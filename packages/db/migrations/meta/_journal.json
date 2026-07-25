@@ -8,6 +8,13 @@
       "when": 1785007955430,
       "tag": "0000_daffy_shiver_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785010562048,
+      "tag": "0001_elite_logan",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,11 @@
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
-import * as schema from './schema.js'
+import * as authSchema from './auth-schema.js'
+import * as domainSchema from './schema.js'
+
+// Merged so Better Auth's drizzleAdapter can resolve `db.query.user` etc.
+// alongside the domain tables on the same client.
+const schema = { ...domainSchema, ...authSchema }
 
 export type Database = ReturnType<typeof createDatabase>['db']
 

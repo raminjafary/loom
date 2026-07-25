@@ -1,13 +1,11 @@
 import { asUserId, asWorkspaceId, userActor, type Actor, type WorkspaceId } from '@loom/domain'
+import { fromNodeHeaders } from 'better-auth/node'
+import type { LoomAuth } from './better-auth.js'
 
 /**
- * AuthPort — the seam Better Auth drops into.
- *
- * IMPORTANT: `devAuth` below is a development stub, NOT an auth implementation.
- * It trusts headers, which means anyone who can reach the port is any user they
- * claim to be. It exists so the contract, realtime path, and actor plumbing can
- * be exercised end to end while Better Auth is wired in behind this same
- * interface. It must be deleted before this is exposed beyond localhost.
+ * AuthPort — the seam every identity source drops into.
+ * `betterAuthPort` below is the real implementation; `devAuth` (see bottom)
+ * remains only for tests that need to bypass Better Auth's HTTP session flow.
  */
 export interface AuthPort {
  /** Resolves the calling principal. Returning null means unauthenticated. */
@@ -19,6 +17,29 @@ export interface Principal {
  readonly workspaceId: WorkspaceId
 }
 
+export interface WorkspaceMembership {
+ ensureMembership(userId: string): Promise<{ workspaceId: string }>
+}
+
+/**
+ * Real auth. Resolves a Better Auth session, then resolves that user to a
+ * workspace via WorkspaceMembership — Better Auth owns identity, it does not
+ * know about our workspace/member tables, so the join happens here.
+ */
+export const betterAuthPort = (auth: LoomAuth, membership: WorkspaceMembership): AuthPort => ({
+ async resolve(headers) {
+ const session = await auth.api.getSession({ headers: fromNodeHeaders(headers) })
+ if (!session) return null
+
+ const { workspaceId } = await membership.ensureMembership(session.user.id)
+
+ return {
+ actor: userActor(asUserId(session.user.id)),
+ workspaceId: asWorkspaceId(workspaceId),
+ }
+ },
+})
+
 const header = (
  headers: Record<string, string | string[] | undefined>,
  name: string,
@@ -28,10 +49,11 @@ const header = (
  return raw ?? null
 }
 
-export const devAuth = (defaults: {
- userId: string
- workspaceId: string
-}): AuthPort => ({
+/**
+ * Development/test-only stub. Trusts headers outright — never wire this into
+ * anything reachable beyond localhost or a test harness.
+ */
+export const devAuth = (defaults: { userId: string; workspaceId: string }): AuthPort => ({
  async resolve(headers) {
  const userId = header(headers, 'x-loom-dev-user') ?? defaults.userId
  const workspaceId = header(headers, 'x-loom-dev-workspace') ?? defaults.workspaceId

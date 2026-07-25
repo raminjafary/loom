@@ -1,4 +1,7 @@
 export * from './client.js'
 export * from './repositories.js'
 export * from './testing.js'
+export * from './workspace-provisioning.js'
+export * from './membership.js'
 export * as schema from './schema.js'
+export * as authSchema from './auth-schema.js'

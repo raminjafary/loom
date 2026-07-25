@@ -6,6 +6,8 @@ const EnvSchema = z.object({
   SERVER_PORT: z.coerce.number().int().default(3001),
   WEB_ORIGIN: z.string().default('http://localhost:5173'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be at least 32 characters'),
+  BETTER_AUTH_URL: z.string().default('http://localhost:3001'),
 })
 
 export type Config = z.infer<typeof EnvSchema>

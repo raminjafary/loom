@@ -17,7 +17,11 @@ import { buildGateway } from './gateway.js'
  * Requires `docker compose up -d`.
  */
 
-const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv)
+const config = loadConfig({
+  ...process.env,
+  NODE_ENV: 'test',
+  BETTER_AUTH_SECRET: 'test-secret-at-least-32-characters-long-value',
+} as NodeJS.ProcessEnv)
 const { db, close: closeDb } = createDatabase(config.DATABASE_URL)
 
 let app: App
