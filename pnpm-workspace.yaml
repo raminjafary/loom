@@ -1,0 +1,24 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - '@turbo/darwin-64@2.10.7'
+  - '@turbo/darwin-arm64@2.10.7'
+  - '@turbo/linux-64@2.10.7'
+  - '@turbo/linux-arm64@2.10.7'
+  - '@turbo/windows-64@2.10.7'
+  - '@turbo/windows-arm64@2.10.7'
+  - turbo@2.10.7
+  - '@orpc/client@1.14.10'
+  - '@orpc/contract@1.14.10'
+  - '@orpc/shared@1.14.10'
+  - '@orpc/standard-server-fetch@1.14.10'
+  - '@orpc/standard-server-peer@1.14.10'
+  - '@orpc/standard-server@1.14.10'
+  - '@orpc/interop@1.14.10'
+  - '@orpc/server@1.14.10'
+  - '@orpc/standard-server-aws-lambda@1.14.10'
+  - '@orpc/standard-server-fastify@1.14.10'
+  - '@orpc/standard-server-node@1.14.10'

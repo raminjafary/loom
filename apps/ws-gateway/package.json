@@ -1,0 +1,31 @@
+{
+  "name": "@loom/ws-gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.2.0",
+    "@loom/api-contract": "workspace:*",
+    "fastify": "^5.10.0",
+    "ioredis": "^5.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@loom/db": "workspace:*",
+    "@loom/server": "workspace:*",
+    "@orpc/client": "^1.14.10",
+    "@orpc/contract": "^1.14.10",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.10",
+    "ws": "^8.18.3"
+  }
+}
