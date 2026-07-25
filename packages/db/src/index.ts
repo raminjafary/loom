@@ -1,5 +1,6 @@
 export * from './client.js'
 export * from './repositories.js'
+export * from './agent-repositories.js'
 export * from './testing.js'
 export * from './workspace-provisioning.js'
 export * from './membership.js'

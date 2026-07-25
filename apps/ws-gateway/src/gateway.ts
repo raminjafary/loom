@@ -4,14 +4,13 @@ import { Redis } from 'ioredis'
 import { z } from 'zod'
 
 /**
- * Dedicated realtime service.
+ * Dedicated realtime service — client-facing fan-out only.
  *
- * Two endpoints with deliberately different trust models:
- * /ws/client — driving-side clients subscribe to workspace frames
- * /ws/runner — the Runner protocol (Phase 1); registered but not yet live
- *
- * Only tier-1 stream frames pass through here. Durable state is the server's
- * job, so this process holds no database connection by design.
+ * The Runner protocol (`/ws/runner`) does NOT live here: it needs to persist
+ * agent_run/approval_request rows, which means it needs the application layer
+ * and a database connection — exactly what this service deliberately doesn't
+ * have. It lives on apps/server instead (see apps/server/src/runner-gateway.ts).
+ * Only tier-1 stream frames pass through here.
  */
 
 const ClientHelloSchema = z.object({
@@ -87,15 +86,6 @@ export const buildGateway = async (options: GatewayOptions): Promise<FastifyInst
 
  socket.on('close', closeRedis)
  socket.on('error', closeRedis)
- })
-
- // Runner protocol lands in Phase 1 (job dispatch + event ingest). Declared
- // now so the trust split between client and runner traffic is explicit.
- instance.get('/ws/runner', { websocket: true }, (socket) => {
- socket.send(
- JSON.stringify({ type: 'error', message: 'runner protocol not implemented yet' }),
-)
- socket.close(1011)
  })
  })
 

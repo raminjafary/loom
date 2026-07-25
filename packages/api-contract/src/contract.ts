@@ -2,9 +2,13 @@ import { oc } from '@orpc/contract'
 import { z } from 'zod'
 import {
  ActorSchema,
+ AgentRunSchema,
+ ApprovalRequestSchema,
  ChannelSchema,
  MessagePageSchema,
  MessageSchema,
+ PersonaSpecSchema,
+ RepositorySchema,
  ThreadSchema,
 } from './schemas.js'
 
@@ -71,6 +75,65 @@ export const contract = {
  }),
 )
 .output(z.array(MessageSchema)),
+ },
+
+ runner: {
+ createPairingToken: oc
+.input(z.object({ name: z.string.min(1).max(100) }))
+.output(z.object({ runnerId: z.string, rawToken: z.string })),
+ },
+
+ /**
+ * Phase 1 scope cut: bind an existing repo by absolute path on
+ * an already-paired Runner. No directory-picker or `git init` flow yet.
+ */
+ repository: {
+ list: oc.output(z.array(RepositorySchema)),
+
+ bindExisting: oc
+.input(
+ z.object({
+ runnerId: z.string,
+ path: z.string.min(1),
+ displayName: z.string.min(1).max(100),
+ }),
+)
+.output(RepositorySchema),
+ },
+
+ agentRun: {
+ /** Inline persona for Phase 1 — no persona CRUD/markdown storage yet. */
+ start: oc
+.input(
+ z.object({
+ threadId: z.string,
+ repositoryId: z.string,
+ persona: PersonaSpecSchema,
+ }),
+)
+.output(AgentRunSchema),
+
+ get: oc.input(z.object({ agentRunId: z.string })).output(AgentRunSchema),
+ },
+
+ /**
+ * Human-only resolution of a pending risky-tool gate — the
+ * use-case enforces this is a `user` actor, not this schema, since that's a
+ * server-side identity check no client input can carry.
+ */
+ approval: {
+ listPending: oc
+.input(z.object({ agentRunId: z.string }))
+.output(z.array(ApprovalRequestSchema)),
+
+ decide: oc
+.input(
+ z.object({
+ approvalRequestId: z.string,
+ decision: z.enum(['approve', 'deny']),
+ }),
+)
+.output(ApprovalRequestSchema),
  },
 } as const
 

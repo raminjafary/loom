@@ -139,8 +139,21 @@ describe('contract completeness', => {
  it('exposes every declared procedure on the client', => {
  // Guards the contract-first rule: the contract is the only surface, so a procedure
  // declared but not implemented must be caught here rather than at runtime.
- expect(Object.keys(contract)).toEqual(['health', 'session', 'channel', 'message'])
+ expect(Object.keys(contract)).toEqual([
+ 'health',
+ 'session',
+ 'channel',
+ 'message',
+ 'runner',
+ 'repository',
+ 'agentRun',
+ 'approval',
+ ])
  expect(Object.keys(contract.channel)).toEqual(['list', 'create', 'rootThread'])
  expect(Object.keys(contract.message)).toEqual(['list', 'post', 'backfill'])
+ expect(Object.keys(contract.runner)).toEqual(['createPairingToken'])
+ expect(Object.keys(contract.repository)).toEqual(['list', 'bindExisting'])
+ expect(Object.keys(contract.agentRun)).toEqual(['start', 'get'])
+ expect(Object.keys(contract.approval)).toEqual(['listPending', 'decide'])
  })
 })

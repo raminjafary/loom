@@ -1,10 +1,14 @@
-import type { Deps } from '@loom/application'
+import type { AgentDeps } from '@loom/application'
 import {
+  agentRunRepository,
+  approvalRepository,
   auditAdapter,
   channelRepository,
   createDatabase,
   ensureWorkspaceMembership,
   messageRepository,
+  repositoryRepository,
+  runnerRepository,
   threadRepository,
 } from '@loom/db'
 import { RPCHandler } from '@orpc/server/node'
@@ -16,10 +20,11 @@ import { createBetterAuth } from './better-auth.js'
 import type { Config } from './config.js'
 import { createEventPublisher } from './events.js'
 import { router } from './router.js'
+import { createRunnerGateway } from './runner-gateway.js'
 
 export interface App {
   readonly fastify: FastifyInstance
-  readonly deps: Deps
+  readonly deps: AgentDeps
   close(): Promise<void>
 }
 
@@ -29,13 +34,22 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
   const { db, close: closeDb } = createDatabase(config.DATABASE_URL)
   const events = createEventPublisher(config.VALKEY_URL)
 
-  const deps: Deps = {
+  const baseDeps = {
     channels: channelRepository(db),
     threads: threadRepository(db),
     messages: messageRepository(db),
     audit: auditAdapter(db),
     events,
+    runners: runnerRepository(db),
+    repositories: repositoryRepository(db),
+    agentRuns: agentRunRepository(db),
+    approvals: approvalRepository(db),
   }
+
+  // The Runner gateway produces `dispatch` — see runner-gateway.ts for why
+  // AgentDeps can't be fully built before it exists.
+  const { register: registerRunnerGateway, dispatch } = createRunnerGateway(db, baseDeps)
+  const deps: AgentDeps = { ...baseDeps, dispatch }
 
   const betterAuth = createBetterAuth({
     db,
@@ -56,6 +70,8 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
     origin: config.WEB_ORIGIN,
     credentials: true,
   })
+
+  await registerRunnerGateway(fastify)
 
   // Better Auth owns everything under /api/auth — sign-up, sign-in, session,
   // sign-out. Mounted before the oRPC body-parser override below so it keeps

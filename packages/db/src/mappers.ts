@@ -1,16 +1,26 @@
 import {
  asAgentRunId,
+ asApprovalRequestId,
  asAuditEventId,
  asChannelId,
  asMessageId,
+ asRepositoryId,
+ asRunnerId,
  asThreadId,
  asUserId,
  asWorkspaceId,
  type Actor,
+ type AgentRun,
+ type AgentRunStatus,
+ type ApprovalRequest,
+ type ApprovalStatus,
  type AuditEvent,
  type Channel,
  type Message,
  type MessageBody,
+ type PersonaSpec,
+ type Repository,
+ type Runner,
  type Thread,
 } from '@loom/domain'
 
@@ -132,6 +142,132 @@ export const toAuditEvent = (row: AuditRow): AuditEvent => ({
  subjectId: row.subjectId,
  metadata: (row.metadata ?? {}) as Record<string, unknown>,
  createdAt: row.createdAt,
+})
+
+export interface RunnerRow {
+ id: string
+ workspaceId: string
+ name: string
+ allowedRoots: unknown
+ connected: boolean
+ lastSeenAt: Date | null
+ createdAt: Date
+}
+
+export const toRunner = (row: RunnerRow): Runner => ({
+ id: asRunnerId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ name: row.name,
+ allowedRoots: Array.isArray(row.allowedRoots) ? (row.allowedRoots as string[]): [],
+ connected: row.connected,
+ lastSeenAt: row.lastSeenAt,
+ createdAt: row.createdAt,
+})
+
+export interface RepositoryRow {
+ id: string
+ workspaceId: string
+ runnerId: string
+ displayName: string
+ absolutePath: string
+ defaultBranch: string
+ createdAt: Date
+}
+
+export const toRepository = (row: RepositoryRow): Repository => ({
+ id: asRepositoryId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ runnerId: asRunnerId(row.runnerId),
+ displayName: row.displayName,
+ absolutePath: row.absolutePath,
+ defaultBranch: row.defaultBranch,
+ createdAt: row.createdAt,
+})
+
+const isPersonaSpec = (value: unknown): value is PersonaSpec =>
+ typeof value === 'object' &&
+ value !== null &&
+ typeof (value as Record<string, unknown>).name === 'string' &&
+ typeof (value as Record<string, unknown>).systemPrompt === 'string' &&
+ typeof (value as Record<string, unknown>).model === 'string' &&
+ Array.isArray((value as Record<string, unknown>).tools)
+
+const toPersonaSpec = (value: unknown): PersonaSpec => {
+ if (!isPersonaSpec(value)) throw new Error('malformed persona spec in agent_run row')
+ return value
+}
+
+export interface AgentRunRow {
+ id: string
+ workspaceId: string
+ threadId: string
+ repositoryId: string
+ runnerId: string
+ persona: unknown
+ status: string
+ totalCostUsd: number | null
+ errorMessage: string | null
+ createdAt: Date
+ completedAt: Date | null
+}
+
+const AGENT_RUN_STATUSES: readonly AgentRunStatus[] = [
+ 'pending',
+ 'running',
+ 'awaiting_approval',
+ 'completed',
+ 'failed',
+ 'cancelled',
+]
+
+const toAgentRunStatus = (value: string): AgentRunStatus => {
+ if ((AGENT_RUN_STATUSES as readonly string[]).includes(value)) return value as AgentRunStatus
+ throw new Error(`unknown agent_run status: ${value}`)
+}
+
+export const toAgentRun = (row: AgentRunRow): AgentRun => ({
+ id: asAgentRunId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ threadId: asThreadId(row.threadId),
+ repositoryId: asRepositoryId(row.repositoryId),
+ runnerId: asRunnerId(row.runnerId),
+ persona: toPersonaSpec(row.persona),
+ status: toAgentRunStatus(row.status),
+ totalCostUsd: row.totalCostUsd,
+ errorMessage: row.errorMessage,
+ createdAt: row.createdAt,
+ completedAt: row.completedAt,
+})
+
+export interface ApprovalRequestRow {
+ id: string
+ workspaceId: string
+ agentRunId: string
+ toolUseId: string
+ toolName: string
+ input: unknown
+ status: string
+ createdAt: Date
+ resolvedAt: Date | null
+}
+
+const APPROVAL_STATUSES: readonly ApprovalStatus[] = ['pending', 'approved', 'denied']
+
+const toApprovalStatus = (value: string): ApprovalStatus => {
+ if ((APPROVAL_STATUSES as readonly string[]).includes(value)) return value as ApprovalStatus
+ throw new Error(`unknown approval_request status: ${value}`)
+}
+
+export const toApprovalRequest = (row: ApprovalRequestRow): ApprovalRequest => ({
+ id: asApprovalRequestId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ agentRunId: asAgentRunId(row.agentRunId),
+ toolUseId: row.toolUseId,
+ toolName: row.toolName,
+ input: (row.input ?? {}) as Record<string, unknown>,
+ status: toApprovalStatus(row.status),
+ createdAt: row.createdAt,
+ resolvedAt: row.resolvedAt,
 })
 
 /** Cursors are opaque to callers; internally they are the `seq` watermark. */
