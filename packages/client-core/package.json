@@ -14,7 +14,8 @@
   "dependencies": {
     "@loom/api-contract": "workspace:*",
     "@orpc/client": "^1.14.10",
-    "@orpc/contract": "^1.14.10"
+    "@orpc/contract": "^1.14.10",
+    "better-auth": "1.6.25"
   },
   "devDependencies": {
     "typescript": "^5.9.2",

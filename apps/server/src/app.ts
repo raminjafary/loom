@@ -3,13 +3,16 @@ import {
   auditAdapter,
   channelRepository,
   createDatabase,
+  ensureWorkspaceMembership,
   messageRepository,
   threadRepository,
 } from '@loom/db'
 import { RPCHandler } from '@orpc/server/node'
 import cors from '@fastify/cors'
+import { toNodeHandler } from 'better-auth/node'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { devAuth, type AuthPort } from './auth.js'
+import { betterAuthPort, type AuthPort } from './auth.js'
+import { createBetterAuth } from './better-auth.js'
 import type { Config } from './config.js'
 import { createEventPublisher } from './events.js'
 import { router } from './router.js'
@@ -19,6 +22,8 @@ export interface App {
   readonly deps: Deps
   close(): Promise<void>
 }
+
+const DEFAULT_WORKSPACE = { slug: 'dev', name: 'Dev Workspace' }
 
 export const buildApp = async (config: Config, authOverride?: AuthPort): Promise<App> => {
   const { db, close: closeDb } = createDatabase(config.DATABASE_URL)
@@ -32,11 +37,17 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
     events,
   }
 
+  const betterAuth = createBetterAuth({
+    db,
+    secret: config.BETTER_AUTH_SECRET,
+    baseUrl: config.BETTER_AUTH_URL,
+    webOrigin: config.WEB_ORIGIN,
+  })
+
   const auth =
     authOverride ??
-    devAuth({
-      userId: 'dev-user',
-      workspaceId: process.env.LOOM_DEV_WORKSPACE_ID ?? '',
+    betterAuthPort(betterAuth, {
+      ensureMembership: (userId) => ensureWorkspaceMembership(db, userId, DEFAULT_WORKSPACE),
     })
 
   const fastify = Fastify({ logger: config.NODE_ENV !== 'test' })
@@ -44,6 +55,13 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
   await fastify.register(cors, {
     origin: config.WEB_ORIGIN,
     credentials: true,
+  })
+
+  // Better Auth owns everything under /api/auth — sign-up, sign-in, session,
+  // sign-out. Mounted before the oRPC body-parser override below so it keeps
+  // Fastify's normal JSON parsing.
+  fastify.all('/api/auth/*', async (request, reply) => {
+    await toNodeHandler(betterAuth.handler)(request.raw, reply.raw)
   })
 
   const handler = new RPCHandler(router)

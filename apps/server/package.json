@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
-    "start": "tsx src/main.ts",
+    "dev": "tsx --env-file=../../.env watch src/main.ts",
+    "start": "tsx --env-file=../../.env src/main.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx --env-file=../../.env src/seed.ts"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "1.6.25",
     "@fastify/cors": "^11.0.1",
     "@loom/api-contract": "workspace:*",
     "@loom/application": "workspace:*",
@@ -20,6 +21,7 @@
     "@orpc/client": "^1.14.10",
     "@orpc/contract": "^1.14.10",
     "@orpc/server": "^1.14.10",
+    "better-auth": "1.6.25",
     "fastify": "^5.10.0",
     "ioredis": "^5.9.0",
     "zod": "^4.4.3"

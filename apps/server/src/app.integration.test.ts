@@ -19,6 +19,7 @@ import { loadConfig } from './config.js'
 const config = loadConfig({
   ...process.env,
   NODE_ENV: 'test',
+  BETTER_AUTH_SECRET: 'test-secret-at-least-32-characters-long-value',
   SERVER_PORT: '0',
 } as NodeJS.ProcessEnv)
 
