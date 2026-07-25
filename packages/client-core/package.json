@@ -1,0 +1,23 @@
+{
+  "name": "@loom/client-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@loom/api-contract": "workspace:*",
+    "@orpc/client": "^1.14.10",
+    "@orpc/contract": "^1.14.10"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.10"
+  }
+}
