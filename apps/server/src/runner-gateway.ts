@@ -13,7 +13,7 @@ import websocket from '@fastify/websocket'
 import type { FastifyInstance } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import type WebSocket from 'ws'
-import { RunnerFrameSchema, type ServerFrame } from './runner-protocol.js'
+import { RunnerFrameSchema, type ServerFrame } from '@loom/runner-protocol'
 
 const CHECK_PATH_TIMEOUT_MS = 10_000
 

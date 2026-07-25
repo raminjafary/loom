@@ -1,19 +1,21 @@
 import { z } from 'zod'
 
 /**
- * Wire protocol for /ws/runner (PLAN.md §4c note, §4a/§4b). Both directions
- * are versioned together here since Runner and server ship in lockstep for
- * now — a real versioning story is a Phase 3+ concern.
+ * Wire protocol for /ws/runner (PLAN.md §4c note, §4a/§4b) — shared between
+ * apps/server and apps/runner so there is exactly one source of truth for the
+ * frame shapes, the same reasoning as packages/api-contract for the browser
+ * boundary. Both directions are versioned together for now since Runner and
+ * server ship in lockstep; a real versioning story is a Phase 3+ concern.
  */
 
-const PersonaSpecSchema = z.object({
+export const PersonaSpecSchema = z.object({
   name: z.string(),
   systemPrompt: z.string(),
   model: z.string(),
   tools: z.array(z.string()),
 })
 
-const AgentEventSchema = z.discriminatedUnion('kind', [
+export const AgentEventSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('assistant_text'), text: z.string() }),
   z.object({
     kind: z.literal('tool_call'),
