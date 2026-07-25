@@ -157,7 +157,11 @@ apps/runner             → sandboxed local execution
 
 **UI stack** **[CORRECTED: was Next.js + React]**: **Vite + Vue 3 SPA**. This app is auth-gated, SPA-shaped, and WebSocket-driven — there is no SEO surface and no meaningful use for SSR or server components. Independently confirmed by the audit: **Next.js App Router Route Handlers structurally cannot host a WebSocket** — the HTTP upgrade must happen outside the Next runtime. Since a separate WS process is required regardless of framework, Next's main advantage (colocated server code) evaporates. Vue-side choices: **Vue Flow** for the graph canvas (MIT; note it's a separate community project from xyflow's React Flow — good parity, not identical, and the one ecosystem downgrade in the switch), **shadcn-vue** or PrimeVue for components, **TanStack Virtual** (framework-agnostic) for the message list, **Pinia** for view state.
 
-**WebSockets live in their own Fastify service** (`apps/ws-gateway`), fanning out from Valkey pub/sub. Two endpoints, deliberately distinct: `/ws/client` (driving-side clients — subscriptions) and `/ws/runner` (Runner protocol — job dispatch and event ingest; the driven side, not a contract client).
+**WebSockets are split across two services by database access, not just by client type** **[CORRECTED during Phase 1 build]**. The original plan put both endpoints on one stateless `apps/ws-gateway` service. That doesn't hold: `/ws/runner` traffic (job dispatch, agent event ingest, permission requests) must persist `agent_run` rows and `approval_request` rows durably — it needs the application layer and a database connection, which `apps/ws-gateway` deliberately does not have (it exists purely to fan out Valkey pub/sub to browsers, stateless by design). So:
+- `/ws/client` stays on `apps/ws-gateway` — stateless fan-out, unchanged.
+- `/ws/runner` lives on **`apps/server`** instead — it needs `Deps` (repositories, use-cases) exactly like the oRPC router does, so it belongs where those already are. `apps/ws-gateway`'s `/ws/runner` stub is removed rather than left as dead code.
+
+This preserves the actual intent (Runner traffic is the driven side, not a contract client, distinct trust model from browser traffic) while fixing the "no DB in the stateless service" contradiction the original placement created.
 
 ### 4d. The nested-orchestration boundary **[NEW — from architecture review]**
 

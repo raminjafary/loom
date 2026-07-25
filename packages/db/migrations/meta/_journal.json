@@ -15,6 +15,20 @@
       "when": 1785010562048,
       "tag": "0001_elite_logan",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785011467517,
+      "tag": "0002_first_scarlet_witch",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785012573077,
+      "tag": "0003_clever_azazel",
+      "breakpoints": true
     }
   ]
 }

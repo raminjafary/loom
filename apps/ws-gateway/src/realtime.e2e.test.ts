@@ -194,13 +194,4 @@ describe('realtime fan-out', () => {
     socket.close()
   })
 
-  it('closes the runner endpoint until the protocol exists', async () => {
-    const socket = new WebSocket(wsUrl.replace('/ws/client', '/ws/runner'))
-    const closed = new Promise<number>((resolve) => socket.once('close', (code) => resolve(code)))
-    await new Promise<void>((resolve, reject) => {
-      socket.once('open', () => resolve())
-      socket.once('error', reject)
-    })
-    expect(await closed).toBe(1011)
-  })
 })

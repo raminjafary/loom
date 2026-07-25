@@ -1,0 +1,77 @@
+import { z } from 'zod'
+
+/**
+ * Wire protocol for /ws/runner (PLAN.md §4c note, §4a/§4b). Both directions
+ * are versioned together here since Runner and server ship in lockstep for
+ * now — a real versioning story is a Phase 3+ concern.
+ */
+
+const PersonaSpecSchema = z.object({
+  name: z.string(),
+  systemPrompt: z.string(),
+  model: z.string(),
+  tools: z.array(z.string()),
+})
+
+const AgentEventSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('assistant_text'), text: z.string() }),
+  z.object({
+    kind: z.literal('tool_call'),
+    toolUseId: z.string(),
+    toolName: z.string(),
+    input: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    kind: z.literal('tool_result'),
+    toolUseId: z.string(),
+    isError: z.boolean(),
+    summary: z.string(),
+  }),
+  z.object({ kind: z.literal('run_completed'), totalCostUsd: z.number(), result: z.string() }),
+  z.object({ kind: z.literal('run_failed'), message: z.string() }),
+])
+
+// Runner -> Server
+export const RunnerFrameSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('hello'), token: z.string(), allowedRoots: z.array(z.string()) }),
+  z.object({
+    type: z.literal('check_path_result'),
+    requestId: z.string(),
+    ok: z.boolean(),
+    // Present only when ok is true/false respectively — a plain flat shape
+    // is simpler here than nesting a union inside discriminatedUnion.
+    defaultBranch: z.string().optional(),
+    error: z.string().optional(),
+  }),
+  z.object({ type: z.literal('agent_event'), runId: z.string(), event: AgentEventSchema }),
+  z.object({
+    type: z.literal('permission_request'),
+    runId: z.string(),
+    toolUseId: z.string(),
+    toolName: z.string(),
+    input: z.record(z.string(), z.unknown()),
+  }),
+])
+
+// Server -> Runner
+export const ServerFrameSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('hello_ack'), runnerId: z.string() }),
+  z.object({ type: z.literal('error'), message: z.string() }),
+  z.object({ type: z.literal('check_path'), requestId: z.string(), path: z.string() }),
+  z.object({
+    type: z.literal('start_run'),
+    runId: z.string(),
+    persona: PersonaSpecSchema,
+    cwd: z.string(),
+  }),
+  z.object({
+    type: z.literal('permission_response'),
+    toolUseId: z.string(),
+    decision: z.enum(['allow', 'deny']),
+  }),
+])
+
+export type RunnerFrame = z.infer<typeof RunnerFrameSchema>
+export type ServerFrame = z.infer<typeof ServerFrameSchema>
+export type WireAgentEvent = z.infer<typeof AgentEventSchema>
+export type WirePersonaSpec = z.infer<typeof PersonaSpecSchema>

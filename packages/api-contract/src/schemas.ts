@@ -62,9 +62,68 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('thread.created'), thread: ThreadSchema }),
 ])
 
+export const RepositorySchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  runnerId: z.string(),
+  displayName: z.string(),
+  absolutePath: z.string(),
+  defaultBranch: z.string(),
+  createdAt: z.date(),
+})
+
+/** Inline for Phase 1 — no markdown/git-backed persona storage yet (PLAN.md §4/§4e). */
+export const PersonaSpecSchema = z.object({
+  name: z.string().min(1).max(100),
+  systemPrompt: z.string().min(1).max(20_000),
+  model: z.string().min(1),
+  tools: z.array(z.string()),
+})
+
+export const AgentRunStatusSchema = z.enum([
+  'pending',
+  'running',
+  'awaiting_approval',
+  'completed',
+  'failed',
+  'cancelled',
+])
+
+export const AgentRunSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  threadId: z.string(),
+  repositoryId: z.string(),
+  runnerId: z.string(),
+  persona: PersonaSpecSchema,
+  status: AgentRunStatusSchema,
+  totalCostUsd: z.number().nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.date(),
+  completedAt: z.date().nullable(),
+})
+
+export const ApprovalStatusSchema = z.enum(['pending', 'approved', 'denied'])
+
+export const ApprovalRequestSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  agentRunId: z.string(),
+  toolUseId: z.string(),
+  toolName: z.string(),
+  input: z.record(z.string(), z.unknown()),
+  status: ApprovalStatusSchema,
+  createdAt: z.date(),
+  resolvedAt: z.date().nullable(),
+})
+
 export type Actor = z.infer<typeof ActorSchema>
 export type Message = z.infer<typeof MessageSchema>
 export type Channel = z.infer<typeof ChannelSchema>
 export type Thread = z.infer<typeof ThreadSchema>
 export type MessagePage = z.infer<typeof MessagePageSchema>
 export type ServerEvent = z.infer<typeof ServerEventSchema>
+export type Repository = z.infer<typeof RepositorySchema>
+export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
+export type AgentRun = z.infer<typeof AgentRunSchema>
+export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>

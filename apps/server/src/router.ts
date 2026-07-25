@@ -1,21 +1,36 @@
 import { contract } from '@loom/api-contract'
 import {
   backfillMessages,
+  bindRepository,
   createChannel,
+  createRunnerPairingToken,
+  decideApproval,
+  getAgentRun,
   getChannelRootThread,
   listChannels,
   listMessages,
+  listPendingApprovals,
+  listRepositories,
   postMessage,
-  type Deps,
+  startAgentRun,
+  type AgentDeps,
 } from '@loom/application'
 import { DomainError } from '@loom/domain'
-import { asChannelId, asMessageId, asThreadId } from '@loom/domain'
+import {
+  asAgentRunId,
+  asApprovalRequestId,
+  asChannelId,
+  asMessageId,
+  asRepositoryId,
+  asRunnerId,
+  asThreadId,
+} from '@loom/domain'
 import { ORPCError, implement } from '@orpc/server'
 import type { Principal } from './auth.js'
 
 export interface RouterContext {
   readonly principal: Principal
-  readonly deps: Deps
+  readonly deps: AgentDeps
 }
 
 const os = implement(contract).$context<RouterContext>()
@@ -117,6 +132,81 @@ export const router = os.router({
           threadId: asThreadId(input.threadId),
           afterMessageId: asMessageId(input.afterMessageId),
           ...(input.limit === undefined ? {} : { limit: input.limit }),
+        }),
+      ),
+    ),
+  },
+
+  runner: {
+    createPairingToken: os.runner.createPairingToken.handler(({ context, input }) =>
+      guard(() =>
+        createRunnerPairingToken(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          name: input.name,
+        }),
+      ),
+    ),
+  },
+
+  repository: {
+    list: os.repository.list.handler(({ context }) =>
+      guard(() => listRepositories(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+
+    bindExisting: os.repository.bindExisting.handler(({ context, input }) =>
+      guard(() =>
+        bindRepository(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          runnerId: asRunnerId(input.runnerId),
+          path: input.path,
+          displayName: input.displayName,
+        }),
+      ),
+    ),
+  },
+
+  agentRun: {
+    start: os.agentRun.start.handler(({ context, input }) =>
+      guard(() =>
+        startAgentRun(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          threadId: asThreadId(input.threadId),
+          repositoryId: asRepositoryId(input.repositoryId),
+          persona: input.persona,
+        }),
+      ),
+    ),
+
+    get: os.agentRun.get.handler(({ context, input }) =>
+      guard(() =>
+        getAgentRun(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          agentRunId: asAgentRunId(input.agentRunId),
+        }),
+      ),
+    ),
+  },
+
+  approval: {
+    listPending: os.approval.listPending.handler(({ context, input }) =>
+      guard(() =>
+        listPendingApprovals(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          agentRunId: asAgentRunId(input.agentRunId),
+        }),
+      ),
+    ),
+
+    decide: os.approval.decide.handler(({ context, input }) =>
+      guard(() =>
+        decideApproval(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          approvalRequestId: asApprovalRequestId(input.approvalRequestId),
+          decision: input.decision,
         }),
       ),
     ),

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import {
   bigserial,
   boolean,
+  doublePrecision,
   index,
   jsonb,
   pgTable,
@@ -84,6 +85,110 @@ export const thread = pgTable(
   ],
 )
 
+/** A paired local daemon (PLAN.md §4a). `allowedRoots` is Runner-declared, not server-managed. */
+export const runner = pgTable(
+  'runner',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    // Hashed, not raw — a leaked DB row must not itself be a usable pairing token.
+    pairingTokenHash: text('pairing_token_hash').notNull(),
+    allowedRoots: jsonb('allowed_roots').$type<string[]>().notNull().default([]),
+    connected: boolean('connected').notNull().default(false),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('runner_workspace_idx').on(t.workspaceId),
+    uniqueIndex('runner_pairing_token_hash_idx').on(t.pairingTokenHash),
+  ],
+)
+
+/** Phase 1 scope cut (PLAN.md §5a): bound by absolute path, no directory picker or `git init` flow yet. */
+export const repository = pgTable(
+  'repository',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    runnerId: uuid('runner_id')
+      .notNull()
+      .references(() => runner.id, { onDelete: 'cascade' }),
+    displayName: text('display_name').notNull(),
+    absolutePath: text('absolute_path').notNull(),
+    defaultBranch: text('default_branch').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('repository_workspace_idx').on(t.workspaceId)],
+)
+
+/**
+ * `persona` is inline JSON for Phase 1 — no markdown/git-backed persona
+ * storage yet (PLAN.md §4/§4e describe the eventual format).
+ */
+export const agentRun = pgTable(
+  'agent_run',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => thread.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    runnerId: uuid('runner_id')
+      .notNull()
+      .references(() => runner.id, { onDelete: 'cascade' }),
+    persona: jsonb('persona').notNull(),
+    status: text('status').notNull().default('pending'),
+    totalCostUsd: doublePrecision('total_cost_usd'),
+    errorMessage: text('error_message'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [index('agent_run_thread_idx').on(t.workspaceId, t.threadId)],
+)
+
+/**
+ * `toolName`/`input` are the exact argv the SDK is about to run — never a
+ * model-authored summary (PLAN.md §6 A1/A3). `resolvedBy` must be a `user`
+ * actor; enforced in the use-case, not the schema.
+ */
+export const approvalRequest = pgTable(
+  'approval_request',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references(() => agentRun.id, { onDelete: 'cascade' }),
+    toolUseId: text('tool_use_id').notNull(),
+    toolName: text('tool_name').notNull(),
+    input: jsonb('input').notNull(),
+    status: text('status').notNull().default('pending'),
+    // No hard FK, deliberately: same reasoning as the actor columns above —
+    // devAuth-based tests use synthetic user ids never inserted into
+    // Better Auth's `user` table, and a resolver's identity here is an audit
+    // fact that must survive even if the referenced user is later removed.
+    resolvedByUserId: text('resolved_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('approval_request_run_idx').on(t.agentRunId),
+    uniqueIndex('approval_request_tool_use_idx').on(t.agentRunId, t.toolUseId),
+  ],
+)
+
 /**
  * `seq` is the ordering and pagination key. Timestamps collide under concurrent
  * inserts, so cursors must never be built from `created_at`.
@@ -99,6 +204,10 @@ export const message = pgTable(
     threadId: uuid('thread_id')
       .notNull()
       .references(() => thread.id, { onDelete: 'cascade' }),
+    // Polymorphic actor columns, deliberately without a hard FK on either side
+    // (mirrors audit_event below): a cascade delete on `agent_run` or `user`
+    // must not silently corrupt chat history. Consistency is enforced in the
+    // mapper layer (packages/db/src/mappers.ts toActor/fromActor).
     actorKind: text('actor_kind').notNull(),
     actorUserId: text('actor_user_id'),
     actorAgentRunId: uuid('actor_agent_run_id'),
