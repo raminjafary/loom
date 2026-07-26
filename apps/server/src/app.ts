@@ -76,7 +76,16 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
   // Better Auth owns everything under /api/auth — sign-up, sign-in, session,
   // sign-out. Mounted before the oRPC body-parser override below so it keeps
   // Fastify's normal JSON parsing.
+  //
+  // toNodeHandler writes straight to `reply.raw` (the underlying Node
+  // response), bypassing Fastify's send lifecycle entirely — so
+  // @fastify/cors's onSend-based header injection never runs here, even
+  // though it *did* run for the OPTIONS preflight (that's short-circuited
+  // earlier, in cors's onRequest hook, before this handler executes). Set
+  // the two headers the browser actually needs by hand.
   fastify.all('/api/auth/*', async (request, reply) => {
+    reply.raw.setHeader('Access-Control-Allow-Origin', config.WEB_ORIGIN)
+    reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
     await toNodeHandler(betterAuth.handler)(request.raw, reply.raw)
   })
 
@@ -89,6 +98,12 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
   fastify.addContentTypeParser(/^.*$/, (_req, _payload, done) => done(null, undefined))
 
   fastify.all('/rpc/*', async (request, reply) => {
+    // Same reason as the /api/auth/* handler above: RPCHandler#handle writes
+    // straight to `reply.raw`, bypassing Fastify's send lifecycle that
+    // @fastify/cors hooks into — so these headers must be set by hand here too.
+    reply.raw.setHeader('Access-Control-Allow-Origin', config.WEB_ORIGIN)
+    reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
+
     const principal = await auth.resolve(request.headers)
     if (!principal) {
       await reply.code(401).send({ error: 'unauthenticated' })
