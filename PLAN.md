@@ -62,7 +62,7 @@ So the center of gravity is **"3 runs need you, 1 stuck 20min, 2 PRs ready"** �
 
 Humans can at any point: read a thread live; post to redirect a running agent (§4d — this is a real constraint, not free); approve/deny a risky action inline; assign tasks from a per-channel kanban board; fork and edit a persona.
 
-### 3a. Built-in personas, persona groups, and `@mention` **[PLANNED — not yet built]**
+### 3a. Built-in personas, persona groups, and `@mention` **[BUILT — see HANDOFF.md]**
 
 Persona CRUD (Phase 1) requires hand-authoring every persona's markdown from nothing, and starting a run is a static sidebar picker, not something triggered by addressing an agent in a channel — a real gap against this section's own ship criterion. Planned fix, three parts:
 
@@ -331,7 +331,7 @@ The happy path (SDK stream → WS → render) is a weekend. The rest is the actu
 - Repository binding: allowed roots, directory picker, bind/create repo, end-of-run diff review with merge/keep/discard.
 - **Inbox + notifications + stuck detection** — the retention hook (§3), not a Phase 4 nicety.
 - Persona editing including tool declaration, skills, and harness settings (§4e); transcript persistence; cost metering at the proxy.
-- Built-in personas, persona groups, and `@mention`-starts-a-run (§3a) — planned, not yet built; closes this section's own ship criterion's `@mention` gap.
+- Built-in personas, persona groups, and `@mention`-starts-a-run (§3a) — built; closes this section's own ship criterion's `@mention` gap. Per-persona `harness.autoApprove` also landed alongside it (not originally scoped in §3a, added on request) — see HANDOFF.md.
 
 **Cut from Phase 1** (all from the product review, all correct):
 - **`OllamaApiAdapter`** — a tool-less HTTP adapter proves nothing about the hard parts of `AgentExecutionPort` (sandboxing, streaming, interrupt, approval callbacks). It was abstraction theatre. Add in Phase 3 with vLLM.
