@@ -27,7 +27,9 @@ const canLoadDiff = => props.run !== null && props.run.clonePath !== null
 <style scoped>
 .panel {
  padding: 0.85rem 1rem;
- border-bottom: 1px solid var(--border);
+ border: 1px solid var(--border);
+ border-radius: 0.6rem;
+ background: var(--bg);
 }
 
 header {

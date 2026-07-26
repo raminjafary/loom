@@ -30,7 +30,7 @@ const submit = () => {
     <ul class="list">
       <li v-for="repo in props.repositories" :key="repo.id" class="item">
         <span class="name">{{ repo.displayName }}</span>
-        <span class="meta">{{ repo.absolutePath }}</span>
+        <span class="meta" :title="repo.absolutePath">{{ repo.absolutePath }}</span>
       </li>
       <li v-if="props.repositories.length === 0" class="empty">No repositories bound yet</li>
     </ul>
@@ -54,7 +54,9 @@ const submit = () => {
 <style scoped>
 .panel {
   padding: 0.85rem 1rem;
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--bg);
 }
 
 h3 {
@@ -87,7 +89,12 @@ h3 {
 .meta {
   color: var(--text-faint);
   font-size: 0.75rem;
-  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
 }
 
 .empty {
