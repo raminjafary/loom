@@ -28,7 +28,12 @@ export const useAgentStore = defineStore('agent', () => {
     bindRepository: (input: { runnerId: string; path: string; displayName: string }) =>
       session.bindRepository(input),
     createPersona: (markdownSource: string) => session.createPersona(markdownSource),
-    startRun: (input: { threadId: string; repositoryId: string; personaId: string }) =>
+    createPersonaGroup: (input: { name: string; personaIds: string[] }) =>
+      session.createPersonaGroup(input),
+    updatePersonaGroup: (input: { personaGroupId: string; name: string; personaIds: string[] }) =>
+      session.updatePersonaGroup(input),
+    deletePersonaGroup: (personaGroupId: string) => session.deletePersonaGroup(personaGroupId),
+    startRun: (input: { threadId: string; repositoryId: string; personaId: string; task?: string }) =>
       session.startRun(input),
     decide: (approvalRequestId: string, decision: 'approve' | 'deny') =>
       session.decide(approvalRequestId, decision),

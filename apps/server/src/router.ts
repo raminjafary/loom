@@ -4,8 +4,11 @@ import {
   bindRepository,
   createChannel,
   createPersona,
+  createPersonaGroup,
   createRunnerPairingToken,
   decideApproval,
+  deletePersonaGroup,
+  getActiveAgentRun,
   getAgentRun,
   getAgentRunDiff,
   getChannelRootThread,
@@ -13,12 +16,14 @@ import {
   listChannels,
   listMessages,
   listPendingApprovals,
+  listPersonaGroups,
   listPersonas,
   listRepositories,
   listRunners,
   postMessage,
   startAgentRun,
   updatePersona,
+  updatePersonaGroup,
   type AgentDeps,
 } from '@loom/application'
 import { DomainError } from '@loom/domain'
@@ -28,6 +33,7 @@ import {
   asApprovalRequestId,
   asChannelId,
   asMessageId,
+  asPersonaGroupId,
   asRepositoryId,
   asRunnerId,
   asThreadId,
@@ -219,6 +225,46 @@ export const router = os.router({
     ),
   },
 
+  personaGroup: {
+    list: os.personaGroup.list.handler(({ context }) =>
+      guard(() => listPersonaGroups(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+
+    create: os.personaGroup.create.handler(({ context, input }) =>
+      guard(() =>
+        createPersonaGroup(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          name: input.name,
+          personaIds: input.personaIds,
+        }),
+      ),
+    ),
+
+    update: os.personaGroup.update.handler(({ context, input }) =>
+      guard(() =>
+        updatePersonaGroup(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          personaGroupId: asPersonaGroupId(input.personaGroupId),
+          name: input.name,
+          personaIds: input.personaIds,
+        }),
+      ),
+    ),
+
+    delete: os.personaGroup.delete.handler(({ context, input }) =>
+      guard(async () => {
+        await deletePersonaGroup(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          personaGroupId: asPersonaGroupId(input.personaGroupId),
+        })
+        return { ok: true as const }
+      }),
+    ),
+  },
+
   agentRun: {
     start: os.agentRun.start.handler(({ context, input }) =>
       guard(() =>
@@ -228,6 +274,7 @@ export const router = os.router({
           threadId: asThreadId(input.threadId),
           repositoryId: asRepositoryId(input.repositoryId),
           personaId: asAgentPersonaId(input.personaId),
+          ...(input.task === undefined ? {} : { task: input.task }),
         }),
       ),
     ),
@@ -239,6 +286,10 @@ export const router = os.router({
           agentRunId: asAgentRunId(input.agentRunId),
         }),
       ),
+    ),
+
+    getActive: os.agentRun.getActive.handler(({ context }) =>
+      guard(() => getActiveAgentRun(context.deps, { workspaceId: context.principal.workspaceId })),
     ),
 
     getDiff: os.agentRun.getDiff.handler(({ context, input }) =>

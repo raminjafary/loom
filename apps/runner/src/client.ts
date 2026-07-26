@@ -81,6 +81,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
               return runAgent({
                 persona: frame.persona,
                 cwd: clonePath,
+                ...(frame.task === undefined ? {} : { task: frame.task }),
                 isRiskyTool,
                 classifyEffect: (toolName, input) =>
                   classifyToolEffect(toolName, input, clonePath, resolveWithinRoot),

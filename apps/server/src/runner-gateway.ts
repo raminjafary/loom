@@ -89,13 +89,14 @@ export const createRunnerGateway = (
  return result
  },
 
- async startRun({ runnerId, runId, persona, cwd, defaultBranch }) {
+ async startRun({ runnerId, runId, persona, cwd, defaultBranch, task }) {
  send(runnerId, {
  type: 'start_run',
  runId,
  persona: {...persona, tools: [...persona.tools] },
  cwd,
  defaultBranch,
+...(task === undefined ? {}: { task }),
  })
  },
 

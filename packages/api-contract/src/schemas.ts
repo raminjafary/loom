@@ -105,6 +105,16 @@ export const AgentPersonaSchema = z.object({
  updatedAt: z.date,
 })
 
+/** The persona model — organizational grouping of personas, not a Team/roster. */
+export const PersonaGroupSchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ name: z.string,
+ personaIds: z.array(z.string),
+ createdAt: z.date,
+ updatedAt: z.date,
+})
+
 export const AgentRunStatusSchema = z.enum([
  'pending',
  'running',
@@ -154,5 +164,6 @@ export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
+export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>

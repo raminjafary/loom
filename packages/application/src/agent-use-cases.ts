@@ -1,4 +1,5 @@
 import {
+ BUILTIN_PERSONAS,
  ForbiddenError,
  NotFoundError,
  ValidationError,
@@ -15,6 +16,8 @@ import {
  type AgentRunId,
  type ApprovalRequest,
  type ApprovalRequestId,
+ type PersonaGroup,
+ type PersonaGroupId,
  type PersonaSpec,
  type Repository,
  type RepositoryId,
@@ -26,6 +29,7 @@ import {
 import type {
  AgentRunRepositoryPort,
  ApprovalRepositoryPort,
+ PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
  RepositoryRepositoryPort,
  RunDispatchPort,
@@ -39,6 +43,7 @@ export interface AgentDeps extends Deps {
  readonly agentRuns: AgentRunRepositoryPort
  readonly approvals: ApprovalRepositoryPort
  readonly personas: PersonaRepositoryPort
+ readonly personaGroups: PersonaGroupRepositoryPort
  readonly dispatch: RunDispatchPort
 }
 
@@ -135,6 +140,30 @@ export const createPersona = async (
  })
 }
 
+/**
+ * Called from apps/server/src/app.ts only when `ensureWorkspace` reports
+ * `created: true` — i.e. exactly once, on the request that actually creates
+ * the workspace row. Not actor-gated: this is system
+ * provisioning, not a human action.
+ */
+export const seedBuiltinPersonas = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<void> => {
+ for (const persona of BUILTIN_PERSONAS) {
+ await deps.personas.create({
+ workspaceId: input.workspaceId,
+ name: persona.name,
+ description: persona.description,
+ markdownSource: persona.markdownSource,
+ model: persona.model,
+ tools: persona.tools,
+ harnessEffort: persona.harnessEffort,
+ harnessMaxTurns: persona.harnessMaxTurns,
+ })
+ }
+}
+
 export const listPersonas = (
  deps: AgentDeps,
  input: { workspaceId: WorkspaceId },
@@ -172,6 +201,77 @@ export const updatePersona = async (
  })
 }
 
+/**
+ * Validates every member id resolves within the workspace — a group
+ * referencing a persona that doesn't exist (typo, deleted persona) is a
+ * client error, not a silently-stored dangling reference.
+ */
+const assertPersonaIdsExist = async (
+ deps: AgentDeps,
+ workspaceId: WorkspaceId,
+ personaIds: string[],
+): Promise<void> => {
+ for (const id of personaIds) {
+ const persona = await deps.personas.findById(workspaceId, id as AgentPersonaId)
+ if (!persona) throw new ValidationError(`Persona ${id} does not exist in this workspace`)
+ }
+}
+
+/** Organizational only — human-only, same reasoning as createPersona. */
+export const createPersonaGroup = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; name: string; personaIds: string[] },
+): Promise<PersonaGroup> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may create a persona group')
+ }
+ const existing = await deps.personaGroups.listByWorkspace(input.workspaceId)
+ if (existing.some((g) => g.name === input.name)) {
+ throw new ValidationError(`Persona group "${input.name}" already exists`)
+ }
+ await assertPersonaIdsExist(deps, input.workspaceId, input.personaIds)
+ return deps.personaGroups.create({
+ workspaceId: input.workspaceId,
+ name: input.name,
+ personaIds: input.personaIds,
+ })
+}
+
+export const listPersonaGroups = (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<PersonaGroup[]> => deps.personaGroups.listByWorkspace(input.workspaceId)
+
+export const updatePersonaGroup = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ personaGroupId: PersonaGroupId
+ name: string
+ personaIds: string[]
+ },
+): Promise<PersonaGroup> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may update a persona group')
+ }
+ await assertPersonaIdsExist(deps, input.workspaceId, input.personaIds)
+ return deps.personaGroups.update(input.workspaceId, input.personaGroupId, {
+ name: input.name,
+ personaIds: input.personaIds,
+ })
+}
+
+export const deletePersonaGroup = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; personaGroupId: PersonaGroupId },
+): Promise<void> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may delete a persona group')
+ }
+ await deps.personaGroups.delete(input.workspaceId, input.personaGroupId)
+}
+
 export const listRepositories = (
  deps: AgentDeps,
  input: { workspaceId: WorkspaceId },
@@ -193,6 +293,17 @@ export const getAgentRun = async (
 }
 
 /**
+ * Lets a client resume watching whatever run is already active, on load —
+ * without this, a page reload during a run leaves no path back to its
+ * approval card until the run happens to finish (found live during
+ * The persona model verification).
+ */
+export const getActiveAgentRun = (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<AgentRun | null> => deps.agentRuns.findActiveByWorkspace(input.workspaceId)
+
+/**
  * Starts one agent run against a bound repository's working copy. The
  * persona is looked up by id and denormalized into a frozen `PersonaSpec`
  * snapshot on the run — the run must keep executing with the persona as it
@@ -206,10 +317,20 @@ export const startAgentRun = async (
  threadId: ThreadId
  repositoryId: RepositoryId
  personaId: AgentPersonaId
+ /** What a human asked for via `@mention`; absent for the sidebar-picker path. */
+ task?: string
  },
 ): Promise<AgentRun> => {
  if (!isHuman(input.actor)) {
  throw new ForbiddenError('Only a human may start an agent run')
+ }
+
+ // Single-active-run limit, preserved not lifted: a
+ // second mention while a run is active must error clearly, never silently
+ // replace what's being watched.
+ const active = await deps.agentRuns.findActiveByWorkspace(input.workspaceId)
+ if (active) {
+ throw new ValidationError('An agent run is already active in this workspace — wait for it to finish first')
  }
 
  const thread = await deps.threads.findById(input.workspaceId, input.threadId)
@@ -256,6 +377,7 @@ export const startAgentRun = async (
  persona: personaSpec,
  cwd: repository.absolutePath,
  defaultBranch: repository.defaultBranch,
+...(input.task === undefined ? {}: { task: input.task }),
  })
  } catch (error) {
  const failed = await deps.agentRuns.updateStatus(input.workspaceId, run.id, {

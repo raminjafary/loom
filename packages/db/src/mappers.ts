@@ -5,6 +5,7 @@ import {
  asAuditEventId,
  asChannelId,
  asMessageId,
+ asPersonaGroupId,
  asRepositoryId,
  asRunnerId,
  asThreadId,
@@ -20,6 +21,7 @@ import {
  type Channel,
  type Message,
  type MessageBody,
+ type PersonaGroup,
  type PersonaSpec,
  type Repository,
  type Runner,
@@ -300,6 +302,24 @@ export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
  tools: Array.isArray(row.tools) ? (row.tools as string[]): [],
  harnessEffort: row.harnessEffort,
  harnessMaxTurns: row.harnessMaxTurns,
+ createdAt: row.createdAt,
+ updatedAt: row.updatedAt,
+})
+
+export interface PersonaGroupRow {
+ id: string
+ workspaceId: string
+ name: string
+ personaIds: unknown
+ createdAt: Date
+ updatedAt: Date
+}
+
+export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
+ id: asPersonaGroupId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ name: row.name,
+ personaIds: Array.isArray(row.personaIds) ? (row.personaIds as string[]): [],
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
 })

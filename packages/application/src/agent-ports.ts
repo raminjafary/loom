@@ -7,6 +7,8 @@ import type {
  ApprovalRequest,
  ApprovalRequestId,
  ApprovalStatus,
+ PersonaGroup,
+ PersonaGroupId,
  PersonaSpec,
  Repository,
  RepositoryId,
@@ -63,6 +65,8 @@ export interface AgentRunRepositoryPort {
  id: AgentRunId,
  patch: { clonePath: string; branchName: string },
 ): Promise<AgentRun>
+ /** Single-active-run guard: any non-terminal run in the workspace. */
+ findActiveByWorkspace(workspaceId: WorkspaceId): Promise<AgentRun | null>
 }
 
 export interface PersonaRepositoryPort {
@@ -90,6 +94,17 @@ export interface PersonaRepositoryPort {
  harnessMaxTurns: number | null
  },
 ): Promise<AgentPersona>
+}
+
+export interface PersonaGroupRepositoryPort {
+ create(input: { workspaceId: WorkspaceId; name: string; personaIds: string[] }): Promise<PersonaGroup>
+ listByWorkspace(workspaceId: WorkspaceId): Promise<PersonaGroup[]>
+ update(
+ workspaceId: WorkspaceId,
+ id: PersonaGroupId,
+ patch: { name: string; personaIds: string[] },
+): Promise<PersonaGroup>
+ delete(workspaceId: WorkspaceId, id: PersonaGroupId): Promise<void>
 }
 
 export interface ApprovalRepositoryPort {
@@ -128,6 +143,8 @@ export interface RunDispatchPort {
  persona: PersonaSpec
  cwd: string
  defaultBranch: string
+ /** What a human asked for via `@mention`; absent for the sidebar-picker path. */
+ task?: string
  }): Promise<void>
  /**
  * Relays a human's decision back to the Runner that is blocked awaiting it.
