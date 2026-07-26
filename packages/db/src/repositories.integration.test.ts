@@ -33,9 +33,14 @@ import { auditEvent, channel, message, thread, workspace } from './schema.js'
  * demonstrates the port abstraction holds rather than merely typechecking.
  *
  * Requires `docker compose up -d`. Skipped when DATABASE_URL is unreachable.
+ *
+ * Prefers TEST_DATABASE_URL when set — this suite truncates `workspace`
+ * itself (see beforeEach below), which cascades to nearly every domain
+ * table, so it must never point at a database a developer is using by hand.
  */
 
-const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://loom:loom@localhost:5432/loom'
+const DATABASE_URL =
+  process.env.TEST_DATABASE_URL ?? 'postgres://loom:loom@localhost:5432/loom_test'
 
 const { db, close } = createDatabase(DATABASE_URL)
 
