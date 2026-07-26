@@ -30,6 +30,11 @@ export const runnerRepository = (db: Database): RunnerRepositoryPort => ({
     return row ? toRunner(row as RunnerRow) : null
   },
 
+  async listByWorkspace(workspaceId) {
+    const rows = await db.select().from(runner).where(eq(runner.workspaceId, workspaceId))
+    return rows.map((row) => toRunner(row as RunnerRow))
+  },
+
   async createPairing(input) {
     const { runnerId, rawToken } = await createRunnerPairing(db, {
       workspaceId: input.workspaceId,

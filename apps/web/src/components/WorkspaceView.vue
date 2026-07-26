@@ -1,23 +1,39 @@
 <script setup lang="ts">
+import type { PersonaSpec } from '@loom/api-contract'
 import { computed, onBeforeUnmount, onMounted } from 'vue'
+import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
 import MessageList from './MessageList.vue'
+import PersonaForm from './PersonaForm.vue'
+import RepositoryPanel from './RepositoryPanel.vue'
+import RunnerPanel from './RunnerPanel.vue'
+import { useAgentStore } from '../stores/agent'
 import { useWorkspaceStore } from '../stores/workspace'
 
 const store = useWorkspaceStore()
+const agent = useAgentStore()
 
 const snapshot = computed(() => store.snapshot)
+const agentSnapshot = computed(() => agent.snapshot)
 const activeChannel = computed(
   () => snapshot.value.channels.find((c) => c.id === snapshot.value.activeChannelId) ?? null,
 )
 
+const startRun = (input: { repositoryId: string; persona: PersonaSpec }) => {
+  const threadId = snapshot.value.activeThread?.id
+  if (!threadId) return
+  void agent.startRun({ threadId, repositoryId: input.repositoryId, persona: input.persona })
+}
+
 onMounted(() => {
   void store.start()
+  void agent.start()
 })
 
 onBeforeUnmount(() => {
   store.dispose()
+  agent.dispose()
 })
 </script>
 
@@ -41,11 +57,35 @@ onBeforeUnmount(() => {
       </header>
 
       <p v-if="snapshot.error" class="error" role="alert">{{ snapshot.error }}</p>
+      <p v-if="agentSnapshot.error" class="error" role="alert">{{ agentSnapshot.error }}</p>
 
       <MessageList :messages="snapshot.messages" />
 
+      <ApprovalCard
+        :approvals="agentSnapshot.pendingApprovals"
+        @decide="(id, decision) => agent.decide(id, decision)"
+      />
+
       <Composer :disabled="!snapshot.activeThread" @send="store.send" />
     </main>
+
+    <aside class="agent-sidebar">
+      <RunnerPanel
+        :runners="agentSnapshot.runners"
+        :last-pairing="agentSnapshot.lastPairing"
+        @create-pairing-token="(name) => agent.createPairingToken(name)"
+      />
+      <RepositoryPanel
+        :repositories="agentSnapshot.repositories"
+        :runners="agentSnapshot.runners"
+        @bind="(input) => agent.bindRepository(input)"
+      />
+      <PersonaForm
+        :repositories="agentSnapshot.repositories"
+        :disabled="!snapshot.activeThread"
+        @start="startRun"
+      />
+    </aside>
   </div>
 </template>
 
@@ -113,5 +153,13 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, var(--danger) 14%, transparent);
   color: var(--danger);
   font-size: 0.85rem;
+}
+
+.agent-sidebar {
+  width: 18rem;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
 }
 </style>

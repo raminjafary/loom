@@ -17,6 +17,7 @@ import type {
 
 export interface RunnerRepositoryPort {
   findById(workspaceId: WorkspaceId, id: RunnerId): Promise<Runner | null>
+  listByWorkspace(workspaceId: WorkspaceId): Promise<Runner[]>
   createPairing(input: {
     workspaceId: WorkspaceId
     name: string
