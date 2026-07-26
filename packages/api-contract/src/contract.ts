@@ -8,6 +8,7 @@ import {
   ChannelSchema,
   MessagePageSchema,
   MessageSchema,
+  PersonaGroupSchema,
   RepositorySchema,
   RunnerSchema,
   ThreadSchema,
@@ -119,6 +120,27 @@ export const contract = {
       .output(AgentPersonaSchema),
   },
 
+  /** PLAN.md §3a — organizational only; does not start anything, does not bind a channel/Planner. */
+  personaGroup: {
+    list: oc.output(z.array(PersonaGroupSchema)),
+
+    create: oc
+      .input(z.object({ name: z.string().min(1).max(100), personaIds: z.array(z.string()) }))
+      .output(PersonaGroupSchema),
+
+    update: oc
+      .input(
+        z.object({
+          personaGroupId: z.string(),
+          name: z.string().min(1).max(100),
+          personaIds: z.array(z.string()),
+        }),
+      )
+      .output(PersonaGroupSchema),
+
+    delete: oc.input(z.object({ personaGroupId: z.string() })).output(z.object({ ok: z.literal(true) })),
+  },
+
   agentRun: {
     start: oc
       .input(
@@ -126,11 +148,16 @@ export const contract = {
           threadId: z.string(),
           repositoryId: z.string(),
           personaId: z.string(),
+          /** What a human asked for via `@mention` (PLAN.md §3a); absent for the sidebar picker. */
+          task: z.string().min(1).max(4_000).optional(),
         }),
       )
       .output(AgentRunSchema),
 
     get: oc.input(z.object({ agentRunId: z.string() })).output(AgentRunSchema),
+
+    /** Lets a client resume watching an already-active run after a reload (PLAN.md §3a). */
+    getActive: oc.output(AgentRunSchema.nullable()),
 
     /** On-demand branch diff for end-of-run review (PLAN.md §5a). */
     getDiff: oc

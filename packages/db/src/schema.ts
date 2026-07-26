@@ -190,6 +190,29 @@ export const agentPersona = pgTable(
 )
 
 /**
+ * Organizational persona grouping (PLAN.md §3a) — a jsonb array of member
+ * persona ids, same convention as `agentPersona.tools`. No join table: there
+ * is no per-attachment metadata, unlike `persona_capability` (§4e, Phase 2).
+ */
+export const personaGroup = pgTable(
+  'persona_group',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    personaIds: jsonb('persona_ids').$type<string[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('persona_group_workspace_idx').on(t.workspaceId),
+    uniqueIndex('persona_group_workspace_name_idx').on(t.workspaceId, t.name),
+  ],
+)
+
+/**
  * `toolName`/`input` are the exact argv the SDK is about to run — never a
  * model-authored summary (PLAN.md §6 A1/A3). `resolvedBy` must be a `user`
  * actor; enforced in the use-case, not the schema.

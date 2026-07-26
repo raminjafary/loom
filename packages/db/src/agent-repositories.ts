@@ -1,27 +1,32 @@
 import type {
   AgentRunRepositoryPort,
   ApprovalRepositoryPort,
+  PersonaGroupRepositoryPort,
   PersonaRepositoryPort,
   RepositoryRepositoryPort,
   RunnerRepositoryPort,
 } from '@loom/application'
 import { NotFoundError, asRunnerId } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, notInArray } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
   toAgentPersona,
   toAgentRun,
   toApprovalRequest,
+  toPersonaGroup,
   toRepository,
   toRunner,
   type AgentPersonaRow,
   type AgentRunRow,
   type ApprovalRequestRow,
+  type PersonaGroupRow,
   type RepositoryRow,
   type RunnerRow,
 } from './mappers.js'
-import { agentPersona, agentRun, approvalRequest, repository, runner } from './schema.js'
+import { agentPersona, agentRun, approvalRequest, personaGroup, repository, runner } from './schema.js'
+
+const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'] as const
 
 export const runnerRepository = (db: Database): RunnerRepositoryPort => ({
   async findById(workspaceId, id) {
@@ -127,6 +132,17 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
       .returning()
     if (!row) throw new NotFoundError('AgentRun')
     return toAgentRun(row as AgentRunRow)
+  },
+
+  async findActiveByWorkspace(workspaceId) {
+    const [row] = await db
+      .select()
+      .from(agentRun)
+      .where(
+        and(eq(agentRun.workspaceId, workspaceId), notInArray(agentRun.status, [...TERMINAL_STATUSES])),
+      )
+      .limit(1)
+    return row ? toAgentRun(row as AgentRunRow) : null
   },
 })
 
@@ -237,6 +253,36 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
       .returning()
     if (!row) throw new NotFoundError('AgentPersona')
     return toAgentPersona(row as AgentPersonaRow)
+  },
+})
+
+export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort => ({
+  async create(input) {
+    const [row] = await db
+      .insert(personaGroup)
+      .values({ workspaceId: input.workspaceId, name: input.name, personaIds: input.personaIds })
+      .returning()
+    if (!row) throw new Error('persona_group insert returned no row')
+    return toPersonaGroup(row as PersonaGroupRow)
+  },
+
+  async listByWorkspace(workspaceId) {
+    const rows = await db.select().from(personaGroup).where(eq(personaGroup.workspaceId, workspaceId))
+    return rows.map((row) => toPersonaGroup(row as PersonaGroupRow))
+  },
+
+  async update(workspaceId, id, patch) {
+    const [row] = await db
+      .update(personaGroup)
+      .set({ name: patch.name, personaIds: patch.personaIds, updatedAt: new Date() })
+      .where(and(eq(personaGroup.workspaceId, workspaceId), eq(personaGroup.id, id)))
+      .returning()
+    if (!row) throw new NotFoundError('PersonaGroup')
+    return toPersonaGroup(row as PersonaGroupRow)
+  },
+
+  async delete(workspaceId, id) {
+    await db.delete(personaGroup).where(and(eq(personaGroup.workspaceId, workspaceId), eq(personaGroup.id, id)))
   },
 })
 

@@ -13,6 +13,7 @@ export type RunnerId = Brand<string, 'RunnerId'>
 export type RepositoryId = Brand<string, 'RepositoryId'>
 export type ApprovalRequestId = Brand<string, 'ApprovalRequestId'>
 export type AgentPersonaId = Brand<string, 'AgentPersonaId'>
+export type PersonaGroupId = Brand<string, 'PersonaGroupId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -25,3 +26,4 @@ export const asRunnerId = (v: string): RunnerId => v as RunnerId
 export const asRepositoryId = (v: string): RepositoryId => v as RepositoryId
 export const asApprovalRequestId = (v: string): ApprovalRequestId => v as ApprovalRequestId
 export const asAgentPersonaId = (v: string): AgentPersonaId => v as AgentPersonaId
+export const asPersonaGroupId = (v: string): PersonaGroupId => v as PersonaGroupId

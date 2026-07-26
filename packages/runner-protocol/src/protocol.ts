@@ -82,6 +82,8 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
     // clones this into a scratch workspace per run (PLAN.md §5a).
     cwd: z.string(),
     defaultBranch: z.string(),
+    /** What a human asked for via `@mention` (PLAN.md §3a); absent for the sidebar picker. */
+    task: z.string().optional(),
   }),
   z.object({
     type: z.literal('permission_response'),

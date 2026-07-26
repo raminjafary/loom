@@ -105,6 +105,8 @@ export const toWireEvents = (message: SDKMessage): WireAgentEvent[] => {
 export interface RunAgentOptions {
   readonly persona: WirePersonaSpec
   readonly cwd: string
+  /** What a human asked for via `@mention` (PLAN.md §3a); absent for the sidebar-picker path. */
+  readonly task?: string
   readonly onEvent: (event: WireAgentEvent) => void
   /** Resolves once a human (relayed via the server) has decided. */
   readonly onPermissionRequest: (
@@ -150,8 +152,12 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
     return result
   }
 
+  const prompt = options.task
+    ? `You are ${options.persona.name}. ${options.task}`
+    : `You are ${options.persona.name}. Begin working now.`
+
   const stream = query({
-    prompt: `You are ${options.persona.name}. Begin working now.`,
+    prompt,
     options: {
       cwd: options.cwd,
       agent: options.persona.name,

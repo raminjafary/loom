@@ -1,4 +1,11 @@
-import type { AgentPersona, AgentRun, ApprovalRequest, Repository, Runner } from '@loom/api-contract'
+import type {
+  AgentPersona,
+  AgentRun,
+  ApprovalRequest,
+  PersonaGroup,
+  Repository,
+  Runner,
+} from '@loom/api-contract'
 import type { LoomApi } from './api.js'
 
 /**
@@ -21,6 +28,7 @@ export interface AgentSnapshot {
   readonly runners: Runner[]
   readonly repositories: Repository[]
   readonly personas: AgentPersona[]
+  readonly personaGroups: PersonaGroup[]
   readonly activeRun: AgentRun | null
   readonly pendingApprovals: ApprovalRequest[]
   readonly lastPairing: { runnerId: string; rawToken: string } | null
@@ -36,7 +44,15 @@ export interface AgentSession {
   createPairingToken(name: string): Promise<void>
   bindRepository(input: { runnerId: string; path: string; displayName: string }): Promise<void>
   createPersona(markdownSource: string): Promise<void>
-  startRun(input: { threadId: string; repositoryId: string; personaId: string }): Promise<void>
+  createPersonaGroup(input: { name: string; personaIds: string[] }): Promise<void>
+  updatePersonaGroup(input: { personaGroupId: string; name: string; personaIds: string[] }): Promise<void>
+  deletePersonaGroup(personaGroupId: string): Promise<void>
+  startRun(input: {
+    threadId: string
+    repositoryId: string
+    personaId: string
+    task?: string
+  }): Promise<void>
   decide(approvalRequestId: string, decision: 'approve' | 'deny'): Promise<void>
   loadDiff(agentRunId: string): Promise<void>
   dispose(): void
@@ -50,6 +66,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     runners: [],
     repositories: [],
     personas: [],
+    personaGroups: [],
     activeRun: null,
     pendingApprovals: [],
     lastPairing: null,
@@ -103,12 +120,21 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     async init() {
       patch({ loading: true, error: null })
       try {
-        const [runners, repositories, personas] = await Promise.all([
+        const [runners, repositories, personas, personaGroups, activeRun] = await Promise.all([
           options.api.runner.list(),
           options.api.repository.list(),
           options.api.persona.list(),
+          options.api.personaGroup.list(),
+          options.api.agentRun.getActive(),
         ])
-        patch({ runners, repositories, personas })
+        patch({ runners, repositories, personas, personaGroups })
+        // Resume watching whatever run is already active — otherwise a page
+        // reload during a run leaves no path back to its approval card.
+        if (activeRun && !TERMINAL_STATUSES.has(activeRun.status)) {
+          const pendingApprovals = await options.api.approval.listPending({ agentRunId: activeRun.id })
+          patch({ activeRun, pendingApprovals })
+          pollActiveRun(activeRun.id)
+        }
       } catch (error) {
         patch({ error: errorMessage(error) })
       } finally {
@@ -145,6 +171,39 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         await options.api.persona.create({ markdownSource })
         const personas = await options.api.persona.list()
         patch({ personas })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async createPersonaGroup(input) {
+      patch({ error: null })
+      try {
+        await options.api.personaGroup.create(input)
+        const personaGroups = await options.api.personaGroup.list()
+        patch({ personaGroups })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async updatePersonaGroup(input) {
+      patch({ error: null })
+      try {
+        await options.api.personaGroup.update(input)
+        const personaGroups = await options.api.personaGroup.list()
+        patch({ personaGroups })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async deletePersonaGroup(personaGroupId) {
+      patch({ error: null })
+      try {
+        await options.api.personaGroup.delete({ personaGroupId })
+        const personaGroups = await options.api.personaGroup.list()
+        patch({ personaGroups })
       } catch (error) {
         patch({ error: errorMessage(error) })
       }

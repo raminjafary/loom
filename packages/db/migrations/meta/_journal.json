@@ -43,6 +43,13 @@
       "when": 1785043120163,
       "tag": "0005_eminent_doorman",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785093149556,
+      "tag": "0006_secret_morlocks",
+      "breakpoints": true
     }
   ]
 }

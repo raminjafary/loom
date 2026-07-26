@@ -18,7 +18,7 @@ export interface Principal {
 }
 
 export interface WorkspaceMembership {
-  ensureMembership(userId: string): Promise<{ workspaceId: string }>
+  ensureMembership(userId: string): Promise<{ workspaceId: string; created: boolean }>
 }
 
 /**

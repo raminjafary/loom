@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { parseMention } from '@loom/client-core'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
 import DiffView from './DiffView.vue'
 import MessageList from './MessageList.vue'
 import PersonaForm from './PersonaForm.vue'
+import PersonaGroupPanel from './PersonaGroupPanel.vue'
 import RepositoryPanel from './RepositoryPanel.vue'
 import RunnerPanel from './RunnerPanel.vue'
 import { useAgentStore } from '../stores/agent'
@@ -28,6 +30,39 @@ const startRun = (input: { repositoryId: string; personaId: string }) => {
   const threadId = snapshot.value.activeThread?.id
   if (!threadId) return
   void agent.startRun({ threadId, repositoryId: input.repositoryId, personaId: input.personaId })
+}
+
+// `@mention` starts a run (PLAN.md §3a): the message always posts as
+// ordinary chat; if it mentions a known persona, a repo-picker bar appears
+// so the human can say inline which bound repo to target — never bound per
+// channel, and never assumed (§3a non-scope).
+const pendingMention = ref<{ personaId: string; personaName: string; task: string } | null>(null)
+const mentionRepositoryId = ref('')
+
+const handleSend = (text: string) => {
+  void store.send(text)
+  const mention = parseMention(text, agentSnapshot.value.personas)
+  pendingMention.value = mention
+  if (mention) {
+    mentionRepositoryId.value = agentSnapshot.value.repositories[0]?.id ?? ''
+  }
+}
+
+const confirmMention = () => {
+  const threadId = snapshot.value.activeThread?.id
+  const mention = pendingMention.value
+  if (!threadId || !mention || !mentionRepositoryId.value) return
+  void agent.startRun({
+    threadId,
+    repositoryId: mentionRepositoryId.value,
+    personaId: mention.personaId,
+    task: mention.task,
+  })
+  pendingMention.value = null
+}
+
+const cancelMention = () => {
+  pendingMention.value = null
 }
 
 onMounted(() => {
@@ -70,7 +105,19 @@ onBeforeUnmount(() => {
         @decide="(id, decision) => agent.decide(id, decision)"
       />
 
-      <Composer :disabled="!snapshot.activeThread" @send="store.send" />
+      <div v-if="pendingMention" class="mention-bar">
+        <span>Start <strong>{{ pendingMention.personaName }}</strong> on:</span>
+        <select v-model="mentionRepositoryId" aria-label="Repository for this run">
+          <option value="" disabled>Select repository…</option>
+          <option v-for="repo in agentSnapshot.repositories" :key="repo.id" :value="repo.id">
+            {{ repo.displayName }}
+          </option>
+        </select>
+        <button type="button" :disabled="!mentionRepositoryId" @click="confirmMention">Start run</button>
+        <button type="button" class="cancel" @click="cancelMention">Cancel</button>
+      </div>
+
+      <Composer :disabled="!snapshot.activeThread" :personas="agentSnapshot.personas" @send="handleSend" />
     </main>
 
     <aside class="agent-sidebar">
@@ -90,6 +137,13 @@ onBeforeUnmount(() => {
         :disabled="!snapshot.activeThread"
         @start="startRun"
         @create-persona="(markdownSource) => agent.createPersona(markdownSource)"
+      />
+      <PersonaGroupPanel
+        :personas="agentSnapshot.personas"
+        :groups="agentSnapshot.personaGroups"
+        @create="(input) => agent.createPersonaGroup(input)"
+        @update="(input) => agent.updatePersonaGroup(input)"
+        @delete="(id) => agent.deletePersonaGroup(id)"
       />
       <DiffView
         :run="agentSnapshot.activeRun"
@@ -164,6 +218,47 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, var(--danger) 14%, transparent);
   color: var(--danger);
   font-size: 0.85rem;
+}
+
+.mention-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  font-size: 0.85rem;
+}
+
+.mention-bar select {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.mention-bar button {
+  padding: 0.3rem 0.6rem;
+  border: 0;
+  border-radius: 0.375rem;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mention-bar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mention-bar button.cancel {
+  background: none;
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .agent-sidebar {

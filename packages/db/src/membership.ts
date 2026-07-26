@@ -13,8 +13,8 @@ export const ensureWorkspaceMembership = async (
   db: Database,
   userId: string,
   defaults: { slug: string; name: string },
-): Promise<{ workspaceId: string }> => {
-  const { id: workspaceId } = await ensureWorkspace(db, defaults.slug, defaults.name)
+): Promise<{ workspaceId: string; created: boolean }> => {
+  const { id: workspaceId, created } = await ensureWorkspace(db, defaults.slug, defaults.name)
 
   const existing = await db
     .select({ id: workspaceMember.id })
@@ -26,5 +26,5 @@ export const ensureWorkspaceMembership = async (
     await db.insert(workspaceMember).values({ workspaceId, userId, role: 'member' })
   }
 
-  return { workspaceId }
+  return { workspaceId, created }
 }

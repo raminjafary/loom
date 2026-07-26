@@ -1,5 +1,6 @@
 export * from './agent-session.js'
 export * from './api.js'
 export * from './auth.js'
+export * from './mention.js'
 export * from './realtime.js'
 export * from './workspace-session.js'

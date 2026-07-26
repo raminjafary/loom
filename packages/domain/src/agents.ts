@@ -2,6 +2,7 @@ import type {
   AgentPersonaId,
   AgentRunId,
   ApprovalRequestId,
+  PersonaGroupId,
   RepositoryId,
   RunnerId,
   ThreadId,
@@ -72,6 +73,21 @@ export interface AgentPersona {
   readonly tools: string[]
   readonly harnessEffort: string | null
   readonly harnessMaxTurns: number | null
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}
+
+/**
+ * Organizational grouping of personas (PLAN.md §3a, scoped down from the
+ * fuller "Team" concept in §3 — a channel + roster + optional lead Planner
+ * is real Phase 2 scope). Grouping personas doesn't start anything and does
+ * not bind to a channel or a Planner.
+ */
+export interface PersonaGroup {
+  readonly id: PersonaGroupId
+  readonly workspaceId: WorkspaceId
+  readonly name: string
+  readonly personaIds: string[]
   readonly createdAt: Date
   readonly updatedAt: Date
 }

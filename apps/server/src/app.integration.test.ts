@@ -147,6 +147,7 @@ describe('contract completeness', () => {
       'runner',
       'repository',
       'persona',
+      'personaGroup',
       'agentRun',
       'approval',
     ])
@@ -155,7 +156,8 @@ describe('contract completeness', () => {
     expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken'])
     expect(Object.keys(contract.repository)).toEqual(['list', 'bindExisting'])
     expect(Object.keys(contract.persona)).toEqual(['list', 'get', 'create', 'update'])
-    expect(Object.keys(contract.agentRun)).toEqual(['start', 'get', 'getDiff'])
+    expect(Object.keys(contract.personaGroup)).toEqual(['list', 'create', 'update', 'delete'])
+    expect(Object.keys(contract.agentRun)).toEqual(['start', 'get', 'getActive', 'getDiff'])
     expect(Object.keys(contract.approval)).toEqual(['listPending', 'decide'])
   })
 })

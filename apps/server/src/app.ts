@@ -1,4 +1,5 @@
-import type { AgentDeps } from '@loom/application'
+import { type AgentDeps, seedBuiltinPersonas } from '@loom/application'
+import { asWorkspaceId } from '@loom/domain'
 import {
   agentRunRepository,
   approvalRepository,
@@ -7,6 +8,7 @@ import {
   createDatabase,
   ensureWorkspaceMembership,
   messageRepository,
+  personaGroupRepository,
   personaRepository,
   repositoryRepository,
   runnerRepository,
@@ -46,6 +48,7 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
     agentRuns: agentRunRepository(db),
     approvals: approvalRepository(db),
     personas: personaRepository(db),
+    personaGroups: personaGroupRepository(db),
   }
 
   // The Runner gateway produces `dispatch` — see runner-gateway.ts for why
@@ -63,7 +66,13 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
   const auth =
     authOverride ??
     betterAuthPort(betterAuth, {
-      ensureMembership: (userId) => ensureWorkspaceMembership(db, userId, DEFAULT_WORKSPACE),
+      ensureMembership: async (userId) => {
+        const result = await ensureWorkspaceMembership(db, userId, DEFAULT_WORKSPACE)
+        if (result.created) {
+          await seedBuiltinPersonas(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
+        }
+        return result
+      },
     })
 
   const fastify = Fastify({ logger: config.NODE_ENV !== 'test' })
