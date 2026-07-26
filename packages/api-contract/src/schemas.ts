@@ -62,6 +62,16 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
  z.object({ type: z.literal('thread.created'), thread: ThreadSchema }),
 ])
 
+export const RunnerSchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ name: z.string,
+ allowedRoots: z.array(z.string),
+ connected: z.boolean,
+ lastSeenAt: z.date.nullable,
+ createdAt: z.date,
+})
+
 export const RepositorySchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -123,6 +133,7 @@ export type Channel = z.infer<typeof ChannelSchema>
 export type Thread = z.infer<typeof ThreadSchema>
 export type MessagePage = z.infer<typeof MessagePageSchema>
 export type ServerEvent = z.infer<typeof ServerEventSchema>
+export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>

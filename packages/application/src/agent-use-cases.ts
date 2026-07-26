@@ -15,6 +15,7 @@ import {
  type PersonaSpec,
  type Repository,
  type RepositoryId,
+ type Runner,
  type RunnerId,
  type ThreadId,
  type WorkspaceId,
@@ -97,6 +98,12 @@ export const bindRepository = async (
  defaultBranch: check.defaultBranch,
  })
 }
+
+/** What a real client needs to render a runner-picker; no actor restriction, same as listRepositories. */
+export const listRunners = (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<Runner[]> => deps.runners.listByWorkspace(input.workspaceId)
 
 export const listRepositories = (
  deps: AgentDeps,

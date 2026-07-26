@@ -11,6 +11,7 @@ import {
   listMessages,
   listPendingApprovals,
   listRepositories,
+  listRunners,
   postMessage,
   startAgentRun,
   type AgentDeps,
@@ -138,6 +139,15 @@ export const router = os.router({
   },
 
   runner: {
+    list: os.runner.list.handler(({ context }) =>
+      guard(async () => {
+        const runners = await listRunners(context.deps, {
+          workspaceId: context.principal.workspaceId,
+        })
+        return runners.map((runner) => ({ ...runner, allowedRoots: [...runner.allowedRoots] }))
+      }),
+    ),
+
     createPairingToken: os.runner.createPairingToken.handler(({ context, input }) =>
       guard(() =>
         createRunnerPairingToken(context.deps, {

@@ -9,6 +9,7 @@ import {
  MessageSchema,
  PersonaSpecSchema,
  RepositorySchema,
+ RunnerSchema,
  ThreadSchema,
 } from './schemas.js'
 
@@ -78,6 +79,8 @@ export const contract = {
  },
 
  runner: {
+ list: oc.output(z.array(RunnerSchema)),
+
  createPairingToken: oc
 .input(z.object({ name: z.string.min(1).max(100) }))
 .output(z.object({ runnerId: z.string, rawToken: z.string })),
