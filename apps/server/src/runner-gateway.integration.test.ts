@@ -30,6 +30,7 @@ const { db, close: closeDb } = createDatabase(config.DATABASE_URL)
 let app: App
 let client: ContractRouterClient<Contract>
 let wsUrl: string
+let testPersonaId: string
 
 beforeAll(async => {
  const row = await seedWorkspace(db, `runner-gateway-${Date.now}`)
@@ -43,6 +44,10 @@ beforeAll(async => {
 
 beforeEach(async => {
  await truncateDomainTables(db)
+ // agent_persona is truncated above too — recreated per test, same reason
+ // the fake Runner is re-paired per test rather than reused.
+ const persona = await client.persona.create({ markdownSource: TEST_PERSONA_MARKDOWN })
+ testPersonaId = persona.id
 })
 
 afterAll(async => {
@@ -115,12 +120,14 @@ const bindViaFakeRunner = async (
  return bindPromise
 }
 
-const testPersona = {
- name: 'fake-worker',
- systemPrompt: 'irrelevant for this test',
- model: 'test-model',
- tools: ['Read'],
-}
+const TEST_PERSONA_MARKDOWN = `---
+name: fake-worker
+description: A test persona, not a real worker.
+model: test-model
+tools: [Read]
+---
+
+irrelevant for this test`
 
 describe('runner-gateway: pairing and repository binding', => {
  it('rejects an unknown pairing token', async => {
@@ -173,7 +180,7 @@ describe('runner-gateway: agent run event ingest', => {
  const runPromise = client.agentRun.start({
  threadId: created.rootThread.id,
  repositoryId: repo.id,
- persona: testPersona,
+ personaId: testPersonaId,
  })
  const startFrame = await startRun
  expect(startFrame.cwd).toBe('/tmp/repo')
@@ -225,7 +232,7 @@ describe('runner-gateway: agent run event ingest', => {
  const runPromise = client.agentRun.start({
  threadId: created.rootThread.id,
  repositoryId: repo.id,
- persona: testPersona,
+ personaId: testPersonaId,
  })
  await startRun
  const run = await runPromise
@@ -281,7 +288,7 @@ describe('runner-gateway: agent run event ingest', => {
  const runPromise = client.agentRun.start({
  threadId: created.rootThread.id,
  repositoryId: repo.id,
- persona: testPersona,
+ personaId: testPersonaId,
  })
  await startRun
  const run = await runPromise

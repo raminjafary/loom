@@ -1,40 +1,45 @@
 <script setup lang="ts">
-import type { PersonaSpec, Repository } from '@loom/api-contract'
+import type { AgentPersona, Repository } from '@loom/api-contract'
 import { ref } from 'vue'
 
 const props = defineProps<{
   repositories: Repository[]
+  personas: AgentPersona[]
   disabled: boolean
 }>()
 
 const emit = defineEmits<{
-  start: [input: { repositoryId: string; persona: PersonaSpec }]
+  start: [input: { repositoryId: string; personaId: string }]
+  'create-persona': [markdownSource: string]
 }>()
 
 const repositoryId = ref('')
-const name = ref('')
-const model = ref('claude-haiku-4-5-20251001')
-const tools = ref('Read, Grep, Glob')
-const systemPrompt = ref('')
+const personaId = ref('')
 
-const canSubmit = () =>
-  !props.disabled &&
-  repositoryId.value !== '' &&
-  name.value.trim().length > 0 &&
-  systemPrompt.value.trim().length > 0
+const canSubmit = () => !props.disabled && repositoryId.value !== '' && personaId.value !== ''
 
 const submit = () => {
   if (!canSubmit()) return
-  const persona: PersonaSpec = {
-    name: name.value.trim(),
-    systemPrompt: systemPrompt.value.trim(),
-    model: model.value.trim(),
-    tools: tools.value
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean),
-  }
-  emit('start', { repositoryId: repositoryId.value, persona })
+  emit('start', { repositoryId: repositoryId.value, personaId: personaId.value })
+}
+
+const DEFAULT_MARKDOWN = `---
+name: my-worker
+description: One-line description of what this persona does.
+model: claude-haiku-4-5-20251001
+tools: [Read, Grep, Glob]
+---
+
+System prompt / instructions for the agent go here.`
+
+const showNewPersona = ref(false)
+const draftMarkdown = ref(DEFAULT_MARKDOWN)
+
+const submitNewPersona = () => {
+  if (!draftMarkdown.value.trim()) return
+  emit('create-persona', draftMarkdown.value)
+  draftMarkdown.value = DEFAULT_MARKDOWN
+  showNewPersona.value = false
 }
 </script>
 
@@ -49,16 +54,26 @@ const submit = () => {
           {{ repo.displayName }}
         </option>
       </select>
-      <input v-model="name" placeholder="persona name" aria-label="Persona name" />
-      <input v-model="model" placeholder="model" aria-label="Model" />
-      <input v-model="tools" placeholder="tools (comma-separated)" aria-label="Tools" />
-      <textarea
-        v-model="systemPrompt"
-        rows="3"
-        placeholder="system prompt / instructions"
-        aria-label="System prompt"
-      />
+      <select v-model="personaId" aria-label="Persona">
+        <option value="" disabled>Select persona…</option>
+        <option v-for="persona in props.personas" :key="persona.id" :value="persona.id">
+          {{ persona.name }}
+        </option>
+      </select>
       <button type="submit" :disabled="!canSubmit()">Start run</button>
+    </form>
+
+    <button type="button" class="toggle-new" @click="showNewPersona = !showNewPersona">
+      {{ showNewPersona ? 'Cancel' : '+ New persona' }}
+    </button>
+
+    <form v-if="showNewPersona" class="new-persona" @submit.prevent="submitNewPersona">
+      <textarea
+        v-model="draftMarkdown"
+        rows="8"
+        aria-label="Persona markdown (frontmatter + system prompt)"
+      />
+      <button type="submit" :disabled="!draftMarkdown.trim()">Save persona</button>
     </form>
   </section>
 </template>
@@ -77,15 +92,15 @@ h3 {
   color: var(--text-faint);
 }
 
-.form {
+.form,
+.new-persona {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
 }
 
 .form select,
-.form input,
-.form textarea {
+.new-persona textarea {
   padding: 0.35rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: 0.375rem;
@@ -95,7 +110,13 @@ h3 {
   resize: vertical;
 }
 
-.form button {
+.new-persona textarea {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+.form button,
+.new-persona button {
   padding: 0.35rem 0.55rem;
   border: 0;
   border-radius: 0.375rem;
@@ -106,8 +127,24 @@ h3 {
   cursor: pointer;
 }
 
-.form button:disabled {
+.form button:disabled,
+.new-persona button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.toggle-new {
+  margin-top: 0.5rem;
+  padding: 0.3rem 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.new-persona {
+  margin-top: 0.5rem;
 }
 </style>

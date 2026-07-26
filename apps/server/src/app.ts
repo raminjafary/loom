@@ -7,6 +7,7 @@ import {
   createDatabase,
   ensureWorkspaceMembership,
   messageRepository,
+  personaRepository,
   repositoryRepository,
   runnerRepository,
   threadRepository,
@@ -44,6 +45,7 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
     repositories: repositoryRepository(db),
     agentRuns: agentRunRepository(db),
     approvals: approvalRepository(db),
+    personas: personaRepository(db),
   }
 
   // The Runner gateway produces `dispatch` — see runner-gateway.ts for why

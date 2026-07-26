@@ -1,4 +1,5 @@
 import {
+ asAgentPersonaId,
  asAgentRunId,
  asApprovalRequestId,
  asAuditEventId,
@@ -10,6 +11,7 @@ import {
  asUserId,
  asWorkspaceId,
  type Actor,
+ type AgentPersona,
  type AgentRun,
  type AgentRunStatus,
  type ApprovalRequest,
@@ -272,6 +274,34 @@ export const toApprovalRequest = (row: ApprovalRequestRow): ApprovalRequest => (
  status: toApprovalStatus(row.status),
  createdAt: row.createdAt,
  resolvedAt: row.resolvedAt,
+})
+
+export interface AgentPersonaRow {
+ id: string
+ workspaceId: string
+ name: string
+ description: string
+ markdownSource: string
+ model: string
+ tools: unknown
+ harnessEffort: string | null
+ harnessMaxTurns: number | null
+ createdAt: Date
+ updatedAt: Date
+}
+
+export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
+ id: asAgentPersonaId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ name: row.name,
+ description: row.description,
+ markdownSource: row.markdownSource,
+ model: row.model,
+ tools: Array.isArray(row.tools) ? (row.tools as string[]): [],
+ harnessEffort: row.harnessEffort,
+ harnessMaxTurns: row.harnessMaxTurns,
+ createdAt: row.createdAt,
+ updatedAt: row.updatedAt,
 })
 
 /** Cursors are opaque to callers; internally they are the `seq` watermark. */

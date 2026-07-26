@@ -1,4 +1,6 @@
 import type {
+ AgentPersona,
+ AgentPersonaId,
  AgentRun,
  AgentRunId,
  AgentRunStatus,
@@ -61,6 +63,33 @@ export interface AgentRunRepositoryPort {
  id: AgentRunId,
  patch: { clonePath: string; branchName: string },
 ): Promise<AgentRun>
+}
+
+export interface PersonaRepositoryPort {
+ create(input: {
+ workspaceId: WorkspaceId
+ name: string
+ description: string
+ markdownSource: string
+ model: string
+ tools: string[]
+ harnessEffort: string | null
+ harnessMaxTurns: number | null
+ }): Promise<AgentPersona>
+ findById(workspaceId: WorkspaceId, id: AgentPersonaId): Promise<AgentPersona | null>
+ listByWorkspace(workspaceId: WorkspaceId): Promise<AgentPersona[]>
+ update(
+ workspaceId: WorkspaceId,
+ id: AgentPersonaId,
+ patch: {
+ description: string
+ markdownSource: string
+ model: string
+ tools: string[]
+ harnessEffort: string | null
+ harnessMaxTurns: number | null
+ },
+): Promise<AgentPersona>
 }
 
 export interface ApprovalRepositoryPort {

@@ -3,22 +3,27 @@ import {
   backfillMessages,
   bindRepository,
   createChannel,
+  createPersona,
   createRunnerPairingToken,
   decideApproval,
   getAgentRun,
   getAgentRunDiff,
   getChannelRootThread,
+  getPersona,
   listChannels,
   listMessages,
   listPendingApprovals,
+  listPersonas,
   listRepositories,
   listRunners,
   postMessage,
   startAgentRun,
+  updatePersona,
   type AgentDeps,
 } from '@loom/application'
 import { DomainError } from '@loom/domain'
 import {
+  asAgentPersonaId,
   asAgentRunId,
   asApprovalRequestId,
   asChannelId,
@@ -178,6 +183,42 @@ export const router = os.router({
     ),
   },
 
+  persona: {
+    list: os.persona.list.handler(({ context }) =>
+      guard(() => listPersonas(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+
+    get: os.persona.get.handler(({ context, input }) =>
+      guard(() =>
+        getPersona(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          personaId: asAgentPersonaId(input.personaId),
+        }),
+      ),
+    ),
+
+    create: os.persona.create.handler(({ context, input }) =>
+      guard(() =>
+        createPersona(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          markdownSource: input.markdownSource,
+        }),
+      ),
+    ),
+
+    update: os.persona.update.handler(({ context, input }) =>
+      guard(() =>
+        updatePersona(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          personaId: asAgentPersonaId(input.personaId),
+          markdownSource: input.markdownSource,
+        }),
+      ),
+    ),
+  },
+
   agentRun: {
     start: os.agentRun.start.handler(({ context, input }) =>
       guard(() =>
@@ -186,7 +227,7 @@ export const router = os.router({
           actor: context.principal.actor,
           threadId: asThreadId(input.threadId),
           repositoryId: asRepositoryId(input.repositoryId),
-          persona: input.persona,
+          personaId: asAgentPersonaId(input.personaId),
         }),
       ),
     ),

@@ -2,12 +2,12 @@ import { oc } from '@orpc/contract'
 import { z } from 'zod'
 import {
  ActorSchema,
+ AgentPersonaSchema,
  AgentRunSchema,
  ApprovalRequestSchema,
  ChannelSchema,
  MessagePageSchema,
  MessageSchema,
- PersonaSpecSchema,
  RepositorySchema,
  RunnerSchema,
  ThreadSchema,
@@ -104,14 +104,28 @@ export const contract = {
 .output(RepositorySchema),
  },
 
+ /** Phase 1 subset — markdown+frontmatter, read/CRUD only. */
+ persona: {
+ list: oc.output(z.array(AgentPersonaSchema)),
+
+ get: oc.input(z.object({ personaId: z.string })).output(AgentPersonaSchema),
+
+ create: oc
+.input(z.object({ markdownSource: z.string.min(1).max(40_000) }))
+.output(AgentPersonaSchema),
+
+ update: oc
+.input(z.object({ personaId: z.string, markdownSource: z.string.min(1).max(40_000) }))
+.output(AgentPersonaSchema),
+ },
+
  agentRun: {
- /** Inline persona for Phase 1 — no persona CRUD/markdown storage yet. */
  start: oc
 .input(
  z.object({
  threadId: z.string,
  repositoryId: z.string,
- persona: PersonaSpecSchema,
+ personaId: z.string,
  }),
 )
 .output(AgentRunSchema),

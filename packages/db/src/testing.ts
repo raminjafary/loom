@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
+ agentPersona,
  agentRun,
  approvalRequest,
  auditEvent,
@@ -27,13 +28,13 @@ import {
 
 export const truncateDomainTables = async (db: Database): Promise<void> => {
  await db.execute(
- sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRun}, ${repository}, ${runner}, ${message}, ${thread}, ${channel} restart identity cascade`,
+ sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRun}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${thread}, ${channel} restart identity cascade`,
 )
 }
 
 export const truncateAll = async (db: Database): Promise<void> => {
  await db.execute(
- sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRun}, ${repository}, ${runner}, ${message}, ${thread}, ${channel}, ${workspace} restart identity cascade`,
+ sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRun}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${thread}, ${channel}, ${workspace} restart identity cascade`,
 )
 }
 

@@ -133,11 +133,12 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  const toolUseId = `${toolName}-${Date.now}-${Math.random.toString(36).slice(2)}`
 
  // Out-of-bounds writes are not a judgment call for a human to weigh —
- // deny outright and surface it in the thread rather than spending an
- // approval round-trip on something that was never going to be approved.
+ // deny outright, skipping the approval round-trip entirely. No separate
+ // onEvent here: `message` becomes the tool_result the SDK reports back
+ // to the model, which toWireEvents already renders as a visible
+ // tool_result — a second manual emission would just duplicate that line.
  const effect = await options.classifyEffect(toolName, input)
  if (!effect.ok) {
- options.onEvent({ kind: 'tool_result', toolUseId, isError: true, summary: `Auto-denied: ${effect.reason}` })
  return { behavior: 'deny', message: effect.reason }
  }
 

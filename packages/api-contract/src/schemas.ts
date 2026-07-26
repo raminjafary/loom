@@ -90,6 +90,21 @@ export const PersonaSpecSchema = z.object({
  tools: z.array(z.string),
 })
 
+/** Phase 1 subset — read/CRUD only, no git-backed versioning yet. */
+export const AgentPersonaSchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ name: z.string,
+ description: z.string,
+ markdownSource: z.string,
+ model: z.string,
+ tools: z.array(z.string),
+ harnessEffort: z.string.nullable,
+ harnessMaxTurns: z.number.nullable,
+ createdAt: z.date,
+ updatedAt: z.date,
+})
+
 export const AgentRunStatusSchema = z.enum([
  'pending',
  'running',
@@ -138,5 +153,6 @@ export type ServerEvent = z.infer<typeof ServerEventSchema>
 export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
+export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>
