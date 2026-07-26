@@ -113,6 +113,11 @@ export interface RunAgentOptions {
     input: Record<string, unknown>,
   ) => Promise<'allow' | 'deny'>
   readonly isRiskyTool: (toolName: string) => boolean
+  /** Path-scoped write check (PLAN.md §6 A3) — see packages/domain/src/risky-tools.ts. */
+  readonly classifyEffect: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>
 }
 
 export const runAgent = async (options: RunAgentOptions): Promise<void> => {
@@ -126,6 +131,16 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
     // fresh one is minted per gate and used consistently in the
     // permission_request/permission_response round-trip.
     const toolUseId = `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+    // Out-of-bounds writes are not a judgment call for a human to weigh —
+    // deny outright and surface it in the thread rather than spending an
+    // approval round-trip on something that was never going to be approved.
+    const effect = await options.classifyEffect(toolName, input)
+    if (!effect.ok) {
+      options.onEvent({ kind: 'tool_result', toolUseId, isError: true, summary: `Auto-denied: ${effect.reason}` })
+      return { behavior: 'deny', message: effect.reason }
+    }
+
     const decision = await options.onPermissionRequest(toolUseId, toolName, input)
     const result: PermissionResult =
       decision === 'allow'

@@ -1,8 +1,8 @@
-import { isRiskyTool } from '@loom/domain'
+import { classifyToolEffect, isRiskyTool } from '@loom/domain'
 import { RunnerFrameSchema, ServerFrameSchema, type RunnerFrame } from '@loom/runner-protocol'
 import WebSocket from 'ws'
 import { runAgent } from './claude-agent-adapter.js'
-import { checkPath } from './path-check.js'
+import { checkPath, resolveWithinRoot } from './path-check.js'
 import { getDiff, prepareRunWorkspace } from './run-workspace.js'
 
 export interface RunnerClientOptions {
@@ -82,6 +82,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 persona: frame.persona,
                 cwd: clonePath,
                 isRiskyTool,
+                classifyEffect: (toolName, input) =>
+                  classifyToolEffect(toolName, input, clonePath, resolveWithinRoot),
                 onEvent: (event) => send({ type: 'agent_event', runId, event }),
                 onPermissionRequest: (toolUseId, toolName, input) => {
                   send({ type: 'permission_request', runId, toolUseId, toolName, input })
