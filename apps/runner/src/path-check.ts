@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { realpath, stat } from 'node:fs/promises'
-import { resolve as resolvePath } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -65,4 +65,42 @@ export const checkPath = async (
  error: `Failed to read git branch: ${error instanceof Error ? error.message: String(error)}`,
  }
  }
+}
+
+/**
+ * Symlink-safe realpath, but tolerant of a target that doesn't exist yet —
+ * `Write` routinely targets a file that isn't there yet, so realpath on the
+ * full path would just throw. Walks up to the nearest existing ancestor,
+ * resolves *that*, and re-appends the not-yet-created suffix; only the
+ * existing prefix can hide a symlink anyway.
+ */
+const resolveExisting = async (target: string): Promise<string> => {
+ const suffix: string[] = []
+ let current = target
+ for (;;) {
+ try {
+ const real = await realpath(current)
+ return suffix.length > 0 ? join(real,...suffix.reverse): real
+ } catch {
+ const parent = dirname(current)
+ if (parent === current) return target
+ suffix.push(relative(parent, current))
+ current = parent
+ }
+ }
+}
+
+/**
+ * The resolver `classifyToolEffect` (packages/domain/src/risky-tools.ts)
+ * calls to check a Write/Edit/NotebookEdit target against the run's clone —
+ * domain has zero dependencies, so the actual filesystem access lives here.
+ */
+export const resolveWithinRoot = async (
+ path: string,
+ root: string,
+): Promise<{ readonly withinRoot: boolean }> => {
+ const targetAbs = isAbsolute(path) ? path: resolvePath(root, path)
+ const [realRoot, realTarget] = await Promise.all([resolveExisting(root), resolveExisting(targetAbs)])
+ const rel = relative(realRoot, realTarget)
+ return { withinRoot: rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)) }
 }
