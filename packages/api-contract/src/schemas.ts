@@ -109,6 +109,8 @@ export const AgentRunSchema = z.object({
  status: AgentRunStatusSchema,
  totalCostUsd: z.number.nullable,
  errorMessage: z.string.nullable,
+ clonePath: z.string.nullable,
+ branchName: z.string.nullable,
  createdAt: z.date,
  completedAt: z.date.nullable,
 })

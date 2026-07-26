@@ -117,6 +117,11 @@ export const contract = {
 .output(AgentRunSchema),
 
  get: oc.input(z.object({ agentRunId: z.string })).output(AgentRunSchema),
+
+ /** On-demand branch diff for end-of-run review. */
+ getDiff: oc
+.input(z.object({ agentRunId: z.string }))
+.output(z.object({ diff: z.string })),
  },
 
  /**

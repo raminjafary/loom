@@ -6,6 +6,7 @@ import {
   createRunnerPairingToken,
   decideApproval,
   getAgentRun,
+  getAgentRunDiff,
   getChannelRootThread,
   listChannels,
   listMessages,
@@ -197,6 +198,15 @@ export const router = os.router({
           agentRunId: asAgentRunId(input.agentRunId),
         }),
       ),
+    ),
+
+    getDiff: os.agentRun.getDiff.handler(({ context, input }) =>
+      guard(async () => ({
+        diff: await getAgentRunDiff(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          agentRunId: asAgentRunId(input.agentRunId),
+        }),
+      })),
     ),
   },
 
