@@ -384,10 +384,28 @@ export const startAgentRun = async (
 ...(input.task === undefined ? {}: { task: input.task }),
  })
  } catch (error) {
+ const errorMessage = error instanceof Error ? error.message: String(error)
  const failed = await deps.agentRuns.updateStatus(input.workspaceId, run.id, {
  status: 'failed',
- errorMessage: error instanceof Error ? error.message: String(error),
+ errorMessage,
  })
+
+ // Every other failure mode posts a visible system message (run_failed,
+ // approval needed,...) — a dispatch failure (e.g. Runner disconnected)
+ // was the one silent exception, leaving no trace a human could see.
+ const message = await deps.messages.append({
+ workspaceId: input.workspaceId,
+ threadId: input.threadId,
+ author: systemActor,
+ body: { kind: 'system', text: `Run failed to start: ${errorMessage}` },
+ })
+ await deps.events.publish({
+ type: 'message.created',
+ workspaceId: input.workspaceId,
+ threadId: input.threadId,
+ message,
+ })
+
  return failed
  }
 
