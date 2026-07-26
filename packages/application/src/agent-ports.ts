@@ -55,6 +55,12 @@ export interface AgentRunRepositoryPort {
       completedAt?: Date
     },
   ): Promise<AgentRun>
+  /** Set once the Runner finishes cloning (PLAN.md §5a) — a distinct event from a status transition. */
+  recordWorkspace(
+    workspaceId: WorkspaceId,
+    id: AgentRunId,
+    patch: { clonePath: string; branchName: string },
+  ): Promise<AgentRun>
 }
 
 export interface ApprovalRepositoryPort {
@@ -93,6 +99,7 @@ export interface RunDispatchPort {
     runId: AgentRunId
     persona: PersonaSpec
     cwd: string
+    defaultBranch: string
   }): Promise<void>
   /**
    * Relays a human's decision back to the Runner that is blocked awaiting it.
@@ -105,4 +112,9 @@ export interface RunDispatchPort {
     toolUseId: string
     decision: 'allow' | 'deny'
   }): Promise<void>
+  /** Asks the Runner for the run's branch diff on demand (PLAN.md §5a diff-review handoff). */
+  getDiff(input: {
+    runnerId: RunnerId
+    runId: AgentRunId
+  }): Promise<{ ok: true; diff: string } | { ok: false; error: string }>
 }

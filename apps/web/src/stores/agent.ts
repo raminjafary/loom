@@ -32,6 +32,7 @@ export const useAgentStore = defineStore('agent', () => {
       session.startRun(input),
     decide: (approvalRequestId: string, decision: 'approve' | 'deny') =>
       session.decide(approvalRequestId, decision),
+    loadDiff: (agentRunId: string) => session.loadDiff(agentRunId),
     dispose: () => session.dispose(),
   }
 })

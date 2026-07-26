@@ -207,6 +207,8 @@ export interface AgentRunRow {
   status: string
   totalCostUsd: number | null
   errorMessage: string | null
+  clonePath: string | null
+  branchName: string | null
   createdAt: Date
   completedAt: Date | null
 }
@@ -235,6 +237,8 @@ export const toAgentRun = (row: AgentRunRow): AgentRun => ({
   status: toAgentRunStatus(row.status),
   totalCostUsd: row.totalCostUsd,
   errorMessage: row.errorMessage,
+  clonePath: row.clonePath,
+  branchName: row.branchName,
   createdAt: row.createdAt,
   completedAt: row.completedAt,
 })

@@ -153,7 +153,7 @@ describe('contract completeness', () => {
     expect(Object.keys(contract.message)).toEqual(['list', 'post', 'backfill'])
     expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken'])
     expect(Object.keys(contract.repository)).toEqual(['list', 'bindExisting'])
-    expect(Object.keys(contract.agentRun)).toEqual(['start', 'get'])
+    expect(Object.keys(contract.agentRun)).toEqual(['start', 'get', 'getDiff'])
     expect(Object.keys(contract.approval)).toEqual(['listPending', 'decide'])
   })
 })

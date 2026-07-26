@@ -176,6 +176,7 @@ export const startAgentRun = async (
       runId: run.id,
       persona: input.persona,
       cwd: repository.absolutePath,
+      defaultBranch: repository.defaultBranch,
     })
   } catch (error) {
     const failed = await deps.agentRuns.updateStatus(input.workspaceId, run.id, {
@@ -186,6 +187,41 @@ export const startAgentRun = async (
   }
 
   return deps.agentRuns.updateStatus(input.workspaceId, run.id, { status: 'running' })
+}
+
+/**
+ * Called by runner-gateway.ts when the Runner reports its clone is ready
+ * (PLAN.md §5a) — a distinct event from any status transition, since the
+ * run may still be `pending`/`running` when this arrives.
+ */
+export const recordRunWorkspace = async (
+  deps: AgentDeps,
+  input: {
+    workspaceId: WorkspaceId
+    agentRunId: AgentRunId
+    clonePath: string
+    branchName: string
+  },
+): Promise<AgentRun> =>
+  deps.agentRuns.recordWorkspace(input.workspaceId, input.agentRunId, {
+    clonePath: input.clonePath,
+    branchName: input.branchName,
+  })
+
+/** Asks the Runner for the run's branch diff on demand, for end-of-run review (PLAN.md §5a). */
+export const getAgentRunDiff = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
+): Promise<string> => {
+  const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+  if (!run) throw new NotFoundError('AgentRun')
+  if (!run.clonePath) {
+    throw new ValidationError('Run has no workspace yet — it may still be starting')
+  }
+
+  const result = await deps.dispatch.getDiff({ runnerId: run.runnerId, runId: run.id })
+  if (!result.ok) throw new ValidationError(result.error)
+  return result.diff
 }
 
 const eventToMessageText = (event: AgentEvent): string => {

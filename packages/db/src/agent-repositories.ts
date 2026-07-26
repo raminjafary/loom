@@ -115,6 +115,16 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
     if (!row) throw new NotFoundError('AgentRun')
     return toAgentRun(row as AgentRunRow)
   },
+
+  async recordWorkspace(workspaceId, id, patch) {
+    const [row] = await db
+      .update(agentRun)
+      .set({ clonePath: patch.clonePath, branchName: patch.branchName })
+      .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
+      .returning()
+    if (!row) throw new NotFoundError('AgentRun')
+    return toAgentRun(row as AgentRunRow)
+  },
 })
 
 export const approvalRepository = (db: Database): ApprovalRepositoryPort => ({

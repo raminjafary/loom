@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
+import DiffView from './DiffView.vue'
 import MessageList from './MessageList.vue'
 import PersonaForm from './PersonaForm.vue'
 import RepositoryPanel from './RepositoryPanel.vue'
@@ -84,6 +85,11 @@ onBeforeUnmount(() => {
         :repositories="agentSnapshot.repositories"
         :disabled="!snapshot.activeThread"
         @start="startRun"
+      />
+      <DiffView
+        :run="agentSnapshot.activeRun"
+        :diff="agentSnapshot.diff"
+        @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
       />
     </aside>
   </div>

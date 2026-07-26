@@ -1,5 +1,5 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
-import { requestApproval, recordAgentEvent } from '@loom/application'
+import { requestApproval, recordAgentEvent, recordRunWorkspace } from '@loom/application'
 import {
   asAgentRunId,
   asRunnerId,
@@ -27,6 +27,11 @@ interface PendingCheck {
   reject(error: Error): void
 }
 
+interface PendingDiff {
+  resolve(result: { ok: true; diff: string } | { ok: false; error: string }): void
+  reject(error: Error): void
+}
+
 /**
  * Runner-facing WS endpoint (PLAN.md §4c note): corrected placement, lives on
  * apps/server rather than apps/ws-gateway because it needs the application
@@ -48,6 +53,7 @@ export const createRunnerGateway = (
 ): { register(fastify: FastifyInstance): Promise<void>; dispatch: RunDispatchPort } => {
   const connections = new Map<string, ConnectedRunner>()
   const pendingChecks = new Map<string, PendingCheck>()
+  const pendingDiffs = new Map<string, PendingDiff>()
 
   const send = (runnerId: RunnerId, frame: ServerFrame): void => {
     const conn = connections.get(runnerId)
@@ -83,17 +89,44 @@ export const createRunnerGateway = (
       return result
     },
 
-    async startRun({ runnerId, runId, persona, cwd }) {
+    async startRun({ runnerId, runId, persona, cwd, defaultBranch }) {
       send(runnerId, {
         type: 'start_run',
         runId,
         persona: { ...persona, tools: [...persona.tools] },
         cwd,
+        defaultBranch,
       })
     },
 
     async sendApprovalDecision({ runnerId, toolUseId, decision }) {
       send(runnerId, { type: 'permission_response', toolUseId, decision })
+    },
+
+    async getDiff({ runnerId, runId }) {
+      if (!connections.has(runnerId)) {
+        return { ok: false, error: 'Runner is not currently connected' }
+      }
+      const requestId = randomUUID()
+      return new Promise<{ ok: true; diff: string } | { ok: false; error: string }>(
+        (resolve, reject) => {
+          const timer = setTimeout(() => {
+            pendingDiffs.delete(requestId)
+            reject(new Error('Runner did not respond to get_diff in time'))
+          }, CHECK_PATH_TIMEOUT_MS)
+          pendingDiffs.set(requestId, {
+            resolve: (r) => {
+              clearTimeout(timer)
+              resolve(r)
+            },
+            reject: (e) => {
+              clearTimeout(timer)
+              reject(e)
+            },
+          })
+          send(runnerId, { type: 'get_diff', requestId, runId })
+        },
+      )
     },
   }
 
@@ -146,6 +179,27 @@ export const createRunnerGateway = (
           input: frame.input,
         })
         return
+
+      case 'run_workspace_ready':
+        await recordRunWorkspace(deps, {
+          workspaceId,
+          agentRunId: asAgentRunId(frame.runId),
+          clonePath: frame.clonePath,
+          branchName: frame.branchName,
+        })
+        return
+
+      case 'diff_result': {
+        const pending = pendingDiffs.get(frame.requestId)
+        if (!pending) return
+        pendingDiffs.delete(frame.requestId)
+        pending.resolve(
+          frame.ok
+            ? { ok: true, diff: frame.diff ?? '' }
+            : { ok: false, error: frame.error ?? 'Runner failed to produce a diff' },
+        )
+        return
+      }
     }
   }
 

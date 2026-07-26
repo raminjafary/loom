@@ -150,6 +150,10 @@ export const agentRun = pgTable(
     status: text('status').notNull().default('pending'),
     totalCostUsd: doublePrecision('total_cost_usd'),
     errorMessage: text('error_message'),
+    // Set once the Runner finishes cloning (PLAN.md §5a) — null until then,
+    // and for any run that fails before a workspace is ever prepared.
+    clonePath: text('clone_path'),
+    branchName: text('branch_name'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp('completed_at', { withTimezone: true }),
   },

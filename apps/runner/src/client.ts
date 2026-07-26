@@ -3,6 +3,7 @@ import { RunnerFrameSchema, ServerFrameSchema, type RunnerFrame } from '@loom/ru
 import WebSocket from 'ws'
 import { runAgent } from './claude-agent-adapter.js'
 import { checkPath } from './path-check.js'
+import { getDiff, prepareRunWorkspace } from './run-workspace.js'
 
 export interface RunnerClientOptions {
   readonly serverWsUrl: string
@@ -14,6 +15,9 @@ export interface RunnerClientOptions {
 export const connectRunner = (options: RunnerClientOptions): { close: () => void } => {
   const log = options.log ?? ((message: string) => process.stdout.write(`${message}\n`))
   const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>()
+  // Per-run clone state, needed to answer a later get_diff request — keyed by
+  // runId since a Runner may have several runs in flight concurrently.
+  const runWorkspaces = new Map<string, { clonePath: string; defaultBranch: string }>()
 
   let socket: WebSocket | null = null
   let closed = false
@@ -68,19 +72,37 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
 
         case 'start_run': {
           const runId = frame.runId
-          log(`starting run ${runId} in ${frame.cwd}`)
-          void runAgent({
-            persona: frame.persona,
-            cwd: frame.cwd,
-            isRiskyTool,
-            onEvent: (event) => send({ type: 'agent_event', runId, event }),
-            onPermissionRequest: (toolUseId, toolName, input) => {
-              send({ type: 'permission_request', runId, toolUseId, toolName, input })
-              return new Promise((resolve) => {
-                pendingPermissions.set(toolUseId, resolve)
+          log(`preparing workspace for run ${runId} from ${frame.cwd}`)
+          void prepareRunWorkspace(frame.cwd, runId)
+            .then(({ clonePath, branchName }) => {
+              runWorkspaces.set(runId, { clonePath, defaultBranch: frame.defaultBranch })
+              send({ type: 'run_workspace_ready', runId, clonePath, branchName })
+              log(`starting run ${runId} in ${clonePath}`)
+              return runAgent({
+                persona: frame.persona,
+                cwd: clonePath,
+                isRiskyTool,
+                onEvent: (event) => send({ type: 'agent_event', runId, event }),
+                onPermissionRequest: (toolUseId, toolName, input) => {
+                  send({ type: 'permission_request', runId, toolUseId, toolName, input })
+                  return new Promise((resolve) => {
+                    pendingPermissions.set(toolUseId, resolve)
+                  })
+                },
               })
-            },
-          }).then(() => log(`run ${runId} finished`))
+            })
+            .then(() => log(`run ${runId} finished`))
+            .catch((error) => {
+              log(`run ${runId} failed to prepare workspace: ${error instanceof Error ? error.message : String(error)}`)
+              send({
+                type: 'agent_event',
+                runId,
+                event: {
+                  kind: 'run_failed',
+                  message: `Failed to prepare run workspace: ${error instanceof Error ? error.message : String(error)}`,
+                },
+              })
+            })
           return
         }
 
@@ -90,6 +112,25 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
             pendingPermissions.delete(frame.toolUseId)
             resolve(frame.decision)
           }
+          return
+        }
+
+        case 'get_diff': {
+          const workspace = runWorkspaces.get(frame.runId)
+          if (!workspace) {
+            send({ type: 'diff_result', requestId: frame.requestId, ok: false, error: 'Run has no workspace' })
+            return
+          }
+          void getDiff(workspace.clonePath, workspace.defaultBranch)
+            .then((diff) => send({ type: 'diff_result', requestId: frame.requestId, ok: true, diff }))
+            .catch((error) =>
+              send({
+                type: 'diff_result',
+                requestId: frame.requestId,
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            )
           return
         }
       }

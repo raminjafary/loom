@@ -73,6 +73,9 @@ export interface AgentRun {
   readonly status: AgentRunStatus
   readonly totalCostUsd: number | null
   readonly errorMessage: string | null
+  // Set once the Runner finishes cloning (PLAN.md §5a) — null until then.
+  readonly clonePath: string | null
+  readonly branchName: string | null
   readonly createdAt: Date
   readonly completedAt: Date | null
 }

@@ -53,6 +53,20 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
     toolName: z.string(),
     input: z.record(z.string(), z.unknown()),
   }),
+  /** Sent once the Runner finishes cloning, before the agent starts (PLAN.md §5a). */
+  z.object({
+    type: z.literal('run_workspace_ready'),
+    runId: z.string(),
+    clonePath: z.string(),
+    branchName: z.string(),
+  }),
+  z.object({
+    type: z.literal('diff_result'),
+    requestId: z.string(),
+    ok: z.boolean(),
+    diff: z.string().optional(),
+    error: z.string().optional(),
+  }),
 ])
 
 // Server -> Runner
@@ -64,13 +78,17 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('start_run'),
     runId: z.string(),
     persona: PersonaSpecSchema,
+    // Source repo path to clone from, not the run's own cwd — the Runner
+    // clones this into a scratch workspace per run (PLAN.md §5a).
     cwd: z.string(),
+    defaultBranch: z.string(),
   }),
   z.object({
     type: z.literal('permission_response'),
     toolUseId: z.string(),
     decision: z.enum(['allow', 'deny']),
   }),
+  z.object({ type: z.literal('get_diff'), requestId: z.string(), runId: z.string() }),
 ])
 
 export type RunnerFrame = z.infer<typeof RunnerFrameSchema>

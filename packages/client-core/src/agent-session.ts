@@ -23,6 +23,7 @@ export interface AgentSnapshot {
   readonly activeRun: AgentRun | null
   readonly pendingApprovals: ApprovalRequest[]
   readonly lastPairing: { runnerId: string; rawToken: string } | null
+  readonly diff: string | null
   readonly loading: boolean
   readonly error: string | null
 }
@@ -35,6 +36,7 @@ export interface AgentSession {
   bindRepository(input: { runnerId: string; path: string; displayName: string }): Promise<void>
   startRun(input: { threadId: string; repositoryId: string; persona: PersonaSpec }): Promise<void>
   decide(approvalRequestId: string, decision: 'approve' | 'deny'): Promise<void>
+  loadDiff(agentRunId: string): Promise<void>
   dispose(): void
 }
 
@@ -48,6 +50,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     activeRun: null,
     pendingApprovals: [],
     lastPairing: null,
+    diff: null,
     loading: false,
     error: null,
   }
@@ -136,7 +139,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       patch({ error: null })
       try {
         const run = await options.api.agentRun.start(input)
-        patch({ activeRun: run, pendingApprovals: [] })
+        patch({ activeRun: run, pendingApprovals: [], diff: null })
         pollActiveRun(run.id)
       } catch (error) {
         patch({ error: errorMessage(error) })
@@ -148,6 +151,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       try {
         await options.api.approval.decide({ approvalRequestId, decision })
         if (state.activeRun) pollActiveRun(state.activeRun.id)
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async loadDiff(agentRunId) {
+      patch({ error: null })
+      try {
+        const { diff } = await options.api.agentRun.getDiff({ agentRunId })
+        patch({ diff })
       } catch (error) {
         patch({ error: errorMessage(error) })
       }
