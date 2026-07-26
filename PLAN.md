@@ -62,6 +62,16 @@ So the center of gravity is **"3 runs need you, 1 stuck 20min, 2 PRs ready"** �
 
 Humans can at any point: read a thread live; post to redirect a running agent (§4d — this is a real constraint, not free); approve/deny a risky action inline; assign tasks from a per-channel kanban board; fork and edit a persona.
 
+### 3a. Built-in personas, persona groups, and `@mention` **[PLANNED — not yet built]**
+
+Persona CRUD (Phase 1) requires hand-authoring every persona's markdown from nothing, and starting a run is a static sidebar picker, not something triggered by addressing an agent in a channel — a real gap against this section's own ship criterion. Planned fix, three parts:
+
+- **Built-in personas.** Seven roles ship pre-seeded per workspace on first provisioning: Product Manager, SWE, Frontend Engineer, Backend Engineer, QA, Security Reviewer, Solution Architect — real, editable `agent_persona` rows (not read-only templates), each with a role-appropriate tool set (e.g. Security Reviewer stays read-only: `[Read, Grep, Glob]`; engineering roles get `[Read, Edit, Write, Bash, Grep, Glob]`). Seeded exactly once per workspace, keyed off `ensureWorkspace`'s already-computed-but-currently-discarded `created` flag.
+- **Persona groups ("Teams"), scoped down from this section's original Team definition (line 43).** The Team sketched above — channel + roster + optional lead Planner — is real Phase 2 scope (Planner/Swarm, §7). What's planned now is a much smaller building block: a named, workspace-level group of personas, assembled by clicking or dragging persona chips into a group in a new visual composer (an early, cut-down version of the Phase 2 "canvas-based team composition" already called out under Views above). **Organizational only** — grouping personas doesn't start anything, and does not bind to a channel or a Planner. It's a stepping stone toward the fuller Team concept, not that concept itself.
+- **`@mention` starts a run.** Typing `@persona-name` in a channel's composer, autocompleted against every persona in the workspace, both posts the message as ordinary chat *and* starts a real agent run — the mentioned text becomes the run's actual task (a new optional `task` field flows from `agentRun.start` through to the Runner's prompt; today the Runner always prompts a fixed "begin working now" regardless of what a human asked). You mention **individual personas only** — mentioning a persona group would mean starting N concurrent runs, which the platform doesn't support yet (exactly one active run is tracked at a time, workspace-wide) and is Phase 2 swarm territory, not this.
+
+Explicit non-scope, so it isn't mistaken for silently-covered ground later: no per-channel persona/team roster (a persona is mentionable in every channel, not "added" to specific ones); no repository pre-binding per channel (`@mention` prompts which bound repo to target, inline, every time); the single-active-run limit is preserved, not lifted, by this work — a second mention while a run is active must surface a clear error, never silently replace what's being watched.
+
 ---
 
 ## 4. Architecture
@@ -321,6 +331,7 @@ The happy path (SDK stream → WS → render) is a weekend. The rest is the actu
 - Repository binding: allowed roots, directory picker, bind/create repo, end-of-run diff review with merge/keep/discard.
 - **Inbox + notifications + stuck detection** — the retention hook (§3), not a Phase 4 nicety.
 - Persona editing including tool declaration, skills, and harness settings (§4e); transcript persistence; cost metering at the proxy.
+- Built-in personas, persona groups, and `@mention`-starts-a-run (§3a) — planned, not yet built; closes this section's own ship criterion's `@mention` gap.
 
 **Cut from Phase 1** (all from the product review, all correct):
 - **`OllamaApiAdapter`** — a tool-less HTTP adapter proves nothing about the hard parts of `AgentExecutionPort` (sandboxing, streaming, interrupt, approval callbacks). It was abstraction theatre. Add in Phase 3 with vLLM.
