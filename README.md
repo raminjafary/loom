@@ -2,7 +2,7 @@
 
 Human + agent collaboration workspace. See the design notes for the architecture and roadmap, and [HANDOFF.md](./HANDOFF.md) for exact current state and next steps.
 
-**Current state: Phase 0 complete, Phase 1 substantially built.** Realtime chat, real auth, and a working agent-execution pipeline: pair a Runner, bind a real git repo, start a real Claude Agent SDK run, watch it work in a thread, with a human-only approval gate on risky tools. See HANDOFF.md before starting new work.
+**Current state: Phase 0 complete, Phase 1 mostly built — not yet ship-criterion-complete.** Realtime chat, real auth, and a working agent-execution pipeline, now with a real UI: pair a Runner, bind a real git repo, create/edit personas (markdown + frontmatter), start a real Claude Agent SDK run from a picker, watch it work in a thread, approve/deny risky tools from a card, review the run's diff — all with clone-per-run isolation and path-scoped write enforcement. See HANDOFF.md before starting new work, and the persona model for the next planned slice (built-in personas, persona groups, `@mention`-starts-a-run).
 
 ## Requirements
 
@@ -40,7 +40,9 @@ Sign up through the web UI (email/password via Better Auth) — a default worksp
 
 ### Running a real agent
 
-1. Pair a Runner: call `runner.createPairingToken({name})` (no UI for this yet — see HANDOFF.md) to get a `runnerId` and a raw pairing token.
+All of this is reachable from the web UI's sidebar now (mint a pairing token, bind a repo, write or pick a persona, start a run, approve/deny gates, view the diff). To drive it directly over RPC instead:
+
+1. Pair a Runner: call `runner.createPairingToken({name})` to get a `runnerId` and a raw pairing token.
 2. Start the Runner against a real git repo's parent directory:
  ```bash
  LOOM_SERVER_WS_URL=ws://localhost:3001/ws/runner \
@@ -49,14 +51,15 @@ Sign up through the web UI (email/password via Better Auth) — a default worksp
  pnpm --filter @loom/runner start
  ```
 3. Bind a repo: `repository.bindExisting({runnerId, path: '/absolute/path/to/repo', displayName})`.
-4. Start a run: `agentRun.start({threadId, repositoryId, persona: {name, systemPrompt, model, tools}})`.
-5. Watch it work via `message.list`/realtime — tool calls, results, and the final `run_completed` all render as messages in the thread.
+4. Create a persona (markdown + frontmatter — see the capability registry for the format): `persona.create({markdownSource})`.
+5. Start a run: `agentRun.start({threadId, repositoryId, personaId})`. The Runner clones the bound repo into a per-run scratch workspace first — it never touches the bound repo's own working tree.
+6. Watch it work via `message.list`/realtime — tool calls, results, and the final `run_completed` all render as messages in the thread. Fetch the run's branch diff on demand with `agentRun.getDiff({agentRunId})`.
 
 ## Verifying
 
 ```bash
 pnpm -r typecheck # all packages
-pnpm -r test # 69 tests
+pnpm -r test # 89 tests
 npx vitest run tools/architecture.test.ts # layer boundaries
 npx eslint packages/ apps/ # boundary lint rules
 ```
@@ -89,7 +92,9 @@ The dependency rule — outer layers depend on inner, never the reverse — is e
 See HANDOFF.md §"What's not built" for the full list. Headline items:
 
 - No RBAC, no rate limiting, no CSP.
-- Persona storage is inline JSON on `agent_run` — no markdown/git-backed persona files or CRUD UI yet.
-- Repository binding is bind-by-absolute-path only — no directory picker, no `git init` flow.
-- Risky-tool classification is a hardcoded name list (`Bash`/`Write`/`Edit`/`NotebookEdit`) — effect-based classification already flags this as insufficient long-term; it's the documented Phase 1 starting point, not the final design.
-- Sandbox hardening (network egress policy, resource limits, read-only mounts — the sandbox spec) is not implemented. The Runner executes agent runs with the same filesystem/network access as the process running it.
+- No built-in personas, no persona groups, no `@mention`-starts-a-run — planned next, see the persona model. Persona CRUD itself (markdown + frontmatter) is real; every persona still has to be hand-authored from nothing, and starting a run is a static sidebar picker.
+- Repository binding is bind-by-absolute-path only — no directory picker, no `git init` flow (a real picker needs the Runner to expose a `listDirectory` capability, which doesn't exist yet — see repository binding).
+- Risky-tool classification path-scopes writes against the run's clone (real, enforced, verified live), but `Bash` still gates by name only — no reliable static argv classifier exists for arbitrary shell. Effect-based classification flags this as the honest limit short of a full sandbox rewrite.
+- No container/microVM sandbox, no egress proxy, no credential broker, no host-side git-push policy (the agent has no way to push at all yet, so there's nothing to gate). This is a substantial standalone project, not attempted yet.
+- No inbox/notifications, no stuck-run detection, no idempotency keys, no budget caps, no kill switch, no run resumption after a Runner restart — all flagged in the security model/the roadmap as required runtime safety mechanics.
+- No skills/MCP attachment — needs the capability registry, which is Phase 2 scope.
