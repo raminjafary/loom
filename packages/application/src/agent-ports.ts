@@ -79,6 +79,7 @@ export interface PersonaRepositoryPort {
     tools: string[]
     harnessEffort: string | null
     harnessMaxTurns: number | null
+    harnessAutoApprove: boolean
   }): Promise<AgentPersona>
   findById(workspaceId: WorkspaceId, id: AgentPersonaId): Promise<AgentPersona | null>
   listByWorkspace(workspaceId: WorkspaceId): Promise<AgentPersona[]>
@@ -92,6 +93,7 @@ export interface PersonaRepositoryPort {
       tools: string[]
       harnessEffort: string | null
       harnessMaxTurns: number | null
+      harnessAutoApprove: boolean
     },
   ): Promise<AgentPersona>
 }

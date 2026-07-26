@@ -13,6 +13,7 @@ export const PersonaSpecSchema = z.object({
   systemPrompt: z.string(),
   model: z.string(),
   tools: z.array(z.string()),
+  autoApprove: z.boolean(),
 })
 
 export const AgentEventSchema = z.discriminatedUnion('kind', [

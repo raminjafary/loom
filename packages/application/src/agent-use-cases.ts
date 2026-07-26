@@ -137,6 +137,7 @@ export const createPersona = async (
     tools: parsed.tools,
     harnessEffort: parsed.harnessEffort,
     harnessMaxTurns: parsed.harnessMaxTurns,
+    harnessAutoApprove: parsed.harnessAutoApprove,
   })
 }
 
@@ -160,6 +161,7 @@ export const seedBuiltinPersonas = async (
       tools: persona.tools,
       harnessEffort: persona.harnessEffort,
       harnessMaxTurns: persona.harnessMaxTurns,
+      harnessAutoApprove: persona.harnessAutoApprove,
     })
   }
 }
@@ -198,6 +200,7 @@ export const updatePersona = async (
     tools: parsed.tools,
     harnessEffort: parsed.harnessEffort,
     harnessMaxTurns: parsed.harnessMaxTurns,
+    harnessAutoApprove: parsed.harnessAutoApprove,
   })
 }
 
@@ -351,6 +354,7 @@ export const startAgentRun = async (
     systemPrompt: parsePersonaMarkdown(persona.markdownSource).systemPrompt,
     model: persona.model,
     tools: persona.tools,
+    autoApprove: persona.harnessAutoApprove,
   }
 
   const run = await deps.agentRuns.create({

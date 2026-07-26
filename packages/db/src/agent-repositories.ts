@@ -214,6 +214,7 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
         tools: input.tools,
         harnessEffort: input.harnessEffort,
         harnessMaxTurns: input.harnessMaxTurns,
+        harnessAutoApprove: input.harnessAutoApprove,
       })
       .returning()
     if (!row) throw new Error('agent_persona insert returned no row')
@@ -247,6 +248,7 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
         tools: patch.tools,
         harnessEffort: patch.harnessEffort,
         harnessMaxTurns: patch.harnessMaxTurns,
+        harnessAutoApprove: patch.harnessAutoApprove,
         updatedAt: new Date(),
       })
       .where(and(eq(agentPersona.workspaceId, workspaceId), eq(agentPersona.id, id)))

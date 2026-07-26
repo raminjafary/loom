@@ -1,0 +1,1 @@
+ALTER TABLE "agent_persona" ADD COLUMN "harness_auto_approve" boolean DEFAULT false NOT NULL;

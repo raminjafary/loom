@@ -19,6 +19,7 @@ describe('BUILTIN_PERSONAS', () => {
         tools: persona.tools,
         harnessEffort: persona.harnessEffort,
         harnessMaxTurns: persona.harnessMaxTurns,
+        harnessAutoApprove: persona.harnessAutoApprove,
         systemPrompt: persona.systemPrompt,
       })
     },

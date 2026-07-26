@@ -12,6 +12,7 @@ export interface BuiltinPersona {
   readonly tools: string[]
   readonly harnessEffort: string | null
   readonly harnessMaxTurns: number | null
+  readonly harnessAutoApprove: boolean
   readonly systemPrompt: string
   readonly markdownSource: string
 }
@@ -34,6 +35,7 @@ const define = (spec: {
     tools: spec.tools,
     harnessEffort: null,
     harnessMaxTurns: null,
+    harnessAutoApprove: false,
     systemPrompt: spec.systemPrompt,
   }
   return { ...persona, markdownSource: serializePersonaMarkdown(persona) }
