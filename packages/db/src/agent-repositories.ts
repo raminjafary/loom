@@ -1,6 +1,7 @@
 import type {
   AgentRunRepositoryPort,
   ApprovalRepositoryPort,
+  PersonaRepositoryPort,
   RepositoryRepositoryPort,
   RunnerRepositoryPort,
 } from '@loom/application'
@@ -9,16 +10,18 @@ import { createHash, randomBytes } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
+  toAgentPersona,
   toAgentRun,
   toApprovalRequest,
   toRepository,
   toRunner,
+  type AgentPersonaRow,
   type AgentRunRow,
   type ApprovalRequestRow,
   type RepositoryRow,
   type RunnerRow,
 } from './mappers.js'
-import { agentRun, approvalRequest, repository, runner } from './schema.js'
+import { agentPersona, agentRun, approvalRequest, repository, runner } from './schema.js'
 
 export const runnerRepository = (db: Database): RunnerRepositoryPort => ({
   async findById(workspaceId, id) {
@@ -179,6 +182,61 @@ export const approvalRepository = (db: Database): ApprovalRepositoryPort => ({
       .returning()
     if (!row) throw new NotFoundError('ApprovalRequest')
     return toApprovalRequest(row as ApprovalRequestRow)
+  },
+})
+
+export const personaRepository = (db: Database): PersonaRepositoryPort => ({
+  async create(input) {
+    const [row] = await db
+      .insert(agentPersona)
+      .values({
+        workspaceId: input.workspaceId,
+        name: input.name,
+        description: input.description,
+        markdownSource: input.markdownSource,
+        model: input.model,
+        tools: input.tools,
+        harnessEffort: input.harnessEffort,
+        harnessMaxTurns: input.harnessMaxTurns,
+      })
+      .returning()
+    if (!row) throw new Error('agent_persona insert returned no row')
+    return toAgentPersona(row as AgentPersonaRow)
+  },
+
+  async findById(workspaceId, id) {
+    const [row] = await db
+      .select()
+      .from(agentPersona)
+      .where(and(eq(agentPersona.workspaceId, workspaceId), eq(agentPersona.id, id)))
+      .limit(1)
+    return row ? toAgentPersona(row as AgentPersonaRow) : null
+  },
+
+  async listByWorkspace(workspaceId) {
+    const rows = await db
+      .select()
+      .from(agentPersona)
+      .where(eq(agentPersona.workspaceId, workspaceId))
+    return rows.map((row) => toAgentPersona(row as AgentPersonaRow))
+  },
+
+  async update(workspaceId, id, patch) {
+    const [row] = await db
+      .update(agentPersona)
+      .set({
+        description: patch.description,
+        markdownSource: patch.markdownSource,
+        model: patch.model,
+        tools: patch.tools,
+        harnessEffort: patch.harnessEffort,
+        harnessMaxTurns: patch.harnessMaxTurns,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(agentPersona.workspaceId, workspaceId), eq(agentPersona.id, id)))
+      .returning()
+    if (!row) throw new NotFoundError('AgentPersona')
+    return toAgentPersona(row as AgentPersonaRow)
   },
 })
 

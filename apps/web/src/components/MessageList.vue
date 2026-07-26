@@ -2,7 +2,11 @@
 import type { Actor, Message } from '@loom/api-contract'
 import { nextTick, ref, watch } from 'vue'
 
-const props = defineProps<{ messages: Message[] }>()
+const props = defineProps<{
+  messages: Message[]
+  /** Persona name for whichever agent run this client currently knows about (client-side only, not a full run history index). */
+  personaNameByRunId?: Record<string, string>
+}>()
 
 const scroller = ref<HTMLElement | null>(null)
 
@@ -32,7 +36,7 @@ const authorLabel = (actor: Actor): string => {
     case 'user':
       return actor.userId
     case 'agent_run':
-      return `agent ${actor.agentRunId.slice(0, 8)}`
+      return props.personaNameByRunId?.[actor.agentRunId] ?? `agent ${actor.agentRunId.slice(0, 8)}`
     case 'system':
       return 'system'
   }

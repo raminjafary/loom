@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { PersonaSpec } from '@loom/api-contract'
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
@@ -20,11 +19,15 @@ const agentSnapshot = computed(() => agent.snapshot)
 const activeChannel = computed(
   () => snapshot.value.channels.find((c) => c.id === snapshot.value.activeChannelId) ?? null,
 )
+const personaNameByRunId = computed(() => {
+  const run = agentSnapshot.value.activeRun
+  return run ? { [run.id]: run.persona.name } : {}
+})
 
-const startRun = (input: { repositoryId: string; persona: PersonaSpec }) => {
+const startRun = (input: { repositoryId: string; personaId: string }) => {
   const threadId = snapshot.value.activeThread?.id
   if (!threadId) return
-  void agent.startRun({ threadId, repositoryId: input.repositoryId, persona: input.persona })
+  void agent.startRun({ threadId, repositoryId: input.repositoryId, personaId: input.personaId })
 }
 
 onMounted(() => {
@@ -60,7 +63,7 @@ onBeforeUnmount(() => {
       <p v-if="snapshot.error" class="error" role="alert">{{ snapshot.error }}</p>
       <p v-if="agentSnapshot.error" class="error" role="alert">{{ agentSnapshot.error }}</p>
 
-      <MessageList :messages="snapshot.messages" />
+      <MessageList :messages="snapshot.messages" :persona-name-by-run-id="personaNameByRunId" />
 
       <ApprovalCard
         :approvals="agentSnapshot.pendingApprovals"
@@ -83,8 +86,10 @@ onBeforeUnmount(() => {
       />
       <PersonaForm
         :repositories="agentSnapshot.repositories"
+        :personas="agentSnapshot.personas"
         :disabled="!snapshot.activeThread"
         @start="startRun"
+        @create-persona="(markdownSource) => agent.createPersona(markdownSource)"
       />
       <DiffView
         :run="agentSnapshot.activeRun"

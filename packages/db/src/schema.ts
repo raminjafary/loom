@@ -161,6 +161,35 @@ export const agentRun = pgTable(
 )
 
 /**
+ * Persona storage (PLAN.md §4e, Phase 1 subset — read/CRUD only, no
+ * git-backed versioning yet, per HANDOFF.md). `markdownSource` is the source
+ * of truth; the other columns are its parsed frontmatter, denormalized for
+ * querying without re-parsing on every list/get.
+ */
+export const agentPersona = pgTable(
+  'agent_persona',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    markdownSource: text('markdown_source').notNull(),
+    model: text('model').notNull(),
+    tools: jsonb('tools').$type<string[]>().notNull().default([]),
+    harnessEffort: text('harness_effort'),
+    harnessMaxTurns: doublePrecision('harness_max_turns'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('agent_persona_workspace_idx').on(t.workspaceId),
+    uniqueIndex('agent_persona_workspace_name_idx').on(t.workspaceId, t.name),
+  ],
+)
+
+/**
  * `toolName`/`input` are the exact argv the SDK is about to run — never a
  * model-authored summary (PLAN.md §6 A1/A3). `resolvedBy` must be a `user`
  * actor; enforced in the use-case, not the schema.

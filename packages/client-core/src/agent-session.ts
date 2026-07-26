@@ -1,4 +1,4 @@
-import type { AgentRun, ApprovalRequest, PersonaSpec, Repository, Runner } from '@loom/api-contract'
+import type { AgentPersona, AgentRun, ApprovalRequest, Repository, Runner } from '@loom/api-contract'
 import type { LoomApi } from './api.js'
 
 /**
@@ -20,6 +20,7 @@ const POLL_INTERVAL_MS = 1500
 export interface AgentSnapshot {
   readonly runners: Runner[]
   readonly repositories: Repository[]
+  readonly personas: AgentPersona[]
   readonly activeRun: AgentRun | null
   readonly pendingApprovals: ApprovalRequest[]
   readonly lastPairing: { runnerId: string; rawToken: string } | null
@@ -34,7 +35,8 @@ export interface AgentSession {
   init(): Promise<void>
   createPairingToken(name: string): Promise<void>
   bindRepository(input: { runnerId: string; path: string; displayName: string }): Promise<void>
-  startRun(input: { threadId: string; repositoryId: string; persona: PersonaSpec }): Promise<void>
+  createPersona(markdownSource: string): Promise<void>
+  startRun(input: { threadId: string; repositoryId: string; personaId: string }): Promise<void>
   decide(approvalRequestId: string, decision: 'approve' | 'deny'): Promise<void>
   loadDiff(agentRunId: string): Promise<void>
   dispose(): void
@@ -47,6 +49,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
   let state: AgentSnapshot = {
     runners: [],
     repositories: [],
+    personas: [],
     activeRun: null,
     pendingApprovals: [],
     lastPairing: null,
@@ -100,11 +103,12 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     async init() {
       patch({ loading: true, error: null })
       try {
-        const [runners, repositories] = await Promise.all([
+        const [runners, repositories, personas] = await Promise.all([
           options.api.runner.list(),
           options.api.repository.list(),
+          options.api.persona.list(),
         ])
-        patch({ runners, repositories })
+        patch({ runners, repositories, personas })
       } catch (error) {
         patch({ error: errorMessage(error) })
       } finally {
@@ -130,6 +134,17 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         await options.api.repository.bindExisting(input)
         const repositories = await options.api.repository.list()
         patch({ repositories })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async createPersona(markdownSource) {
+      patch({ error: null })
+      try {
+        await options.api.persona.create({ markdownSource })
+        const personas = await options.api.persona.list()
+        patch({ personas })
       } catch (error) {
         patch({ error: errorMessage(error) })
       }

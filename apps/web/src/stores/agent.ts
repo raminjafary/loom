@@ -1,5 +1,4 @@
 import { createAgentSession, createApi, type AgentSnapshot } from '@loom/client-core'
-import type { PersonaSpec } from '@loom/api-contract'
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 
@@ -28,7 +27,8 @@ export const useAgentStore = defineStore('agent', () => {
     createPairingToken: (name: string) => session.createPairingToken(name),
     bindRepository: (input: { runnerId: string; path: string; displayName: string }) =>
       session.bindRepository(input),
-    startRun: (input: { threadId: string; repositoryId: string; persona: PersonaSpec }) =>
+    createPersona: (markdownSource: string) => session.createPersona(markdownSource),
+    startRun: (input: { threadId: string; repositoryId: string; personaId: string }) =>
       session.startRun(input),
     decide: (approvalRequestId: string, decision: 'approve' | 'deny') =>
       session.decide(approvalRequestId, decision),

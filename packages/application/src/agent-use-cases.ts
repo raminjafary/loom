@@ -5,9 +5,12 @@ import {
   agentRunActor,
   isHuman,
   isRiskyTool,
+  parsePersonaMarkdown,
   systemActor,
   type Actor,
   type AgentEvent,
+  type AgentPersona,
+  type AgentPersonaId,
   type AgentRun,
   type AgentRunId,
   type ApprovalRequest,
@@ -23,6 +26,7 @@ import {
 import type {
   AgentRunRepositoryPort,
   ApprovalRepositoryPort,
+  PersonaRepositoryPort,
   RepositoryRepositoryPort,
   RunDispatchPort,
   RunnerRepositoryPort,
@@ -34,6 +38,7 @@ export interface AgentDeps extends Deps {
   readonly repositories: RepositoryRepositoryPort
   readonly agentRuns: AgentRunRepositoryPort
   readonly approvals: ApprovalRepositoryPort
+  readonly personas: PersonaRepositoryPort
   readonly dispatch: RunDispatchPort
 }
 
@@ -105,6 +110,68 @@ export const listRunners = (
   input: { workspaceId: WorkspaceId },
 ): Promise<Runner[]> => deps.runners.listByWorkspace(input.workspaceId)
 
+/** Human-only, same reasoning as bindRepository — a persona is an administrative artifact, not something a run edits about itself. */
+export const createPersona = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; markdownSource: string },
+): Promise<AgentPersona> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError('Only a human may create a persona')
+  }
+  const parsed = parsePersonaMarkdown(input.markdownSource)
+  const existing = await deps.personas.listByWorkspace(input.workspaceId)
+  if (existing.some((p) => p.name === parsed.name)) {
+    throw new ValidationError(`Persona "${parsed.name}" already exists`)
+  }
+  return deps.personas.create({
+    workspaceId: input.workspaceId,
+    name: parsed.name,
+    description: parsed.description,
+    markdownSource: input.markdownSource,
+    model: parsed.model,
+    tools: parsed.tools,
+    harnessEffort: parsed.harnessEffort,
+    harnessMaxTurns: parsed.harnessMaxTurns,
+  })
+}
+
+export const listPersonas = (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId },
+): Promise<AgentPersona[]> => deps.personas.listByWorkspace(input.workspaceId)
+
+export const getPersona = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<AgentPersona> => {
+  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+  if (!persona) throw new NotFoundError('AgentPersona')
+  return persona
+}
+
+export const updatePersona = async (
+  deps: AgentDeps,
+  input: {
+    workspaceId: WorkspaceId
+    actor: Actor
+    personaId: AgentPersonaId
+    markdownSource: string
+  },
+): Promise<AgentPersona> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError('Only a human may update a persona')
+  }
+  const parsed = parsePersonaMarkdown(input.markdownSource)
+  return deps.personas.update(input.workspaceId, input.personaId, {
+    description: parsed.description,
+    markdownSource: input.markdownSource,
+    model: parsed.model,
+    tools: parsed.tools,
+    harnessEffort: parsed.harnessEffort,
+    harnessMaxTurns: parsed.harnessMaxTurns,
+  })
+}
+
 export const listRepositories = (
   deps: AgentDeps,
   input: { workspaceId: WorkspaceId },
@@ -126,8 +193,10 @@ export const getAgentRun = async (
 }
 
 /**
- * Starts one agent run against a bound repository's working copy. `persona`
- * is inline for Phase 1 — no markdown/git-backed persona storage yet.
+ * Starts one agent run against a bound repository's working copy. The
+ * persona is looked up by id and denormalized into a frozen `PersonaSpec`
+ * snapshot on the run — the run must keep executing with the persona as it
+ * was at start time even if the stored persona is edited later.
  */
 export const startAgentRun = async (
   deps: AgentDeps,
@@ -136,7 +205,7 @@ export const startAgentRun = async (
     actor: Actor
     threadId: ThreadId
     repositoryId: RepositoryId
-    persona: PersonaSpec
+    personaId: AgentPersonaId
   },
 ): Promise<AgentRun> => {
   if (!isHuman(input.actor)) {
@@ -153,12 +222,22 @@ export const startAgentRun = async (
   if (!runner) throw new NotFoundError('Runner')
   if (!runner.connected) throw new ValidationError('Runner is not currently connected')
 
+  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+  if (!persona) throw new NotFoundError('AgentPersona')
+
+  const personaSpec: PersonaSpec = {
+    name: persona.name,
+    systemPrompt: parsePersonaMarkdown(persona.markdownSource).systemPrompt,
+    model: persona.model,
+    tools: persona.tools,
+  }
+
   const run = await deps.agentRuns.create({
     workspaceId: input.workspaceId,
     threadId: input.threadId,
     repositoryId: input.repositoryId,
     runnerId: repository.runnerId,
-    persona: input.persona,
+    persona: personaSpec,
   })
 
   await deps.audit.record({
@@ -167,14 +246,14 @@ export const startAgentRun = async (
     action: 'agent_run.started',
     subjectType: 'agent_run',
     subjectId: run.id,
-    metadata: { repositoryId: repository.id, model: input.persona.model },
+    metadata: { repositoryId: repository.id, personaId: persona.id, model: personaSpec.model },
   })
 
   try {
     await deps.dispatch.startRun({
       runnerId: repository.runnerId,
       runId: run.id,
-      persona: input.persona,
+      persona: personaSpec,
       cwd: repository.absolutePath,
       defaultBranch: repository.defaultBranch,
     })
@@ -224,12 +303,28 @@ export const getAgentRunDiff = async (
   return result.diff
 }
 
+// Tried in order; the first string field present is shown as the call's
+// headline target. Full args aren't hidden — they're what a risky call's
+// approval card renders verbatim (PLAN.md §6 A3) — this is just what makes
+// the plain activity line scannable instead of a raw JSON dump.
+const PRIMARY_ARG_FIELDS = ['command', 'file_path', 'notebook_path', 'pattern', 'path', 'url', 'query']
+
+const primaryArg = (input: Readonly<Record<string, unknown>>): string | null => {
+  for (const field of PRIMARY_ARG_FIELDS) {
+    const value = input[field]
+    if (typeof value === 'string') return value
+  }
+  return null
+}
+
 const eventToMessageText = (event: AgentEvent): string => {
   switch (event.kind) {
     case 'assistant_text':
       return event.text
-    case 'tool_call':
-      return `→ ${event.toolName} ${JSON.stringify(event.input)}`
+    case 'tool_call': {
+      const primary = primaryArg(event.input)
+      return primary ? `→ ${event.toolName}: ${primary}` : `→ ${event.toolName} ${JSON.stringify(event.input)}`
+    }
     case 'tool_result':
       return event.isError
         ? `✗ ${event.summary}`
@@ -318,15 +413,17 @@ export const requestApproval = async (
     status: 'awaiting_approval',
   })
 
-  // The card renders the exact argv, never a model-authored summary
-  // (PLAN.md §6 A3) — `input.input` here is the tool-call payload itself.
+  // This chat line is just a pointer — the exact argv, never a
+  // model-authored summary (PLAN.md §6 A3), renders in the approval card
+  // itself (ApprovalCard.vue), which is where a human actually decides.
+  // Dumping the raw payload and internal id here too would just be noise.
   const message = await deps.messages.append({
     workspaceId: input.workspaceId,
     threadId: run.threadId,
     author: systemActor(),
     body: {
       kind: 'system',
-      text: `Approval needed — ${input.toolName} ${JSON.stringify(input.input)} (request ${approval.id})`,
+      text: `Approval needed for ${input.toolName} — see the approval card below.`,
     },
   })
 

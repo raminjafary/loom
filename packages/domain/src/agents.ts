@@ -1,4 +1,5 @@
 import type {
+  AgentPersonaId,
   AgentRunId,
   ApprovalRequestId,
   RepositoryId,
@@ -53,6 +54,26 @@ export interface PersonaSpec {
   // here just forces spreads at every boundary for no safety benefit, since
   // nothing in this codebase mutates a persona's tool list in place.
   readonly tools: string[]
+}
+
+/**
+ * Stored persona (PLAN.md §4e, Phase 1 subset — read/CRUD only, no
+ * git-backed versioning yet, per HANDOFF.md). `markdownSource` is the source
+ * of truth; the other fields are its parsed frontmatter, kept denormalized
+ * for querying without re-parsing on every list/get.
+ */
+export interface AgentPersona {
+  readonly id: AgentPersonaId
+  readonly workspaceId: WorkspaceId
+  readonly name: string
+  readonly description: string
+  readonly markdownSource: string
+  readonly model: string
+  readonly tools: string[]
+  readonly harnessEffort: string | null
+  readonly harnessMaxTurns: number | null
+  readonly createdAt: Date
+  readonly updatedAt: Date
 }
 
 export type AgentRunStatus =
