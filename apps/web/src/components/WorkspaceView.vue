@@ -167,10 +167,14 @@ onBeforeUnmount(() => {
 }
 
 .agent-sidebar {
-  width: 18rem;
+  width: 21rem;
   flex-shrink: 0;
   overflow-y: auto;
   border-left: 1px solid var(--border);
   background: var(--surface);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 </style>
