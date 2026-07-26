@@ -12,5 +12,19 @@ const EnvSchema = z.object({
 
 export type Config = z.infer<typeof EnvSchema>
 
-export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config =>
-  EnvSchema.parse(env)
+const DEFAULT_TEST_DATABASE_URL = 'postgres://loom:loom@localhost:5432/loom_test'
+
+/**
+ * Integration tests run against real Postgres, not a mock — but never
+ * against the same database a developer might be using the app against by
+ * hand. Under `NODE_ENV=test`, `DATABASE_URL` is always overridden to a
+ * separate test database (`TEST_DATABASE_URL`, defaulted like `DATABASE_URL`
+ * itself is) so `pnpm -r test` can never truncate a live dev workspace.
+ */
+export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
+  const config = EnvSchema.parse(env)
+  if (config.NODE_ENV === 'test') {
+    return { ...config, DATABASE_URL: env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL }
+  }
+  return config
+}
