@@ -288,6 +288,7 @@ export interface AgentPersonaRow {
  tools: unknown
  harnessEffort: string | null
  harnessMaxTurns: number | null
+ harnessAutoApprove: boolean
  createdAt: Date
  updatedAt: Date
 }
@@ -302,6 +303,7 @@ export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
  tools: Array.isArray(row.tools) ? (row.tools as string[]): [],
  harnessEffort: row.harnessEffort,
  harnessMaxTurns: row.harnessMaxTurns,
+ harnessAutoApprove: row.harnessAutoApprove,
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
 })

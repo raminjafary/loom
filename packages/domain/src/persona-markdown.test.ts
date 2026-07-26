@@ -23,17 +23,26 @@ describe('parsePersonaMarkdown', () => {
       tools: ['Read', 'Edit', 'Bash', 'Grep'],
       harnessEffort: 'medium',
       harnessMaxTurns: 40,
+      harnessAutoApprove: false,
       systemPrompt: 'You are backend-worker. Implement exactly what the spec says, nothing more.',
     })
   })
 
-  it('defaults tools to empty and harness fields to null when absent', () => {
+  it('parses harness.autoApprove', () => {
+    const parsed = parsePersonaMarkdown(
+      '---\nname: unattended\ndescription: Runs without a human in the loop.\nmodel: claude-sonnet-5\nharness:\n  autoApprove: true\n---\nGo.',
+    )
+    expect(parsed.harnessAutoApprove).toBe(true)
+  })
+
+  it('defaults tools to empty and harness fields to null/false when absent', () => {
     const parsed = parsePersonaMarkdown(
       '---\nname: read-only\ndescription: Reads things.\nmodel: claude-haiku-4-5-20251001\n---\nBe read-only.',
     )
     expect(parsed.tools).toEqual([])
     expect(parsed.harnessEffort).toBeNull()
     expect(parsed.harnessMaxTurns).toBeNull()
+    expect(parsed.harnessAutoApprove).toBe(false)
   })
 
   it('throws when frontmatter is missing a required field', () => {
@@ -60,7 +69,7 @@ describe('serializePersonaMarkdown', () => {
     expect(parsePersonaMarkdown(serialized)).toEqual(parsed)
   })
 
-  it('omits the harness block when both fields are null', () => {
+  it('omits the harness block when effort/maxTurns are null and autoApprove is false', () => {
     const serialized = serializePersonaMarkdown({
       name: 'n',
       description: 'd',
@@ -68,8 +77,23 @@ describe('serializePersonaMarkdown', () => {
       tools: ['Read'],
       harnessEffort: null,
       harnessMaxTurns: null,
+      harnessAutoApprove: false,
       systemPrompt: 'body',
     })
     expect(serialized).not.toMatch(/harness:/)
+  })
+
+  it('includes the harness block when only autoApprove is set', () => {
+    const serialized = serializePersonaMarkdown({
+      name: 'n',
+      description: 'd',
+      model: 'm',
+      tools: ['Read'],
+      harnessEffort: null,
+      harnessMaxTurns: null,
+      harnessAutoApprove: true,
+      systemPrompt: 'body',
+    })
+    expect(serialized).toMatch(/harness:\n  autoApprove: true/)
   })
 })

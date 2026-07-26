@@ -179,6 +179,7 @@ export const agentPersona = pgTable(
  tools: jsonb('tools').$type<string[]>.notNull.default([]),
  harnessEffort: text('harness_effort'),
  harnessMaxTurns: doublePrecision('harness_max_turns'),
+ harnessAutoApprove: boolean('harness_auto_approve').notNull.default(false),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },

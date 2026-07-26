@@ -144,6 +144,14 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  return { behavior: 'deny', message: effect.reason }
  }
 
+ // Per-persona opt-in:
+ // skips the human round-trip for this run. The hard path-scoped write
+ // boundary above still applies unconditionally — this only ever skips a
+ // judgment call, never a boundary.
+ if (options.persona.autoApprove) {
+ return { behavior: 'allow' }
+ }
+
  const decision = await options.onPermissionRequest(toolUseId, toolName, input)
  const result: PermissionResult =
  decision === 'allow'

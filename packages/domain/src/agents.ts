@@ -55,6 +55,13 @@ export interface PersonaSpec {
  // here just forces spreads at every boundary for no safety benefit, since
  // nothing in this codebase mutates a persona's tool list in place.
  readonly tools: string[]
+ /**
+ * Per-persona opt-in (default false): skips the human approval round-trip
+ * for risky tools this run hits. The path-scoped write boundary
+ * still applies unconditionally — that's a hard boundary, not a judgment
+ * call, and autoApprove never touches it.
+ */
+ readonly autoApprove: boolean
 }
 
 /**
@@ -72,6 +79,7 @@ export interface AgentPersona {
  readonly tools: string[]
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
+ readonly harnessAutoApprove: boolean
  readonly createdAt: Date
  readonly updatedAt: Date
 }
