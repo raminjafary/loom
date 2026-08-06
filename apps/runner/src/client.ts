@@ -25,6 +25,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // start_run arrives (covers a hang during workspace prep too), cleared once
  // the run reaches a terminal outcome.
  const heartbeats = new Map<string, ReturnType<typeof setInterval>>
+ // Per-run abort handles — registered before the
+ // clone starts so a cancel arriving during workspace prep is not ignored.
+ const aborts = new Map<string, AbortController>
  const HEARTBEAT_INTERVAL_MS = Number(process.env.LOOM_HEARTBEAT_INTERVAL_MS ?? 20_000)
 
  let socket: WebSocket | null = null
@@ -87,8 +90,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  setInterval( => send({ type: 'heartbeat', runId }), HEARTBEAT_INTERVAL_MS),
 )
 
+ const abort = new AbortController
+ aborts.set(runId, abort)
+
  void prepareRunWorkspace(frame.cwd, runId)
 .then(({ clonePath, branchName }) => {
+ // A cancel that landed while the clone was still running has no
+ // agent loop to abort yet — honor it here instead of starting one.
+ if (abort.signal.aborted) return
+
  runWorkspaces.set(runId, {
  clonePath,
  defaultBranch: frame.defaultBranch,
@@ -101,6 +111,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  persona: frame.persona,
  cwd: clonePath,
 ...(frame.task === undefined ? {}: { task: frame.task }),
+ abortController: abort,
  isRiskyTool,
  classifyEffect: (toolName, input) =>
  classifyToolEffect(toolName, input, clonePath, resolveWithinRoot),
@@ -115,6 +126,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
 .then( => log(`run ${runId} finished`))
 .catch((error) => {
+ // A cancel during clone surfaces here as a rejected prepare; the
+ // server already recorded the run as cancelled, so stay quiet.
+ if (abort.signal.aborted) return
  log(`run ${runId} failed to prepare workspace: ${error instanceof Error ? error.message: String(error)}`)
  send({
  type: 'agent_event',
@@ -131,7 +145,16 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  clearInterval(timer)
  heartbeats.delete(runId)
  }
+ aborts.delete(runId)
  })
+ return
+ }
+
+ case 'cancel_run': {
+ const abort = aborts.get(frame.runId)
+ if (!abort) return
+ log(`cancelling run ${frame.runId}`)
+ abort.abort
  return
  }
 

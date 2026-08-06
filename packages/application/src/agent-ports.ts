@@ -18,6 +18,7 @@ import type {
  ThreadId,
  UserId,
  WorkspaceId,
+ WorkspaceRunControl,
 } from '@loom/domain'
 
 export interface RunnerRepositoryPort {
@@ -68,6 +69,13 @@ export interface AgentRunRepositoryPort {
 ): Promise<AgentRun>
  /** Single-active-run guard: any non-terminal run in the workspace. */
  findActiveByWorkspace(workspaceId: WorkspaceId): Promise<AgentRun | null>
+ /**
+ * Every non-terminal run in one workspace. Distinct from
+ * `findActiveByWorkspace` on purpose: the kill switch must stop
+ * *all* of them, and must not quietly depend on the single-active-run limit
+ * still holding — that limit is a Phase 1 scope cut, not an invariant.
+ */
+ listActiveByWorkspace(workspaceId: WorkspaceId): Promise<AgentRun[]>
  /** A human's end-of-run keep/discard decision on DiffView. */
  setBranchDisposition(
  workspaceId: WorkspaceId,
@@ -133,6 +141,19 @@ export interface PersonaGroupRepositoryPort {
  delete(workspaceId: WorkspaceId, id: PersonaGroupId): Promise<void>
 }
 
+/**
+ * The kill switch's persistence. Its own port
+ * rather than a method on `AgentRunRepositoryPort`: the state belongs to the
+ * workspace, not to any run.
+ */
+export interface WorkspaceRunControlRepositoryPort {
+ get(workspaceId: WorkspaceId): Promise<WorkspaceRunControl>
+ set(
+ workspaceId: WorkspaceId,
+ patch: { paused: boolean; pausedByUserId: string | null },
+): Promise<WorkspaceRunControl>
+}
+
 export interface ApprovalRepositoryPort {
  create(input: {
  workspaceId: WorkspaceId
@@ -143,10 +164,17 @@ export interface ApprovalRepositoryPort {
  }): Promise<ApprovalRequest>
  findById(workspaceId: WorkspaceId, id: ApprovalRequestId): Promise<ApprovalRequest | null>
  listPendingByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<ApprovalRequest[]>
+ /**
+ * `resolvedByUserId: null` marks a resolution no human made — the kill switch
+ * denying a dead run's gate, or the approval SLA auto-denying an expired one
+ *. That is *not* a hole in identity-bound approval's identity binding: `decideApproval`
+ * is the only path a client can reach, and it still requires a `user` actor.
+ * These null resolutions are system sweeps that can only ever deny.
+ */
  resolve(
  workspaceId: WorkspaceId,
  id: ApprovalRequestId,
- patch: { status: ApprovalStatus; resolvedByUserId: UserId },
+ patch: { status: ApprovalStatus; resolvedByUserId: UserId | null },
 ): Promise<ApprovalRequest>
 }
 
@@ -172,6 +200,13 @@ export interface RunDispatchPort {
  /** What a human asked for via `@mention`; absent for the sidebar-picker path. */
  task?: string
  }): Promise<void>
+ /**
+ * Aborts a run mid-flight. Fire-and-forget and
+ * deliberately tolerant of a disconnected Runner: the server marks the run
+ * `cancelled` either way, since a Runner it cannot reach cannot be the thing
+ * that decides whether a stop takes effect.
+ */
+ cancelRun(input: { runnerId: RunnerId; runId: AgentRunId }): Promise<void>
  /**
  * Relays a human's decision back to the Runner that is blocked awaiting it.
  * Keyed by `toolUseId` (what the SDK's canUseTool callback actually holds),

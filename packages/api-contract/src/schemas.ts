@@ -145,6 +145,14 @@ export const AgentRunSchema = z.object({
  completedAt: z.date.nullable,
 })
 
+/** Global kill switch state. */
+export const RunControlSchema = z.object({
+ workspaceId: z.string,
+ paused: z.boolean,
+ pausedAt: z.date.nullable,
+ pausedByUserId: z.string.nullable,
+})
+
 export const ApprovalStatusSchema = z.enum(['pending', 'approved', 'denied'])
 
 export const ApprovalRequestSchema = z.object({
@@ -171,4 +179,5 @@ export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>
+export type RunControl = z.infer<typeof RunControlSchema>
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>

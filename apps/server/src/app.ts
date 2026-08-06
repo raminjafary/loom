@@ -14,6 +14,7 @@ import {
  repositoryRepository,
  runnerRepository,
  threadRepository,
+ workspaceRunControlRepository,
 } from '@loom/db'
 import { RPCHandler } from '@orpc/server/node'
 import cors from '@fastify/cors'
@@ -50,6 +51,7 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
  approvals: approvalRepository(db),
  personas: personaRepository(db),
  personaGroups: personaGroupRepository(db),
+ runControl: workspaceRunControlRepository(db),
  }
 
  // The Runner gateway produces `dispatch` — see runner-gateway.ts for why

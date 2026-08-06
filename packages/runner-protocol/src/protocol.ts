@@ -113,6 +113,12 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  toolUseId: z.string,
  decision: z.enum(['allow', 'deny']),
  }),
+ /**
+ * Kill switch. Fire-and-forget with no result frame on purpose:
+ * the server has already marked the run `cancelled` by the time this is sent,
+ * so there is no decision left for the Runner's answer to influence.
+ */
+ z.object({ type: z.literal('cancel_run'), runId: z.string }),
  z.object({ type: z.literal('get_diff'), requestId: z.string, runId: z.string }),
  z.object({ type: z.literal('discard_run'), requestId: z.string, runId: z.string }),
  z.object({

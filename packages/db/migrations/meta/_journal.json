@@ -71,6 +71,13 @@
       "when": 1785173424383,
       "tag": "0009_faulty_thundra",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786017171602,
+      "tag": "0010_worried_mathemanic",
+      "breakpoints": true
     }
   ]
 }

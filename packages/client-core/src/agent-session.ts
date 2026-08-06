@@ -4,6 +4,7 @@ import type {
  ApprovalRequest,
  PersonaGroup,
  Repository,
+ RunControl,
  Runner,
 } from '@loom/api-contract'
 import type { LoomApi } from './api.js'
@@ -40,6 +41,9 @@ export interface AgentSnapshot {
  // the one currently executing.
  readonly inspectedRun: AgentRun | null
  readonly inspectedApprovals: ApprovalRequest[]
+ // Global kill switch — null until `init` has read it, so the UI
+ // can tell "not loaded yet" apart from "loaded, not paused".
+ readonly runControl: RunControl | null
  readonly loading: boolean
  readonly error: string | null
 }
@@ -67,6 +71,10 @@ export interface AgentSession {
  pushRun(agentRunId: string, acknowledgeCiChange?: boolean): Promise<void>
  refreshInbox: Promise<void>
  inspectRun(agentRunId: string): Promise<void>
+ /** Kill switch: stops everything in flight and blocks new starts. */
+ pauseAllRuns: Promise<void>
+ /** Lifts the pause. Never restarts what the pause cancelled. */
+ resumeAllRuns: Promise<void>
  dispose: void
 }
 
@@ -86,6 +94,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  needsAttention: [],
  inspectedRun: null,
  inspectedApprovals: [],
+ runControl: null,
  loading: false,
  error: null,
  }
@@ -156,14 +165,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  async init {
  patch({ loading: true, error: null })
  try {
- const [runners, repositories, personas, personaGroups, activeRun] = await Promise.all([
+ const [runners, repositories, personas, personaGroups, activeRun, runControl] =
+ await Promise.all([
  options.api.runner.list,
  options.api.repository.list,
  options.api.persona.list,
  options.api.personaGroup.list,
  options.api.agentRun.getActive,
+ options.api.runControl.get,
  ])
- patch({ runners, repositories, personas, personaGroups })
+ patch({ runners, repositories, personas, personaGroups, runControl })
  // Resume watching whatever run is already active — otherwise a page
  // reload during a run leaves no path back to its approval card.
  if (activeRun && !TERMINAL_STATUSES.has(activeRun.status)) {
@@ -310,6 +321,35 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  if (state.activeRun?.id === run.id) patch({ activeRun: run })
  if (state.inspectedRun?.id === run.id) patch({ inspectedRun: run })
  await fetchInbox
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async pauseAllRuns {
+ patch({ error: null })
+ try {
+ const { control } = await options.api.runControl.pauseAll
+ patch({ runControl: control })
+ // The pause cancelled whatever was in flight, so stop the run poller
+ // rather than letting it keep hitting a now-terminal run, and re-read
+ // the run it was watching so the UI shows `cancelled` immediately.
+ stopPolling
+ if (state.activeRun) {
+ const run = await options.api.agentRun.get({ agentRunId: state.activeRun.id })
+ patch({ activeRun: run, pendingApprovals: [] })
+ }
+ await fetchInbox
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async resumeAllRuns {
+ patch({ error: null })
+ try {
+ const runControl = await options.api.runControl.resume
+ patch({ runControl })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

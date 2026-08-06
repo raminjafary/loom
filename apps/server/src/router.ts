@@ -14,6 +14,7 @@ import {
   getAgentRunDiff,
   getChannelRootThread,
   getPersona,
+  getRunControl,
   keepAgentRun,
   listChannels,
   listMessages,
@@ -23,8 +24,10 @@ import {
   listRepositories,
   listRunners,
   listRunsNeedingAttention,
+  pauseAllRuns,
   postMessage,
   pushAgentRun,
+  resumeAllRuns,
   startAgentRun,
   updatePersona,
   updatePersonaGroup,
@@ -340,6 +343,30 @@ export const router = os.router({
 
     listNeedsAttention: os.agentRun.listNeedsAttention.handler(({ context }) =>
       guard(() => listRunsNeedingAttention(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+  },
+
+  runControl: {
+    get: os.runControl.get.handler(({ context }) =>
+      guard(() => getRunControl(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+
+    pauseAll: os.runControl.pauseAll.handler(({ context }) =>
+      guard(() =>
+        pauseAllRuns(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+        }),
+      ),
+    ),
+
+    resume: os.runControl.resume.handler(({ context }) =>
+      guard(() =>
+        resumeAllRuns(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+        }),
+      ),
     ),
   },
 

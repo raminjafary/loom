@@ -26,6 +26,7 @@ import {
  type RunnerId,
  type ThreadId,
  type WorkspaceId,
+ type WorkspaceRunControl,
 } from '@loom/domain'
 import type {
  AgentRunRepositoryPort,
@@ -35,6 +36,7 @@ import type {
  RepositoryRepositoryPort,
  RunDispatchPort,
  RunnerRepositoryPort,
+ WorkspaceRunControlRepositoryPort,
 } from './agent-ports.js'
 import type { Deps } from './use-cases.js'
 
@@ -45,6 +47,7 @@ export interface AgentDeps extends Deps {
  readonly approvals: ApprovalRepositoryPort
  readonly personas: PersonaRepositoryPort
  readonly personaGroups: PersonaGroupRepositoryPort
+ readonly runControl: WorkspaceRunControlRepositoryPort
  readonly dispatch: RunDispatchPort
 }
 
@@ -329,6 +332,13 @@ export const startAgentRun = async (
  throw new ForbiddenError('Only a human may start an agent run')
  }
 
+ // Kill switch — checked before anything is
+ // written, so a paused workspace leaves no half-created run behind.
+ const control = await deps.runControl.get(input.workspaceId)
+ if (control.paused) {
+ throw new ValidationError('Agent runs are paused for this workspace — resume them first')
+ }
+
  // Single-active-run limit, preserved not lifted: a
  // second mention while a run is active must error clearly, never silently
  // replace what's being watched.
@@ -497,6 +507,109 @@ const postRunSystemMessage = async (
  threadId: run.threadId,
  message,
  })
+}
+
+export const getRunControl = (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<WorkspaceRunControl> => deps.runControl.get(input.workspaceId)
+
+/**
+ * Cancels one in-flight run and tells its Runner to abort. Shared by the kill
+ * switch and (eventually) any other forced stop. A Runner that can't be reached
+ * does not block the cancellation: the run is marked `cancelled` regardless,
+ * because a stop that a disconnected Runner could veto is not a stop. Its
+ * orphaned process is then the dead-run reaper's problem, not this path's.
+ */
+const cancelRun = async (deps: AgentDeps, run: AgentRun, reason: string): Promise<void> => {
+ try {
+ await deps.dispatch.cancelRun({ runnerId: run.runnerId, runId: run.id })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+
+ // Any gate this run was blocked on is dead too. Left pending it would show up
+ // in the Inbox forever, pointing at a run that can never act on the decision.
+ const pending = await deps.approvals.listPendingByRun(run.workspaceId, run.id)
+ for (const approval of pending) {
+ await deps.approvals.resolve(run.workspaceId, approval.id, {
+ status: 'denied',
+ resolvedByUserId: null,
+ })
+ }
+
+ const cancelled = await deps.agentRuns.updateStatus(run.workspaceId, run.id, {
+ status: 'cancelled',
+ errorMessage: reason,
+ completedAt: new Date,
+ })
+ await postRunSystemMessage(deps, cancelled, `Run cancelled: ${reason}.`)
+}
+
+/**
+ * The global kill switch. Sets the workspace's pause flag *first*, so a run started
+ * concurrently with this sweep is rejected by `startAgentRun` rather than
+ * slipping in behind it, then cancels everything already in flight.
+ */
+export const pauseAllRuns = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor },
+): Promise<{ control: WorkspaceRunControl; cancelledRunIds: string[] }> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may pause agent runs')
+ }
+ if (input.actor.kind !== 'user') throw new ForbiddenError('Only a human may pause agent runs')
+
+ const control = await deps.runControl.set(input.workspaceId, {
+ paused: true,
+ pausedByUserId: input.actor.userId,
+ })
+
+ const active = await deps.agentRuns.listActiveByWorkspace(input.workspaceId)
+ for (const run of active) {
+ await cancelRun(deps, run, 'workspace paused by an operator')
+ }
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'workspace.runs_paused',
+ subjectType: 'workspace',
+ subjectId: input.workspaceId,
+ metadata: { cancelledRunIds: active.map((run) => run.id) },
+ })
+
+ return { control, cancelledRunIds: active.map((run) => run.id) }
+}
+
+/**
+ * Lifts the pause. Deliberately does *not* restart anything the pause
+ * cancelled — see WorkspaceRunControl's note: an operator who hit the switch
+ * wanted the work stopped, and reviving it here would undo that decision on
+ * their behalf.
+ */
+export const resumeAllRuns = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor },
+): Promise<WorkspaceRunControl> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may resume agent runs')
+ }
+
+ const control = await deps.runControl.set(input.workspaceId, {
+ paused: false,
+ pausedByUserId: null,
+ })
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'workspace.runs_resumed',
+ subjectType: 'workspace',
+ subjectId: input.workspaceId,
+ })
+
+ return control
 }
 
 /**

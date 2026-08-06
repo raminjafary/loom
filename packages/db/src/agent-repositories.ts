@@ -5,6 +5,7 @@ import type {
  PersonaRepositoryPort,
  RepositoryRepositoryPort,
  RunnerRepositoryPort,
+ WorkspaceRunControlRepositoryPort,
 } from '@loom/application'
 import { NotFoundError, asRunnerId } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
@@ -24,7 +25,15 @@ import {
  type RepositoryRow,
  type RunnerRow,
 } from './mappers.js'
-import { agentPersona, agentRun, approvalRequest, personaGroup, repository, runner } from './schema.js'
+import {
+ agentPersona,
+ agentRun,
+ approvalRequest,
+ personaGroup,
+ repository,
+ runner,
+ workspace,
+} from './schema.js'
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'] as const
 
@@ -145,6 +154,16 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  return row ? toAgentRun(row as AgentRunRow): null
  },
 
+ async listActiveByWorkspace(workspaceId) {
+ const rows = await db
+.select
+.from(agentRun)
+.where(
+ and(eq(agentRun.workspaceId, workspaceId), notInArray(agentRun.status, [...TERMINAL_STATUSES])),
+)
+ return rows.map((row) => toAgentRun(row as AgentRunRow))
+ },
+
  async setBranchDisposition(workspaceId, id, disposition) {
  const [row] = await db
 .update(agentRun)
@@ -250,6 +269,55 @@ export const approvalRepository = (db: Database): ApprovalRepositoryPort => ({
 .returning
  if (!row) throw new NotFoundError('ApprovalRequest')
  return toApprovalRequest(row as ApprovalRequestRow)
+ },
+})
+
+/**
+ * Kill-switch state. Columns live on `workspace` rather than a
+ * dedicated table — it's strictly 1:1 with a workspace, so a separate row would
+ * add a join and a "does the row exist yet?" case for nothing.
+ */
+export const workspaceRunControlRepository = (db: Database): WorkspaceRunControlRepositoryPort => ({
+ async get(workspaceId) {
+ const [row] = await db
+.select({
+ runsPaused: workspace.runsPaused,
+ runsPausedAt: workspace.runsPausedAt,
+ runsPausedByUserId: workspace.runsPausedByUserId,
+ })
+.from(workspace)
+.where(eq(workspace.id, workspaceId))
+.limit(1)
+ if (!row) throw new NotFoundError('Workspace')
+ return {
+ workspaceId,
+ paused: row.runsPaused,
+ pausedAt: row.runsPausedAt,
+ pausedByUserId: row.runsPausedByUserId,
+ }
+ },
+
+ async set(workspaceId, patch) {
+ const [row] = await db
+.update(workspace)
+.set({
+ runsPaused: patch.paused,
+ runsPausedAt: patch.paused ? new Date: null,
+ runsPausedByUserId: patch.pausedByUserId,
+ })
+.where(eq(workspace.id, workspaceId))
+.returning({
+ runsPaused: workspace.runsPaused,
+ runsPausedAt: workspace.runsPausedAt,
+ runsPausedByUserId: workspace.runsPausedByUserId,
+ })
+ if (!row) throw new NotFoundError('Workspace')
+ return {
+ workspaceId,
+ paused: row.runsPaused,
+ pausedAt: row.runsPausedAt,
+ pausedByUserId: row.runsPausedByUserId,
+ }
  },
 })
 

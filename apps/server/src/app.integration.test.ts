@@ -121,6 +121,45 @@ describe('contract over HTTP', => {
  expect(second.nextCursor).toBeNull
  })
 
+ /**
+ * The kill switch. `truncateDomainTables` deliberately spares
+ * `workspace` (see packages/db/src/testing.ts), and the pause flag lives on
+ * that row — so this test must resume before it ends, or every later test in
+ * the file inherits a paused workspace.
+ */
+ it('pauses and resumes runs workspace-wide', async => {
+ expect((await client.runControl.get).paused).toBe(false)
+
+ const paused = await client.runControl.pauseAll
+ expect(paused.control.paused).toBe(true)
+ expect(paused.control.pausedByUserId).toBe('dev-user')
+ // Nothing was in flight, so nothing to cancel — the flag is the point here.
+ expect(paused.cancelledRunIds).toEqual([])
+ expect((await client.runControl.get).paused).toBe(true)
+
+ const resumed = await client.runControl.resume
+ expect(resumed.paused).toBe(false)
+ expect(resumed.pausedAt).toBeNull
+ expect(resumed.pausedByUserId).toBeNull
+ })
+
+ it('rejects starting a run while the workspace is paused', async => {
+ await client.runControl.pauseAll
+ try {
+ // Rejected before any lookup of thread/repo/persona, so the ids below
+ // never need to exist — that ordering is the assertion.
+ await expect(
+ client.agentRun.start({
+ threadId: '00000000-0000-0000-0000-000000000000',
+ repositoryId: '00000000-0000-0000-0000-000000000000',
+ personaId: '00000000-0000-0000-0000-000000000000',
+ }),
+).rejects.toThrow(/paused/i)
+ } finally {
+ await client.runControl.resume
+ }
+ })
+
  it('rejects an unauthenticated caller', async => {
  const anonymous = await buildApp(config, { resolve: async => null })
  await anonymous.fastify.listen({ port: 0, host: '127.0.0.1' })
@@ -149,6 +188,7 @@ describe('contract completeness', => {
  'persona',
  'personaGroup',
  'agentRun',
+ 'runControl',
  'approval',
  ])
  expect(Object.keys(contract.channel)).toEqual(['list', 'create', 'rootThread'])
@@ -167,6 +207,7 @@ describe('contract completeness', => {
  'push',
  'listNeedsAttention',
  ])
+ expect(Object.keys(contract.runControl)).toEqual(['get', 'pauseAll', 'resume'])
  expect(Object.keys(contract.approval)).toEqual(['listPending', 'decide'])
  })
 })

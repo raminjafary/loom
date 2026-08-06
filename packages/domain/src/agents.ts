@@ -97,6 +97,22 @@ export interface PersonaGroup {
  readonly updatedAt: Date
 }
 
+/**
+ * The global kill switch. Workspace-scoped rather than process-global: a pause must survive a
+ * server restart, so it lives in the database, not in memory.
+ *
+ * Pausing is deliberately asymmetric with resuming. Pausing cancels every
+ * in-flight run; resuming only lifts the block on *starting* new ones and never
+ * restarts anything — an operator who hit the switch wants the work stopped,
+ * and silently reviving killed runs would be the opposite of that.
+ */
+export interface WorkspaceRunControl {
+ readonly workspaceId: WorkspaceId
+ readonly paused: boolean
+ readonly pausedAt: Date | null
+ readonly pausedByUserId: string | null
+}
+
 export type AgentRunStatus =
  | 'pending'
  | 'running'
