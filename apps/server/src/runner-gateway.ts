@@ -116,6 +116,14 @@ export const createRunnerGateway = (
       })
     },
 
+    async cancelRun({ runnerId, runId }) {
+      // Silent when the Runner is gone: a disconnected Runner has no live agent
+      // loop to abort, and the caller (pauseAllRuns) cancels the run in the
+      // database either way — see RunDispatchPort.cancelRun.
+      if (!connections.has(runnerId)) return
+      send(runnerId, { type: 'cancel_run', runId })
+    },
+
     async sendApprovalDecision({ runnerId, toolUseId, decision }) {
       send(runnerId, { type: 'permission_response', toolUseId, decision })
     },

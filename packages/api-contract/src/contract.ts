@@ -10,6 +10,7 @@ import {
   MessageSchema,
   PersonaGroupSchema,
   RepositorySchema,
+  RunControlSchema,
   RunnerSchema,
   ThreadSchema,
 } from './schemas.js'
@@ -182,6 +183,21 @@ export const contract = {
 
     /** Runs needing a human decision — the inbox's data source (PLAN.md §3). */
     listNeedsAttention: oc.output(z.array(AgentRunSchema)),
+  },
+
+  /**
+   * The global kill switch (PLAN.md §6 runtime safety: "One button. Nothing had
+   * one."). `pauseAll` blocks new runs *and* cancels every in-flight one;
+   * `resume` only lifts the block — it never restarts what the pause killed.
+   */
+  runControl: {
+    get: oc.output(RunControlSchema),
+
+    pauseAll: oc.output(
+      z.object({ control: RunControlSchema, cancelledRunIds: z.array(z.string()) }),
+    ),
+
+    resume: oc.output(RunControlSchema),
   },
 
   /**

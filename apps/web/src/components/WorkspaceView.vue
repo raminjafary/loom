@@ -6,6 +6,7 @@ import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
 import DiffView from './DiffView.vue'
 import InboxView from './InboxView.vue'
+import KillSwitch from './KillSwitch.vue'
 import MessageList from './MessageList.vue'
 import PersonaForm from './PersonaForm.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
@@ -108,6 +109,11 @@ onBeforeUnmount(() => {
           <span v-if="view === 'workspace'" class="conn" :class="snapshot.connection">
             {{ snapshot.connection }}
           </span>
+          <KillSwitch
+            :control="agentSnapshot.runControl"
+            @pause="agent.pauseAllRuns()"
+            @resume="agent.resumeAllRuns()"
+          />
           <button
             v-if="view === 'workspace'"
             type="button"

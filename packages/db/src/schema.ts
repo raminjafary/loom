@@ -26,6 +26,14 @@ export const workspace = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
     slug: text('slug').notNull(),
+    // Global kill switch (PLAN.md §6 runtime safety). Persisted rather than
+    // held in memory so a pause survives a server restart — an operator who
+    // stopped everything must not have it silently undone by a redeploy.
+    runsPaused: boolean('runs_paused').notNull().default(false),
+    runsPausedAt: timestamp('runs_paused_at', { withTimezone: true }),
+    // No hard FK, same reasoning as approvalRequest.resolvedByUserId: who hit
+    // the switch is an audit fact that must survive the user being removed.
+    runsPausedByUserId: text('runs_paused_by_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('workspace_slug_idx').on(t.slug)],

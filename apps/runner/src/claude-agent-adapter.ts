@@ -108,6 +108,12 @@ export interface RunAgentOptions {
   /** What a human asked for via `@mention` (PLAN.md §3a); absent for the sidebar-picker path. */
   readonly task?: string
   readonly onEvent: (event: WireAgentEvent) => void
+  /**
+   * Aborts the SDK's agent loop mid-flight (PLAN.md §6 kill switch). Owned by
+   * the caller so a `cancel_run` frame arriving on the socket can reach a run
+   * that is already streaming.
+   */
+  readonly abortController?: AbortController
   /** Resolves once a human (relayed via the server) has decided. */
   readonly onPermissionRequest: (
     toolUseId: string,
@@ -179,6 +185,7 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
       },
       canUseTool,
       permissionMode: 'default',
+      ...(options.abortController ? { abortController: options.abortController } : {}),
     },
   })
 
@@ -189,6 +196,10 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
       }
     }
   } catch (error) {
+    // An abort is an expected outcome, not a crash: the server already recorded
+    // the run as cancelled before sending `cancel_run`, so reporting a
+    // `run_failed` here would overwrite that with a misleading `failed`.
+    if (options.abortController?.signal.aborted) return
     options.onEvent({
       kind: 'run_failed',
       message: error instanceof Error ? error.message : String(error),

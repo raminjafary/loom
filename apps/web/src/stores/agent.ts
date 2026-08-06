@@ -42,6 +42,8 @@ export const useAgentStore = defineStore('agent', () => {
     discardRun: (agentRunId: string) => session.discardRun(agentRunId),
     pushRun: (agentRunId: string, acknowledgeCiChange?: boolean) =>
       session.pushRun(agentRunId, acknowledgeCiChange),
+    pauseAllRuns: () => session.pauseAllRuns(),
+    resumeAllRuns: () => session.resumeAllRuns(),
     refreshInbox: () => session.refreshInbox(),
     inspectRun: (agentRunId: string) => session.inspectRun(agentRunId),
     dispose: () => session.dispose(),
