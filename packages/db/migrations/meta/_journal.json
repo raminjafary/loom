@@ -57,6 +57,20 @@
       "when": 1785096512934,
       "tag": "0007_new_doctor_doom",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785171964305,
+      "tag": "0008_motionless_black_cat",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785173424383,
+      "tag": "0009_faulty_thundra",
+      "breakpoints": true
     }
   ]
 }

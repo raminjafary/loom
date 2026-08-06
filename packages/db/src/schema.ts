@@ -154,6 +154,18 @@ export const agentRun = pgTable(
  // and for any run that fails before a workspace is ever prepared.
  clonePath: text('clone_path'),
  branchName: text('branch_name'),
+ // Set by a human's end-of-run keep/discard decision on DiffView — null until then. `discarded` also implies the
+ // clone on disk has been removed by the Runner.
+ branchDisposition: text('branch_disposition'),
+ // Dead-run reaper inputs — internal-only,
+ // never exposed through the contract. `lastHeartbeatAt` is bumped only by
+ // the Runner's periodic heartbeat frame (detects a dead connection);
+ // `lastEventAt` is bumped by any agent_event (detects a hung-but-connected
+ // run). Both null until first arrival — the reaper falls back to
+ // `createdAt` so a run that never gets a first heartbeat/event is still
+ // caught, not ignored forever.
+ lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+ lastEventAt: timestamp('last_event_at', { withTimezone: true }),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  completedAt: timestamp('completed_at', { withTimezone: true }),
  },

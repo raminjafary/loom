@@ -6,9 +6,20 @@ const props = defineProps<{
  diff: string | null
 }>
 
-const emit = defineEmits<{ 'load-diff': [agentRunId: string] }>
+const emit = defineEmits<{
+ 'load-diff': [agentRunId: string]
+ keep: [agentRunId: string]
+ discard: [agentRunId: string]
+ push: [agentRunId: string, acknowledgeCiChange: boolean]
+}>
+
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 
 const canLoadDiff = => props.run !== null && props.run.clonePath !== null
+
+// Keep/discard/push only make sense once the run is done and undecided.
+const canDecideDisposition = =>
+ props.run !== null && TERMINAL_STATUSES.has(props.run.status) && props.run.branchDisposition === null
 </script>
 
 <template>
@@ -21,6 +32,15 @@ const canLoadDiff = => props.run !== null && props.run.clonePath !== null
  </header>
  <!-- Raw diff text only, no v-html -->
  <pre v-if="props.diff !== null" class="diff">{{ props.diff || '(no changes yet)' }}</pre>
+ <p v-if="props.run.branchDisposition" class="disposition">Branch {{ props.run.branchDisposition }}.</p>
+ <footer v-else-if="canDecideDisposition">
+ <button type="button" @click="emit('keep', props.run.id)">Keep branch</button>
+ <button type="button" class="danger" @click="emit('discard', props.run.id)">Discard branch</button>
+ <button type="button" @click="emit('push', props.run.id, false)">Push &amp; open PR</button>
+ <button type="button" class="muted" @click="emit('push', props.run.id, true)">
+ Push anyway (CI/workflow changes)
+ </button>
+ </footer>
  </section>
 </template>
 
@@ -73,5 +93,27 @@ button:disabled {
  font-size: 0.78rem;
  white-space: pre-wrap;
  overflow-wrap: anywhere;
+}
+
+footer {
+ display: flex;
+ gap: 0.5rem;
+ margin-top: 0.6rem;
+}
+
+.disposition {
+ margin: 0.6rem 0 0;
+ font-size: 0.8rem;
+ color: var(--text-faint);
+}
+
+button.danger {
+ border-color: var(--danger);
+ color: var(--danger);
+}
+
+button.muted {
+ opacity: 0.6;
+ font-size: 0.75rem;
 }
 </style>

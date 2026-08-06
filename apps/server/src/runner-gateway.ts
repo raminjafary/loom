@@ -1,5 +1,5 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
-import { requestApproval, recordAgentEvent, recordRunWorkspace } from '@loom/application'
+import { requestApproval, recordAgentEvent, recordRunHeartbeat, recordRunWorkspace } from '@loom/application'
 import {
  asAgentRunId,
  asRunnerId,
@@ -32,6 +32,20 @@ interface PendingDiff {
  reject(error: Error): void
 }
 
+interface PendingDiscard {
+ resolve(result: { ok: true } | { ok: false; error: string }): void
+ reject(error: Error): void
+}
+
+interface PendingPush {
+ resolve(
+ result:
+ | { ok: true; prUrl?: string; compareUrl?: string; warning?: string }
+ | { ok: false; error: string },
+): void
+ reject(error: Error): void
+}
+
 /**
  * Runner-facing WS endpoint: corrected placement, lives on
  * apps/server rather than apps/ws-gateway because it needs the application
@@ -54,6 +68,8 @@ export const createRunnerGateway = (
  const connections = new Map<string, ConnectedRunner>
  const pendingChecks = new Map<string, PendingCheck>
  const pendingDiffs = new Map<string, PendingDiff>
+ const pendingDiscards = new Map<string, PendingDiscard>
+ const pendingPushes = new Map<string, PendingPush>
 
  const send = (runnerId: RunnerId, frame: ServerFrame): void => {
  const conn = connections.get(runnerId)
@@ -129,6 +145,57 @@ export const createRunnerGateway = (
  },
 )
  },
+
+ async discardRun({ runnerId, runId }) {
+ if (!connections.has(runnerId)) {
+ return { ok: false, error: 'Runner is not currently connected' }
+ }
+ const requestId = randomUUID
+ return new Promise<{ ok: true } | { ok: false; error: string }>((resolve, reject) => {
+ const timer = setTimeout( => {
+ pendingDiscards.delete(requestId)
+ reject(new Error('Runner did not respond to discard_run in time'))
+ }, CHECK_PATH_TIMEOUT_MS)
+ pendingDiscards.set(requestId, {
+ resolve: (r) => {
+ clearTimeout(timer)
+ resolve(r)
+ },
+ reject: (e) => {
+ clearTimeout(timer)
+ reject(e)
+ },
+ })
+ send(runnerId, { type: 'discard_run', requestId, runId })
+ })
+ },
+
+ async pushRun({ runnerId, runId, acknowledgeCiChange }) {
+ if (!connections.has(runnerId)) {
+ return { ok: false, error: 'Runner is not currently connected' }
+ }
+ const requestId = randomUUID
+ return new Promise<
+ | { ok: true; prUrl?: string; compareUrl?: string; warning?: string }
+ | { ok: false; error: string }
+ >((resolve, reject) => {
+ const timer = setTimeout( => {
+ pendingPushes.delete(requestId)
+ reject(new Error('Runner did not respond to push_run in time'))
+ }, CHECK_PATH_TIMEOUT_MS)
+ pendingPushes.set(requestId, {
+ resolve: (r) => {
+ clearTimeout(timer)
+ resolve(r)
+ },
+ reject: (e) => {
+ clearTimeout(timer)
+ reject(e)
+ },
+ })
+ send(runnerId, { type: 'push_run', requestId, runId, acknowledgeCiChange })
+ })
+ },
  }
 
  const deps: AgentDeps = {...baseDeps, dispatch }
@@ -201,6 +268,37 @@ export const createRunnerGateway = (
 )
  return
  }
+
+ case 'discard_result': {
+ const pending = pendingDiscards.get(frame.requestId)
+ if (!pending) return
+ pendingDiscards.delete(frame.requestId)
+ pending.resolve(
+ frame.ok ? { ok: true }: { ok: false, error: frame.error ?? 'Runner failed to discard the run' },
+)
+ return
+ }
+
+ case 'push_result': {
+ const pending = pendingPushes.get(frame.requestId)
+ if (!pending) return
+ pendingPushes.delete(frame.requestId)
+ pending.resolve(
+ frame.ok
+ ? {
+ ok: true,
+...(frame.prUrl === undefined ? {}: { prUrl: frame.prUrl }),
+...(frame.compareUrl === undefined ? {}: { compareUrl: frame.compareUrl }),
+...(frame.warning === undefined ? {}: { warning: frame.warning }),
+ }
+: { ok: false, error: frame.error ?? 'Runner failed to push the run' },
+)
+ return
+ }
+
+ case 'heartbeat':
+ await recordRunHeartbeat(deps, { workspaceId, agentRunId: asAgentRunId(frame.runId) })
+ return
  }
  }
 

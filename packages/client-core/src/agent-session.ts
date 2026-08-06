@@ -33,6 +33,13 @@ export interface AgentSnapshot {
  readonly pendingApprovals: ApprovalRequest[]
  readonly lastPairing: { runnerId: string; rawToken: string } | null
  readonly diff: string | null
+ // Inbox — runs needing a human decision, workspace-wide.
+ readonly needsAttention: AgentRun[]
+ // The run being reviewed from the Inbox — independent of `activeRun`,
+ // since a human can review a past run's approval/diff without it being
+ // the one currently executing.
+ readonly inspectedRun: AgentRun | null
+ readonly inspectedApprovals: ApprovalRequest[]
  readonly loading: boolean
  readonly error: string | null
 }
@@ -55,6 +62,11 @@ export interface AgentSession {
  }): Promise<void>
  decide(approvalRequestId: string, decision: 'approve' | 'deny'): Promise<void>
  loadDiff(agentRunId: string): Promise<void>
+ keepRun(agentRunId: string): Promise<void>
+ discardRun(agentRunId: string): Promise<void>
+ pushRun(agentRunId: string, acknowledgeCiChange?: boolean): Promise<void>
+ refreshInbox: Promise<void>
+ inspectRun(agentRunId: string): Promise<void>
  dispose: void
 }
 
@@ -71,6 +83,9 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  pendingApprovals: [],
  lastPairing: null,
  diff: null,
+ needsAttention: [],
+ inspectedRun: null,
+ inspectedApprovals: [],
  loading: false,
  error: null,
  }
@@ -81,6 +96,27 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  const patch = (next: Partial<AgentSnapshot>) => {
  state = {...state,...next }
  for (const listener of listeners) listener(state)
+ }
+
+ const fetchInbox = async : Promise<void> => {
+ try {
+ const needsAttention = await options.api.agentRun.listNeedsAttention
+ patch({ needsAttention })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ }
+
+ const fetchInspected = async (agentRunId: string): Promise<void> => {
+ try {
+ const [run, inspectedApprovals] = await Promise.all([
+ options.api.agentRun.get({ agentRunId }),
+ options.api.approval.listPending({ agentRunId }),
+ ])
+ patch({ inspectedRun: run, inspectedApprovals })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
  }
 
  const stopPolling = => {
@@ -135,6 +171,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ activeRun, pendingApprovals })
  pollActiveRun(activeRun.id)
  }
+ await fetchInbox
  } catch (error) {
  patch({ error: errorMessage(error) })
  } finally {
@@ -225,6 +262,8 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  try {
  await options.api.approval.decide({ approvalRequestId, decision })
  if (state.activeRun) pollActiveRun(state.activeRun.id)
+ if (state.inspectedRun) await fetchInspected(state.inspectedRun.id)
+ await fetchInbox
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -239,6 +278,45 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: errorMessage(error) })
  }
  },
+
+ async keepRun(agentRunId) {
+ patch({ error: null })
+ try {
+ const run = await options.api.agentRun.keep({ agentRunId })
+ if (state.activeRun?.id === run.id) patch({ activeRun: run })
+ if (state.inspectedRun?.id === run.id) patch({ inspectedRun: run })
+ await fetchInbox
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async discardRun(agentRunId) {
+ patch({ error: null })
+ try {
+ const run = await options.api.agentRun.discard({ agentRunId })
+ if (state.activeRun?.id === run.id) patch({ activeRun: run })
+ if (state.inspectedRun?.id === run.id) patch({ inspectedRun: run })
+ await fetchInbox
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async pushRun(agentRunId, acknowledgeCiChange) {
+ patch({ error: null })
+ try {
+ const run = await options.api.agentRun.push({ agentRunId, acknowledgeCiChange })
+ if (state.activeRun?.id === run.id) patch({ activeRun: run })
+ if (state.inspectedRun?.id === run.id) patch({ inspectedRun: run })
+ await fetchInbox
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ refreshInbox: fetchInbox,
+ inspectRun: fetchInspected,
 
  dispose {
  stopPolling

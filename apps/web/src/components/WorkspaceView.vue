@@ -5,6 +5,7 @@ import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
 import DiffView from './DiffView.vue'
+import InboxView from './InboxView.vue'
 import MessageList from './MessageList.vue'
 import PersonaForm from './PersonaForm.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
@@ -65,6 +66,16 @@ const cancelMention = => {
  pendingMention.value = null
 }
 
+// Inbox — the retention hook, a second top-level view toggled
+// locally since apps/web has no router. Refreshed on entry rather than
+// polled continuously.
+const view = ref<'workspace' | 'inbox'>('workspace')
+
+const openInbox = => {
+ view.value = 'inbox'
+ void agent.refreshInbox
+}
+
 onMounted( => {
  void store.start
  void agent.start
@@ -87,14 +98,33 @@ onBeforeUnmount( => {
 
  <main class="main">
  <header class="topbar">
+ <template v-if="view === 'workspace'">
  <h2 v-if="activeChannel">#{{ activeChannel.name }}</h2>
  <h2 v-else class="muted">No channel selected</h2>
+ </template>
+ <h2 v-else>Inbox</h2>
 
- <span class="conn":class="snapshot.connection">
+ <div class="topbar-actions">
+ <span v-if="view === 'workspace'" class="conn":class="snapshot.connection">
  {{ snapshot.connection }}
  </span>
+ <button
+ v-if="view === 'workspace'"
+ type="button"
+ class="inbox-toggle"
+ @click="openInbox"
+ >
+ Inbox<span v-if="agentSnapshot.needsAttention.length" class="badge">{{
+ agentSnapshot.needsAttention.length
+ }}</span>
+ </button>
+ <button v-else type="button" class="inbox-toggle" @click="view = 'workspace'">
+ Back to workspace
+ </button>
+ </div>
  </header>
 
+ <template v-if="view === 'workspace'">
  <p v-if="snapshot.error" class="error" role="alert">{{ snapshot.error }}</p>
  <p v-if="agentSnapshot.error" class="error" role="alert">{{ agentSnapshot.error }}</p>
 
@@ -118,9 +148,25 @@ onBeforeUnmount( => {
  </div>
 
  <Composer:disabled="!snapshot.activeThread":personas="agentSnapshot.personas" @send="handleSend" />
+ </template>
+
+ <InboxView
+ v-else
+ class="inbox-region"
+:runs="agentSnapshot.needsAttention"
+:selected-run="agentSnapshot.inspectedRun"
+:approvals="agentSnapshot.inspectedApprovals"
+:diff="agentSnapshot.diff"
+ @select="(agentRunId) => agent.inspectRun(agentRunId)"
+ @decide="(id, decision) => agent.decide(id, decision)"
+ @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
+ @keep="(agentRunId) => agent.keepRun(agentRunId)"
+ @discard="(agentRunId) => agent.discardRun(agentRunId)"
+ @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
+ />
  </main>
 
- <aside class="agent-sidebar">
+ <aside v-if="view === 'workspace'" class="agent-sidebar">
  <RunnerPanel
 :runners="agentSnapshot.runners"
 :last-pairing="agentSnapshot.lastPairing"
@@ -149,6 +195,9 @@ onBeforeUnmount( => {
 :run="agentSnapshot.activeRun"
 :diff="agentSnapshot.diff"
  @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
+ @keep="(agentRunId) => agent.keepRun(agentRunId)"
+ @discard="(agentRunId) => agent.discardRun(agentRunId)"
+ @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
  />
  </aside>
  </div>
@@ -212,6 +261,35 @@ onBeforeUnmount( => {
  border-color: color-mix(in oklab, var(--danger) 40%, transparent);
 }
 
+.topbar-actions {
+ display: flex;
+ align-items: center;
+ gap: 0.6rem;
+}
+
+.inbox-toggle {
+ display: flex;
+ align-items: center;
+ gap: 0.35rem;
+ padding: 0.3rem 0.6rem;
+ border: 1px solid var(--border);
+ border-radius: 0.375rem;
+ background: var(--surface-hover);
+ color: var(--text);
+ font: inherit;
+ font-size: 0.8rem;
+ cursor: pointer;
+}
+
+.inbox-toggle.badge {
+ padding: 0.05rem 0.4rem;
+ border-radius: 999px;
+ background: var(--accent);
+ color: var(--accent-contrast);
+ font-size: 0.7rem;
+ font-weight: 600;
+}
+
 .error {
  margin: 0;
  padding: 0.6rem 1.25rem;
@@ -259,6 +337,11 @@ onBeforeUnmount( => {
  background: none;
  color: var(--text-muted);
  font-weight: 500;
+}
+
+.inbox-region {
+ flex: 1;
+ min-height: 0;
 }
 
 .agent-sidebar {

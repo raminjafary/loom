@@ -68,6 +68,28 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  diff: z.string.optional,
  error: z.string.optional,
  }),
+ z.object({
+ type: z.literal('discard_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ error: z.string.optional,
+ }),
+ /** Result of a host-side push + best-effort PR/MR open. */
+ z.object({
+ type: z.literal('push_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ prUrl: z.string.optional,
+ compareUrl: z.string.optional,
+ warning: z.string.optional,
+ error: z.string.optional,
+ }),
+ /**
+ * Periodic liveness signal while a run is in flight — deliberately a sibling of `agent_event`, not folded into
+ * `AgentEventSchema`: it must never become a chat message, only bump
+ * `agent_run.last_heartbeat_at`.
+ */
+ z.object({ type: z.literal('heartbeat'), runId: z.string }),
 ])
 
 // Server -> Runner
@@ -92,6 +114,13 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  decision: z.enum(['allow', 'deny']),
  }),
  z.object({ type: z.literal('get_diff'), requestId: z.string, runId: z.string }),
+ z.object({ type: z.literal('discard_run'), requestId: z.string, runId: z.string }),
+ z.object({
+ type: z.literal('push_run'),
+ requestId: z.string,
+ runId: z.string,
+ acknowledgeCiChange: z.boolean,
+ }),
 ])
 
 export type RunnerFrame = z.infer<typeof RunnerFrameSchema>

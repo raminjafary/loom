@@ -126,6 +126,8 @@ export const AgentRunStatusSchema = z.enum([
  'cancelled',
 ])
 
+export const AgentRunBranchDispositionSchema = z.enum(['kept', 'discarded', 'pushed'])
+
 export const AgentRunSchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -138,6 +140,7 @@ export const AgentRunSchema = z.object({
  errorMessage: z.string.nullable,
  clonePath: z.string.nullable,
  branchName: z.string.nullable,
+ branchDisposition: AgentRunBranchDispositionSchema.nullable,
  createdAt: z.date,
  completedAt: z.date.nullable,
 })
