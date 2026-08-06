@@ -32,6 +32,8 @@ let app: App
 let client: ContractRouterClient<Contract>
 let wsUrl: string
 let testPersonaId: string
+/** Pairing tokens by Runner name, so a test can reconnect as the same Runner. */
+const pairingTokens = new Map<string, string>
 
 beforeAll(async => {
  const row = await seedWorkspace(db, `runner-gateway-${Date.now}`)
@@ -88,6 +90,7 @@ const pairFakeRunner = async (
  allowedRoots: string[] = ['/tmp'],
 ): Promise<{ socket: WebSocket; runnerId: string }> => {
  const { runnerId, rawToken } = await client.runner.createPairingToken({ name })
+ pairingTokens.set(name, rawToken)
  const socket = new WebSocket(wsUrl)
  await new Promise<void>((resolve, reject) => {
  socket.once('open', => resolve)
@@ -476,6 +479,111 @@ describe('runner-gateway: agent run event ingest', => {
  }
 
  socket.close
+ })
+
+ /**
+ * Run resumption reconciliation. Both branches matter: a Runner
+ * that still holds a run's state gets told to resume it, and one that does not has the
+ * run failed immediately with a real reason rather than left for the reaper's generic
+ * "no heartbeat" minutes later.
+ */
+ it('tells a reconnecting Runner to resume a run it still holds', async => {
+ const { socket, runnerId } = await pairFakeRunner('resume-yes')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'resume-yes' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startRun
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: run.id,
+ seq: 7,
+ event: { kind: 'assistant_text', text: 'partial work' },
+ }),
+)
+ // Settle the ingest so highestSeq is observable below.
+ let page = await client.message.list({ threadId: created.rootThread.id })
+ for (let i = 0; i < 20 && !page.messages.some((m) => m.body.text.includes('partial work')); i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ page = await client.message.list({ threadId: created.rootThread.id })
+ }
+ socket.close
+
+ // Reconnect as the same Runner, declaring the run resumable.
+ const reconnected = new WebSocket(wsUrl)
+ await new Promise<void>((resolve, reject) => {
+ reconnected.once('open', => resolve)
+ reconnected.once('error', reject)
+ })
+ const resumeFrame = nextFrame(reconnected, (v) => v.type === 'resume_run')
+ reconnected.send(
+ JSON.stringify({
+ type: 'hello',
+ token: pairingTokens.get('resume-yes'),
+ allowedRoots: ['/tmp'],
+ resumableRunIds: [run.id],
+ }),
+)
+
+ const frame = await resumeFrame
+ expect(frame.runId).toBe(run.id)
+ // The server's own watermark, so the Runner continues the sequence instead of
+ // restarting at 1 and having every new event dropped as a duplicate.
+ expect(frame.fromEventSeq).toBe(7)
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('running')
+
+ reconnected.close
+ })
+
+ it('fails a run when its Runner reconnects without it', async => {
+ const { socket, runnerId } = await pairFakeRunner('resume-no')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'resume-no' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startRun
+ const run = await runPromise
+ socket.close
+
+ const reconnected = new WebSocket(wsUrl)
+ await new Promise<void>((resolve, reject) => {
+ reconnected.once('open', => resolve)
+ reconnected.once('error', reject)
+ })
+ reconnected.send(
+ JSON.stringify({
+ type: 'hello',
+ token: pairingTokens.get('resume-no'),
+ allowedRoots: ['/tmp'],
+ resumableRunIds: [],
+ }),
+)
+
+ let after = await client.agentRun.get({ agentRunId: run.id })
+ for (let i = 0; i < 30 && after.status !== 'failed'; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ after = await client.agentRun.get({ agentRunId: run.id })
+ }
+ expect(after.status).toBe('failed')
+ expect(after.errorMessage).toMatch(/workspace state was lost/i)
+
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ expect(page.messages.some((m) => m.body.text.includes('Runner restarted'))).toBe(true)
+
+ reconnected.close
  })
 
  it('rejects resolving the same approval twice', async => {

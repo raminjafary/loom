@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildSandboxArgs, sandboxConfigFromEnv, sandboxEnabled } from './sandbox.js'
+import {
+ buildSandboxArgs,
+ sandboxConfigFromEnv,
+ sandboxEnabled,
+ sandboxModelKeyFromEnv,
+} from './sandbox.js'
 
 /**
  * These assert the sandbox spec spec itself, not plumbing. Every clause in
@@ -11,6 +16,7 @@ const config = sandboxConfigFromEnv({} as NodeJS.ProcessEnv)
 const args = buildSandboxArgs(config, {
  runId: 'run-1',
  clonePath: '/scratch/loom-run-1',
+ homePath: '/scratch/loom-home-1',
  env: { ANTHROPIC_BASE_URL: 'http://loom-egress:8080/anthropic' },
 })
 const joined = args.join(' ')
@@ -42,9 +48,11 @@ describe('sandbox args meet the sandbox spec spec', => {
  }
  })
 
- it('mounts only the run clone, and nothing from the host home', => {
+ it('mounts only run-scoped paths, and nothing from the host home', => {
  const binds = args.filter((_, i) => args[i - 1] === '-v')
- expect(binds).toEqual(['/scratch/loom-run-1:/work:rw'])
+ // Exactly two, both created per run: the clone, and a host-backed HOME so the SDK
+ // session transcript survives a Runner restart (see HOME_DIR in sandbox.ts).
+ expect(binds).toEqual(['/scratch/loom-run-1:/work:rw', '/scratch/loom-home-1:/home/agent:rw'])
  // The explicit the sandbox spec denylist. A regression here is the difference between a
  // contained injection and a stolen credential.
  for (const forbidden of ['.ssh', '.aws', '.config/gh', '.claude', '.gitconfig', 'docker.sock']) {
@@ -88,6 +96,25 @@ describe('sandbox configuration', => {
  expect(
  sandboxConfigFromEnv({ LOOM_CONTAINER_RUNTIME: 'podman' } as NodeJS.ProcessEnv).runtime,
 ).toBe('podman')
+ })
+
+ it('requires an explicit opt-in before handing a run a real model key', => {
+ // Weakening the credential broker must be a decision an operator made, not a side effect of a
+ // variable being set somewhere else.
+ const key = 'sk-ant-api03-whatever'
+ expect(sandboxModelKeyFromEnv({} as NodeJS.ProcessEnv)).toBeNull
+ expect(
+ sandboxModelKeyFromEnv({ LOOM_SANDBOX_MODEL_API_KEY: key } as NodeJS.ProcessEnv),
+).toBeNull
+ expect(
+ sandboxModelKeyFromEnv({ LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH: '1' } as NodeJS.ProcessEnv),
+).toBeNull
+ expect(
+ sandboxModelKeyFromEnv({
+ LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH: '1',
+ LOOM_SANDBOX_MODEL_API_KEY: key,
+ } as NodeJS.ProcessEnv),
+).toBe(key)
  })
 
  it('is on unless explicitly disabled', => {

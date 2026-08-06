@@ -1,6 +1,6 @@
 import { classifyPushEffect } from '@loom/domain'
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -10,6 +10,13 @@ const execFileAsync = promisify(execFile)
 export interface RunWorkspace {
  readonly clonePath: string
  readonly branchName: string
+ /**
+ * Host-backed HOME for the run's sandbox. Exists so the SDK's session transcript
+ * (`$HOME/.claude/projects`) outlives the container — without it the session id in
+ * the Runner's state file names a transcript that was destroyed, and resumption after
+ * a restart is impossible.
+ */
+ readonly homePath: string
 }
 
 const scratchRoot = : string => process.env.LOOM_RUN_SCRATCH_ROOT ?? tmpdir
@@ -28,13 +35,18 @@ export const prepareRunWorkspace = async (
 ): Promise<RunWorkspace> => {
  const branchName = `loom/run-${runId}`
  const clonePath = await mkdtemp(join(scratchRoot, `loom-run-${runId}-`))
+ const homePath = await mkdtemp(join(scratchRoot, `loom-home-${runId}-`))
+ // The sandbox runs as uid 1000, which is not the Runner's uid on Linux. Docker
+ // Desktop maps ownership on bind mounts, but a plain Linux host does not, so the
+ // directory is made group/other-writable rather than silently unwritable there.
+ await chmod(homePath, 0o777)
 
  await execFileAsync('git', ['clone', '--quiet', sourcePath, clonePath])
  await execFileAsync('git', ['-C', clonePath, 'checkout', '-b', branchName])
  await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
  await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
 
- return { clonePath, branchName }
+ return { clonePath, branchName, homePath }
 }
 
 /** The run's branch diff against the point it was cloned from, for end-of-run review. */
@@ -48,9 +60,14 @@ export const getDiff = async (clonePath: string, defaultBranch: string): Promise
  return stdout
 }
 
-/** Removes a run's scratch clone after a human discards the branch on DiffView. */
-export const discardRunWorkspace = async (clonePath: string): Promise<void> => {
+/**
+ * Removes a run's scratch clone after a human discards the branch on DiffView, and its
+ * host-backed HOME with it — that directory holds the SDK session transcript, which is
+ * a record of the run and should not outlive the branch a human just discarded.
+ */
+export const discardRunWorkspace = async (clonePath: string, homePath?: string): Promise<void> => {
  await rm(clonePath, { recursive: true, force: true })
+ if (homePath) await rm(homePath, { recursive: true, force: true })
 }
 
 interface ParsedRemote {

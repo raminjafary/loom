@@ -15,8 +15,14 @@ import {
  revokeEgressToken,
 } from './egress-client.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
+import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
 import { discardRunWorkspace, getDiff, prepareRunWorkspace, pushRunBranch } from './run-workspace.js'
-import { runAgentInSandbox, sandboxConfigFromEnv, sandboxEnabled } from './sandbox.js'
+import {
+ runAgentInSandbox,
+ sandboxConfigFromEnv,
+ sandboxEnabled,
+ sandboxModelKeyFromEnv,
+} from './sandbox.js'
 
 export interface RunnerClientOptions {
  readonly serverWsUrl: string
@@ -32,7 +38,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // runId since a Runner may have several runs in flight concurrently.
  const runWorkspaces = new Map<
  string,
- { clonePath: string; defaultBranch: string; sourcePath: string; branchName: string }
+ { clonePath: string; defaultBranch: string; sourcePath: string; branchName: string; homePath: string }
  >
  // Per-run heartbeat timers — started as soon as
  // start_run arrives (covers a hang during workspace prep too), cleared once
@@ -41,8 +47,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // Per-run abort handles — registered before the
  // clone starts so a cancel arriving during workspace prep is not ignored.
  const aborts = new Map<string, AbortController>
- // SDK session ids, so a run can be resumed rather than restarted. Only in memory here; durable persistence lands with resumption.
- const sessions = new Map<string, string>
+ // Durable per-run state — the SDK session id, the clone, and
+ // the event seq watermark, so a Runner restart can continue rather than lose the run.
+ const runStates = new Map<string, RunState>
  const HEARTBEAT_INTERVAL_MS = Number(process.env.LOOM_HEARTBEAT_INTERVAL_MS ?? 20_000)
 
  // Sandbox + egress config. `egress` is null when this Runner
@@ -51,6 +58,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const sandbox = sandboxConfigFromEnv
  const useSandbox = sandboxEnabled
  const egress = egressConfigFromEnv
+ const sandboxModelKey = sandboxModelKeyFromEnv
  const USAGE_POLL_MS = Number(process.env.LOOM_USAGE_POLL_MS ?? 5_000)
 
  let socket: WebSocket | null = null
@@ -67,6 +75,16 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const seq = (eventSeqs.get(runId) ?? 0) + 1
  eventSeqs.set(runId, seq)
  send({ type: 'agent_event', runId, seq, event })
+
+ // Persisted with the state, not just held: a resumed run continues this sequence,
+ // and restarting it at 1 would make every new event collide with an old one on the
+ // server's (run, seq) index and vanish.
+ const state = runStates.get(runId)
+ if (state) {
+ const next = {...state, lastEventSeq: seq }
+ runStates.set(runId, next)
+ void saveRunState(next).catch( => {})
+ }
  }
 
  /**
@@ -124,12 +142,19 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  persona: WirePersonaSpec
  task?: string
  clonePath: string
+ homePath: string
  abort: AbortController
  resumeSessionId?: string
  }): Promise<void> => {
  const onEvent = (event: WireAgentEvent) => sendAgentEvent(input.runId, event)
  const onSessionId = (sessionId: string) => {
- sessions.set(input.runId, sessionId)
+ const state = runStates.get(input.runId)
+ if (!state) return
+ const next = {...state, sessionId }
+ runStates.set(input.runId, next)
+ void saveRunState(next).catch((error) =>
+ log(`failed to persist session for ${input.runId}: ${error instanceof Error ? error.message: String(error)}`),
+)
  }
  const onPermissionRequest = (
  toolUseId: string,
@@ -162,6 +187,21 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  return
  }
 
+ // Checked before leasing or starting anything: without it the SDK's CLI refuses
+ // to contact its base URL at all and the run would hang to its wall clock with no
+ // explanation.
+ if (!sandboxModelKey) {
+ sendAgentEvent(input.runId, {
+ kind: 'run_failed',
+ message:
+ 'Sandboxed runs need LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH=1 and LOOM_SANDBOX_MODEL_API_KEY set on the Runner. ' +
+ 'The Claude Agent SDK validates its API key offline and will not use a broker-issued token, so the sandbox ' +
+ 'must be handed a real key to pass that check. Set LOOM_SANDBOX_ENABLED=0 to run ' +
+ 'unsandboxed instead, which is less safe.',
+ })
+ return
+ }
+
  // The lease is taken before the container starts, so the sandbox never exists
  // in a state where it could reach the model API without one.
  const egressToken = await leaseEgressToken(egress, {
@@ -177,8 +217,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  persona: input.persona,
 ...(input.task === undefined ? {}: { task: input.task }),
  clonePath: input.clonePath,
+ homePath: input.homePath,
  egressToken,
  egressDataUrl: egress.dataUrl,
+ modelApiKeyForCliCheck: sandboxModelKey,
 ...(input.resumeSessionId === undefined ? {}: { resumeSessionId: input.resumeSessionId }),
  abortController: input.abort,
  onEvent,
@@ -204,7 +246,34 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 
  ws.on('open', => {
  log(`connected to ${options.serverWsUrl}`)
- send({ type: 'hello', token: options.pairingToken, allowedRoots: [...options.allowedRoots] })
+ // Resumable runs are declared in the handshake so the server can reconcile
+ // before anything else happens. Read from disk each
+ // connect rather than from memory, so a fresh process reports what it really has.
+ void listRunStates
+.then((states) => {
+ for (const state of states) {
+ runStates.set(state.runId, state)
+ eventSeqs.set(state.runId, state.lastEventSeq)
+ runWorkspaces.set(state.runId, {
+ clonePath: state.clonePath,
+ defaultBranch: state.defaultBranch,
+ sourcePath: state.sourcePath,
+ branchName: state.branchName,
+ homePath: state.homePath,
+ })
+ }
+ send({
+ type: 'hello',
+ token: options.pairingToken,
+ allowedRoots: [...options.allowedRoots],
+ resumableRunIds: states.map((state) => state.runId),
+ })
+ })
+.catch( => {
+ // A state directory this Runner cannot read is not a reason to refuse to
+ // pair — it just means nothing is resumable.
+ send({ type: 'hello', token: options.pairingToken, allowedRoots: [...options.allowedRoots], resumableRunIds: [] })
+ })
  })
 
  ws.on('message', (raw: Buffer | ArrayBuffer | Buffer[]) => {
@@ -256,7 +325,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  aborts.set(runId, abort)
 
  void prepareRunWorkspace(frame.cwd, runId)
-.then(({ clonePath, branchName }) => {
+.then(({ clonePath, branchName, homePath }) => {
  // A cancel that landed while the clone was still running has no
  // agent loop to abort yet — honor it here instead of starting one.
  if (abort.signal.aborted) return
@@ -266,7 +335,23 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  defaultBranch: frame.defaultBranch,
  sourcePath: frame.cwd,
  branchName,
+ homePath,
  })
+ const state: RunState = {
+ runId,
+ persona: frame.persona,
+...(frame.task === undefined ? {}: { task: frame.task }),
+ clonePath,
+ homePath,
+ branchName,
+ defaultBranch: frame.defaultBranch,
+ sourcePath: frame.cwd,
+ lastEventSeq: 0,
+ }
+ runStates.set(runId, state)
+ void saveRunState(state).catch((error) =>
+ log(`failed to persist state for ${runId}: ${error instanceof Error ? error.message: String(error)}`),
+)
  send({ type: 'run_workspace_ready', runId, clonePath, branchName })
  log(`starting run ${runId} in ${clonePath}`)
  return runAgentForRun({
@@ -274,6 +359,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  persona: frame.persona,
 ...(frame.task === undefined ? {}: { task: frame.task }),
  clonePath,
+ homePath,
  abort,
  })
  })
@@ -295,7 +381,81 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  heartbeats.delete(runId)
  }
  aborts.delete(runId)
- sessions.delete(runId)
+ // State is cleared only on a terminal outcome. Surviving a crash is the
+ // whole point, so it must not be removed just because this process is
+ // done with the run.
+ runStates.delete(runId)
+ eventSeqs.delete(runId)
+ void clearRunState(runId).catch( => {})
+ })
+ return
+ }
+
+ /**
+ * Continue a run this Runner already has state for. The
+ * persona and task come from the state file, not the frame, so a persona edited
+ * while the Runner was down cannot change what a resumed run is doing.
+ */
+ case 'resume_run': {
+ const state = runStates.get(frame.runId)
+ if (!state) {
+ // The server believed this run resumable; it is not. Reported rather than
+ // ignored, or the run would sit active until the reaper noticed.
+ log(`cannot resume ${frame.runId} — no local state`)
+ sendAgentEvent(frame.runId, {
+ kind: 'run_failed',
+ message: 'Run could not be resumed: the Runner no longer has its workspace state.',
+ })
+ return
+ }
+ if (aborts.has(frame.runId)) {
+ // Already running here — a duplicate reconcile, not a second run.
+ return
+ }
+
+ // Continue the sequence from the server's watermark rather than the local
+ // one: the server is authoritative about what it actually ingested, and any
+ // events sent but not recorded would otherwise collide.
+ eventSeqs.set(frame.runId, Math.max(frame.fromEventSeq, state.lastEventSeq))
+
+ log(
+ `resuming run ${frame.runId} in ${state.clonePath}${state.sessionId ? ` (session ${state.sessionId})`: ' (no session — restarting the agent loop)'}`,
+)
+
+ const abort = new AbortController
+ aborts.set(frame.runId, abort)
+ heartbeats.set(
+ frame.runId,
+ setInterval( => send({ type: 'heartbeat', runId: frame.runId }), HEARTBEAT_INTERVAL_MS),
+)
+
+ void runAgentForRun({
+ runId: frame.runId,
+ persona: state.persona,
+...(state.task === undefined ? {}: { task: state.task }),
+ clonePath: state.clonePath,
+ homePath: state.homePath,
+ abort,
+...(state.sessionId === undefined ? {}: { resumeSessionId: state.sessionId }),
+ })
+.then( => log(`resumed run ${frame.runId} finished`))
+.catch((error) => {
+ if (abort.signal.aborted) return
+ sendAgentEvent(frame.runId, {
+ kind: 'run_failed',
+ message: `Resumed run failed: ${error instanceof Error ? error.message: String(error)}`,
+ })
+ })
+.finally( => {
+ const timer = heartbeats.get(frame.runId)
+ if (timer) {
+ clearInterval(timer)
+ heartbeats.delete(frame.runId)
+ }
+ aborts.delete(frame.runId)
+ runStates.delete(frame.runId)
+ eventSeqs.delete(frame.runId)
+ void clearRunState(frame.runId).catch( => {})
  })
  return
  }
@@ -342,7 +502,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  send({ type: 'discard_result', requestId: frame.requestId, ok: false, error: 'Run has no workspace' })
  return
  }
- void discardRunWorkspace(workspace.clonePath)
+ void discardRunWorkspace(workspace.clonePath, workspace.homePath)
 .then( => {
  runWorkspaces.delete(frame.runId)
  send({ type: 'discard_result', requestId: frame.requestId, ok: true })
