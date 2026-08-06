@@ -18,6 +18,8 @@
     "infra:down": "docker compose down"
   },
   "devDependencies": {
+    "@orpc/client": "1.14.10",
+    "@orpc/contract": "1.14.10",
     "@types/node": "^24.3.0",
     "eslint": "^9.34.0",
     "turbo": "^2.10.7",
