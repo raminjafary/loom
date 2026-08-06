@@ -49,6 +49,45 @@ export const prepareRunWorkspace = async (
  return { clonePath, branchName, homePath }
 }
 
+/**
+ * Commits whatever the agent left in the working tree, on the run's own branch.
+ *
+ * Not optional, and not the model's job. Repository binding renders "the run's branch diff"
+ * for review and the push policy pushes `HEAD:refs/heads/<branch>` — both are empty if the agent
+ * edited files and never committed, which is exactly what a real run did: the diff came
+ * back as zero bytes and a push would have shipped a branch with no commits. Relying on
+ * the persona prompt to remember `git commit` makes the review and push paths depend on
+ * model behaviour, so the platform does it.
+ *
+ * Runs on any terminal outcome, including failure and cancellation: partial work is
+ * still worth showing a human, and it is theirs to keep or discard.
+ *
+ * Identity is the run's, never a human's — the commit is agent-authored and the history
+ * should say so.
+ */
+export const commitRunWork = async (
+ clonePath: string,
+ input: { personaName: string; runId: string },
+): Promise<{ committed: boolean }> => {
+ const { stdout: status } = await execFileAsync('git', ['-C', clonePath, 'status', '--porcelain'])
+ if (status.trim.length === 0) return { committed: false }
+
+ await execFileAsync('git', ['-C', clonePath, 'add', '-A'])
+ await execFileAsync('git', [
+ '-C',
+ clonePath,
+ '-c',
+ `user.name=${input.personaName} (Loom agent)`,
+ '-c',
+ 'user.email=agent@loom.invalid',
+ 'commit',
+ '--quiet',
+ '-m',
+ `${input.personaName}: work from run ${input.runId}`,
+ ])
+ return { committed: true }
+}
+
 /** The run's branch diff against the point it was cloned from, for end-of-run review. */
 export const getDiff = async (clonePath: string, defaultBranch: string): Promise<string> => {
  const { stdout } = await execFileAsync('git', [

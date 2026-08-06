@@ -16,7 +16,13 @@ import {
 } from './egress-client.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
-import { discardRunWorkspace, getDiff, prepareRunWorkspace, pushRunBranch } from './run-workspace.js'
+import {
+ commitRunWork,
+ discardRunWorkspace,
+ getDiff,
+ prepareRunWorkspace,
+ pushRunBranch,
+} from './run-workspace.js'
 import {
  runAgentInSandbox,
  sandboxConfigFromEnv,
@@ -125,6 +131,23 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  void pumpUsage.catch((error) => log(`usage poll failed: ${error instanceof Error ? error.message: String(error)}`))
  }, USAGE_POLL_MS)
 : null
+
+
+ /**
+ * Commits whatever the agent left behind, so the end-of-run diff and any later push
+ * are not empty (see commitRunWork). Failures are logged, not fatal: a run that
+ * finished is still a run, and a human can inspect the clone by hand.
+ */
+ const commitWork = async (runId: string, personaName: string): Promise<void> => {
+ const workspace = runWorkspaces.get(runId)
+ if (!workspace) return
+ try {
+ const { committed } = await commitRunWork(workspace.clonePath, { personaName, runId })
+ if (committed) log(`committed run ${runId}'s work on ${workspace.branchName}`)
+ } catch (error) {
+ log(`failed to commit run ${runId}'s work: ${error instanceof Error ? error.message: String(error)}`)
+ }
+ }
 
  /**
  * Chooses how a run's agent loop executes. Sandboxed is the default and the
@@ -363,7 +386,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  abort,
  })
  })
-.then( => log(`run ${runId} finished`))
+.then(async => {
+ await commitWork(runId, frame.persona.name)
+ log(`run ${runId} finished`)
+ })
 .catch((error) => {
  // A cancel during clone surfaces here as a rejected prepare; the
  // server already recorded the run as cancelled, so stay quiet.
@@ -438,7 +464,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  abort,
 ...(state.sessionId === undefined ? {}: { resumeSessionId: state.sessionId }),
  })
-.then( => log(`resumed run ${frame.runId} finished`))
+.then(async => {
+ await commitWork(frame.runId, state.persona.name)
+ log(`resumed run ${frame.runId} finished`)
+ })
 .catch((error) => {
  if (abort.signal.aborted) return
  sendAgentEvent(frame.runId, {

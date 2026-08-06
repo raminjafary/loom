@@ -8,6 +8,12 @@ importers:
 
   .:
     devDependencies:
+      '@orpc/client':
+        specifier: 1.14.10
+        version: 1.14.10
+      '@orpc/contract':
+        specifier: 1.14.10
+        version: 1.14.10
       '@types/node':
         specifier: ^24.3.0
         version: 24.13.3
