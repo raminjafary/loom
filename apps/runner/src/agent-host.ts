@@ -1,6 +1,7 @@
 import { classifyToolEffect, isRiskyTool } from '@loom/domain'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
+import { startLeaseShim } from './lease-shim.js'
 import { resolveWithinRoot } from './path-check.js'
 import {
  SandboxCommandSchema,
@@ -31,6 +32,12 @@ const emit = (event: SandboxEvent): void => {
 const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>
 
 const main = async : Promise<void> => {
+ // Logged, not silent. An agent host that produces no output at all is
+ // indistinguishable from one that never started, which cost real debugging time.
+ // stderr, so it can never be mistaken for a protocol frame.
+ const note = (message: string) => process.stderr.write(`agent-host: ${message}\n`)
+ note('started')
+
  const lines = createInterface({ input: process.stdin })
 
  const started = new Promise<Extract<SandboxCommand, { t: 'start' }>>(
@@ -39,7 +46,14 @@ const main = async : Promise<void> => {
  const decoded = decodeFrameLine(line)
  if (decoded === null) return
  const parsed = SandboxCommandSchema.safeParse(decoded)
- if (!parsed.success) return
+ if (!parsed.success) {
+ // Reported, not swallowed. A dropped `start` frame leaves the run hanging
+ // until its wall clock with no indication why — which is exactly what a
+ // silent `return` here produced when PersonaSpec gained a required field
+ // and a caller had not been updated.
+ note(`ignoring malformed command frame: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`)
+ return
+ }
 
  if (parsed.data.t === 'start') {
  resolve(parsed.data)
@@ -54,6 +68,31 @@ const main = async : Promise<void> => {
  })
  },
 )
+
+ // Started before the agent, so the SDK's very first request already has somewhere
+ // to go. Absent config means this container is not using the proxy at all, which is
+ // only the unsandboxed/debug path.
+ const leaseToken = process.env.LOOM_LEASE_TOKEN
+ const egressUrl = process.env.LOOM_EGRESS_URL
+ const shimPort = Number(process.env.LOOM_LEASE_SHIM_PORT ?? 8787)
+
+ if (leaseToken && egressUrl) {
+ await startLeaseShim({
+ port: shimPort,
+ leaseToken,
+ egressUrl,
+ leaseHeader: process.env.LOOM_LEASE_HEADER ?? 'x-loom-lease',
+ log: note,
+ })
+ note(`lease shim listening on 127.0.0.1:${shimPort} -> ${egressUrl}`)
+ } else {
+ note('no lease configured — model calls will not be proxied')
+ }
+
+ // Only now: the host holds its `start` frame until it sees this, because stdin
+ // written before the container attaches is discarded (see SandboxEventSchema).
+ emit({ t: 'ready' })
+ note('waiting for start frame')
 
  const command = await started
  const persona = command.persona as Parameters<typeof runAgent>[0]['persona']
