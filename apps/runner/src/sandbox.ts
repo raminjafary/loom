@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
@@ -84,11 +85,21 @@ export const sandboxEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
  */
 const LEASE_HEADER = 'x-loom-lease'
 
+/** Port the lease shim listens on inside the container. */
+const LEASE_SHIM_PORT = 8787
+
 /**
- * Shape-valid but meaningless. Not a credential and not a lease: the proxy ignores
- * `x-api-key` when `x-loom-lease` is present, so this value grants nothing.
+ * Container name, which doubles as its DNS name on the sandbox network — that is how
+ * the agent addresses its own shim (see ANTHROPIC_BASE_URL below).
  */
-const PLACEHOLDER_API_KEY = `sk-ant-api03-${'0'.repeat(96)}`
+const containerName = (runId: string): string => `loom-run-${runId}`
+
+/**
+ * Shape-valid but meaningless. Not a credential and not a lease — the shim strips it
+ * before forwarding, so it never reaches the proxy, let alone the provider. It exists
+ * only so the CLI's local format check passes and it proceeds to make a request.
+ */
+const placeholderApiKey = (): string => `sk-ant-api03-${randomBytes(48).toString('hex')}`
 
 /** The run's clone, and the only host path the container can see. */
 const WORK_DIR = '/work'
@@ -108,7 +119,7 @@ export const buildSandboxArgs = (
   // Interactive stdio: the approval round-trip and event stream ride these pipes.
   '-i',
   '--name',
-  `loom-run-${options.runId}`,
+  containerName(options.runId),
 
   // No route off the host except the egress proxy.
   '--network',
@@ -192,18 +203,23 @@ export const runAgentInSandbox = async (
     runId: options.runId,
     clonePath: options.clonePath,
     env: {
-      // A placeholder, deliberately: the CLI validates this value's shape locally
-      // (prefix, length, and apparently a checksum) and mangles what it forwards, so
-      // it cannot be relied on to carry anything. It exists only to get the CLI past
-      // its own check and onto the API-key code path, which is the one that honors
-      // ANTHROPIC_BASE_URL — ANTHROPIC_AUTH_TOKEN alone lands on the OAuth path and
-      // reports "Not logged in".
-      ANTHROPIC_API_KEY: PLACEHOLDER_API_KEY,
-      // The real authentication, out-of-band where nothing rewrites it (§6 A6).
-      ANTHROPIC_CUSTOM_HEADERS: `${LEASE_HEADER}: ${options.egressToken}`,
-      // Bare origin, no path: the SDK's bundled CLI discards a path here and asks
-      // for `/v1/messages` off the origin, which the proxy serves.
-      ANTHROPIC_BASE_URL: options.egressDataUrl,
+      // A throwaway that only has to satisfy the CLI's own local format check — it
+      // grants nothing, and the shim discards it before forwarding. Randomly
+      // generated rather than a fixed constant because an all-zeros key fails that
+      // check and makes the CLI send an unauthenticated request instead.
+      ANTHROPIC_API_KEY: placeholderApiKey(),
+      // The SDK talks to the in-container shim, not the proxy directly. See
+      // lease-shim.ts: the CLI rewrites whatever auth it is given, so the lease is
+      // attached after it. Addressed by the container's own name rather than
+      // 127.0.0.1 because the CLI ignores a loopback base URL and goes straight to
+      // api.anthropic.com — observed, not assumed.
+      ANTHROPIC_BASE_URL: `http://${containerName(options.runId)}:${LEASE_SHIM_PORT}`,
+      // Read by the agent host to configure that shim. Not names the CLI knows, so
+      // nothing rewrites them.
+      LOOM_LEASE_TOKEN: options.egressToken,
+      LOOM_EGRESS_URL: options.egressDataUrl,
+      LOOM_LEASE_SHIM_PORT: String(LEASE_SHIM_PORT),
+      LOOM_LEASE_HEADER: LEASE_HEADER,
       // Everything that is not the model API goes through the same proxy, where it
       // meets the host allowlist. The lease token rides in the URL's userinfo
       // because that is the only channel `HTTP_PROXY`-aware tools (npm, curl, git)
@@ -215,7 +231,10 @@ export const runAgentInSandbox = async (
       // proxy — arriving in absolute form on the forward-proxy path instead of the
       // credential-injecting one, which fails as "must use CONNECT". Found by
       // running it, not by reading it.
-      NO_PROXY: `localhost,127.0.0.1,${proxyHost(options.egressDataUrl)}`,
+      // Both the proxy host and the container's own name. Without the latter the CLI
+      // would route its shim call through the egress proxy, arriving on the
+      // forward-proxy path instead of the shim.
+      NO_PROXY: `localhost,127.0.0.1,${proxyHost(options.egressDataUrl)},${containerName(options.runId)}`,
       HOME: HOME_DIR,
     },
   })
@@ -230,7 +249,7 @@ export const runAgentInSandbox = async (
     // leaves the container itself alive, which is exactly the orphan A5's
     // resource limits are meant to bound.
     try {
-      await execFileAsync(config.runtime, ['kill', `loom-run-${options.runId}`])
+      await execFileAsync(config.runtime, ['kill', containerName(options.runId)])
     } catch {
       // Already gone, or never started — nothing to do either way.
     }
@@ -256,16 +275,22 @@ export const runAgentInSandbox = async (
     if (child.stdin.writable) child.stdin.write(encodeFrame(frame))
   }
 
-  send({
-    t: 'start',
-    persona: options.persona,
-    ...(options.task === undefined ? {} : { task: options.task }),
-    cwd: WORK_DIR,
-    ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
-  })
+  // Held until the container reports `ready`. Writing it now would lose it —
+  // `docker run -i` discards stdin written before the container's process attaches,
+  // and the symptom is a run that hangs to its wall clock with no error anywhere.
+  const sendStart = () => {
+    send({
+      t: 'start',
+      persona: options.persona,
+      ...(options.task === undefined ? {} : { task: options.task }),
+      cwd: WORK_DIR,
+      ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
+    })
+  }
 
   const stdout = createInterface({ input: child.stdout })
   stdout.on('line', (line) => {
+    if (process.env.LOOM_SANDBOX_TRACE === '1') log(`[run ${options.runId}:raw] ${line}`)
     const decoded = decodeFrameLine(line)
     if (decoded === null) {
       // Ordinary container output — build logs, npm noise. Logged, not parsed.
@@ -277,6 +302,9 @@ export const runAgentInSandbox = async (
     const frame = parsed.data
 
     switch (frame.t) {
+      case 'ready':
+        sendStart()
+        return
       case 'event':
         options.onEvent(frame.event)
         return

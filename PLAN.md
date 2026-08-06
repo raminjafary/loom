@@ -467,6 +467,40 @@ This section is the largest revision. The security review found the original des
 
 **A5 — Sandbox spec, explicitly.** "Scoped fs/net" is not a spec, and unspecified means insecure-by-default. Required: `--network=none` by default with all egress through the authenticating proxy; **never** mount the container socket; `--cap-drop=ALL --security-opt=no-new-privileges`; default seccomp (never `unconfined`); non-root UID in a userns; read-only rootfs with tmpfs `/tmp`; mount **only** the run's clone — never `$HOME`, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.claude`, `~/.gitconfig`; memory/pids/cpu limits and a wall-clock kill. Platform asymmetry to note: rootless Podman gets a VM boundary on macOS but **not** on Linux — hence microVM isolation (§8). Accept the honest limit: **the model API call is itself an unblockable exfiltration channel**, so the real control is "secrets never enter the sandbox," not "the sandbox can't talk out."
 
+**A6 caveat found in implementation — the Claude Agent SDK defeats credential brokering for its own key.** [NEW]
+The broker below works, and is built: a run presents an opaque per-run token, the
+proxy attaches the real credential, meters authoritatively, and enforces the host
+allowlist. Verified end to end with ordinary HTTP clients.
+
+It does **not** work for the Claude Agent SDK's own model calls, for a reason outside
+this platform's control. The SDK's bundled native CLI validates `ANTHROPIC_API_KEY`
+*client-side* before making any request — prefix, length, and something
+checksum-shaped, since randomly generated keys of identical shape are accepted or
+rejected depending on the draw. When that check fails the CLI ignores
+`ANTHROPIC_BASE_URL` entirely and contacts `api.anthropic.com` directly. It also
+rewrites the key it forwards (a 109-character value arrived as 108, then 102), so the
+token cannot ride on it even when accepted, and `ANTHROPIC_CUSTOM_HEADERS` did not
+arrive at all. `ANTHROPIC_AUTH_TOKEN` alone selects the OAuth path and reports "Not
+logged in".
+
+Consequences, stated rather than papered over:
+
+- A sandboxed Claude Agent run needs a **real, valid** model key inside the sandbox.
+  A6's "the sandbox gets zero long-lived credentials" is therefore **not achieved for
+  that one credential**, and this plan should not claim otherwise.
+- What still holds: egress is deny-by-default, so the key is only *usable* through the
+  proxy (`api.anthropic.com` is not on the CONNECT allowlist), metering and budget
+  enforcement remain authoritative, and no other secret enters the sandbox. The
+  residual exposure is exfiltration of that one key — which A5 already concedes is
+  hard to prevent, since the model API call is itself an unblockable channel.
+- The property is recoverable two ways, neither in Phase 1: provider-issued per-run
+  scoped keys (does not exist today), or a backend whose auth is brokerable —
+  `VllmApiAdapter` and `CodexAdapter` (§7 Phase 3) are both plain HTTP clients with no
+  client-side key validation, so the broker works for them unchanged.
+- An in-container loopback shim is built and retained regardless: it attaches the lease
+  token so the proxy can still attribute and meter spend per run, which is what budget
+  caps depend on.
+
 **A6 — Secrets via broker, not decryptable files.** Giving a run the age private key means one injection yields every workspace secret permanently, and decrypted env vars leak into transcripts (agents echo env) which flow to blob storage and the UI. Fix: keys stay on the host; the sandbox gets **zero long-lived credentials** and presents a per-run opaque token to a **credential-injecting egress proxy** that attaches the real secret, enforces host/method allowlists, and logs. Routing model API calls through the same proxy also yields **authoritative cost metering** instead of trusting model self-reported tokens. Anything unavoidably in-container is short-lived and single-scope. Redact at transcript-write time; set a retention policy.
 
 **A7 — Trust boundary between planner and worker.** Worker output is untrusted text a planner acts on with more authority. Fix: **planner personas get `tools: []`** — decomposition emits structured output only, so poisoned input cannot become planner execution. Worker→planner reports are schema-validated typed structs with untrusted-data framing (a mitigation, not a boundary — stated as such). `parent_run_id` attenuates capability (§5).

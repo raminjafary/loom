@@ -40,6 +40,13 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
 
 /** Container → host. */
 export const SandboxEventSchema = z.discriminatedUnion('t', [
+  /**
+   * Emitted once the agent host is listening on stdin. The host must not send
+   * `start` before this: `docker run -i` drops anything written to stdin before the
+   * container's process attaches, and the resulting failure is a run that simply
+   * hangs until its wall clock with no error anywhere.
+   */
+  z.object({ t: z.literal('ready') }),
   z.object({ t: z.literal('event'), event: AgentEventSchema }),
   z.object({
     t: z.literal('permission_request'),
