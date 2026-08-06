@@ -7,3 +7,4 @@ dist/
 .DS_Store
 coverage/
 personas/
+graphify-out/

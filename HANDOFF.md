@@ -32,7 +32,7 @@ Full stack, mirroring keep/discard's existing shape exactly: `RunDispatchPort.pu
 **Live-verified end to end**, via a throwaway runner + repo + local bare "remote" (not any of the existing `stage2`/`verify` scratch fixtures, and cleaned up after — see below):
 - A real push landed the run's branch in the bare remote, `branchDisposition` became `'pushed'`, and the chat message correctly reported the graceful "no PR attempted, unparseable remote" fallback.
 - A run that touched `.github/workflows/ci.yml` was correctly **rejected** (400, exact policy reason, branch never reached the remote) without `acknowledgeCiChange`, then **succeeded** once resubmitted with it.
-- **Not verified in this environment, flagged rather than claimed**: the real `gh pr create`/`glab mr create` path against an actual `github.com`/`gitlab.com` remote+token. No such remote exists in this dev setup. The parsing/fallback logic was code-reviewed instead.
+- **The real `gh pr create`/`glab mr create` path has never executed** — no `github.com`/`gitlab.com` remote or token exists in this dev setup, so only the fallback branch has ever run. **Deliberately not being chased** (decided this session): the code stays, but nobody should treat verifying it as pending work. It's best-effort by design — every failure mode already degrades to "pushed, here's the compare URL" rather than failing the push, so the worst case if the CLI invocation is subtly wrong is a missing PR link on a push that still succeeded. Verify opportunistically if a real remote ever gets bound; don't build scaffolding for it.
 - **The UI path is now verified too**, in a real browser against a fresh DB: signed in, ran `swe` on a bound repo, approved two real gates from the approval card (which rendered exact tool argv, not a model summary — §6 A3), loaded the diff, clicked **Push & open PR**, and confirmed all four buttons render (Keep / Discard / Push & open PR / the muted "Push anyway"), the panel switched to "Branch pushed." with the buttons removed, the Inbox emptied, `branch_disposition` became `pushed`, and the branch **plus its file content** actually landed in the bare remote.
 
 ### Stale `runner.connected` flag — fixed, but not runtime-verified
@@ -66,9 +66,9 @@ Everything from the last handoff's list still applies except the Inbox visual-ve
 
 ## Immediate next steps, in priority order
 
-1. **Real `gh`/`glab` PR-creation path**, against an actual `github.com`/`gitlab.com` remote with a real token on some Runner host. Nothing in this dev environment has one, so this is the single remaining unverified branch of the push feature (the parsing/fallback logic around it is code-reviewed only). Everything else in the push path — policy rejection, CI-config override, the real push, and the full browser UI flow — is verified.
-2. **The "Push anyway (CI/workflow changes)" button specifically has not been clicked**, only its underlying `acknowledgeCiChange: true` path (verified via RPC in the prior session). Low risk — same emit wiring as the button next to it — but it's the one control nobody has pressed.
-3. **Run resumption + idempotency keys + budget caps + kill switch** — still flagged in PLAN.md §6/§7, none implemented.
+1. **Global kill switch / pause-all** (PLAN.md §6 runtime safety: *"One button. Nothing had one."*) — the most self-contained of the remaining §6 gaps and the highest-value one: today there is no way to stop everything at once. Suggested starting point for the next session.
+2. **Approval SLA** (§6: timeout → auto-deny → resumable) — smaller than the rest, and the approval round-trip it builds on is already working and now browser-verified.
+3. **Run resumption + idempotency keys + budget caps** — still flagged in PLAN.md §6/§7, none implemented. Budget caps want cost metering at the proxy (§6 A6), which doesn't exist, so they're gated behind that.
 5. **Container/microVM sandbox + egress proxy + credential broker** — still its own project, not a small PR. The push feature deliberately did not pull this forward.
 6. Only after the above: Planner/Swarm (PLAN.md §7 Phase 2) — and PLAN.md §11's riskiest-assumption test (parallel workers on one repo) still hasn't been run.
 
