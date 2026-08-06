@@ -108,6 +108,8 @@ export type AgentRunStatus =
   | 'failed'
   | 'cancelled'
 
+export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed'
+
 export interface AgentRun {
   readonly id: AgentRunId
   readonly workspaceId: WorkspaceId
@@ -121,6 +123,12 @@ export interface AgentRun {
   // Set once the Runner finishes cloning (PLAN.md §5a) — null until then.
   readonly clonePath: string | null
   readonly branchName: string | null
+  // A human's end-of-run keep/discard decision on DiffView — null until made.
+  readonly branchDisposition: AgentRunBranchDisposition | null
+  // Dead-run reaper inputs (PLAN.md §6) — internal-only, deliberately absent
+  // from AgentRunSchema (packages/api-contract) so they never reach the browser.
+  readonly lastHeartbeatAt: Date | null
+  readonly lastEventAt: Date | null
   readonly createdAt: Date
   readonly completedAt: Date | null
 }

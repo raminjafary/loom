@@ -8,7 +8,7 @@ import type {
 } from '@loom/application'
 import { NotFoundError, asRunnerId } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
-import { and, eq, notInArray } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
   toAgentPersona,
@@ -143,6 +143,58 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
       )
       .limit(1)
     return row ? toAgentRun(row as AgentRunRow) : null
+  },
+
+  async setBranchDisposition(workspaceId, id, disposition) {
+    const [row] = await db
+      .update(agentRun)
+      .set({ branchDisposition: disposition })
+      .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
+      .returning()
+    if (!row) throw new NotFoundError('AgentRun')
+    return toAgentRun(row as AgentRunRow)
+  },
+
+  async recordHeartbeat(workspaceId, id) {
+    await db
+      .update(agentRun)
+      .set({ lastHeartbeatAt: new Date() })
+      .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
+  },
+
+  async recordEventActivity(workspaceId, id) {
+    await db
+      .update(agentRun)
+      .set({ lastEventAt: new Date() })
+      .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
+  },
+
+  async listAllActive() {
+    const rows = await db
+      .select()
+      .from(agentRun)
+      .where(notInArray(agentRun.status, [...TERMINAL_STATUSES]))
+    return rows.map((row) => toAgentRun(row as AgentRunRow))
+  },
+
+  async listNeedsAttention(workspaceId) {
+    const rows = await db
+      .select()
+      .from(agentRun)
+      .where(
+        and(
+          eq(agentRun.workspaceId, workspaceId),
+          or(
+            eq(agentRun.status, 'awaiting_approval'),
+            and(
+              inArray(agentRun.status, [...TERMINAL_STATUSES]),
+              isNull(agentRun.branchDisposition),
+              isNotNull(agentRun.clonePath),
+            ),
+          ),
+        ),
+      )
+    return rows.map((row) => toAgentRun(row as AgentRunRow))
   },
 })
 
@@ -323,6 +375,23 @@ export const resolveRunnerByToken = async (
     .where(eq(runner.pairingTokenHash, hashToken(rawToken)))
     .limit(1)
   return row ?? null
+}
+
+/**
+ * Called once at server boot. `runner.connected` is only cleared by the socket
+ * close/error handler, so a server killed uncleanly (SIGKILL, crash) leaves
+ * every flag stale-true while the next process starts with an empty in-memory
+ * `connections` map — the UI then shows "connected" for a Runner that no
+ * dispatch can reach. A fresh process has zero live connections by definition,
+ * so resetting is always correct here; anything genuinely alive re-sets its own
+ * flag through the Runner's existing auto-reconnect.
+ *
+ * Assumes a single server instance owns /ws/runner (true today). Horizontal
+ * scaling (PLAN.md §7 Phase 4) would need per-instance connection ownership
+ * instead, since this reset is global.
+ */
+export const clearAllRunnerConnections = async (db: Database): Promise<void> => {
+  await db.update(runner).set({ connected: false }).where(eq(runner.connected, true))
 }
 
 export const setRunnerConnection = async (

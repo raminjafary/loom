@@ -14,6 +14,7 @@ import {
   type AgentPersonaId,
   type AgentRun,
   type AgentRunId,
+  type AgentRunStatus,
   type ApprovalRequest,
   type ApprovalRequestId,
   type PersonaGroup,
@@ -431,6 +432,18 @@ export const recordRunWorkspace = async (
     branchName: input.branchName,
   })
 
+/** Called by runner-gateway.ts on every `heartbeat` frame (PLAN.md §6 dead-run reaper). */
+export const recordRunHeartbeat = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
+): Promise<void> => deps.agentRuns.recordHeartbeat(input.workspaceId, input.agentRunId)
+
+/** Backs the Inbox view (PLAN.md §3) — runs a human hasn't finished with yet. */
+export const listRunsNeedingAttention = (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId },
+): Promise<AgentRun[]> => deps.agentRuns.listNeedsAttention(input.workspaceId)
+
 /** Asks the Runner for the run's branch diff on demand, for end-of-run review (PLAN.md §5a). */
 export const getAgentRunDiff = async (
   deps: AgentDeps,
@@ -445,6 +458,158 @@ export const getAgentRunDiff = async (
   const result = await deps.dispatch.getDiff({ runnerId: run.runnerId, runId: run.id })
   if (!result.ok) throw new ValidationError(result.error)
   return result.diff
+}
+
+const TERMINAL_RUN_STATUSES: readonly AgentRunStatus[] = ['completed', 'failed', 'cancelled']
+
+const requireDisposableRun = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; agentRunId: AgentRunId },
+): Promise<AgentRun> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError("Only a human may decide a run's branch disposition")
+  }
+  const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+  if (!run) throw new NotFoundError('AgentRun')
+  if (!TERMINAL_RUN_STATUSES.includes(run.status)) {
+    throw new ValidationError('Run must finish before its branch can be kept or discarded')
+  }
+  if (run.branchDisposition) {
+    throw new ValidationError(`Run's branch was already ${run.branchDisposition}`)
+  }
+  return run
+}
+
+const postRunSystemMessage = async (
+  deps: AgentDeps,
+  run: AgentRun,
+  text: string,
+): Promise<void> => {
+  const message = await deps.messages.append({
+    workspaceId: run.workspaceId,
+    threadId: run.threadId,
+    author: systemActor(),
+    body: { kind: 'system', text },
+  })
+  await deps.events.publish({
+    type: 'message.created',
+    workspaceId: run.workspaceId,
+    threadId: run.threadId,
+    message,
+  })
+}
+
+/**
+ * Keeps a finished run's branch as-is (PLAN.md §7 ship criterion) — no push,
+ * no host action; "merge" needs §6 A2's push policy and isn't built yet.
+ */
+export const keepAgentRun = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; agentRunId: AgentRunId },
+): Promise<AgentRun> => {
+  const run = await requireDisposableRun(deps, input)
+  const updated = await deps.agentRuns.setBranchDisposition(input.workspaceId, run.id, 'kept')
+  await postRunSystemMessage(deps, run, `Branch ${run.branchName ?? '(unknown)'} kept.`)
+  return updated
+}
+
+/**
+ * Discards a finished run's branch: the Runner deletes the on-disk clone
+ * (skipped if the run never got one — e.g. it failed before cloning).
+ */
+export const discardAgentRun = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; agentRunId: AgentRunId },
+): Promise<AgentRun> => {
+  const run = await requireDisposableRun(deps, input)
+
+  if (run.clonePath) {
+    const result = await deps.dispatch.discardRun({ runnerId: run.runnerId, runId: run.id })
+    if (!result.ok) throw new ValidationError(result.error)
+  }
+
+  const updated = await deps.agentRuns.setBranchDisposition(input.workspaceId, run.id, 'discarded')
+  await postRunSystemMessage(deps, run, `Branch ${run.branchName ?? '(unknown)'} discarded.`)
+  return updated
+}
+
+/**
+ * Host-side pushes a finished run's branch to the bound repo's `origin` and
+ * best-effort opens a PR/MR (PLAN.md §6 A2). Unlike discard, a push failure
+ * leaves the run undecided — nothing was mutated, so it must stay retriable
+ * (e.g. after fixing a CI-config rejection) rather than getting stuck.
+ */
+export const pushAgentRun = async (
+  deps: AgentDeps,
+  input: {
+    workspaceId: WorkspaceId
+    actor: Actor
+    agentRunId: AgentRunId
+    acknowledgeCiChange?: boolean
+  },
+): Promise<AgentRun> => {
+  const run = await requireDisposableRun(deps, input)
+  if (!run.clonePath) throw new ValidationError('Run has no workspace to push')
+
+  const result = await deps.dispatch.pushRun({
+    runnerId: run.runnerId,
+    runId: run.id,
+    acknowledgeCiChange: input.acknowledgeCiChange ?? false,
+  })
+  if (!result.ok) throw new ValidationError(result.error)
+
+  const updated = await deps.agentRuns.setBranchDisposition(input.workspaceId, run.id, 'pushed')
+  const outcome = result.prUrl
+    ? `PR opened: ${result.prUrl}`
+    : result.compareUrl
+      ? `Open a PR: ${result.compareUrl}`
+      : 'No PR/MR was opened (unrecognized git host).'
+  const warning = result.warning ? ` (${result.warning})` : ''
+  await postRunSystemMessage(
+    deps,
+    run,
+    `Branch ${run.branchName ?? '(unknown)'} pushed. ${outcome}${warning}`,
+  )
+  return updated
+}
+
+/**
+ * Dead-run reaper (PLAN.md §6 runtime safety) — a periodic sweep, not a
+ * request-scoped use-case; called from a `setInterval` in apps/server, never
+ * through the contract. Two independent signals, per PLAN.md's own framing
+ * ("heartbeat + stuck detection"): a stale heartbeat means the Runner
+ * connection/process is gone; a stale `lastEventAt` with a live heartbeat
+ * means the Runner is still connected but the agent loop made no progress.
+ * Either one is enough to reap. Both fall back to `createdAt` so a run that
+ * never got a first heartbeat/event (hung during workspace prep) is still
+ * caught.
+ */
+export const reapStuckRuns = async (
+  deps: AgentDeps,
+  options: { heartbeatTimeoutMs: number; noProgressTimeoutMs: number },
+): Promise<void> => {
+  const runs = await deps.agentRuns.listAllActive()
+  const now = Date.now()
+
+  for (const run of runs) {
+    const sinceHeartbeat = now - (run.lastHeartbeatAt ?? run.createdAt).getTime()
+    const sinceEvent = now - (run.lastEventAt ?? run.createdAt).getTime()
+
+    const heartbeatStale = sinceHeartbeat > options.heartbeatTimeoutMs
+    const noProgress = sinceEvent > options.noProgressTimeoutMs
+    if (!heartbeatStale && !noProgress) continue
+
+    const reason = heartbeatStale
+      ? `no heartbeat for over ${Math.round(options.heartbeatTimeoutMs / 1000)}s`
+      : `no progress for over ${Math.round(options.noProgressTimeoutMs / 1000)}s`
+
+    const failed = await deps.agentRuns.updateStatus(run.workspaceId, run.id, {
+      status: 'failed',
+      errorMessage: `Run reaped: ${reason}`,
+      completedAt: new Date(),
+    })
+    await postRunSystemMessage(deps, failed, `Run failed: ${reason}.`)
+  }
 }
 
 // Tried in order; the first string field present is shown as the call's
@@ -493,6 +658,10 @@ export const recordAgentEvent = async (
 ): Promise<void> => {
   const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
   if (!run) throw new NotFoundError('AgentRun')
+
+  // Dead-run reaper input (PLAN.md §6) — any event at all counts as progress,
+  // distinct from the heartbeat's plain connection-liveness signal.
+  await deps.agentRuns.recordEventActivity(input.workspaceId, input.agentRunId)
 
   const author = input.event.kind === 'run_completed' || input.event.kind === 'run_failed'
     ? systemActor()

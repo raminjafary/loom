@@ -3,7 +3,7 @@ import { RunnerFrameSchema, ServerFrameSchema, type RunnerFrame } from '@loom/ru
 import WebSocket from 'ws'
 import { runAgent } from './claude-agent-adapter.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
-import { getDiff, prepareRunWorkspace } from './run-workspace.js'
+import { discardRunWorkspace, getDiff, prepareRunWorkspace, pushRunBranch } from './run-workspace.js'
 
 export interface RunnerClientOptions {
   readonly serverWsUrl: string
@@ -17,7 +17,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
   const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>()
   // Per-run clone state, needed to answer a later get_diff request — keyed by
   // runId since a Runner may have several runs in flight concurrently.
-  const runWorkspaces = new Map<string, { clonePath: string; defaultBranch: string }>()
+  const runWorkspaces = new Map<
+    string,
+    { clonePath: string; defaultBranch: string; sourcePath: string; branchName: string }
+  >()
+  // Per-run heartbeat timers (PLAN.md §6 runtime safety) — started as soon as
+  // start_run arrives (covers a hang during workspace prep too), cleared once
+  // the run reaches a terminal outcome.
+  const heartbeats = new Map<string, ReturnType<typeof setInterval>>()
+  const HEARTBEAT_INTERVAL_MS = Number(process.env.LOOM_HEARTBEAT_INTERVAL_MS ?? 20_000)
 
   let socket: WebSocket | null = null
   let closed = false
@@ -73,9 +81,20 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         case 'start_run': {
           const runId = frame.runId
           log(`preparing workspace for run ${runId} from ${frame.cwd}`)
+
+          heartbeats.set(
+            runId,
+            setInterval(() => send({ type: 'heartbeat', runId }), HEARTBEAT_INTERVAL_MS),
+          )
+
           void prepareRunWorkspace(frame.cwd, runId)
             .then(({ clonePath, branchName }) => {
-              runWorkspaces.set(runId, { clonePath, defaultBranch: frame.defaultBranch })
+              runWorkspaces.set(runId, {
+                clonePath,
+                defaultBranch: frame.defaultBranch,
+                sourcePath: frame.cwd,
+                branchName,
+              })
               send({ type: 'run_workspace_ready', runId, clonePath, branchName })
               log(`starting run ${runId} in ${clonePath}`)
               return runAgent({
@@ -106,6 +125,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 },
               })
             })
+            .finally(() => {
+              const timer = heartbeats.get(runId)
+              if (timer) {
+                clearInterval(timer)
+                heartbeats.delete(runId)
+              }
+            })
           return
         }
 
@@ -129,6 +155,66 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
             .catch((error) =>
               send({
                 type: 'diff_result',
+                requestId: frame.requestId,
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            )
+          return
+        }
+
+        case 'discard_run': {
+          const workspace = runWorkspaces.get(frame.runId)
+          if (!workspace) {
+            send({ type: 'discard_result', requestId: frame.requestId, ok: false, error: 'Run has no workspace' })
+            return
+          }
+          void discardRunWorkspace(workspace.clonePath)
+            .then(() => {
+              runWorkspaces.delete(frame.runId)
+              send({ type: 'discard_result', requestId: frame.requestId, ok: true })
+            })
+            .catch((error) =>
+              send({
+                type: 'discard_result',
+                requestId: frame.requestId,
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            )
+          return
+        }
+
+        case 'push_run': {
+          const workspace = runWorkspaces.get(frame.runId)
+          if (!workspace) {
+            send({ type: 'push_result', requestId: frame.requestId, ok: false, error: 'Run has no workspace' })
+            return
+          }
+          void pushRunBranch(
+            workspace.sourcePath,
+            workspace.clonePath,
+            workspace.branchName,
+            workspace.defaultBranch,
+            frame.acknowledgeCiChange,
+          )
+            .then((result) =>
+              send(
+                result.ok
+                  ? {
+                      type: 'push_result',
+                      requestId: frame.requestId,
+                      ok: true,
+                      ...(result.prUrl === undefined ? {} : { prUrl: result.prUrl }),
+                      ...(result.compareUrl === undefined ? {} : { compareUrl: result.compareUrl }),
+                      ...(result.warning === undefined ? {} : { warning: result.warning }),
+                    }
+                  : { type: 'push_result', requestId: frame.requestId, ok: false, error: result.error },
+              ),
+            )
+            .catch((error) =>
+              send({
+                type: 'push_result',
                 requestId: frame.requestId,
                 ok: false,
                 error: error instanceof Error ? error.message : String(error),

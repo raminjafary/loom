@@ -163,6 +163,25 @@ export const contract = {
     getDiff: oc
       .input(z.object({ agentRunId: z.string() }))
       .output(z.object({ diff: z.string() })),
+
+    /** Keeps a finished run's branch as-is — no push, no host action (PLAN.md §7 ship criterion's "keep" case). */
+    keep: oc.input(z.object({ agentRunId: z.string() })).output(AgentRunSchema),
+
+    /** Discards a finished run's branch: the Runner deletes the on-disk clone. */
+    discard: oc.input(z.object({ agentRunId: z.string() })).output(AgentRunSchema),
+
+    /**
+     * Host-side pushes the run's branch to the bound repo's `origin` and
+     * best-effort opens a PR/MR (PLAN.md §6 A2) — the agent never holds git
+     * credentials or pushes. `acknowledgeCiChange` re-submits a push the
+     * policy blocked for touching CI config, confirming human review.
+     */
+    push: oc
+      .input(z.object({ agentRunId: z.string(), acknowledgeCiChange: z.boolean().optional() }))
+      .output(AgentRunSchema),
+
+    /** Runs needing a human decision — the inbox's data source (PLAN.md §3). */
+    listNeedsAttention: oc.output(z.array(AgentRunSchema)),
   },
 
   /**

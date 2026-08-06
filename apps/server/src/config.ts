@@ -8,6 +8,11 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be at least 32 characters'),
   BETTER_AUTH_URL: z.string().default('http://localhost:3001'),
+  // Dead-run reaper (PLAN.md §6 runtime safety) — see agent-use-cases.ts's
+  // reapStuckRuns for how the two timeouts are used.
+  REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  REAPER_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
+  REAPER_NO_PROGRESS_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
 })
 
 export type Config = z.infer<typeof EnvSchema>

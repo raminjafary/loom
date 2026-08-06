@@ -1,10 +1,11 @@
-import { type AgentDeps, seedBuiltinPersonas } from '@loom/application'
+import { type AgentDeps, reapStuckRuns, seedBuiltinPersonas } from '@loom/application'
 import { asWorkspaceId } from '@loom/domain'
 import {
   agentRunRepository,
   approvalRepository,
   auditAdapter,
   channelRepository,
+  clearAllRunnerConnections,
   createDatabase,
   ensureWorkspaceMembership,
   messageRepository,
@@ -77,10 +78,28 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
 
   const fastify = Fastify({ logger: config.NODE_ENV !== 'test' })
 
+  // Dead-run reaper (PLAN.md §6) — skipped under NODE_ENV=test so a stray
+  // sweep never races a test's own DB assertions.
+  const reaperTimer =
+    config.NODE_ENV === 'test'
+      ? null
+      : setInterval(() => {
+          void reapStuckRuns(deps, {
+            heartbeatTimeoutMs: config.REAPER_HEARTBEAT_TIMEOUT_MS,
+            noProgressTimeoutMs: config.REAPER_NO_PROGRESS_TIMEOUT_MS,
+          }).catch((error) => {
+            fastify.log.error({ error }, 'reapStuckRuns failed')
+          })
+        }, config.REAPER_INTERVAL_MS)
+
   await fastify.register(cors, {
     origin: config.WEB_ORIGIN,
     credentials: true,
   })
+
+  // Before any Runner can reconnect: this process owns no live connections yet,
+  // so any lingering `connected: true` is stale (see clearAllRunnerConnections).
+  await clearAllRunnerConnections(db)
 
   await registerRunnerGateway(fastify)
 
@@ -137,6 +156,7 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
     fastify,
     deps,
     close: async () => {
+      if (reaperTimer) clearInterval(reaperTimer)
       await fastify.close()
       await events.close()
       await closeDb()

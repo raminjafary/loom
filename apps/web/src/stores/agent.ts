@@ -38,6 +38,12 @@ export const useAgentStore = defineStore('agent', () => {
     decide: (approvalRequestId: string, decision: 'approve' | 'deny') =>
       session.decide(approvalRequestId, decision),
     loadDiff: (agentRunId: string) => session.loadDiff(agentRunId),
+    keepRun: (agentRunId: string) => session.keepRun(agentRunId),
+    discardRun: (agentRunId: string) => session.discardRun(agentRunId),
+    pushRun: (agentRunId: string, acknowledgeCiChange?: boolean) =>
+      session.pushRun(agentRunId, acknowledgeCiChange),
+    refreshInbox: () => session.refreshInbox(),
+    inspectRun: (agentRunId: string) => session.inspectRun(agentRunId),
     dispose: () => session.dispose(),
   }
 })

@@ -2,6 +2,7 @@ import type {
   AgentPersona,
   AgentPersonaId,
   AgentRun,
+  AgentRunBranchDisposition,
   AgentRunId,
   AgentRunStatus,
   ApprovalRequest,
@@ -67,6 +68,30 @@ export interface AgentRunRepositoryPort {
   ): Promise<AgentRun>
   /** Single-active-run guard (PLAN.md §3a non-scope): any non-terminal run in the workspace. */
   findActiveByWorkspace(workspaceId: WorkspaceId): Promise<AgentRun | null>
+  /** A human's end-of-run keep/discard decision on DiffView (PLAN.md §7 ship criterion). */
+  setBranchDisposition(
+    workspaceId: WorkspaceId,
+    id: AgentRunId,
+    disposition: AgentRunBranchDisposition,
+  ): Promise<AgentRun>
+  /** Bumped by the Runner's periodic heartbeat frame (PLAN.md §6 dead-run reaper). */
+  recordHeartbeat(workspaceId: WorkspaceId, id: AgentRunId): Promise<void>
+  /** Bumped by any agent_event — distinct signal from a heartbeat (§6): a hung-but-connected run keeps sending heartbeats but stops making progress. */
+  recordEventActivity(workspaceId: WorkspaceId, id: AgentRunId): Promise<void>
+  /**
+   * Every non-terminal run, workspace-agnostic — the one deliberate exception
+   * to this port's per-workspace convention. Backs the dead-run reaper, an
+   * internal background sweep never exposed through the contract, so there's
+   * no authz boundary to enforce here the way there is for every other method.
+   */
+  listAllActive(): Promise<AgentRun[]>
+  /**
+   * Runs a human hasn't finished with yet (PLAN.md §3's inbox/retention
+   * hook): awaiting an approval decision, or terminal with an unreviewed
+   * branch (kept/discarded not yet decided). A reaper-failed run naturally
+   * falls into the latter — it already got a chat message explaining why.
+   */
+  listNeedsAttention(workspaceId: WorkspaceId): Promise<AgentRun[]>
 }
 
 export interface PersonaRepositoryPort {
@@ -165,4 +190,23 @@ export interface RunDispatchPort {
     runnerId: RunnerId
     runId: AgentRunId
   }): Promise<{ ok: true; diff: string } | { ok: false; error: string }>
+  /** Instructs the Runner to delete the run's on-disk clone after a human discards the branch. */
+  discardRun(input: {
+    runnerId: RunnerId
+    runId: AgentRunId
+  }): Promise<{ ok: true } | { ok: false; error: string }>
+  /**
+   * Host-side pushes the run's branch to the bound repo's `origin` and
+   * best-effort opens a PR/MR (PLAN.md §6 A2). `acknowledgeCiChange`
+   * confirms human review of a push the policy would otherwise block for
+   * touching CI config.
+   */
+  pushRun(input: {
+    runnerId: RunnerId
+    runId: AgentRunId
+    acknowledgeCiChange: boolean
+  }): Promise<
+    | { ok: true; prUrl?: string; compareUrl?: string; warning?: string }
+    | { ok: false; error: string }
+  >
 }

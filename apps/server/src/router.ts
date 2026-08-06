@@ -8,11 +8,13 @@ import {
   createRunnerPairingToken,
   decideApproval,
   deletePersonaGroup,
+  discardAgentRun,
   getActiveAgentRun,
   getAgentRun,
   getAgentRunDiff,
   getChannelRootThread,
   getPersona,
+  keepAgentRun,
   listChannels,
   listMessages,
   listPendingApprovals,
@@ -20,7 +22,9 @@ import {
   listPersonas,
   listRepositories,
   listRunners,
+  listRunsNeedingAttention,
   postMessage,
+  pushAgentRun,
   startAgentRun,
   updatePersona,
   updatePersonaGroup,
@@ -299,6 +303,43 @@ export const router = os.router({
           agentRunId: asAgentRunId(input.agentRunId),
         }),
       })),
+    ),
+
+    keep: os.agentRun.keep.handler(({ context, input }) =>
+      guard(() =>
+        keepAgentRun(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          agentRunId: asAgentRunId(input.agentRunId),
+        }),
+      ),
+    ),
+
+    discard: os.agentRun.discard.handler(({ context, input }) =>
+      guard(() =>
+        discardAgentRun(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          agentRunId: asAgentRunId(input.agentRunId),
+        }),
+      ),
+    ),
+
+    push: os.agentRun.push.handler(({ context, input }) =>
+      guard(() =>
+        pushAgentRun(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          agentRunId: asAgentRunId(input.agentRunId),
+          ...(input.acknowledgeCiChange === undefined
+            ? {}
+            : { acknowledgeCiChange: input.acknowledgeCiChange }),
+        }),
+      ),
+    ),
+
+    listNeedsAttention: os.agentRun.listNeedsAttention.handler(({ context }) =>
+      guard(() => listRunsNeedingAttention(context.deps, { workspaceId: context.principal.workspaceId })),
     ),
   },
 

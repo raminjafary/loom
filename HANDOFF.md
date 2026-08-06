@@ -1,98 +1,103 @@
 # Handoff — Loom, end of this session
 
-Read this before touching code. `PLAN.md` is the architecture/roadmap (§3a is now marked **[BUILT]**); this file is "what actually happened and what's next."
+Read this before touching code. `PLAN.md` is the architecture/roadmap; this file is "what actually happened and what's next."
 
-Session scope: last session's priority #1 (PLAN.md §3a — built-in personas, persona groups, `@mention` starts a run), plus one feature added mid-session on explicit request (per-persona auto-approve), plus two real gaps found during live verification and fixed on the spot. Three commits, in order:
-
-```
-8e675cc  feat: built-in personas, persona groups, @mention starts a run
-2872e91  feat: per-persona auto-approve, skip the human approval round-trip
-9c200a2  fix: post a visible chat message when a run fails to dispatch
-```
-
-Read PLAN.md §3a, §7 Phase 1 before making changes.
+Session scope, in order: last session's priority #1 (visually verify the Inbox in a real browser — the previous session's biggest verification gap), then priority #2 ("merge" on `DiffView`, PLAN.md §6 A2's host-side push policy).
 
 ---
 
 ## What's real right now (not a mock, not a stub)
 
-**Built-in personas, seeded once per workspace.** Seven roles (`packages/domain/src/builtin-personas.ts`: Product Manager, SWE, Frontend Engineer, Backend Engineer, QA, Security Reviewer, Solution Architect) are real, editable `agent_persona` rows, not templates — same table, same CRUD path a hand-authored persona uses. Seeded exactly once per workspace, keyed off `ensureWorkspace`'s `created` flag, now threaded up through `ensureWorkspaceMembership` (`packages/db/src/membership.ts`) → `WorkspaceMembership.ensureMembership` (`apps/server/src/auth.ts`) → `apps/server/src/app.ts`'s wiring, where `seedBuiltinPersonas` (`packages/application/src/agent-use-cases.ts`) fires only when `created: true`. **Live-verified twice**: a fresh workspace got exactly 7 personas; re-authenticating against the same workspace didn't duplicate them. Tool sets differ by role (Security Reviewer/PM/Solution Architect stay read-only `[Read, Grep, Glob]`; engineering roles get `[Read, Edit, Write, Bash, Grep, Glob]`; QA gets `[Read, Grep, Glob, Bash]`, no `Write` — it has to run tests via `Bash`, which matters below).
+### Inbox — visually verified this session
 
-**Persona groups, organizational only.** New `persona_group` table (`personaIds: string[]` as jsonb, same convention as `agentPersona.tools` — no join table, since there's no per-attachment metadata). Full CRUD through the contract (`personaGroup.list/create/update/delete`), a `PersonaGroupPanel.vue` in the sidebar (click a persona chip to toggle membership, immediate save). Doesn't start anything, doesn't bind to a channel — exactly per PLAN.md §3a's non-scope paragraph. Live-verified: created, toggled membership, deleted, all through the real UI against the real DB.
+Last session built keep/discard + the dead-run reaper + the Inbox view but could not click through it (browser extension unavailable). This session the extension connected and the full flow was verified live against the real dev DB: Inbox toggle renders, badge count refreshes correctly on entry and after actions, row selection populates the approval card and diff panel for the *inspected* run (independent of `activeRun`), "Load diff" renders real diff content, "Keep branch" posts the chat message and clears the row.
 
-**`@mention` starts a run, with the mentioned text as the actual task.** `Composer.vue` has real autocomplete (typing `@qa` shows matching personas with descriptions) and, on send, still posts the message as ordinary chat — but if it parses as a mention of a known persona (`packages/client-core/src/mention.ts`), `WorkspaceView.vue` shows an inline "Start `<persona>` on: `<repo picker>`" bar. Confirming it calls `agentRun.start` with a new optional `task` field, threaded all the way through `contract.ts` → `router.ts` → `startAgentRun` → `RunDispatchPort.startRun` → the `start_run` wire frame (`packages/runner-protocol/src/protocol.ts`) → `apps/runner/src/client.ts` → `claude-agent-adapter.ts`, where the prompt is now `You are {persona}. {task}` instead of the previous always-fixed `"Begin working now."`. **Live-verified end to end, twice**: `@qa write your name to a file called qa-verify.txt` → the QA persona (no `Write` tool) correctly reached for `Bash` instead, correctly triggered the risky-tool approval gate, got approved, and actually wrote the file with the right content. Second run confirmed the SDK really receives the mentioned text as its task, not a generic prompt.
+One real, pre-existing environment issue found and worked around during that verification, **then fixed at the end of the session** (see "Stale `runner.connected` flag" below): `stage2-runner` showed "connected" in the Runners panel but any dispatch to it (`agentRun.start`, `getDiff`) failed with "Runner ... is not connected". `verify-runner` was unaffected and is what got used for the rest of the session's verification.
 
-**Single-active-run guard, server-side.** `AgentRunRepositoryPort.findActiveByWorkspace` (new) backs a check at the top of `startAgentRun`: if any non-terminal run exists in the workspace, it throws a `ValidationError` (→ `400 BAD_REQUEST`, not 409 — the auto-generated draft of this handoff said 409, that was wrong) with a clear message, surfaced via `agentSnapshot.error`. **Live-verified**: a genuinely stale `running` row from before this session (never reaped — see "no stuck-run detection" in the not-built list) correctly blocked a new mention-start until manually marked terminal; then a real second run correctly refused to start while the first was still active.
+### "Push & open PR" on `DiffView` (PLAN.md §6 A2 push policy) — built and live-verified
 
-**`agentRun.getActive` — resume watching an active run after a reload.** Found live, not speculative: reloading the page during an active run left *zero* path back to its approval card (nothing in `init()` re-fetched run/approval state). New contract endpoint + `agent-session.ts` change: on `init()`, fetch the workspace's active run (if any) and resume polling immediately. Fixed and reloaded live to confirm the approval card came back.
+The third branch disposition, alongside `kept`/`discarded`: **`pushed`**. Two things reshaped PLAN.md's "merge" into "push" — found during design, not assumed:
 
-**Per-persona `harness.autoApprove`** (not in original §3a scope — added mid-session on explicit request, after clarifying scope: per-persona opt-in, not a global bypass). New `harness.autoApprove: true` frontmatter field (`persona-markdown.ts`), new `agent_persona.harness_auto_approve` column, threaded through `PersonaSpec`/`WirePersonaSpec` to the Runner's `canUseTool`: when true, skips the human approval round-trip for that run's risky tools. **The path-scoped write boundary (classifyEffect) is never skipped** — that's a hard boundary, not a judgment call, and autoApprove only ever touches the "ask a human" step. **Live-verified**: created a real persona with `autoApprove: true`, mentioned it, watched it run `Bash: echo autoapprove-worked` to completion with **zero** `approval_request` rows created — confirmed directly against the DB, not inferred from the UI.
+- **No git remote/provider is tracked anywhere in the schema.** `repository` stores only `absolutePath`/`runnerId`/`defaultBranch`. A run's clone is `git clone <repository.absolutePath> <scratch-dir>` — the clone's own `origin` points at the local bound repo, not any upstream. The real upstream (if any) is read fresh, host-side, from `git -C <boundRepoPath> remote get-url origin` at push time — never stored, never agent-controlled.
+- **No credential broker exists** (Phase 3). Per explicit direction this session, the push and any PR/MR creation reuse whatever git/`gh`/`glab` auth already lives on the **Runner host** — the same trust boundary the push itself already uses. No new credential storage anywhere.
 
-**Dispatch-failure visibility fix.** Found live: when `dispatch.startRun` throws (e.g. Runner not connected), the run was marked `failed` in the DB but nothing was ever posted to the thread — every *other* failure mode (`run_failed`, approval-needed) posts a system message, this was the one silent exception. Fixed in `startAgentRun`'s catch block. Live-verified: intentionally started a run against a repo bound to a disconnected Runner, saw `✗ Run failed to start: Runner ... is not connected` appear in chat.
+Mechanics (`apps/runner/src/run-workspace.ts`'s new `pushRunBranch`):
+1. Resolve the bound repo's `origin`. No `origin` configured → clean failure, **no disposition set** (unlike discard, a push failure must stay retriable — nothing was mutated).
+2. `git diff --name-only <defaultBranch>...HEAD` → new domain classifier `packages/domain/src/push-policy.ts`'s `classifyPushEffect` (unit-tested, mirrors `risky-tools.ts`'s classify-then-gate shape) — rejects if the changed paths touch CI config (`.github/workflows/`, `.gitlab-ci.yml`, `.circleci/`) unless the request carries `acknowledgeCiChange: true`.
+3. `git push <remoteUrl> HEAD:refs/heads/<branchName>` — force-push/tags/protected-branch are enforced **by construction**, not a runtime check: the target is always exactly the run's own trusted DB-stored branch name, as a plain push, never anything else. There is no code path that could push elsewhere.
+4. Best-effort PR/MR: `gh pr create`/`glab mr create` if the remote host is `github.com`/`gitlab.com`; any failure (CLI missing, not authed) downgrades to a `warning` + a manually-constructed compare URL rather than failing the push. Unparseable or unrecognized remotes (e.g. a local bare-repo path, used for this session's own testing) get a plain "pushed, no PR attempted" message — never an error.
 
-**104 automated tests, all passing** (was 89 at last handoff). New: `builtin-personas.test.ts`, `mention.test.ts`, plus new cases in `persona-markdown.test.ts` (harness.autoApprove parse/serialize round-trip) and `app.integration.test.ts` (contract-completeness list updated for `personaGroup` and `agentRun.getActive`). None call the real Claude Agent SDK — as before, that's verified manually, and this session did substantially more manual verification than usual because the feature is inherently interactive (chat + autocomplete + inline UI).
+Full stack, mirroring keep/discard's existing shape exactly: `RunDispatchPort.pushRun` (`agent-ports.ts`) → `pushAgentRun` use-case (`agent-use-cases.ts`) → contract `agentRun.push` → router → `client-core`'s `pushRun` → Pinia `agent.ts` store → two new buttons on `DiffView.vue` ("Push & open PR" / a muted "Push anyway (CI/workflow changes)" for the rare override case) → wired through both `WorkspaceView.vue` usages and `InboxView.vue`'s re-emit, same pattern as `keep`/`discard`. New wire frames `push_run`/`push_result` in `packages/runner-protocol`, new `pendingPushes` map + dispatch case in `runner-gateway.ts`, new `push_run` case in `apps/runner/src/client.ts` (its per-run `runWorkspaces` map now also carries `sourcePath`/`branchName`, needed to resolve the remote and target ref without any new frame fields from the server). `AgentRunBranchDisposition` gained `'pushed'` — no migration needed, it's a plain validated `text` column, not a DB enum.
 
----
+**Live-verified end to end**, via a throwaway runner + repo + local bare "remote" (not any of the existing `stage2`/`verify` scratch fixtures, and cleaned up after — see below):
+- A real push landed the run's branch in the bare remote, `branchDisposition` became `'pushed'`, and the chat message correctly reported the graceful "no PR attempted, unparseable remote" fallback.
+- A run that touched `.github/workflows/ci.yml` was correctly **rejected** (400, exact policy reason, branch never reached the remote) without `acknowledgeCiChange`, then **succeeded** once resubmitted with it.
+- **Not verified in this environment, flagged rather than claimed**: the real `gh pr create`/`glab mr create` path against an actual `github.com`/`gitlab.com` remote+token. No such remote exists in this dev setup. The parsing/fallback logic was code-reviewed instead.
+- **Also not verified**: the new UI buttons via an actual browser click (all push-path verification this session was via direct RPC calls with a scripted test account + curl, to move fast once the design was locked in — see below). `DiffView.vue`'s two new buttons are code-reviewed and follow the exact existing keep/discard button pattern, but nobody has clicked them.
 
-## Bugs/gaps found and fixed this session
+### Stale `runner.connected` flag — fixed, but not runtime-verified
 
-1. **`tsx watch` + Node 24's native `--env-file` flag.** `apps/server`/`apps/ws-gateway`'s dev script was `tsx --env-file=../../.env watch src/main.ts` — Node 24.18 now recognizes `--env-file` natively and appears to consume it ahead of tsx's own CLI parsing, breaking tsx's "is the first arg `watch`?" detection; it tried to import a module literally named `watch`. Fixed by reordering: `tsx watch --env-file=../../.env src/main.ts` (`watch` first). Confirmed `pnpm dev` now starts all three (server/ws-gateway/web) cleanly with live-reload intact.
-2. **Reload loses all run/approval visibility** (see `agentRun.getActive` above) — fixed.
-3. **Dispatch failures were silent in chat** (see above) — fixed.
+Root cause of the drift described above: `runner.connected` is set `true` on the `hello` handshake and cleared **only** in the socket close/error handler (`apps/server/src/runner-gateway.ts`). A server killed uncleanly (SIGKILL/crash — exactly what happened repeatedly across these sessions) never runs that handler, so every flag stays stale-true, while the next server process boots with an empty in-memory `connections` Map. The Runners panel reads the DB flag; dispatch reads the live Map. Hence "connected" in the UI, "not connected" on dispatch.
+
+Fix: new `clearAllRunnerConnections(db)` in `packages/db/src/agent-repositories.ts`, called once at boot in `apps/server/src/app.ts` immediately before `registerRunnerGateway`. A fresh process owns zero live connections by definition, so the reset is always correct; anything genuinely alive re-sets its own flag through the Runner's existing 2s auto-reconnect. Documented inline as assuming a single server instance owns `/ws/runner` (true today; horizontal scaling per PLAN.md §7 Phase 4 would need per-instance connection ownership instead, since this reset is global).
+
+**Verification status, stated plainly**: `pnpm -r typecheck` and `npx eslint packages/ apps/` are clean, and the 73 DB-free tests pass. The 37 DB/Valkey-dependent tests (`packages/db`, `apps/server`, `apps/ws-gateway`) **were not run** — the Docker daemon was down by then, and those are exactly the two packages this fix touches. Nobody has watched a boot actually clear a stale flag. **Do that first**: start Docker, set a `connected: true` flag on a Runner with no live process, boot the server, confirm the flag flips to false and the Runners panel agrees with dispatch.
+
+### Test suite
+
+104 → **110** tests. New: `packages/domain/src/push-policy.test.ts` (6 tests — CI-config detection per pattern, non-CI paths pass, `acknowledgeCiChange` override, empty changeset). `app.integration.test.ts`'s contract-completeness list now includes `push`. Everything else — `pnpm -r typecheck`, `npx eslint packages/ apps/`, `npx vitest run tools/architecture.test.ts` — clean.
 
 ---
 
 ## What's NOT built — do not assume these exist
 
-Everything from the last handoff's "not built" list still applies except `@mention`/built-in-personas/persona-groups, which are struck. Restated against PLAN.md §7 Phase 1's ship criterion:
+Everything from the last handoff's list still applies except the Inbox visual-verification gap and "merge", which are struck. Restated:
 
-- **No merge/keep/discard on `DiffView`.** Still only displays the branch diff; no action button. Needs PLAN.md §6 A2's host-side push policy for "merge," but "keep the branch"/"discard" don't need that and could land without it.
-- **No real inbox/notifications.** Approval only surfaces in-thread; PLAN.md §3's own stated center of gravity ("3 runs need you") still doesn't exist.
-- **No stuck-run detection, no dead-run reaper, no run resumption after a Runner restart, no idempotency keys, no budget caps, no global kill switch.** The stale `running` row this session's single-active-run guard tripped over is a live example of exactly this gap — nothing currently marks an abandoned run terminal.
-- **No container/microVM sandbox, no egress proxy, no credential broker, no host-side git-push policy.** Unchanged, still a separate project.
-- **No skills/MCP attachment.** Unchanged — needs the Phase 2 capability registry.
-- **No UI test harness.** `PersonaGroupPanel.vue`, the Composer autocomplete, and the mention-bar have no automated component tests, only this session's live verification.
-- **`autoApprove` has no UI toggle** — it's raw-markdown-only, consistent with PLAN.md §7's Phase 1 cut ("ship a textarea with frontmatter validation," no form builder). A persona author has to type `harness:\n  autoApprove: true` by hand.
-- Repository binding is still bind-by-absolute-path only (unchanged, deliberate — see previous handoff).
-- `apps/tui` still doesn't exist (unchanged).
+- **No same-tool-call-N-times stuck detection.** Still deliberately not added — see previous handoffs' reasoning, unchanged.
+- **No continuous Inbox polling.** Unchanged, deliberate.
+- **No run resumption after a Runner restart, no idempotency keys, no budget caps, no global kill switch.** Unchanged, still flagged in PLAN.md §6/§7.
+- **No container/microVM sandbox, no egress proxy, no credential broker.** Unchanged. The push feature explicitly does *not* introduce a credential broker — it reuses host-level git/`gh`/`glab` auth on the Runner, by design, per this session's direction. Don't read "push is built" as "credential broker is built."
+- **No skills/MCP attachment.** Unchanged.
+- **No UI test harness**, and the new push buttons specifically have not been clicked in a real browser (see above) — only exercised via direct RPC calls.
+- Repository binding is still bind-by-absolute-path only; still no remote/provider column anywhere in the schema (push resolves `origin` fresh, host-side, every time — nothing new is persisted).
+- `apps/tui` still doesn't exist.
 
 ---
 
 ## Immediate next steps, in priority order
 
-1. **Merge/keep/discard on `DiffView`** — the diff is real and reviewable; there's no action button yet. "Keep"/"discard" don't need the push-policy work and could land first; "merge" needs PLAN.md §6 A2 (agent never holds git credentials; host-side push after policy check).
-2. **Inbox/notifications + stuck-run detection** — PLAN.md §3 calls this the actual job-to-be-done, and this session's own guard-vs-stale-run incident is a concrete argument for why it's overdue, not just a nice-to-have.
-3. **Run resumption + idempotency keys + budget caps + kill switch** — all still flagged in PLAN.md §6/§7, none implemented.
-4. **Container/microVM sandbox + egress proxy + credential broker** — still its own project, not a small PR.
-5. Only after the above: Planner/Swarm (PLAN.md §7 Phase 2) — and PLAN.md §11's riskiest-assumption test (parallel workers on one repo) still hasn't been run.
+1. **Click the new "Push & open PR" / "Push anyway" buttons in a real browser.** This session's push verification was all via scripted RPC calls (a throwaway runner + local bare-repo remote + curl), not a UI click-through — the inverse gap from last session's Inbox situation. Do this first.
+2. **Real `gh`/`glab` PR-creation path**, against an actual `github.com`/`gitlab.com` remote with a real token on some Runner host. Nothing in this dev environment has one.
+3. **Run the DB-dependent tests, and verify the `clearAllRunnerConnections` boot reset** — see its section above. Needs Docker up; it was down when the fix landed, so `packages/db`/`apps/server`/`apps/ws-gateway` tests (37 of the 110) have not been run against this fix at all.
+4. **Run resumption + idempotency keys + budget caps + kill switch** — still flagged in PLAN.md §6/§7, none implemented.
+5. **Container/microVM sandbox + egress proxy + credential broker** — still its own project, not a small PR. The push feature deliberately did not pull this forward.
+6. Only after the above: Planner/Swarm (PLAN.md §7 Phase 2) — and PLAN.md §11's riskiest-assumption test (parallel workers on one repo) still hasn't been run.
 
 ## Things to NOT redo
 
-- Everything in the previous handoff's "do not redo" list still applies.
-- Don't reintroduce a per-channel persona/team roster, or repository pre-binding per channel, for `@mention` — deliberately out of scope per PLAN.md §3a's non-scope paragraph.
-- Don't lift the single-active-run limit "to be helpful" — it's preserved on purpose; a second mention while a run is active must keep erroring clearly, never silently replace what's being watched.
-- Don't build `autoApprove` as a global toggle or a run-time override — it's per-persona, opt-in, in the markdown. This was an explicit scope decision made mid-session (the user was asked, and chose per-persona over global) — don't casually widen it later without asking again.
-- Don't put `harness.autoApprove` anywhere near the path-scoped write boundary (`classifyEffect`/`risky-tools.ts`) — that boundary must stay unconditional. `autoApprove` only ever skips the human round-trip for effect-ok risky calls.
-- **When generating a handoff doc, write directly to this file at repo root — not a `handoffs/` subdirectory.** The `/handoff` skill defaulted to `handoffs/HANDOFF-2026-07-26-2348.md` again this session (same mistake flagged in the previous handoff); it was folded into this file and the stray copy deleted. If this keeps happening, it may be worth a standing project instruction rather than a per-session correction.
-- Don't leave the `stage2-runner`/`stage2-repo`/`verify-runner`/`verify-repo` test data lying around indefinitely — it's harmless (isolated to a scratch repo under a session tmp dir) but is now real rows in your dev `loom` database. Clean up when convenient; not urgent.
+- Everything in the previous handoffs' "do not redo" lists still applies.
+- Don't add a credential broker "while you're in there" on the push feature — explicitly out of scope this session, by direction. Push/PR creation reuses host-level auth on purpose.
+- Don't add a same-tool-call-N-times reaper heuristic without asking first.
+- Don't add continuous Inbox polling casually.
+- Don't move the Inbox toggle to `App.vue` without first also moving (or duplicating) `agent.start()` there.
+- Don't assume `packages/application/src/agent-use-cases.ts` has FakeStore unit tests — it still doesn't, for any function, old or new (`pushAgentRun` included) — this project's established convention is manual/live verification for that file, not unit tests. `push-policy.ts` (pure domain logic) *does* get a unit test, same convention as `risky-tools.ts`.
+- Don't assume the `stage2-runner`/`stage2-repo`/`verify-runner`/`verify-repo` scratch rows are gone — they're still there, still harmless, still not urgent. This session's own throwaway push-test fixtures (a separate `push-test-runner` row, a scripted `pushtest@example.test` account, a local bare-repo "remote") were created fresh and **deleted** before ending the session — don't go looking for them.
+- This session's dev processes (server/ws-gateway/web, plus the two long-lived leftover Runner processes from prior sessions) were all stopped during cleanup. Next session needs a fresh `pnpm dev` + re-paired Runners to pick back up, same as any normal cold start.
 
 ---
 
 ## Environment / how to run
 
-See README.md. Quick reference, updated for this session's fix:
+See README.md. Unchanged except:
 
-- Postgres 18 + Valkey 9 via `docker compose up -d`.
-- `.env` needs `BETTER_AUTH_SECRET` and `TEST_DATABASE_URL` (see `.env.example`).
-- `pnpm dev` now works cleanly (was broken under Node 24 until this session's fix) — starts `apps/server` (:3001), `apps/ws-gateway` (:3002), `apps/web` (:5173) with live-reload.
-- `apps/runner` is still separate, per-machine, started manually with `LOOM_SERVER_WS_URL`/`LOOM_PAIRING_TOKEN`/`LOOM_ALLOWED_ROOTS`. Mint a pairing token from the RunnerPanel UI — the raw token is shown once, copy it precisely (a misread character cost real time this session).
-- Migrations: `pnpm db:migrate` from repo root. **Two new migrations this session**: `0006` (`persona_group` table), `0007` (`agent_persona.harness_auto_approve` column). Apply to both `loom` and `loom_test`.
+- No new migrations this session. `AgentRunBranchDisposition` gained `'pushed'` at the app-validation layer only (`branch_disposition` is a plain `text` column, not a DB enum) — nothing to migrate.
+- No new env vars. Push/PR creation relies on whatever `git`/`gh`/`glab` config and auth already exist on the Runner host — nothing new to configure through Loom itself.
 
 ## Verification commands (all currently passing)
 
 ```bash
 pnpm -r typecheck
-pnpm -r test                                # 104 tests
+pnpm -r test                                # 110 tests
 npx vitest run tools/architecture.test.ts   # 4 checks
 npx eslint packages/ apps/                  # clean
 ```

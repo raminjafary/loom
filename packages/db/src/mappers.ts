@@ -14,6 +14,7 @@ import {
   type Actor,
   type AgentPersona,
   type AgentRun,
+  type AgentRunBranchDisposition,
   type AgentRunStatus,
   type ApprovalRequest,
   type ApprovalStatus,
@@ -198,7 +199,10 @@ const isPersonaSpec = (value: unknown): value is PersonaSpec =>
 
 const toPersonaSpec = (value: unknown): PersonaSpec => {
   if (!isPersonaSpec(value)) throw new Error('malformed persona spec in agent_run row')
-  return value
+  // `autoApprove` postdates some already-completed runs' stored persona JSON
+  // (added after they ran) — default it rather than let a legacy row fail
+  // output validation the first time something re-fetches it in bulk.
+  return { ...value, autoApprove: Boolean((value as { autoApprove?: unknown }).autoApprove) }
 }
 
 export interface AgentRunRow {
@@ -213,6 +217,9 @@ export interface AgentRunRow {
   errorMessage: string | null
   clonePath: string | null
   branchName: string | null
+  branchDisposition: string | null
+  lastHeartbeatAt: Date | null
+  lastEventAt: Date | null
   createdAt: Date
   completedAt: Date | null
 }
@@ -231,6 +238,16 @@ const toAgentRunStatus = (value: string): AgentRunStatus => {
   throw new Error(`unknown agent_run status: ${value}`)
 }
 
+const AGENT_RUN_BRANCH_DISPOSITIONS: readonly AgentRunBranchDisposition[] = ['kept', 'discarded', 'pushed']
+
+const toAgentRunBranchDisposition = (value: string | null): AgentRunBranchDisposition | null => {
+  if (value === null) return null
+  if ((AGENT_RUN_BRANCH_DISPOSITIONS as readonly string[]).includes(value)) {
+    return value as AgentRunBranchDisposition
+  }
+  throw new Error(`unknown agent_run branch_disposition: ${value}`)
+}
+
 export const toAgentRun = (row: AgentRunRow): AgentRun => ({
   id: asAgentRunId(row.id),
   workspaceId: asWorkspaceId(row.workspaceId),
@@ -243,6 +260,9 @@ export const toAgentRun = (row: AgentRunRow): AgentRun => ({
   errorMessage: row.errorMessage,
   clonePath: row.clonePath,
   branchName: row.branchName,
+  branchDisposition: toAgentRunBranchDisposition(row.branchDisposition),
+  lastHeartbeatAt: row.lastHeartbeatAt,
+  lastEventAt: row.lastEventAt,
   createdAt: row.createdAt,
   completedAt: row.completedAt,
 })
