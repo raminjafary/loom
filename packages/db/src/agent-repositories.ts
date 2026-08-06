@@ -1,4 +1,5 @@
 import type {
+  AgentRunEventRepositoryPort,
   AgentRunRepositoryPort,
   ApprovalRepositoryPort,
   PersonaGroupRepositoryPort,
@@ -9,7 +10,7 @@ import type {
 } from '@loom/application'
 import { NotFoundError, asRunnerId } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
-import { and, eq, inArray, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
   toAgentPersona,
@@ -28,6 +29,7 @@ import {
 import {
   agentPersona,
   agentRun,
+  agentRunEvent,
   approvalRequest,
   personaGroup,
   repository,
@@ -214,6 +216,36 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
         ),
       )
     return rows.map((row) => toAgentRun(row as AgentRunRow))
+  },
+})
+
+export const agentRunEventRepository = (db: Database): AgentRunEventRepositoryPort => ({
+  async append(input) {
+    // `onConflictDoNothing` on the (agent_run_id, seq) unique index is the
+    // idempotency primitive — an empty `returning` means this exact event was
+    // already ingested, so the caller skips its side effects.
+    const rows = await db
+      .insert(agentRunEvent)
+      .values({
+        workspaceId: input.workspaceId,
+        agentRunId: input.agentRunId,
+        seq: input.seq,
+        kind: input.kind,
+        payload: input.payload,
+      })
+      .onConflictDoNothing({ target: [agentRunEvent.agentRunId, agentRunEvent.seq] })
+      .returning({ id: agentRunEvent.id })
+    return rows.length > 0
+  },
+
+  async highestSeq(workspaceId, agentRunId) {
+    const [row] = await db
+      .select({ seq: agentRunEvent.seq })
+      .from(agentRunEvent)
+      .where(and(eq(agentRunEvent.workspaceId, workspaceId), eq(agentRunEvent.agentRunId, agentRunId)))
+      .orderBy(desc(agentRunEvent.seq))
+      .limit(1)
+    return row?.seq ?? 0
   },
 })
 

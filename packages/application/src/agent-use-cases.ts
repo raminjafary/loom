@@ -29,6 +29,7 @@ import {
   type WorkspaceRunControl,
 } from '@loom/domain'
 import type {
+  AgentRunEventRepositoryPort,
   AgentRunRepositoryPort,
   ApprovalRepositoryPort,
   PersonaGroupRepositoryPort,
@@ -44,6 +45,7 @@ export interface AgentDeps extends Deps {
   readonly runners: RunnerRepositoryPort
   readonly repositories: RepositoryRepositoryPort
   readonly agentRuns: AgentRunRepositoryPort
+  readonly agentRunEvents: AgentRunEventRepositoryPort
   readonly approvals: ApprovalRepositoryPort
   readonly personas: PersonaRepositoryPort
   readonly personaGroups: PersonaGroupRepositoryPort
@@ -831,10 +833,24 @@ const eventToMessageText = (event: AgentEvent): string => {
  */
 export const recordAgentEvent = async (
   deps: AgentDeps,
-  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; event: AgentEvent },
+  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; seq: number; event: AgentEvent },
 ): Promise<void> => {
   const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
   if (!run) throw new NotFoundError('AgentRun')
+
+  // Idempotency gate (PLAN.md §6 "idempotency keys on run steps"), before any
+  // side effect. A retransmitted event — Runner reconnect, a retried delivery —
+  // must not append a second copy of the same tool call to the thread, nor
+  // re-apply a terminal status transition. The append is the check: the unique
+  // (run, seq) index rejects the duplicate and reports it as already ingested.
+  const fresh = await deps.agentRunEvents.append({
+    workspaceId: input.workspaceId,
+    agentRunId: input.agentRunId,
+    seq: input.seq,
+    kind: input.event.kind,
+    payload: input.event as unknown as Record<string, unknown>,
+  })
+  if (!fresh) return
 
   // Dead-run reaper input (PLAN.md §6) — any event at all counts as progress,
   // distinct from the heartbeat's plain connection-liveness signal.

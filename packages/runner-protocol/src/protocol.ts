@@ -46,7 +46,19 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
     defaultBranch: z.string().optional(),
     error: z.string().optional(),
   }),
-  z.object({ type: z.literal('agent_event'), runId: z.string(), event: AgentEventSchema }),
+  /**
+   * `seq` is a per-run counter the Runner assigns, and the server's idempotency
+   * key (PLAN.md §6 "idempotency keys on run steps"): a retransmitted event
+   * carries the same seq and is dropped rather than appended twice. Required,
+   * not optional — an event without one cannot be deduplicated, and Runner and
+   * server ship in lockstep (see this file's header).
+   */
+  z.object({
+    type: z.literal('agent_event'),
+    runId: z.string(),
+    seq: z.number().int().positive(),
+    event: AgentEventSchema,
+  }),
   z.object({
     type: z.literal('permission_request'),
     runId: z.string(),

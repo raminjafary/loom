@@ -1,5 +1,10 @@
 import { classifyToolEffect, isRiskyTool } from '@loom/domain'
-import { RunnerFrameSchema, ServerFrameSchema, type RunnerFrame } from '@loom/runner-protocol'
+import {
+  RunnerFrameSchema,
+  ServerFrameSchema,
+  type RunnerFrame,
+  type WireAgentEvent,
+} from '@loom/runner-protocol'
 import WebSocket from 'ws'
 import { runAgent } from './claude-agent-adapter.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
@@ -33,7 +38,18 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
   let socket: WebSocket | null = null
   let closed = false
 
+  // Per-run event counter — the server's idempotency key (PLAN.md §6). Kept
+  // here rather than derived from anything observable so a retransmit of an
+  // already-sent event reuses its original seq and is dropped server-side.
+  const eventSeqs = new Map<string, number>()
+
   const send = (frame: RunnerFrame) => socket?.send(JSON.stringify(frame))
+
+  const sendAgentEvent = (runId: string, event: WireAgentEvent) => {
+    const seq = (eventSeqs.get(runId) ?? 0) + 1
+    eventSeqs.set(runId, seq)
+    send({ type: 'agent_event', runId, seq, event })
+  }
 
   const connect = () => {
     if (closed) return
@@ -115,7 +131,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 isRiskyTool,
                 classifyEffect: (toolName, input) =>
                   classifyToolEffect(toolName, input, clonePath, resolveWithinRoot),
-                onEvent: (event) => send({ type: 'agent_event', runId, event }),
+                onEvent: (event) => sendAgentEvent(runId, event),
                 onPermissionRequest: (toolUseId, toolName, input) => {
                   send({ type: 'permission_request', runId, toolUseId, toolName, input })
                   return new Promise((resolve) => {
@@ -130,13 +146,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
               // server already recorded the run as cancelled, so stay quiet.
               if (abort.signal.aborted) return
               log(`run ${runId} failed to prepare workspace: ${error instanceof Error ? error.message : String(error)}`)
-              send({
-                type: 'agent_event',
-                runId,
-                event: {
-                  kind: 'run_failed',
-                  message: `Failed to prepare run workspace: ${error instanceof Error ? error.message : String(error)}`,
-                },
+              sendAgentEvent(runId, {
+                kind: 'run_failed',
+                message: `Failed to prepare run workspace: ${error instanceof Error ? error.message : String(error)}`,
               })
             })
             .finally(() => {
