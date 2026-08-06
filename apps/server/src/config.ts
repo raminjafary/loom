@@ -13,6 +13,12 @@ const EnvSchema = z.object({
   REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
   REAPER_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
   REAPER_NO_PROGRESS_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
+  // Approval SLA (PLAN.md §6) — how long a risky-tool gate may sit undecided
+  // before it auto-denies and the run resumes. Swept on the reaper's interval.
+  // Independent of REAPER_NO_PROGRESS_TIMEOUT_MS by design: a run waiting on a
+  // human is excluded from the no-progress signal (see reapStuckRuns), so this
+  // is the only clock that governs an `awaiting_approval` run.
+  APPROVAL_SLA_MS: z.coerce.number().int().positive().default(900_000),
 })
 
 export type Config = z.infer<typeof EnvSchema>

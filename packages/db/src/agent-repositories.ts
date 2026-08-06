@@ -257,6 +257,14 @@ export const approvalRepository = (db: Database): ApprovalRepositoryPort => ({
     return rows.map((row) => toApprovalRequest(row as ApprovalRequestRow))
   },
 
+  async listAllPending() {
+    const rows = await db
+      .select()
+      .from(approvalRequest)
+      .where(eq(approvalRequest.status, 'pending'))
+    return rows.map((row) => toApprovalRequest(row as ApprovalRequestRow))
+  },
+
   async resolve(workspaceId, id, patch) {
     const [row] = await db
       .update(approvalRequest)
