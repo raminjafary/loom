@@ -30,5 +30,49 @@ services:
       timeout: 5s
       retries: 10
 
+  # The credential-injecting, metering, allowlisting egress boundary
+  # (PLAN.md §6 A6). Deliberately the only service on both networks below:
+  # that asymmetry is what makes deny-by-default egress real for sandboxes.
+  egress-proxy:
+    build:
+      context: .
+      dockerfile: apps/egress-proxy/Dockerfile
+    restart: unless-stopped
+    environment:
+      LOOM_EGRESS_CONTROL_SECRET: ${LOOM_EGRESS_CONTROL_SECRET:?set it in .env — the Runner authenticates to the control plane with it}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?the proxy holds the real key so the sandbox never does}
+      EGRESS_ALLOWED_HOSTS: ${EGRESS_ALLOWED_HOSTS:-}
+    ports:
+      # Control plane on loopback only. A sandbox reaches the data plane by
+      # container name over loom-sandbox and has no route to this port at all;
+      # binding it to 127.0.0.1 keeps it off the host's network too.
+      - "127.0.0.1:8081:8081"
+    networks:
+      - loom-sandbox
+      - default
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  # `internal: true` removes the gateway, so a container attached only to this
+  # network cannot reach the internet, the host, or the other compose services
+  # (postgres and valkey are on `default`). Sandboxes get exactly one reachable
+  # peer: egress-proxy. This is PLAN.md §6 A5's "--network=none by default with
+  # all egress through the authenticating proxy" expressed in a way that still
+  # lets the proxy be reachable — a literal --network=none would cut that too.
+  #
+  # Known Phase 1 limitation, stated rather than hidden: concurrent sandboxes
+  # share this network and can therefore reach each other. They hold no
+  # credentials (§6 A6) so the blast radius is one run's clone, but per-run
+  # networks would close it and are the right follow-up.
+  loom-sandbox:
+    name: loom-sandbox
+    internal: true
+  default:
+    name: loom-default
+
 volumes:
   postgres-data:
