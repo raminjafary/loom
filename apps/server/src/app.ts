@@ -1,4 +1,9 @@
-import { type AgentDeps, reapStuckRuns, seedBuiltinPersonas } from '@loom/application'
+import {
+ expireStaleApprovals,
+ reapStuckRuns,
+ seedBuiltinPersonas,
+ type AgentDeps,
+} from '@loom/application'
 import { asWorkspaceId } from '@loom/domain'
 import {
  agentRunRepository,
@@ -80,17 +85,26 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
 
  const fastify = Fastify({ logger: config.NODE_ENV !== 'test' })
 
- // Dead-run reaper — skipped under NODE_ENV=test so a stray
- // sweep never races a test's own DB assertions.
+ // Background safety sweeps — skipped under NODE_ENV=test so a
+ // stray sweep never races a test's own DB assertions. Both share one interval:
+ // they're cheap indexed scans, and coupling them keeps a single knob for how
+ // often the platform checks itself.
+ //
+ // Order matters. The approval SLA runs first so a gate that just expired hands
+ // its run back to `running` before the reaper looks at it — the other order
+ // would let the reaper judge that same run on a heartbeat it is about to renew.
  const reaperTimer =
  config.NODE_ENV === 'test'
  ? null
 : setInterval( => {
- void reapStuckRuns(deps, {
+ void (async => {
+ await expireStaleApprovals(deps, { approvalSlaMs: config.APPROVAL_SLA_MS })
+ await reapStuckRuns(deps, {
  heartbeatTimeoutMs: config.REAPER_HEARTBEAT_TIMEOUT_MS,
  noProgressTimeoutMs: config.REAPER_NO_PROGRESS_TIMEOUT_MS,
+ })
  }).catch((error) => {
- fastify.log.error({ error }, 'reapStuckRuns failed')
+ fastify.log.error({ error }, 'background safety sweep failed')
  })
  }, config.REAPER_INTERVAL_MS)
 

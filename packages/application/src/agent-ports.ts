@@ -165,6 +165,14 @@ export interface ApprovalRepositoryPort {
  findById(workspaceId: WorkspaceId, id: ApprovalRequestId): Promise<ApprovalRequest | null>
  listPendingByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<ApprovalRequest[]>
  /**
+ * Every pending approval, workspace-agnostic — backs the approval SLA sweep
+ *. Same deliberate exception to this port's per-workspace
+ * convention, for the same reason, as `AgentRunRepositoryPort.listAllActive`:
+ * it's an internal background sweep, never reachable through the contract, so
+ * there is no caller whose authz boundary it could cross.
+ */
+ listAllPending: Promise<ApprovalRequest[]>
+ /**
  * `resolvedByUserId: null` marks a resolution no human made — the kill switch
  * denying a dead run's gate, or the approval SLA auto-denying an expired one
  *. That is *not* a hole in identity-bound approval's identity binding: `decideApproval`

@@ -709,7 +709,12 @@ export const reapStuckRuns = async (
  const sinceEvent = now - (run.lastEventAt ?? run.createdAt).getTime
 
  const heartbeatStale = sinceHeartbeat > options.heartbeatTimeoutMs
- const noProgress = sinceEvent > options.noProgressTimeoutMs
+ // A run blocked on a human is not making progress *by design*, so the
+ // no-progress signal must not apply to it — otherwise the reaper kills every
+ // approval a human takes their time over, and the approval SLA below never
+ // gets to run. The heartbeat signal still applies: a dead Runner is dead
+ // whatever the run was waiting for.
+ const noProgress = run.status !== 'awaiting_approval' && sinceEvent > options.noProgressTimeoutMs
  if (!heartbeatStale && !noProgress) continue
 
  const reason = heartbeatStale
@@ -722,6 +727,64 @@ export const reapStuckRuns = async (
  completedAt: new Date,
  })
  await postRunSystemMessage(deps, failed, `Run failed: ${reason}.`)
+ }
+}
+
+/**
+ * Approval SLA (the runtime-safety rules: "approval SLA (timeout → auto-deny →
+ * resumable)"). A periodic sweep like `reapStuckRuns`, called from the same
+ * interval in apps/server and never through the contract.
+ *
+ * Auto-deny rather than auto-approve, always: an unattended gate is exactly the
+ * case where nobody vouched for the call, and the whole point of effect-based classification is that
+ * an ungated risky effect is the failure mode. Denying also keeps the run
+ * *resumable* — the SDK's canUseTool callback resolves, the model sees a denied
+ * tool result, and the loop continues instead of blocking forever.
+ *
+ * `resolvedByUserId` is null here: no human decided this. That is visible in the
+ * row rather than attributed to whoever happened to be logged in.
+ */
+export const expireStaleApprovals = async (
+ deps: AgentDeps,
+ options: { approvalSlaMs: number },
+): Promise<void> => {
+ const pending = await deps.approvals.listAllPending
+ const now = Date.now
+
+ for (const approval of pending) {
+ if (now - approval.createdAt.getTime <= options.approvalSlaMs) continue
+
+ const run = await deps.agentRuns.findById(approval.workspaceId, approval.agentRunId)
+ // A run that is already terminal (reaped, cancelled by the kill switch)
+ // has no loop left to unblock — resolve the row so it stops showing up in
+ // this sweep and in the Inbox, but don't dispatch or touch the status.
+ const runIsLive = run !== null && !TERMINAL_RUN_STATUSES.includes(run.status)
+
+ await deps.approvals.resolve(approval.workspaceId, approval.id, {
+ status: 'denied',
+ resolvedByUserId: null,
+ })
+
+ if (!runIsLive) continue
+
+ try {
+ await deps.dispatch.sendApprovalDecision({
+ runnerId: run.runnerId,
+ toolUseId: approval.toolUseId,
+ decision: 'deny',
+ })
+ } catch {
+ // Runner gone: the row is resolved either way, and the run's stale
+ // heartbeat is what the dead-run reaper acts on. Swallowing here keeps one
+ // unreachable Runner from aborting the sweep for every other workspace.
+ }
+
+ await deps.agentRuns.updateStatus(approval.workspaceId, run.id, { status: 'running' })
+ await postRunSystemMessage(
+ deps,
+ run,
+ `Approval for ${approval.toolName} auto-denied after ${Math.round(options.approvalSlaMs / 60_000)} min with no decision.`,
+)
  }
 }
 

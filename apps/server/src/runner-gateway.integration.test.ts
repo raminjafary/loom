@@ -1,4 +1,5 @@
 import type { Contract } from '@loom/api-contract'
+import { expireStaleApprovals, reapStuckRuns } from '@loom/application'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
@@ -275,6 +276,156 @@ describe('runner-gateway: agent run event ingest', => {
 
  const runAfter = await client.agentRun.get({ agentRunId: run.id })
  expect(runAfter.status).toBe('running')
+
+ socket.close
+ })
+
+ /**
+ * Approval SLA. Driven by calling the sweep with a zero SLA
+ * rather than by waiting: the production interval is minutes long, and a test
+ * that sleeps for it proves nothing extra.
+ */
+ it('auto-denies an undecided approval past the SLA and lets the run continue', async => {
+ const { socket, runnerId } = await pairFakeRunner('sla-test')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'sla-test' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startRun
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({
+ type: 'permission_request',
+ runId: run.id,
+ toolUseId: 'tool-use-sla',
+ toolName: 'Bash',
+ input: { command: 'curl evil.example' },
+ }),
+)
+
+ let pending = await client.approval.listPending({ agentRunId: run.id })
+ for (let i = 0; i < 20 && pending.length === 0; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ pending = await client.approval.listPending({ agentRunId: run.id })
+ }
+ expect(pending).toHaveLength(1)
+
+ const permissionResponse = nextFrame(socket, (v) => v.type === 'permission_response')
+ await expireStaleApprovals(app.deps, { approvalSlaMs: 0 })
+
+ // Auto-deny, never auto-approve: nobody vouched for this call.
+ const relayed = await permissionResponse
+ expect(relayed.toolUseId).toBe('tool-use-sla')
+ expect(relayed.decision).toBe('deny')
+
+ expect(await client.approval.listPending({ agentRunId: run.id })).toEqual([])
+ // Resumable, not terminal — the SDK's callback resolved, so the loop goes on.
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('running')
+
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ expect(page.messages.some((m) => m.body.text.includes('auto-denied'))).toBe(true)
+
+ socket.close
+ })
+
+ /**
+ * The no-progress reaper must not kill a run that is legitimately waiting on a
+ * human — otherwise the SLA above never gets to fire, and every approval a
+ * human thinks about becomes a dead run.
+ */
+ it('does not reap a run for lack of progress while it awaits approval', async => {
+ const { socket, runnerId } = await pairFakeRunner('reaper-approval-test')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'reaper-approval' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startRun
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({
+ type: 'permission_request',
+ runId: run.id,
+ toolUseId: 'tool-use-reap',
+ toolName: 'Write',
+ input: { file_path: '/tmp/x' },
+ }),
+)
+ let pending = await client.approval.listPending({ agentRunId: run.id })
+ for (let i = 0; i < 20 && pending.length === 0; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ pending = await client.approval.listPending({ agentRunId: run.id })
+ }
+ expect(pending).toHaveLength(1)
+
+ // Zero no-progress timeout would reap any other run instantly; a generous
+ // heartbeat timeout isolates the signal under test to no-progress alone.
+ await reapStuckRuns(app.deps, { heartbeatTimeoutMs: 3_600_000, noProgressTimeoutMs: 0 })
+
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('awaiting_approval')
+
+ socket.close
+ })
+
+ /**
+ * The kill switch, end to end over the real protocol: the Runner
+ * receives a `cancel_run`, the run goes terminal, and the gate it was blocked
+ * on is resolved rather than left in the Inbox pointing at a dead run.
+ */
+ it('cancels an in-flight run and its pending gate when the workspace is paused', async => {
+ const { socket, runnerId } = await pairFakeRunner('kill-switch-test')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'kill-switch' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startRun
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({
+ type: 'permission_request',
+ runId: run.id,
+ toolUseId: 'tool-use-kill',
+ toolName: 'Bash',
+ input: { command: 'sleep 9000' },
+ }),
+)
+ let pending = await client.approval.listPending({ agentRunId: run.id })
+ for (let i = 0; i < 20 && pending.length === 0; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ pending = await client.approval.listPending({ agentRunId: run.id })
+ }
+ expect(pending).toHaveLength(1)
+
+ const cancelFrame = nextFrame(socket, (v) => v.type === 'cancel_run')
+ try {
+ const paused = await client.runControl.pauseAll
+ expect(paused.cancelledRunIds).toEqual([run.id])
+
+ expect((await cancelFrame).runId).toBe(run.id)
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('cancelled')
+ expect(await client.approval.listPending({ agentRunId: run.id })).toEqual([])
+ } finally {
+ // `truncateDomainTables` spares `workspace` (see packages/db/src/testing.ts),
+ // so the pause flag would otherwise leak into every later test in this file.
+ await client.runControl.resume
+ }
 
  socket.close
  })
