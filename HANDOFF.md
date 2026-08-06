@@ -33,7 +33,7 @@ Full stack, mirroring keep/discard's existing shape exactly: `RunDispatchPort.pu
 - A real push landed the run's branch in the bare remote, `branchDisposition` became `'pushed'`, and the chat message correctly reported the graceful "no PR attempted, unparseable remote" fallback.
 - A run that touched `.github/workflows/ci.yml` was correctly **rejected** (400, exact policy reason, branch never reached the remote) without `acknowledgeCiChange`, then **succeeded** once resubmitted with it.
 - **Not verified in this environment, flagged rather than claimed**: the real `gh pr create`/`glab mr create` path against an actual `github.com`/`gitlab.com` remote+token. No such remote exists in this dev setup. The parsing/fallback logic was code-reviewed instead.
-- **Also not verified**: the new UI buttons via an actual browser click (all push-path verification this session was via direct RPC calls with a scripted test account + curl, to move fast once the design was locked in — see below). `DiffView.vue`'s two new buttons are code-reviewed and follow the exact existing keep/discard button pattern, but nobody has clicked them.
+- **The UI path is now verified too**, in a real browser against a fresh DB: signed in, ran `swe` on a bound repo, approved two real gates from the approval card (which rendered exact tool argv, not a model summary — §6 A3), loaded the diff, clicked **Push & open PR**, and confirmed all four buttons render (Keep / Discard / Push & open PR / the muted "Push anyway"), the panel switched to "Branch pushed." with the buttons removed, the Inbox emptied, `branch_disposition` became `pushed`, and the branch **plus its file content** actually landed in the bare remote.
 
 ### Stale `runner.connected` flag — fixed, but not runtime-verified
 
@@ -41,7 +41,7 @@ Root cause of the drift described above: `runner.connected` is set `true` on the
 
 Fix: new `clearAllRunnerConnections(db)` in `packages/db/src/agent-repositories.ts`, called once at boot in `apps/server/src/app.ts` immediately before `registerRunnerGateway`. A fresh process owns zero live connections by definition, so the reset is always correct; anything genuinely alive re-sets its own flag through the Runner's existing 2s auto-reconnect. Documented inline as assuming a single server instance owns `/ws/runner` (true today; horizontal scaling per PLAN.md §7 Phase 4 would need per-instance connection ownership instead, since this reset is global).
 
-**Verification status, stated plainly**: `pnpm -r typecheck` and `npx eslint packages/ apps/` are clean, and the 73 DB-free tests pass. The 37 DB/Valkey-dependent tests (`packages/db`, `apps/server`, `apps/ws-gateway`) **were not run** — the Docker daemon was down by then, and those are exactly the two packages this fix touches. Nobody has watched a boot actually clear a stale flag. **Do that first**: start Docker, set a `connected: true` flag on a Runner with no live process, boot the server, confirm the flag flips to false and the Runners panel agrees with dispatch.
+**Verified behaviorally** (after Docker came back up): connected a real Runner (flag → true), `kill -9`'d both server and Runner so the close handler never ran, confirmed the flag was left **stale-true** with nothing alive — reproducing the original bug exactly — then booted the server and watched the flag flip to **false**. Also incidentally confirmed the self-heal path: an earlier attempt where the Runner process survived showed it reconnecting ~1s after boot and legitimately re-setting the flag to true, which is the intended behavior, not a regression. Full suite green including the previously-blocked 37 DB/Valkey tests.
 
 ### Test suite
 
@@ -66,10 +66,9 @@ Everything from the last handoff's list still applies except the Inbox visual-ve
 
 ## Immediate next steps, in priority order
 
-1. **Click the new "Push & open PR" / "Push anyway" buttons in a real browser.** This session's push verification was all via scripted RPC calls (a throwaway runner + local bare-repo remote + curl), not a UI click-through — the inverse gap from last session's Inbox situation. Do this first.
-2. **Real `gh`/`glab` PR-creation path**, against an actual `github.com`/`gitlab.com` remote with a real token on some Runner host. Nothing in this dev environment has one.
-3. **Run the DB-dependent tests, and verify the `clearAllRunnerConnections` boot reset** — see its section above. Needs Docker up; it was down when the fix landed, so `packages/db`/`apps/server`/`apps/ws-gateway` tests (37 of the 110) have not been run against this fix at all.
-4. **Run resumption + idempotency keys + budget caps + kill switch** — still flagged in PLAN.md §6/§7, none implemented.
+1. **Real `gh`/`glab` PR-creation path**, against an actual `github.com`/`gitlab.com` remote with a real token on some Runner host. Nothing in this dev environment has one, so this is the single remaining unverified branch of the push feature (the parsing/fallback logic around it is code-reviewed only). Everything else in the push path — policy rejection, CI-config override, the real push, and the full browser UI flow — is verified.
+2. **The "Push anyway (CI/workflow changes)" button specifically has not been clicked**, only its underlying `acknowledgeCiChange: true` path (verified via RPC in the prior session). Low risk — same emit wiring as the button next to it — but it's the one control nobody has pressed.
+3. **Run resumption + idempotency keys + budget caps + kill switch** — still flagged in PLAN.md §6/§7, none implemented.
 5. **Container/microVM sandbox + egress proxy + credential broker** — still its own project, not a small PR. The push feature deliberately did not pull this forward.
 6. Only after the above: Planner/Swarm (PLAN.md §7 Phase 2) — and PLAN.md §11's riskiest-assumption test (parallel workers on one repo) still hasn't been run.
 
@@ -81,7 +80,7 @@ Everything from the last handoff's list still applies except the Inbox visual-ve
 - Don't add continuous Inbox polling casually.
 - Don't move the Inbox toggle to `App.vue` without first also moving (or duplicating) `agent.start()` there.
 - Don't assume `packages/application/src/agent-use-cases.ts` has FakeStore unit tests — it still doesn't, for any function, old or new (`pushAgentRun` included) — this project's established convention is manual/live verification for that file, not unit tests. `push-policy.ts` (pure domain logic) *does* get a unit test, same convention as `risky-tools.ts`.
-- Don't assume the `stage2-runner`/`stage2-repo`/`verify-runner`/`verify-repo` scratch rows are gone — they're still there, still harmless, still not urgent. This session's own throwaway push-test fixtures (a separate `push-test-runner` row, a scripted `pushtest@example.test` account, a local bare-repo "remote") were created fresh and **deleted** before ending the session — don't go looking for them.
+- Don't go looking for the old `stage2-*`/`verify-repo` scratch rows or personas — the dev Postgres volume came up empty mid-session and both databases were rebuilt from migrations, so all of it is gone (see "Environment" below for exactly what's in the DB now). Any earlier handoff note about cleaning those up no longer applies.
 - This session's dev processes (server/ws-gateway/web, plus the two long-lived leftover Runner processes from prior sessions) were all stopped during cleanup. Next session needs a fresh `pnpm dev` + re-paired Runners to pick back up, same as any normal cold start.
 
 ---
@@ -92,6 +91,7 @@ See README.md. Unchanged except:
 
 - No new migrations this session. `AgentRunBranchDisposition` gained `'pushed'` at the app-validation layer only (`branch_disposition` is a plain `text` column, not a DB enum) — nothing to migrate.
 - No new env vars. Push/PR creation relies on whatever `git`/`gh`/`glab` config and auth already exist on the Runner host — nothing new to configure through Loom itself.
+- **The dev Postgres volume was empty at the start of this session's second half** — the `loom`/`loom_test` databases had no schema, so both were re-created from scratch (`docker compose up -d`, `CREATE DATABASE loom_test`, `pnpm db:migrate` against each). Every prior scratch fixture (the old `stage2-*`/`verify-*` runners/repos, old personas, old runs) is therefore **gone** — the "don't leave scratch rows lying around" note from earlier handoffs is now moot. Current DB contains only this session's own verification fixtures (a `verify@example.test` account, `verify-runner`, `pushtest-repo`, a `#push-verify` channel, one pushed run); harmless, but that's all that's there.
 
 ## Verification commands (all currently passing)
 
