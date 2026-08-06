@@ -1,9 +1,15 @@
 /**
  * Markdown+frontmatter persona format, Phase 1 subset only:
  * `name`/`description`/`model`/`tools` plus `harness.effort`/`harness.maxTurns`/
- * `harness.autoApprove`. MCP/skills/harness.subagentDepth/budgetCapUsd need the
- * capability registry that doesn't land until Phase 2 (the own phasing
- * note) — not parsed here.
+ * `harness.autoApprove`/`harness.budgetCapUsd`. MCP/skills/harness.subagentDepth
+ * need the capability registry that doesn't land until Phase 2 (the own
+ * phasing note) — not parsed here.
+ *
+ * `harness.budgetCapUsd` (default null = uncapped) is enforced, not advisory
+ *: the egress proxy meters real spend against it and refuses
+ * further model calls once it is passed, and the Runner kills the run. Enforcement
+ * lives at the proxy because that is the only place that sees what a run actually
+ * cost rather than what it reports about itself.
  *
  * `harness.autoApprove` (default false, opt-in per persona): skips the human
  * approval round-trip for risky tools this persona's run hits — the
@@ -24,6 +30,7 @@ export interface ParsedPersonaMarkdown {
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
  readonly harnessAutoApprove: boolean
+ readonly harnessBudgetCapUsd: number | null
  readonly systemPrompt: string
 }
 
@@ -46,6 +53,7 @@ export const parsePersonaMarkdown = (source: string): ParsedPersonaMarkdown => {
  let harnessEffort: string | null = null
  let harnessMaxTurns: number | null = null
  let harnessAutoApprove = false
+ let harnessBudgetCapUsd: number | null = null
  let inHarness = false
 
  for (const rawLine of lines.slice(1, endIndex)) {
@@ -53,13 +61,20 @@ export const parsePersonaMarkdown = (source: string): ParsedPersonaMarkdown => {
 
  if (/^\s/.test(rawLine)) {
  if (!inHarness) continue
- const match = /^\s*(effort|maxTurns|autoApprove):\s*(.+?)\s*$/.exec(rawLine)
+ const match = /^\s*(effort|maxTurns|autoApprove|budgetCapUsd):\s*(.+?)\s*$/.exec(rawLine)
  if (!match?.[1] || match[2] === undefined) continue
  const key = match[1]
  const value = match[2]
  if (key === 'effort') harnessEffort = value
  if (key === 'maxTurns') harnessMaxTurns = Number(value)
  if (key === 'autoApprove') harnessAutoApprove = value === 'true'
+ if (key === 'budgetCapUsd') {
+ const parsed = Number(value)
+ // A malformed cap is dropped rather than defaulted to a number: a wrong
+ // cap either throttles work nobody asked to throttle or fails to stop a
+ // runaway, and null (uncapped) at least matches what the text says.
+ harnessBudgetCapUsd = Number.isFinite(parsed) && parsed > 0 ? parsed: null
+ }
  continue
  }
  inHarness = false
@@ -97,7 +112,17 @@ export const parsePersonaMarkdown = (source: string): ParsedPersonaMarkdown => {
  throw new Error('Persona markdown must have a non-empty body (the system prompt)')
  }
 
- return { name, description, model, tools, harnessEffort, harnessMaxTurns, harnessAutoApprove, systemPrompt }
+ return {
+ name,
+ description,
+ model,
+ tools,
+ harnessEffort,
+ harnessMaxTurns,
+ harnessAutoApprove,
+ harnessBudgetCapUsd,
+ systemPrompt,
+ }
 }
 
 export const serializePersonaMarkdown = (persona: ParsedPersonaMarkdown): string => {
@@ -108,11 +133,19 @@ export const serializePersonaMarkdown = (persona: ParsedPersonaMarkdown): string
  `model: ${persona.model}`,
  `tools: [${persona.tools.join(', ')}]`,
  ]
- if (persona.harnessEffort !== null || persona.harnessMaxTurns !== null || persona.harnessAutoApprove) {
+ if (
+ persona.harnessEffort !== null ||
+ persona.harnessMaxTurns !== null ||
+ persona.harnessAutoApprove ||
+ persona.harnessBudgetCapUsd !== null
+) {
  lines.push('harness:')
  if (persona.harnessEffort !== null) lines.push(` effort: ${persona.harnessEffort}`)
  if (persona.harnessMaxTurns !== null) lines.push(` maxTurns: ${persona.harnessMaxTurns}`)
  if (persona.harnessAutoApprove) lines.push(` autoApprove: true`)
+ if (persona.harnessBudgetCapUsd !== null) {
+ lines.push(` budgetCapUsd: ${persona.harnessBudgetCapUsd}`)
+ }
  }
  lines.push(DELIM, '', persona.systemPrompt)
  return lines.join('\n')

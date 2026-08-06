@@ -89,6 +89,7 @@ export const PersonaSpecSchema = z.object({
  model: z.string.min(1),
  tools: z.array(z.string),
  autoApprove: z.boolean,
+ budgetCapUsd: z.number.nullable,
 })
 
 /** Phase 1 subset — read/CRUD only, no git-backed versioning yet. */
@@ -103,6 +104,7 @@ export const AgentPersonaSchema = z.object({
  harnessEffort: z.string.nullable,
  harnessMaxTurns: z.number.nullable,
  harnessAutoApprove: z.boolean,
+ harnessBudgetCapUsd: z.number.nullable,
  createdAt: z.date,
  updatedAt: z.date,
 })

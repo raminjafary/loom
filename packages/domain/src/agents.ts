@@ -62,6 +62,12 @@ export interface PersonaSpec {
  * call, and autoApprove never touches it.
  */
  readonly autoApprove: boolean
+ /**
+ * Enforced spend ceiling in USD, or null for uncapped. Snapshotted onto the run like the rest of this
+ * spec, so editing the persona mid-run cannot raise the ceiling of a run already
+ * in flight.
+ */
+ readonly budgetCapUsd: number | null
 }
 
 /**
@@ -80,6 +86,7 @@ export interface AgentPersona {
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
  readonly harnessAutoApprove: boolean
+ readonly harnessBudgetCapUsd: number | null
  readonly createdAt: Date
  readonly updatedAt: Date
 }

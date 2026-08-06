@@ -13,6 +13,7 @@ export interface BuiltinPersona {
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
  readonly harnessAutoApprove: boolean
+ readonly harnessBudgetCapUsd: number | null
  readonly systemPrompt: string
  readonly markdownSource: string
 }
@@ -21,12 +22,20 @@ const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob']
 const ENGINEERING_TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob']
 const QA_TOOLS = ['Read', 'Grep', 'Glob', 'Bash']
 
+/**
+ * Every built-in ships with a budget cap. A seeded persona is the one most likely to be `@mention`ed before
+ * anyone has thought about spend, so shipping them uncapped would make the
+ * out-of-the-box path the only uncapped one. $5 matches the own example.
+ */
+const DEFAULT_BUDGET_CAP_USD = 5
+
 const define = (spec: {
  name: string
  description: string
  model: string
  tools: string[]
  systemPrompt: string
+ budgetCapUsd?: number
 }): BuiltinPersona => {
  const persona = {
  name: spec.name,
@@ -36,6 +45,7 @@ const define = (spec: {
  harnessEffort: null,
  harnessMaxTurns: null,
  harnessAutoApprove: false,
+ harnessBudgetCapUsd: spec.budgetCapUsd ?? DEFAULT_BUDGET_CAP_USD,
  systemPrompt: spec.systemPrompt,
  }
  return {...persona, markdownSource: serializePersonaMarkdown(persona) }

@@ -114,6 +114,14 @@ export interface RunAgentOptions {
  * that is already streaming.
  */
  readonly abortController?: AbortController
+ /**
+ * The SDK's session id, reported as soon as the session announces itself.
+ * Persisting it is what makes a run resumable rather than restartable after a
+ * Runner crash.
+ */
+ readonly onSessionId?: (sessionId: string) => void
+ /** An SDK session id to continue instead of starting fresh. */
+ readonly resumeSessionId?: string
  /** Resolves once a human (relayed via the server) has decided. */
  readonly onPermissionRequest: (
  toolUseId: string,
@@ -186,11 +194,23 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  canUseTool,
  permissionMode: 'default',
 ...(options.abortController ? { abortController: options.abortController }: {}),
+...(options.resumeSessionId ? { resume: options.resumeSessionId }: {}),
  },
  })
 
+ // Every SDK message repeats the session id; only the first is interesting.
+ let reportedSessionId: string | null = null
+
  try {
  for await (const message of stream) {
+ // Read off the raw message rather than routed through toWireEvents: a
+ // session id is Runner bookkeeping for resumption, not something to render
+ // in a thread, and the structured tier carries only what is shown.
+ const sessionId = (message as { session_id?: unknown }).session_id
+ if (typeof sessionId === 'string' && sessionId.length > 0 && sessionId !== reportedSessionId) {
+ reportedSessionId = sessionId
+ options.onSessionId?.(sessionId)
+ }
  for (const event of toWireEvents(message)) {
  options.onEvent(event)
  }

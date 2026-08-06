@@ -1,5 +1,5 @@
 import { usageCostUsd, type TokenUsage } from '@loom/domain'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 
 /**
  * The credential broker's bookkeeping. A *lease* is what makes
@@ -39,6 +39,36 @@ export interface UsageRecord {
  readonly exhausted: boolean
 }
 
+/**
+ * Lease tokens are shaped like a provider key on purpose. The Agent SDK's bundled
+ * CLI validates `ANTHROPIC_API_KEY`'s format *locally* and refuses to make any
+ * request at all if it does not match — so an arbitrary opaque token never reaches
+ * the proxy, and the run fails with a bare "Invalid API key" that names nothing.
+ * Found by watching the proxy receive no request whatsoever.
+ *
+ * This is still not a credential: it is random, per-run, revocable, and accepted by
+ * nothing except this proxy. Only the shape is borrowed.
+ *
+ * The shape mimics a real key closely — `sk-ant-api03-` plus a 95-character body —
+ * because the validator appears to check length as well as prefix, and a token that
+ * merely starts with `sk-ant-` was accepted or rejected depending on its length. Hex
+ * rather than base64url for the body, so no issued token can contain `-` or `_`:
+ * with base64url the check passed or failed depending on the random draw, which made
+ * a client-side format check look like an intermittent proxy bug.
+ *
+ * Do not "tidy" the prefix, alphabet, or length without re-running the sandbox smoke
+ * check. The failure mode is a bare "Invalid API key" with no request ever leaving
+ * the container, which points nowhere near the cause.
+ */
+const TOKEN_PREFIX = 'sk-ant-api03-'
+/**
+ * Total token length, and it is exact rather than approximate: the CLI truncates
+ * anything longer to 108 characters, so a 109-character token arrives at the proxy
+ * one character short and fails to match the value that was issued. Verified by
+ * logging the presented length against the issued one.
+ */
+const TOKEN_LENGTH = 108
+
 export const createLeaseRegistry = (options: {
  onUsage?: (record: UsageRecord) => void
 } = {}) => {
@@ -54,7 +84,9 @@ export const createLeaseRegistry = (options: {
 
  const lease: Lease = {
  runId: input.runId,
- token: randomBytes(32).toString('base64url'),
+ token: `${TOKEN_PREFIX}${randomBytes(TOKEN_LENGTH)
+.toString('hex')
+.slice(0, TOKEN_LENGTH - TOKEN_PREFIX.length)}`,
  budgetCapUsd: input.budgetCapUsd,
  // Spend carries over across a re-lease: a run must not get a fresh
  // budget by reconnecting.
@@ -82,6 +114,18 @@ export const createLeaseRegistry = (options: {
 
  findByRunId(runId: string): Lease | null {
  return byRunId.get(runId) ?? null
+ },
+
+ /**
+ * Hashed identifiers of every live lease, for refusal logs. Hashes rather than
+ * tokens so a log can answer "was this ever issued?" without being a place a
+ * token leaks.
+ */
+ fingerprints: string[] {
+ return [...byToken.entries].map(
+ ([token, lease]) =>
+ `${lease.runId}:${createHash('sha256').update(token).digest('hex').slice(0, 10)}`,
+)
  },
 
  /**

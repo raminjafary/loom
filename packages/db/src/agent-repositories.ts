@@ -176,6 +176,13 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  return toAgentRun(row as AgentRunRow)
  },
 
+ async recordCost(workspaceId, id, totalCostUsd) {
+ await db
+.update(agentRun)
+.set({ totalCostUsd })
+.where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
+ },
+
  async recordHeartbeat(workspaceId, id) {
  await db
 .update(agentRun)
@@ -375,6 +382,7 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  harnessEffort: input.harnessEffort,
  harnessMaxTurns: input.harnessMaxTurns,
  harnessAutoApprove: input.harnessAutoApprove,
+ harnessBudgetCapUsd: input.harnessBudgetCapUsd,
  })
 .returning
  if (!row) throw new Error('agent_persona insert returned no row')
@@ -409,6 +417,7 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  harnessEffort: patch.harnessEffort,
  harnessMaxTurns: patch.harnessMaxTurns,
  harnessAutoApprove: patch.harnessAutoApprove,
+ harnessBudgetCapUsd: patch.harnessBudgetCapUsd,
  updatedAt: new Date,
  })
 .where(and(eq(agentPersona.workspaceId, workspaceId), eq(agentPersona.id, id)))

@@ -1,0 +1,67 @@
+# The per-run agent sandbox. This image runs untrusted, model-
+# driven code, so it contains the Agent SDK, the thin agent host, and the tools a
+# coding agent needs — and nothing that could be turned into an escape.
+#
+# Notably absent, deliberately: no gh/glab, no cloud CLIs, no ssh client, no
+# docker client. Pushing is a host-side platform action and the agent
+# holds no credentials, so a credential-shaped tool in here could only
+# ever be a liability. Also absent: the rest of the workspace. This image builds
+# from apps/runner/sandbox-image/package.json, not the monorepo manifest, so it
+# carries no server, web, or database dependencies at all.
+
+# Debian (glibc), not Alpine. The Agent SDK ships a native CLI binary per
+# platform and resolves the glibc name even on musl, so an Alpine base installs
+# `...-linux-arm64-musl` and then fails at runtime looking for `...-linux-arm64`.
+FROM node:24-slim
+
+# git is required — the agent commits inside its clone. ripgrep because the SDK's
+# search tools shell out to it. ca-certificates for TLS through the egress proxy.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ripgrep ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# npm, flat, and NOT pnpm. pnpm's symlinked layout left the SDK's per-platform
+# native CLI as a dangling symlink inside the image — recorded in the lockfile,
+# never materialized — because the lockfile is resolved on the developer's macOS
+# host while the image is linux. Verified by running it: the agent host started,
+# then died with "Native CLI binary for linux-arm64 not found".
+#
+# A flat install resolves the optional dependency for the platform actually being
+# built, and keeps the layout of the security-critical artifact boring.
+COPY apps/runner/sandbox-image/package.json./package.json
+COPY packages/domain packages/domain
+COPY packages/runner-protocol packages/runner-protocol
+# `--include=optional` is load-bearing, not decoration: the SDK's native CLI is an
+# optionalDependency, and without it the image builds clean and then every run
+# dies at startup with "Native CLI binary for linux-arm64 not found".
+RUN npm install --include=optional --no-audit --no-fund
+
+# Fail the build, not the first run. The binary above is resolved by platform, so
+# it is exactly the kind of thing that breaks silently on a base-image or
+# architecture change and only shows up as a runtime error in a container whose
+# logs nobody reads.
+RUN node -e "const p=require.resolve('@anthropic-ai/claude-agent-sdk');const m=process.platform+'-'+process.arch;require.resolve('@anthropic-ai/claude-agent-sdk-'+m+'/package.json',{paths:[p]});console.log('agent SDK native CLI present for '+m)"
+
+# Only the agent-side sources. The Runner's own client, workspace prep, and push
+# policy stay out: those are host-side, and the push policy depends on them being somewhere
+# the agent cannot reach.
+COPY apps/runner/src/agent-host.ts src/
+COPY apps/runner/src/sandbox-protocol.ts src/
+COPY apps/runner/src/claude-agent-adapter.ts src/
+COPY apps/runner/src/path-check.ts src/
+COPY tsconfig.base.json./
+
+# The uid apps/runner/src/sandbox.ts pins with `--user 1000:1000`. `node` is
+# already uid 1000 in this image; naming it numerically keeps the two in sync
+# visibly rather than depending on a username that could be renamed.
+USER 1000:1000
+
+# stdio is the protocol (see sandbox-protocol.ts) — anything written to stdout
+# that is not a prefixed frame is treated as a log line, so a stray print cannot
+# desynchronize the stream.
+#
+# Absolute paths: the run's working directory is /work at runtime (`-w`), so
+# nothing here is resolvable relative to the process cwd.
+ENTRYPOINT ["/app/node_modules/.bin/tsx", "/app/src/agent-host.ts"]
