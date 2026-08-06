@@ -4,6 +4,7 @@ import {
  boolean,
  doublePrecision,
  index,
+ integer,
  jsonb,
  pgTable,
  text,
@@ -178,6 +179,40 @@ export const agentRun = pgTable(
  completedAt: timestamp('completed_at', { withTimezone: true }),
  },
  (t) => [index('agent_run_thread_idx').on(t.workspaceId, t.threadId)],
+)
+
+/**
+ * The structured event tier, doubling as the idempotency ledger for event ingest (the security model runtime
+ * safety: "idempotency keys on run steps").
+ *
+ * `seq` is a per-run counter the Runner assigns. The unique index on
+ * (agent_run_id, seq) is the whole mechanism: a retransmitted or replayed event
+ * conflicts, the insert no-ops, and `recordAgentEvent` skips it — so a
+ * reconnect can never double-append the same tool call into a thread.
+ *
+ * Deliberately not the stream-only tier: token deltas and partial reasoning
+ * never reach here, and the verbatim provider transcript is a separate
+ * blob-storage concern that is still deferred past Phase 1.
+ */
+export const agentRunEvent = pgTable(
+ 'agent_run_event',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ agentRunId: uuid('agent_run_id')
+.notNull
+.references( => agentRun.id, { onDelete: 'cascade' }),
+ seq: integer('seq').notNull,
+ kind: text('kind').notNull,
+ payload: jsonb('payload').notNull,
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ uniqueIndex('agent_run_event_run_seq_idx').on(t.agentRunId, t.seq),
+ index('agent_run_event_workspace_run_idx').on(t.workspaceId, t.agentRunId, t.seq),
+ ],
 )
 
 /**

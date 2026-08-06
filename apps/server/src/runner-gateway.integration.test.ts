@@ -194,6 +194,7 @@ describe('runner-gateway: agent run event ingest', => {
  JSON.stringify({
  type: 'agent_event',
  runId: run.id,
+ seq: 1,
  event: { kind: 'assistant_text', text: 'hello from the fake runner' },
  }),
 )
@@ -201,6 +202,7 @@ describe('runner-gateway: agent run event ingest', => {
  JSON.stringify({
  type: 'agent_event',
  runId: run.id,
+ seq: 2,
  event: { kind: 'run_completed', totalCostUsd: 0.0042, result: 'done' },
  }),
 )
@@ -276,6 +278,52 @@ describe('runner-gateway: agent run event ingest', => {
 
  const runAfter = await client.agentRun.get({ agentRunId: run.id })
  expect(runAfter.status).toBe('running')
+
+ socket.close
+ })
+
+ /**
+ * Idempotency. A Runner that
+ * reconnects mid-run, or any retried delivery, replays events it already sent;
+ * without the (run, seq) key each replay would append a second copy of the
+ * same tool call to the thread and re-apply its status transition.
+ */
+ it('ignores a replayed agent_event rather than double-appending it', async => {
+ const { socket, runnerId } = await pairFakeRunner('idempotency-test')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'idempotency' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startRun
+ const run = await runPromise
+
+ const event = {
+ type: 'agent_event',
+ runId: run.id,
+ seq: 1,
+ event: { kind: 'tool_call', toolUseId: 't1', toolName: 'Read', input: { file_path: '/tmp/a' } },
+ }
+ socket.send(JSON.stringify(event))
+ socket.send(JSON.stringify(event))
+ // A different seq carrying identical content is a genuinely new event, not a
+ // replay — dedupe is on the key, deliberately not on the payload.
+ socket.send(JSON.stringify({...event, seq: 2 }))
+
+ let page = await client.message.list({ threadId: created.rootThread.id })
+ for (let i = 0; i < 20 && page.messages.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ page = await client.message.list({ threadId: created.rootThread.id })
+ }
+ // Settle: give a mistakenly-accepted third append time to show up.
+ await new Promise((r) => setTimeout(r, 200))
+ page = await client.message.list({ threadId: created.rootThread.id })
+
+ expect(page.messages.filter((m) => m.body.text.includes('Read: /tmp/a'))).toHaveLength(2)
 
  socket.close
  })

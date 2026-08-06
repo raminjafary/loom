@@ -142,6 +142,31 @@ export interface PersonaGroupRepositoryPort {
 }
 
 /**
+ * The structured event tier and idempotency ledger.
+ */
+export interface AgentRunEventRepositoryPort {
+ /**
+ * Appends one event. Returns `false` when (agentRunId, seq) was already
+ * ingested — that is the idempotency check, and the caller must then skip
+ * every side effect (message append, status transition) rather than repeat it.
+ */
+ append(input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ seq: number
+ kind: string
+ payload: Record<string, unknown>
+ }): Promise<boolean>
+ /**
+ * Highest `seq` ingested for a run, or 0 if none. What a reconnecting Runner
+ * needs in order to continue the sequence instead of restarting it at 1 —
+ * restarting would make every new event collide with an old one and silently
+ * vanish.
+ */
+ highestSeq(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<number>
+}
+
+/**
  * The kill switch's persistence. Its own port
  * rather than a method on `AgentRunRepositoryPort`: the state belongs to the
  * workspace, not to any run.

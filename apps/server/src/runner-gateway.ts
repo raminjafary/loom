@@ -241,6 +241,7 @@ export const createRunnerGateway = (
  await recordAgentEvent(deps, {
  workspaceId,
  agentRunId: asAgentRunId(frame.runId),
+ seq: frame.seq,
  event,
  })
  return

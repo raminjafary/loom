@@ -6,6 +6,7 @@ import {
 } from '@loom/application'
 import { asWorkspaceId } from '@loom/domain'
 import {
+ agentRunEventRepository,
  agentRunRepository,
  approvalRepository,
  auditAdapter,
@@ -53,6 +54,7 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
  runners: runnerRepository(db),
  repositories: repositoryRepository(db),
  agentRuns: agentRunRepository(db),
+ agentRunEvents: agentRunEventRepository(db),
  approvals: approvalRepository(db),
  personas: personaRepository(db),
  personaGroups: personaGroupRepository(db),
