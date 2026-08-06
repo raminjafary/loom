@@ -125,12 +125,35 @@ to NOT redo".
 
 ## What's NOT built / NOT working — do not assume these exist
 
-### The blocker: model auth from inside the sandbox
+### The blocker: model auth from inside the sandbox — root-caused, and it is an SDK limitation
 
-A sandboxed run cannot currently reach the model API. Everything else about the
-sandbox works.
+A sandboxed Claude Agent run cannot reach the model API with a *broker-issued* token.
+Everything else about the sandbox works, and the proxy chain itself is proven: a
+request from inside the container, carrying a lease, was forwarded through the proxy to
+Anthropic and came back with a real `request_id`. The remaining failure is entirely in
+how the SDK's CLI handles its own credential.
 
-The cause, established by experiment, not guessed:
+**This is now understood, not open.** See PLAN.md §6's "A6 caveat found in
+implementation" for the write-up and its consequences. The short version: a sandboxed
+Claude Agent run needs a **real** model key inside the sandbox, so A6's "zero
+long-lived credentials in the sandbox" does not hold for that one credential. Egress
+is still deny-by-default (so the key is only usable through the proxy), metering and
+caps still work, and no other secret enters the sandbox.
+
+**To finish this**, decide between:
+
+1. **Accept the caveat** — pass the real key into the sandbox, keep the shim so the
+   proxy still attributes and meters spend per run, and move on. Smallest change; the
+   documented limitation stands.
+2. **Recover the property with a brokerable backend** — `VllmApiAdapter` or
+   `CodexAdapter` are plain HTTP clients with no client-side key validation, so the
+   broker works for them unchanged. That is Phase 3 scope (§7).
+
+Either way a real `ANTHROPIC_API_KEY` is needed in `.env` to verify a full run: the
+proxy currently injects a placeholder, so even a correct token path ends in Anthropic's
+401.
+
+The evidence, established by experiment rather than guessed:
 
 - The SDK's bundled **native** CLI (`claude-agent-sdk-linux-arm64/claude`) validates
   `ANTHROPIC_API_KEY`'s shape **locally** and makes no request at all if it dislikes
@@ -150,26 +173,24 @@ The cause, established by experiment, not guessed:
 - The CLI must be exempted from `HTTP_PROXY`/`HTTPS_PROXY` for its own base URL, or it
   proxies the model call to the proxy and arrives on the forward-proxy path.
 
-**Where it was left:** an out-of-band `x-loom-lease` header is wired on both sides
-(proxy reads it first; sandbox sets `ANTHROPIC_CUSTOM_HEADERS`) so auth never depends
-on surviving the key validator. It is **unverified** — in the last test the header did
-not arrive, only a mangled `x-api-key`, so either the `ANTHROPIC_CUSTOM_HEADERS`
-format is wrong or the image was stale. **Check image freshness first**: a plain curl
-carrying `x-loom-lease` returned 401 while producing no proxy log line at all, which
-should be impossible with the current code and suggests the running container was not
-built from it.
+**What is built and working**, and should be kept regardless of which option above is
+chosen: an in-container loopback shim (`apps/runner/src/lease-shim.ts`) attaches the
+lease token after the CLI is done rewriting things, so the proxy can still attribute
+and meter spend per run — which is what budget caps depend on. It answers only its own
+container's addresses, so a sibling sandbox cannot spend another run's budget.
 
-Also unresolved and possibly the same root cause: several refusal logs showed
-`known=[]` (no live leases) when a lease demonstrably existed. At least some of those
-were **stale log lines** read back with `--since`, so do not chase it before
-confirming with fresh output.
+**Still not verified downstream of the model call**: cost metering against real usage,
+budget-cap enforcement actually killing a run, and the `cost_report` frame reaching the
+database. All three are wired and unit-tested; none has seen a real token.
 
-**No end-to-end run has ever succeeded through the sandbox**, so nothing downstream of
-the model call is verified: not cost metering against real usage, not budget-cap
-enforcement, not the `cost_report` frame reaching the database.
+**Two false trails, so they are not re-walked:**
 
-**A real `ANTHROPIC_API_KEY` is required to finish this.** `.env` currently holds a
-placeholder, so even with the token path fixed the proxy forwards and gets a 401.
+- A 401 from the proxy path was Anthropic's, relayed — not ours. Ours says
+  `proxy_denied`; Anthropic's says `authentication_error` and carries a `request_id`.
+  Check the body, not the status.
+- Several refusal logs showed `known=[]` (no live leases) when a lease demonstrably
+  existed. Those were **stale log lines** read back with `--since`/`--tail`. Confirm
+  with fresh output before theorizing.
 
 ### Run resumption after a Runner restart — barely started
 
@@ -218,14 +239,12 @@ seed the counter from the server; wire it when resumption lands.
 
 ## Immediate next steps, in priority order
 
-1. **Finish sandbox model auth.** Rebuild the image with `--no-cache` and confirm the
-   running container has the `x-loom-lease` code before anything else — the evidence
-   points at staleness. Then verify the header arrives; if `ANTHROPIC_CUSTOM_HEADERS`
-   is the wrong mechanism, the fallback is to key the lease off a value the CLI cannot
-   mangle (e.g. a per-run path segment in `ANTHROPIC_BASE_URL`, which the CLI passes
-   through verbatim as the origin).
+1. **Decide the A6 caveat** (see the blocker section): accept a real key inside the
+   sandbox, or defer sandboxed model calls to a brokerable backend in Phase 3. This is
+   a judgement call about the security posture, not an engineering unknown.
 2. **Put a real `ANTHROPIC_API_KEY` in `.env`** and do one full run end to end:
    sandboxed, metered, with a small `budgetCapUsd` to confirm the cap actually kills.
+   Nothing downstream of the model call has ever executed.
 3. **Browser-verify the kill switch**, the one piece of new UI this session added.
 4. **Run resumption** (see above), including seeding the event `seq` from `highestSeq()`.
 5. Only then: Planner/Swarm (§7 Phase 2), and §11's riskiest-assumption test — parallel
