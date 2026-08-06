@@ -238,6 +238,8 @@ export const agentPersona = pgTable(
     harnessEffort: text('harness_effort'),
     harnessMaxTurns: doublePrecision('harness_max_turns'),
     harnessAutoApprove: boolean('harness_auto_approve').notNull().default(false),
+    // Enforced at the egress proxy, not advisory (PLAN.md §6/§9). Null = uncapped.
+    harnessBudgetCapUsd: doublePrecision('harness_budget_cap_usd'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

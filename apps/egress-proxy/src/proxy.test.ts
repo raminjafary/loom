@@ -101,6 +101,28 @@ describe('egress proxy: credential injection', () => {
     expect((await post(lease.token)).status).toBe(401)
   })
 
+  it('accepts an absolute-form target, as a proxy-configured client sends', async () => {
+    // A client with HTTP_PROXY set sends `http://host/path`, not `/path`. The
+    // sandbox's SDK does exactly this, and treating it as a forward-proxy attempt
+    // refused a request that was aimed here correctly.
+    const lease = leases.issue({ runId: 'run-absolute', budgetCapUsd: null })
+    const response = await fetch(`${proxyUrl}/anthropic/v1/messages`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${lease.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+    })
+    expect(response.status).toBe(200)
+
+    // Normalizing the absolute form must not turn this into an open proxy: an
+    // absolute URL means "addressed to me", never "forward me to that host".
+    const openProxy = await fetch(`${proxyUrl}/anything-else`, {
+      headers: { authorization: `Bearer ${lease.token}` },
+    })
+    expect(openProxy.status).toBe(403)
+
+    leases.revoke('run-absolute')
+  })
+
   it('refuses to act as an open forward proxy over plain HTTP', async () => {
     const lease = leases.issue({ runId: 'run-open', budgetCapUsd: null })
     const response = await fetch(`${proxyUrl}/http://evil.example/`, {

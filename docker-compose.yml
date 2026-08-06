@@ -48,8 +48,12 @@ services:
       # binding it to 127.0.0.1 keeps it off the host's network too.
       - "127.0.0.1:8081:8081"
     networks:
-      - loom-sandbox
-      - default
+      loom-sandbox:
+        # Stable name for sandboxes to reach, instead of the compose-generated
+        # container name — apps/runner/src/sandbox.ts hardcodes no project prefix.
+        aliases:
+          - loom-egress
+      default: {}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -69,10 +73,13 @@ networks:
   # credentials (§6 A6) so the blast radius is one run's clone, but per-run
   # networks would close it and are the right follow-up.
   loom-sandbox:
+    # Fixed name, because apps/runner/src/sandbox.ts passes it to `--network` and
+    # the Runner is a host process with no knowledge of the compose project prefix.
     name: loom-sandbox
     internal: true
-  default:
-    name: loom-default
+  # `default` is left unnamed on purpose: renaming it strands containers created
+  # under the previous name and `docker compose up` then refuses to reattach them.
+  default: {}
 
 volumes:
   postgres-data:

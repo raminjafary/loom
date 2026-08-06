@@ -65,6 +65,24 @@ controlPlane.listen(env.EGRESS_CONTROL_PORT, env.EGRESS_CONTROL_HOST, () => {
   log(`control plane on ${env.EGRESS_CONTROL_HOST}:${env.EGRESS_CONTROL_PORT}`)
 })
 
+/**
+ * Leases are in-memory (see leases.ts), so a crash does not merely drop one
+ * request — it invalidates every live run's credential at once, and the runs then
+ * fail with "no valid lease" pointing nowhere near the real cause. Logging and
+ * staying up is strictly better than restarting for a socket error on one
+ * connection.
+ *
+ * Not a substitute for handling errors where they happen — a refused CONNECT
+ * attaches its own error listener for exactly this reason — this is the backstop
+ * for the ones nobody anticipated.
+ */
+process.on('uncaughtException', (error) => {
+  log(`uncaught exception (staying up): ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+})
+process.on('unhandledRejection', (reason) => {
+  log(`unhandled rejection (staying up): ${reason instanceof Error ? reason.message : String(reason)}`)
+})
+
 const shutdown = () => {
   dataPlane.close()
   controlPlane.close()

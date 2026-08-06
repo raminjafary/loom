@@ -24,6 +24,7 @@ describe('parsePersonaMarkdown', () => {
       harnessEffort: 'medium',
       harnessMaxTurns: 40,
       harnessAutoApprove: false,
+      harnessBudgetCapUsd: null,
       systemPrompt: 'You are backend-worker. Implement exactly what the spec says, nothing more.',
     })
   })
@@ -69,7 +70,7 @@ describe('serializePersonaMarkdown', () => {
     expect(parsePersonaMarkdown(serialized)).toEqual(parsed)
   })
 
-  it('omits the harness block when effort/maxTurns are null and autoApprove is false', () => {
+  it('omits the harness block when every harness field is at its default', () => {
     const serialized = serializePersonaMarkdown({
       name: 'n',
       description: 'd',
@@ -78,6 +79,7 @@ describe('serializePersonaMarkdown', () => {
       harnessEffort: null,
       harnessMaxTurns: null,
       harnessAutoApprove: false,
+      harnessBudgetCapUsd: null,
       systemPrompt: 'body',
     })
     expect(serialized).not.toMatch(/harness:/)
@@ -92,8 +94,50 @@ describe('serializePersonaMarkdown', () => {
       harnessEffort: null,
       harnessMaxTurns: null,
       harnessAutoApprove: true,
+      harnessBudgetCapUsd: null,
       systemPrompt: 'body',
     })
     expect(serialized).toMatch(/harness:\n  autoApprove: true/)
+  })
+
+  it('includes the harness block when only a budget cap is set', () => {
+    const serialized = serializePersonaMarkdown({
+      name: 'n',
+      description: 'd',
+      model: 'm',
+      tools: ['Read'],
+      harnessEffort: null,
+      harnessMaxTurns: null,
+      harnessAutoApprove: false,
+      harnessBudgetCapUsd: 2.5,
+      systemPrompt: 'body',
+    })
+    expect(serialized).toMatch(/harness:\n  budgetCapUsd: 2\.5/)
+  })
+})
+
+describe('harness.budgetCapUsd', () => {
+  const withHarness = (line: string): string =>
+    `---\nname: n\ndescription: d\nmodel: m\ntools: [Read]\nharness:\n  ${line}\n---\n\nbody`
+
+  it('parses a numeric cap', () => {
+    expect(parsePersonaMarkdown(withHarness('budgetCapUsd: 5.00')).harnessBudgetCapUsd).toBe(5)
+  })
+
+  it('is null when absent — uncapped, matching PLAN.md §9 defaults', () => {
+    expect(parsePersonaMarkdown(SAMPLE).harnessBudgetCapUsd).toBeNull()
+  })
+
+  it('drops a malformed or non-positive cap rather than inventing a number', () => {
+    // A wrong cap either throttles work nobody asked to throttle or fails to stop
+    // a runaway. Null at least matches what the frontmatter's author can see.
+    expect(parsePersonaMarkdown(withHarness('budgetCapUsd: not-a-number')).harnessBudgetCapUsd).toBeNull()
+    expect(parsePersonaMarkdown(withHarness('budgetCapUsd: 0')).harnessBudgetCapUsd).toBeNull()
+    expect(parsePersonaMarkdown(withHarness('budgetCapUsd: -3')).harnessBudgetCapUsd).toBeNull()
+  })
+
+  it('round-trips a cap through serialize', () => {
+    const parsed = parsePersonaMarkdown(withHarness('budgetCapUsd: 1.25'))
+    expect(parsePersonaMarkdown(serializePersonaMarkdown(parsed))).toEqual(parsed)
   })
 })

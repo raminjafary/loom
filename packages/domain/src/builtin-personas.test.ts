@@ -20,10 +20,20 @@ describe('BUILTIN_PERSONAS', () => {
         harnessEffort: persona.harnessEffort,
         harnessMaxTurns: persona.harnessMaxTurns,
         harnessAutoApprove: persona.harnessAutoApprove,
+        harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
         systemPrompt: persona.systemPrompt,
       })
     },
   )
+
+  it('ships every built-in with an enforced budget cap', () => {
+    // The seeded personas are the ones most likely to be @mentioned before anyone
+    // has thought about spend, so an uncapped built-in would make the
+    // out-of-the-box path the only uncapped one (PLAN.md §6/§9).
+    for (const persona of BUILTIN_PERSONAS) {
+      expect(persona.harnessBudgetCapUsd).toBeGreaterThan(0)
+    }
+  })
 
   it('security-reviewer is read-only', () => {
     const reviewer = BUILTIN_PERSONAS.find((p) => p.name === 'security-reviewer')

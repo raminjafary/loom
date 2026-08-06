@@ -1,0 +1,1 @@
+ALTER TABLE "agent_persona" ADD COLUMN "harness_budget_cap_usd" double precision;

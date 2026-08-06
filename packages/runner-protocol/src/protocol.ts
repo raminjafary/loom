@@ -14,6 +14,7 @@ export const PersonaSpecSchema = z.object({
   model: z.string(),
   tools: z.array(z.string()),
   autoApprove: z.boolean(),
+  budgetCapUsd: z.number().nullable(),
 })
 
 export const AgentEventSchema = z.discriminatedUnion('kind', [
@@ -103,6 +104,23 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
    * `agent_run.last_heartbeat_at`.
    */
   z.object({ type: z.literal('heartbeat'), runId: z.string() }),
+  /**
+   * Authoritative spend, metered at the egress proxy and relayed by the Runner
+   * (PLAN.md §6 A6, §9). Deliberately not derived from the SDK's self-reported
+   * `total_cost_usd`: A6's point is that the number a run reports about itself is
+   * not the number to bill or to enforce a cap against.
+   *
+   * Relayed over this socket rather than posted by the proxy directly, so metered
+   * cost reaches the database through a path that is already authenticated and
+   * already trusted with run state.
+   */
+  z.object({
+    type: z.literal('cost_report'),
+    runId: z.string(),
+    spentUsd: z.number().nonnegative(),
+    capUsd: z.number().nonnegative().nullable(),
+    exhausted: z.boolean(),
+  }),
 ])
 
 // Server -> Runner

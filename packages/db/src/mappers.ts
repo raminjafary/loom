@@ -199,10 +199,17 @@ const isPersonaSpec = (value: unknown): value is PersonaSpec =>
 
 const toPersonaSpec = (value: unknown): PersonaSpec => {
   if (!isPersonaSpec(value)) throw new Error('malformed persona spec in agent_run row')
-  // `autoApprove` postdates some already-completed runs' stored persona JSON
-  // (added after they ran) — default it rather than let a legacy row fail
-  // output validation the first time something re-fetches it in bulk.
-  return { ...value, autoApprove: Boolean((value as { autoApprove?: unknown }).autoApprove) }
+  // `autoApprove` and `budgetCapUsd` postdate some already-completed runs' stored
+  // persona JSON (added after they ran) — defaulted rather than letting a legacy
+  // row fail output validation the first time something re-fetches it in bulk.
+  // `budgetCapUsd` defaults to null (uncapped) because that is what those runs
+  // actually executed under; inventing a cap retroactively would misreport history.
+  const raw = value as { autoApprove?: unknown; budgetCapUsd?: unknown }
+  return {
+    ...value,
+    autoApprove: Boolean(raw.autoApprove),
+    budgetCapUsd: typeof raw.budgetCapUsd === 'number' ? raw.budgetCapUsd : null,
+  }
 }
 
 export interface AgentRunRow {
@@ -309,6 +316,7 @@ export interface AgentPersonaRow {
   harnessEffort: string | null
   harnessMaxTurns: number | null
   harnessAutoApprove: boolean
+  harnessBudgetCapUsd: number | null
   createdAt: Date
   updatedAt: Date
 }
@@ -324,6 +332,7 @@ export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
   harnessEffort: row.harnessEffort,
   harnessMaxTurns: row.harnessMaxTurns,
   harnessAutoApprove: row.harnessAutoApprove,
+  harnessBudgetCapUsd: row.harnessBudgetCapUsd,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 })

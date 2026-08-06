@@ -10,7 +10,7 @@ Sources synthesized: Cursor "Agent Swarm Model Economics"; Anthropic "Building E
 
 ## 1. What exists, and the gap
 
-Closest analogs: **Buzz** (Block, Nostr-based, crypto-signed agent identity), **Multica** (kanban + "Squads" routing-leader pattern, backs onto Claude Code/Codex/Cursor already), **TeamClaw** (Slack-like @-mention chat, git-backed skill sharing), **AgentTeams/HiClaw** (Matrix-based Manager→Workers, "no black boxes").
+Closest analogs: **Buzz** (Block, Nostr-based, crypto-signed agent identity), **Multica** (kanban + "Squads" routing-leader pattern, backs onto Claude Code/Codex/Cursor already), **TeamClaw** (Slack-like @-mention chat, git-backed skill sharing), **AgentTeams/HiClaw** (Matrix-based Manager→Workers, "no black boxes"), **Ouroboros** (razzant/ouroboros — durable agent identity/memory across restarts, live specialist swarm, and self-rewriting implementation; see §4f).
 
 None combine all four of:
 1. Markdown personas as a first-class, versioned, shareable artifact.
@@ -199,6 +199,66 @@ Agent runs emit thousands of events. Writing all of them to Postgres does not su
 
 A late-joining client backfills from tier 2 (structured) and fetches tier 3 on explicit "expand raw" — never by replaying tier 1. This is also what keeps `subscribeToRunTree` (§3) light: it carries structure and status only, never content.
 
+### 4d-ter. Agentic context management — roadmap, not Phase 1 **[NEW]**
+
+§4d-bis covers how the *platform* persists what an agent emitted. This covers the
+separate problem of what goes *into* an agent's context window on each turn, which
+Phase 1 does not manage at all: a run gets the SDK's default auto-compaction and
+nothing else, and nothing carries across runs except what a human re-types.
+
+Framing borrowed from a July 2026 position paper on "agentic context management"
+(arXiv 2607.21503). Treat its provenance carefully: single-author, from a startup
+whose closed-source hosted product is the reference implementation, with
+self-reported benchmark numbers whose per-run artifacts and core mechanisms are
+withheld. A third-party harness reports simpler BM25+vector setups scoring *higher*
+on the same benchmark, so "92% = state of the art" is not a safe read. The
+conceptual decomposition is the transferable part; the numbers are not evidence.
+
+Three ideas worth adopting, in descending order of how well they survive contact
+with this project:
+
+1. **Compaction with validation.** Compress, then verify that specific facts are
+   still recoverable from the compressed form, and retry less aggressively when
+   they are not. The failure this prevents is real and measured: one-shot
+   summarization of 18k tokens to ~122 dropped downstream accuracy *below* running
+   with no context at all. Cost stays linear — a validation cost `c` every `p`
+   turns is `N·W·(1+c/p)`, a fixed multiplier, not a return to quadratic. This is
+   the most useful item and the only one that is implementable behind an existing
+   port rather than needing new infrastructure.
+2. **Extract-then-store, not store-then-extract.** Their audit of a popular memory
+   library found 10,134 entries accumulated over 32 days of which 38 were usable —
+   boot-file restatements, cron noise, config dumps. Storing raw turns and hoping
+   retrieval sorts it out produces junk that then crowds out signal. Relevant here
+   the moment §7 Phase 2's planner→worker summaries exist, since a condensed
+   worker report *is* an extraction step, and doing it badly is how a planner ends
+   up acting on noise.
+3. **Hybrid retrieval by regime.** Their 5-corpus study has vector winning
+   decisively on natural-language→code (MRR@10 0.91 vs 0.29 keyword) and losing
+   decisively on science QA (0.61 vs 0.82 — "mitochondria" is a key, not a nearby
+   concept), with a 60–100x indexing-time penalty for embeddings. A workspace
+   indexing both code and prose will have one method wrong for half its corpus.
+   Only matters once there is a corpus to retrieve *from*, which is Phase 3+.
+
+**Explicitly not adopting** the paper's headline differentiator: a
+user→customer→client scope hierarchy with multi-tenant isolation. That targets B2B
+platforms where one deployment serves many organizations. Loom already carries
+`workspace_id` on every row (§5), and the extra levels would be dead weight.
+
+Also not adopting the product: it is a hosted closed service with no self-hostable
+component, which fails §8's constraint outright and would mean a repo's
+conversational context leaving the operator's infrastructure.
+
+**Phasing**: item 1 lands in Phase 3 alongside the verification harness (they share
+the same shape — assert a property holds after an automated transformation). Item 2
+lands with Phase 2's planner aggregation, as part of the schema-validated
+worker→planner report rather than as separate machinery. Item 3 is Phase 3+ and
+gated on there being a retrieval corpus at all. None of it is Phase 1.
+
+**The gap none of this closes**, worth naming because it is the one a human
+actually feels: cross-session recall of *why* a decision was made. The paper punts
+that to future work as largely unsolved, and this plan should not pretend
+otherwise. The audit log (§5) records what happened, not the reasoning behind it.
+
 ### 4e. Capability attachment — MCP servers, tools, skills, plugins, harness settings
 
 A persona is not just a prompt plus a model. It's a prompt, a **tool surface**, a **capability set**, and a **harness configuration** — all attachable and editable from the UI, all versioned with the persona, all swappable.
@@ -249,6 +309,111 @@ harness:
 MCP client targets spec revision `2025-11-25` today, behind an interface — the `2026-07-28` stateless revision removes session affinity and will make horizontal scaling much easier, so plan to adopt it (§7 Phase 4). **A2A** (Linux Foundation, v1.2) is the agent-to-agent standard, but adopt it only at the *external* boundary — exposing this orchestrator as an Agent Card to other people's agents — never for internal fan-out.
 
 **Phasing**: Phase 1 ships tool declaration + skills + harness settings (needed for a persona to be useful at all). MCP server registry and attachment land early in Phase 2 — the registry is small, but the credential-broker integration and the review/pinning flow are what take the time.
+
+### 4f. Ouroboros mode — durable identity and self-modification **[NEW]**
+
+Adopted scope, prompted by **Ouroboros** (razzant/ouroboros): an agent whose
+identity, durable memory, and history continue across tasks and restarts, which
+works on external projects, coordinates a live swarm of specialists, and **can
+rewrite the implementation it runs on — code, architecture, prompts, tools, and
+dependencies** — with reflection able to change how it understands itself without
+severing that continuity. Assessed from that description, not an audit of its source.
+
+This is a deliberate, informed extension of the trust model, not an oversight. Two
+existing rules are **amended, not deleted**, and the amendment is what makes the
+feature buildable instead of merely exciting:
+
+- §5's capability attenuation becomes *attenuation within an envelope* (below).
+- §4e's "an agent must never be able to add an MCP server to itself" becomes "never
+  **outside its envelope**".
+
+Everything else in §6 stands unchanged. The failure mode being designed against is
+unchanged too, and is worth restating because self-modification sharpens it: model
+output is attacker-controllable input (§2 principle 11), so a self-rewriting agent is
+a mechanism by which one prompt injection can become *permanent*. §5a already names
+this in miniature — persona import must never read from a run's working tree, "or
+injection becomes persistent." Ouroboros mode makes that risk structural, so the
+controls below are load-bearing, not ceremony.
+
+#### The envelope — the one primitive that makes this tractable
+
+A human grants a persona an **envelope**: a maximum tool set, model tier, budget cap,
+path scope, MCP references, and subagent depth. Inside its envelope an agent may
+rewrite itself freely and without asking. It can never widen its own envelope — only
+a human can, through the normal contract (§4c), audited like any other admin action.
+
+This keeps the property §5 actually cares about (there is a ceiling, and the ceiling
+is human-set) while giving up the property that was incidental (that the ceiling is
+also the *current* configuration). Attenuation still holds for children: a child's
+envelope is a subset of its parent's, so a self-modifying planner cannot mint a worker
+more capable than itself.
+
+`agent_persona` therefore gains an `envelope` alongside its current fields, and every
+self-modification is validated against it before it is applied. A modification that
+would exceed the envelope is rejected and surfaced to a human as a request, not
+silently clamped — clamping teaches an agent to probe.
+
+#### Five tiers, in ascending order of blast radius
+
+1. **Prompts / persona.** The agent rewrites its own markdown. Cheapest and most
+   useful tier, and already nearly free here: the persona *is* a git-versioned
+   artifact (§4e), so a self-edit is a commit — reviewable, attributable to the
+   authoring `agent_run` via the audit log (§5), and revertible.
+2. **Tools and capabilities.** The agent adds or drops tools and MCP references
+   within its envelope. Registry entries stay admin-registered and tool-list-hashed
+   (§4e) — the agent chooses *among* reviewed capabilities, it does not register new
+   executable code for itself.
+3. **Architecture and code.** The agent modifies Loom's own source. Mechanically this
+   is just a run against Loom's repo, which §12 already calls for as dogfooding. What
+   makes it Ouroboros rather than ordinary work is tier 5's continuity.
+4. **Dependencies.** Highest-risk tier, treated as such. Registry egress is already
+   allowlisted at the proxy (§6 A6), and lockfile/manifest changes get the same
+   treatment `push-policy.ts` already gives CI config today: a distinct classifier
+   requiring an explicit, separately-acknowledged human decision. Supply chain is the
+   one place where "the agent decided" is not an acceptable provenance.
+5. **Reflection with continuity.** Durable per-persona memory and identity that
+   survive both restarts and the agent's own rewrites. This is the half that is a
+   plain gap in the current plan: `agent_run` is deliberately ephemeral (§2 principle
+   3) and nothing carries across runs except what a human re-types. §4d-ter's
+   extract-then-store discipline is what keeps that memory from degenerating into the
+   99.6% junk that store-first produces, and memory stays per-`workspace_id` and
+   attenuated like every other capability — otherwise it is a side channel around the
+   planner/worker boundary (§6 A7).
+
+#### Promotion — never in place
+
+The tail cannot be eaten by the mouth. An agent that rewrites the process it is
+currently running inside can destroy the very thing that would have rolled the change
+back, so tiers 3 and 4 are **build-and-promote, never edit-and-restart**:
+
+- The agent writes to a branch in its own clone, as any run does (§5a).
+- The verification harness (§7 Phase 3) runs: build, tests, and a startup smoke check
+  of the *candidate*, not the incumbent.
+- Promotion is a separate, explicitly gated step that swaps a new deployment in
+  behind a health check, with the previous revision retained.
+- Rollback is always `git revert` plus re-promote, and never depends on the modified
+  code being able to do it.
+
+A self-modification that fails its own verification is a failed run with a diff to
+read — the same end state as any other failed run, which is the point.
+
+#### What stays true regardless
+
+- The agent still never holds git credentials and never pushes (§6 A2). Self-authored
+  commits reach a remote through the host-side Runner's policy check like anything
+  else.
+- Approvals stay identity-bound to a human (§6 A1). A self-modifying agent gains no
+  ability to approve its own gates, and `approveAction` still rejects any non-`user`
+  principal.
+- Secrets still never enter the sandbox (§6 A6).
+- Every self-modification is an `audit_event` naming the authoring run, append-only.
+
+#### Swarm coordination
+
+Not adopted as a component: coordinating a live swarm of specialists is the same
+problem §7 Phase 2 solves here, so Ouroboros is an alternative implementation of
+Loom's core rather than something Loom can take a dependency on. Worth reading for
+its scheduler design; the Planner/Swarm work stays as planned.
 
 ---
 
@@ -352,7 +517,33 @@ The happy path (SDK stream → WS → render) is a weekend. The rest is the actu
 - Kanban; cost dashboard.
 
 ### Phase 3 — Multi-backend + hardening, ~6 weeks
-`CodexAdapter`, `CursorAdapter`, `VllmApiAdapter`/`OllamaApiAdapter` — real proof the port holds. microVM isolation (Kata/microsandbox). SeaweedFS swap. Decorrelated review pass. Verification harness (test-runner integration + definition-of-done for principle #6). Persona sharing. Decide the §4d nesting policy.
+`CodexAdapter`, `CursorAdapter`, `VllmApiAdapter`/`OllamaApiAdapter` — real proof the port holds. microVM isolation (Kata/microsandbox). SeaweedFS swap. Decorrelated review pass. Verification harness (test-runner integration + definition-of-done for principle #6). **Validated compaction** (§4d-ter item 1) — same shape as the verification harness, so they land together. Persona sharing. Decide the §4d nesting policy. The verification harness is also the hard prerequisite for Phase 3b (§4f), so treat it as load-bearing rather than a nicety.
+
+### Phase 3b — Ouroboros mode, ~8–12 weeks (§4f)
+Sequenced after Phase 3 rather than inside it because every tier depends on the
+verification harness existing: a self-modifying agent without an automated
+definition-of-done is a random mutation generator.
+
+- **Envelope** on `agent_persona` (max tools, model tier, budget, path scope, MCP
+  refs, subagent depth), validated on every self-modification, widenable only by a
+  human through the contract. This is the prerequisite for all five tiers — build it
+  first and alone, since it is also the thing that keeps tiers 2–4 from being
+  unbounded.
+- **Tier 1 + 2**: self-edit of prompts, then of tools/capabilities within the
+  envelope. Cheap, and they exercise the envelope check on real traffic before
+  anything with a large blast radius depends on it.
+- **Tier 5**: durable per-persona memory and identity across runs and restarts,
+  built on §4d-ter's extract-then-store and validated compaction. Sequenced *before*
+  tiers 3–4 because continuity is what makes a code rewrite meaningful rather than
+  just an edit, and because a memory bug is far cheaper to find than a promotion bug.
+- **Tier 3 + 4**: code/architecture, then dependencies, both strictly
+  build-and-promote (§4f) with health-checked swap and retained previous revision.
+  Dependency changes get their own acknowledged-classifier gate, mirroring the
+  CI-config gate `push-policy.ts` already implements.
+- **Rollback drill** as an explicit deliverable, not an assumption: a scripted
+  exercise that promotes a knowingly-broken self-modification and recovers from it
+  without the modified code participating. Until that drill passes, tiers 3–4 stay
+  off by default.
 
 ### Phase 4 — Production, ongoing
 Full RBAC, compliance export, gradual rollout so runs aren't disrupted mid-task, multi-org, external integrations, MCP client behind an interface (target spec `2025-11-25`, plan for the stateless `2026-07-28` revision — it makes horizontal scaling much easier), A2A only at the external boundary.
@@ -400,7 +591,7 @@ Track cost per `agent_run`, rolled up per thread/team/workspace, **metered at th
 ## 10. Risks
 
 - **Cost runaway** → enforced caps at the proxy, visible meter, single-agent default.
-- **Context rot** → checkpoint to external memory past a token threshold; compact and reinitiate.
+- **Context rot** → checkpoint to external memory past a token threshold; compact and reinitiate. Compaction must be *validated*, not assumed — one-shot summarization has been measured dropping accuracy below no-context-at-all (§4d-ter).
 - **Concurrent conflicts** → clone-per-run + serialized merge queue (not an agent).
 - **Prompt injection → RCE** → §6 in full; the load-bearing controls are "secrets never enter the sandbox" and "the agent never pushes."
 - **Sandbox escape** → microVM isolation; containers alone are insufficient.
@@ -408,6 +599,7 @@ Track cost per `agent_run`, rolled up per thread/team/workspace, **metered at th
 - **UI overload** → condensed by default, raw one click away; inbox over stream.
 - **Vague delegation** → schema-validated decomposition, both directions.
 - **Per-run build cost** → base image + dependency cache before swarms are useful.
+- **Self-modification makes an injection permanent** (§4f) → the envelope bounds what a rewrite can reach, promotion is never in place so a bad rewrite cannot destroy its own rollback path, dependency edits need a separately acknowledged human decision, and every self-modification is an append-only audit event naming the authoring run. The residual risk is accepted knowingly: a persona with a wide envelope and a long-lived memory is the highest-value target in the system.
 
 ---
 

@@ -82,6 +82,14 @@ export interface AgentRunRepositoryPort {
     id: AgentRunId,
     disposition: AgentRunBranchDisposition,
   ): Promise<AgentRun>
+  /**
+   * Authoritative spend, metered at the egress proxy (PLAN.md §6 A6, §9).
+   * Separate from `updateStatus` on purpose: cost arrives continuously while a run
+   * is mid-flight, and folding it into a status write would mean either inventing
+   * a status transition per cost tick or letting cost updates silently rewrite
+   * status.
+   */
+  recordCost(workspaceId: WorkspaceId, id: AgentRunId, totalCostUsd: number): Promise<void>
   /** Bumped by the Runner's periodic heartbeat frame (PLAN.md §6 dead-run reaper). */
   recordHeartbeat(workspaceId: WorkspaceId, id: AgentRunId): Promise<void>
   /** Bumped by any agent_event — distinct signal from a heartbeat (§6): a hung-but-connected run keeps sending heartbeats but stops making progress. */
@@ -113,6 +121,7 @@ export interface PersonaRepositoryPort {
     harnessEffort: string | null
     harnessMaxTurns: number | null
     harnessAutoApprove: boolean
+    harnessBudgetCapUsd: number | null
   }): Promise<AgentPersona>
   findById(workspaceId: WorkspaceId, id: AgentPersonaId): Promise<AgentPersona | null>
   listByWorkspace(workspaceId: WorkspaceId): Promise<AgentPersona[]>
@@ -127,6 +136,7 @@ export interface PersonaRepositoryPort {
       harnessEffort: string | null
       harnessMaxTurns: number | null
       harnessAutoApprove: boolean
+      harnessBudgetCapUsd: number | null
     },
   ): Promise<AgentPersona>
 }

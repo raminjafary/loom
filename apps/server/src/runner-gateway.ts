@@ -1,5 +1,11 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
-import { requestApproval, recordAgentEvent, recordRunHeartbeat, recordRunWorkspace } from '@loom/application'
+import {
+  recordAgentEvent,
+  recordRunCost,
+  recordRunHeartbeat,
+  recordRunWorkspace,
+  requestApproval,
+} from '@loom/application'
 import {
   asAgentRunId,
   asRunnerId,
@@ -307,6 +313,14 @@ export const createRunnerGateway = (
 
       case 'heartbeat':
         await recordRunHeartbeat(deps, { workspaceId, agentRunId: asAgentRunId(frame.runId) })
+        return
+
+      case 'cost_report':
+        await recordRunCost(deps, {
+          workspaceId,
+          agentRunId: asAgentRunId(frame.runId),
+          spentUsd: frame.spentUsd,
+        })
         return
     }
   }

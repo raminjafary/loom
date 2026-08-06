@@ -1,4 +1,5 @@
 import { classifyEgress, parseUsage, type TokenUsage } from '@loom/domain'
+import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { connect as netConnect } from 'node:net'
 import type { Duplex } from 'node:stream'
@@ -39,11 +40,38 @@ export interface ProxyOptions {
   readonly log?: (message: string) => void
 }
 
-const bearer = (header: string | undefined): string | null => {
+/**
+ * Extracts a lease token from an auth header. Accepts Bearer, Basic, and a bare
+ * token, because the three clients that present one all do it differently: the
+ * Agent SDK sends `x-api-key`/Bearer, and `HTTP_PROXY`-aware tools (npm, curl,
+ * git) send Basic credentials taken from the proxy URL's userinfo — which is the
+ * only way to give them a proxy credential at all.
+ */
+const authToken = (header: string | undefined): string | null => {
   if (!header) return null
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim())
-  return match?.[1] ?? header.trim()
+  const trimmed = header.trim()
+
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(trimmed)
+  if (bearerMatch?.[1]) return bearerMatch[1]
+
+  const basicMatch = /^Basic\s+(.+)$/i.exec(trimmed)
+  if (basicMatch?.[1]) {
+    const decoded = Buffer.from(basicMatch[1], 'base64').toString('utf8')
+    // The username is ignored: only the password carries the token, so callers
+    // are free to use any placeholder user.
+    const colon = decoded.indexOf(':')
+    return colon === -1 ? decoded : decoded.slice(colon + 1)
+  }
+
+  return trimmed
 }
+
+/**
+ * Short hash of a token, for logs. Never the token itself: a refusal log has to be
+ * comparable against what was issued without becoming a place credentials leak.
+ */
+const fingerprint = (token: string | null): string =>
+  token === null ? 'none' : createHash('sha256').update(token).digest('hex').slice(0, 10)
 
 const readBody = async (request: IncomingMessage): Promise<Buffer> => {
   const chunks: Buffer[] = []
@@ -64,9 +92,13 @@ const deny = (response: ServerResponse, status: number, message: string): void =
  * replaced, not passed along; the hop-by-hop ones are per-connection by
  * definition and re-adding them corrupts the upstream request.
  */
+/** Where the sandbox carries its lease token. See handleModelRequest for why. */
+export const LEASE_HEADER = 'x-loom-lease'
+
 const STRIPPED_REQUEST_HEADERS = new Set([
   'authorization',
   'x-api-key',
+  LEASE_HEADER,
   'host',
   'connection',
   'proxy-authorization',
@@ -76,6 +108,22 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   'upgrade',
 ])
 
+/**
+ * Absolute-form request targets reduce to their path; anything else is returned
+ * unchanged. Deliberately does *not* treat an absolute URL as permission to
+ * forward to that host — that would make this an open proxy. It only means "this
+ * request was addressed to me", and the path is then matched as usual.
+ */
+const normalizePath = (target: string): string => {
+  if (!/^https?:\/\//i.test(target)) return target
+  try {
+    const parsed = new URL(target)
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return target
+  }
+}
+
 export const createEgressProxy = (options: ProxyOptions): Server => {
   const log = options.log ?? (() => {})
 
@@ -84,11 +132,28 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
     response: ServerResponse,
     path: string,
   ): Promise<void> => {
+    // `x-loom-lease` first, and it is the channel that actually matters. The Agent
+    // SDK's bundled CLI validates ANTHROPIC_API_KEY's shape locally — apparently
+    // including a checksum, since a 109-character token passed and a 108-character
+    // one did not — and mangles what it forwards. Carrying the lease in a header of
+    // our own means authentication never depends on surviving that validator.
+    // authorization/x-api-key remain accepted for plain HTTP clients (see the tests).
     const token =
-      bearer(request.headers.authorization) ??
+      (typeof request.headers[LEASE_HEADER] === 'string' ? request.headers[LEASE_HEADER] : null) ??
+      authToken(request.headers.authorization) ??
       (typeof request.headers['x-api-key'] === 'string' ? request.headers['x-api-key'] : null)
     const lease = options.leases.resolve(token)
     if (!lease) {
+      // Logged with the shape of what arrived, never the value. An authenticating
+      // proxy that does not record its own refusals is undebuggable: a rejected
+      // agent reports only "invalid API key", which says nothing about why.
+      log(
+        `model request refused: no valid lease. path=${path} auth=${
+          request.headers.authorization ? 'authorization' : 'none'
+        } x-api-key=${request.headers['x-api-key'] ? 'present' : 'absent'} tokenLen=${
+          token?.length ?? 0
+        } presented=${fingerprint(token)} known=[${options.leases.fingerprints().join(', ')}]`,
+      )
       deny(response, 401, 'no valid run lease presented')
       return
     }
@@ -155,7 +220,11 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
   }
 
   const server = createServer((request, response) => {
-    const url = request.url ?? '/'
+    // A client configured with HTTP_PROXY sends the absolute form
+    // (`http://host/path`) rather than a bare path. Normalized here so the model
+    // endpoint is reachable either way — the alternative is a confusing "must use
+    // CONNECT" refusal for a request that was aimed at this proxy correctly.
+    const url = normalizePath(request.url ?? '/')
 
     if (url === '/healthz') {
       response.writeHead(200, { 'content-type': 'application/json' })
@@ -163,8 +232,19 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
       return
     }
 
-    if (url.startsWith('/anthropic/')) {
-      void handleModelRequest(request, response, url.slice('/anthropic'.length)).catch((error) => {
+    // Both spellings reach the model endpoint. `/anthropic/*` is the explicit one;
+    // `/v1/*` exists because the Agent SDK's bundled CLI discards any path in
+    // ANTHROPIC_BASE_URL and requests `/v1/messages` off the bare origin — so the
+    // sandbox points at the origin and this is what it actually asks for. Learned by
+    // watching it CONNECT straight to api.anthropic.com instead.
+    const modelPath = url.startsWith('/anthropic/')
+      ? url.slice('/anthropic'.length)
+      : url.startsWith('/v1/')
+        ? url
+        : null
+
+    if (modelPath !== null) {
+      void handleModelRequest(request, response, modelPath).catch((error) => {
         deny(response, 500, error instanceof Error ? error.message : String(error))
       })
       return
@@ -177,6 +257,14 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
   })
 
   server.on('connect', (request: IncomingMessage, clientSocket: Duplex, head: Buffer) => {
+    // Attached first, before any refusal path. A Duplex with no 'error' listener
+    // throws, and an unhandled throw here takes the whole proxy down — which wipes
+    // every in-memory lease and cascades into "no valid run lease" for runs that
+    // were perfectly valid a moment earlier. That is exactly what happened: a
+    // client whose refused CONNECT socket then errored restarted the process
+    // mid-run, and the resulting failure looked like an auth bug several layers away.
+    clientSocket.on('error', () => clientSocket.destroy())
+
     const refuse = (status: string, reason: string) => {
       log(`CONNECT ${request.url ?? '?'} refused: ${reason}`)
       clientSocket.write(`HTTP/1.1 ${status}\r\n\r\n`)
@@ -185,7 +273,7 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
 
     // Even an allowlisted host requires a valid lease: the allowlist bounds
     // *where* a run may talk, the lease is what says a run exists at all.
-    const lease = options.leases.resolve(bearer(request.headers['proxy-authorization']))
+    const lease = options.leases.resolve(authToken(request.headers['proxy-authorization']))
     if (!lease) {
       refuse('407 Proxy Authentication Required', 'no valid run lease presented')
       return
@@ -216,7 +304,7 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
       clientSocket.destroy()
     }
     upstream.on('error', teardown)
-    clientSocket.on('error', teardown)
+    clientSocket.on('close', teardown)
   })
 
   return server

@@ -144,6 +144,7 @@ export const createPersona = async (
     harnessEffort: parsed.harnessEffort,
     harnessMaxTurns: parsed.harnessMaxTurns,
     harnessAutoApprove: parsed.harnessAutoApprove,
+    harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
   })
 }
 
@@ -168,6 +169,7 @@ export const seedBuiltinPersonas = async (
       harnessEffort: persona.harnessEffort,
       harnessMaxTurns: persona.harnessMaxTurns,
       harnessAutoApprove: persona.harnessAutoApprove,
+      harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
     })
   }
 }
@@ -207,6 +209,7 @@ export const updatePersona = async (
     harnessEffort: parsed.harnessEffort,
     harnessMaxTurns: parsed.harnessMaxTurns,
     harnessAutoApprove: parsed.harnessAutoApprove,
+    harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
   })
 }
 
@@ -368,6 +371,7 @@ export const startAgentRun = async (
     model: persona.model,
     tools: persona.tools,
     autoApprove: persona.harnessAutoApprove,
+    budgetCapUsd: persona.harnessBudgetCapUsd,
   }
 
   const run = await deps.agentRuns.create({
@@ -443,6 +447,19 @@ export const recordRunWorkspace = async (
     clonePath: input.clonePath,
     branchName: input.branchName,
   })
+
+/**
+ * Called by runner-gateway.ts on every `cost_report` frame — spend the egress
+ * proxy metered and the Runner relayed (PLAN.md §6 A6, §9).
+ *
+ * This overwrites whatever the SDK later self-reports in `run_completed`, which
+ * is the intent: A6's point is that a run's own account of what it cost is not
+ * the number to bill or to enforce a cap against. The proxy saw the requests.
+ */
+export const recordRunCost = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; spentUsd: number },
+): Promise<void> => deps.agentRuns.recordCost(input.workspaceId, input.agentRunId, input.spentUsd)
 
 /** Called by runner-gateway.ts on every `heartbeat` frame (PLAN.md §6 dead-run reaper). */
 export const recordRunHeartbeat = async (
@@ -875,9 +892,14 @@ export const recordAgentEvent = async (
   })
 
   if (input.event.kind === 'run_completed') {
+    // The SDK's self-reported cost is a fallback, not the truth (PLAN.md §6 A6).
+    // If the egress proxy already metered this run, its figure stands; only an
+    // unsandboxed run — where no proxy sat on the request path — has nothing
+    // better to record.
+    const metered = run.totalCostUsd !== null
     await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
       status: 'completed',
-      totalCostUsd: input.event.totalCostUsd,
+      ...(metered ? {} : { totalCostUsd: input.event.totalCostUsd }),
       completedAt: new Date(),
     })
   } else if (input.event.kind === 'run_failed') {
