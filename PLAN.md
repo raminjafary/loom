@@ -493,10 +493,25 @@ Consequences, stated rather than papered over:
   enforcement remain authoritative, and no other secret enters the sandbox. The
   residual exposure is exfiltration of that one key — which A5 already concedes is
   hard to prevent, since the model API call is itself an unblockable channel.
-- The property is recoverable two ways, neither in Phase 1: provider-issued per-run
-  scoped keys (does not exist today), or a backend whose auth is brokerable —
-  `VllmApiAdapter` and `CodexAdapter` (§7 Phase 3) are both plain HTTP clients with no
-  client-side key validation, so the broker works for them unchanged.
+- **Why not use subscription auth instead of a key at all?** Because both constraints
+  point the same way. §8 records the SDK's license condition — claude.ai
+  login/subscription limits may not be exposed to your users, API keys only — and
+  subscription auth would additionally require mounting the host's `~/.claude`
+  credentials into the sandbox, which A5 forbids outright. The CLI's "Not logged in"
+  on the OAuth path is that absence working as intended, not a misconfiguration.
+- **The open fork**, worth deciding explicitly rather than by default, is which backend
+  a *sandboxed* run uses:
+  1. Claude Agent SDK with a real key in the sandbox — works today, A6 weakened for
+     that one credential. This is what Phase 1 ships.
+  2. A brokerable backend for sandboxed runs — `VllmApiAdapter`/`CodexAdapter` (§7
+     Phase 3) are plain HTTP clients with no client-side key validation, so the broker
+     works unchanged. Already on the roadmap for other reasons, so it costs nothing
+     extra. **Preferred durable answer.**
+  3. Drop the SDK and drive the Messages API directly, owning the agent loop. A6 then
+     holds fully, but this rebuilds exactly what §4b decided not to — the unit of work
+     is a coding agent that already has its own loop, tools, permissions and session
+     state. A strategy change, not a fix; only justified if (2) also proves unworkable.
+- Provider-issued per-run scoped keys would solve it cleanly and do not exist today.
 - An in-container loopback shim is built and retained regardless: it attaches the lease
   token so the proxy can still attribute and meter spend per run, which is what budget
   caps depend on.

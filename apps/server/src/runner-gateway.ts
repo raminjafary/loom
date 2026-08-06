@@ -1,5 +1,6 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
 import {
+  reconcileRunnerRuns,
   recordAgentEvent,
   recordRunCost,
   recordRunHeartbeat,
@@ -378,6 +379,19 @@ export const createRunnerGateway = (
               allowedRoots: helloResult.data.allowedRoots,
             })
             socket.send(JSON.stringify({ type: 'hello_ack', runnerId }))
+
+            // Reconcile before anything else this Runner might send. A run it can
+            // resume gets a `resume_run`; one it cannot is failed now with a real
+            // reason instead of waiting minutes for the reaper's generic message.
+            // Registered in `connections` above, so `send` can reach it.
+            const { resumable } = await reconcileRunnerRuns(deps, {
+              workspaceId: asWorkspaceId(resolved.workspaceId),
+              runnerId,
+              resumableRunIds: helloResult.data.resumableRunIds ?? [],
+            })
+            for (const run of resumable) {
+              send(runnerId, { type: 'resume_run', runId: run.runId, fromEventSeq: run.fromEventSeq })
+            }
             return
           }
 

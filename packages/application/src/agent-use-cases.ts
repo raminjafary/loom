@@ -461,6 +461,53 @@ export const recordRunCost = async (
   input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; spentUsd: number },
 ): Promise<void> => deps.agentRuns.recordCost(input.workspaceId, input.agentRunId, input.spentUsd)
 
+/**
+ * Reconciles a Runner's in-flight runs when it (re)connects (PLAN.md §7 Phase 1, "run
+ * resumption after Runner restart").
+ *
+ * Two outcomes per non-terminal run assigned to that Runner:
+ *
+ * - The Runner still holds state for it → resumable. Returned so the gateway can send
+ *   `resume_run` with the server's highest ingested event seq.
+ * - The Runner does not → the work is gone. Failed immediately with a clear reason,
+ *   rather than left for the dead-run reaper to kill minutes later with a generic
+ *   "no heartbeat" message. Same end state, far better explanation, and the Inbox stops
+ *   showing a run nobody is working on.
+ *
+ * Runs whose Runner never reconnects are still the reaper's job; this only knows about
+ * the Runner in front of it.
+ */
+export const reconcileRunnerRuns = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; runnerId: RunnerId; resumableRunIds: readonly string[] },
+): Promise<{ resumable: { runId: AgentRunId; fromEventSeq: number }[] }> => {
+  const active = await deps.agentRuns.listActiveByWorkspace(input.workspaceId)
+  const resumable: { runId: AgentRunId; fromEventSeq: number }[] = []
+
+  for (const run of active) {
+    if (run.runnerId !== input.runnerId) continue
+
+    if (input.resumableRunIds.includes(run.id)) {
+      const fromEventSeq = await deps.agentRunEvents.highestSeq(input.workspaceId, run.id)
+      resumable.push({ runId: run.id, fromEventSeq })
+      continue
+    }
+
+    const failed = await deps.agentRuns.updateStatus(input.workspaceId, run.id, {
+      status: 'failed',
+      errorMessage: 'Runner reconnected without this run — its workspace state was lost',
+      completedAt: new Date(),
+    })
+    await postRunSystemMessage(
+      deps,
+      failed,
+      'Run interrupted: the Runner restarted and could not recover this run.',
+    )
+  }
+
+  return { resumable }
+}
+
 /** Called by runner-gateway.ts on every `heartbeat` frame (PLAN.md §6 dead-run reaper). */
 export const recordRunHeartbeat = async (
   deps: AgentDeps,

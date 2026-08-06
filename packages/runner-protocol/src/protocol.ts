@@ -37,7 +37,21 @@ export const AgentEventSchema = z.discriminatedUnion('kind', [
 
 // Runner -> Server
 export const RunnerFrameSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('hello'), token: z.string(), allowedRoots: z.array(z.string()) }),
+  /**
+   * `resumableRunIds` are runs this Runner still holds on-disk state for (PLAN.md §7
+   * Phase 1). Sent on every connect, including the first, where it is empty.
+   *
+   * The server needs it to tell two cases apart that look identical from its side: a
+   * run whose Runner restarted but can continue, and a run whose Runner came back with
+   * nothing and can only be failed. Without it the only outcome is waiting for the
+   * dead-run reaper, which is correct but discards work still sitting on disk.
+   */
+  z.object({
+    type: z.literal('hello'),
+    token: z.string(),
+    allowedRoots: z.array(z.string()),
+    resumableRunIds: z.array(z.string()).optional(),
+  }),
   z.object({
     type: z.literal('check_path_result'),
     requestId: z.string(),
@@ -150,6 +164,20 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
    * so there is no decision left for the Runner's answer to influence.
    */
   z.object({ type: z.literal('cancel_run'), runId: z.string() }),
+  /**
+   * Continue a run the Runner already holds state for (PLAN.md §7 Phase 1). Carries no
+   * persona or task: the Runner's own state file has them, and re-sending them from the
+   * server would let a persona edited mid-run change what a resumed run is doing.
+   *
+   * `fromEventSeq` is the server's highest ingested `seq`, so the Runner continues the
+   * sequence instead of restarting it at 1 and having every new event dropped as a
+   * duplicate.
+   */
+  z.object({
+    type: z.literal('resume_run'),
+    runId: z.string(),
+    fromEventSeq: z.number().int().nonnegative(),
+  }),
   z.object({ type: z.literal('get_diff'), requestId: z.string(), runId: z.string() }),
   z.object({ type: z.literal('discard_run'), requestId: z.string(), runId: z.string() }),
   z.object({

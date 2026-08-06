@@ -35,12 +35,21 @@ export interface SandboxOptions {
   readonly runId: string
   readonly persona: WirePersonaSpec
   readonly task?: string
-  /** Host path of the run's clone. Mounted at WORK_DIR inside; nothing else is mounted. */
+  /** Host path of the run's clone, mounted at WORK_DIR. */
   readonly clonePath: string
+  /** Host path backing the sandbox's HOME, so the SDK session survives a restart. */
+  readonly homePath: string
   /** Opaque per-run lease token (PLAN.md §6 A6). Never the real model key. */
   readonly egressToken: string
   /** Where the sandbox reaches the proxy, e.g. http://loom-egress:8080. */
   readonly egressDataUrl: string
+  /**
+   * A real, well-formed model key, required only to satisfy the SDK CLI's *offline*
+   * format check (PLAN.md §6's A6 caveat). It is never used to authenticate: the shim
+   * strips it and the proxy attaches its own copy. Opt-in, because handing a run any
+   * real credential is a deliberate weakening of A6 and must not happen by default.
+   */
+  readonly modelApiKeyForCliCheck: string
   readonly resumeSessionId?: string
   readonly onEvent: (event: WireAgentEvent) => void
   readonly onSessionId?: (sessionId: string) => void
@@ -95,15 +104,34 @@ const LEASE_SHIM_PORT = 8787
 const containerName = (runId: string): string => `loom-run-${runId}`
 
 /**
- * Shape-valid but meaningless. Not a credential and not a lease — the shim strips it
- * before forwarding, so it never reaches the proxy, let alone the provider. It exists
- * only so the CLI's local format check passes and it proceeds to make a request.
+ * The key handed to a sandbox purely to satisfy the SDK CLI's offline format check
+ * (PLAN.md §6's A6 caveat). Deliberately explicit opt-in rather than a default:
+ * handing a run a real credential weakens A6, and that should be a decision an
+ * operator made, not something that happened quietly because a variable was set
+ * somewhere else.
+ *
+ * Returns null when not configured, and `runAgentForRun` then fails the run with an
+ * explanation instead of letting it hang on a CLI that will not talk to anything.
  */
-const placeholderApiKey = (): string => `sk-ant-api03-${randomBytes(48).toString('hex')}`
+export const sandboxModelKeyFromEnv = (env: NodeJS.ProcessEnv = process.env): string | null =>
+  env.LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH === '1' && env.LOOM_SANDBOX_MODEL_API_KEY
+    ? env.LOOM_SANDBOX_MODEL_API_KEY
+    : null
 
-/** The run's clone, and the only host path the container can see. */
+/** The run's clone. */
 const WORK_DIR = '/work'
-/** tmpfs, because the rootfs is read-only and the SDK writes session state under HOME. */
+/**
+ * The SDK keeps resumable session transcripts under `$HOME/.claude/projects`. That has
+ * to outlive the container or resumption after a Runner restart is impossible — the
+ * session id survives in the Runner's state file but the transcript it names would be
+ * gone. So HOME is a host-backed, run-scoped directory rather than a tmpfs.
+ *
+ * This is a second bind mount, which A5's "mount only the run's clone" does not
+ * literally allow. The risk is the same shape as the clone's, and deliberately so: the
+ * directory is created per run, owned by that run, and destroyed with it. What A5 is
+ * actually guarding against — `$HOME`, `~/.ssh`, `~/.aws`, `~/.claude` on the *host* —
+ * is still never mounted.
+ */
 const HOME_DIR = '/home/agent'
 
 /**
@@ -112,7 +140,7 @@ const HOME_DIR = '/home/agent'
  */
 export const buildSandboxArgs = (
   config: SandboxConfig,
-  options: { runId: string; clonePath: string; env: Record<string, string> },
+  options: { runId: string; clonePath: string; homePath: string; env: Record<string, string> },
 ): string[] => [
   'run',
   '--rm',
@@ -139,18 +167,19 @@ export const buildSandboxArgs = (
   '--user',
   '1000:1000',
 
-  // Immutable rootfs. Everything writable is an explicit, noexec tmpfs.
+  // Immutable rootfs. The only other writable space is a noexec tmpfs.
   '--read-only',
   '--tmpfs',
   '/tmp:rw,noexec,nosuid,size=1g',
-  '--tmpfs',
-  `${HOME_DIR}:rw,noexec,nosuid,size=256m,uid=1000,gid=1000`,
 
-  // The ONLY bind mount. Never $HOME, ~/.ssh, ~/.aws, ~/.config/gh, ~/.claude,
-  // ~/.gitconfig — and never the container socket, which would hand the agent
-  // the host (A5).
+  // Exactly two bind mounts, both run-scoped: the clone, and a host-backed HOME so
+  // the SDK's session transcript survives a Runner restart (see HOME_DIR). Never the
+  // host's $HOME, ~/.ssh, ~/.aws, ~/.config/gh, ~/.claude or ~/.gitconfig — and never
+  // the container socket, which would hand the agent the host (A5).
   '-v',
   `${options.clonePath}:${WORK_DIR}:rw`,
+  '-v',
+  `${options.homePath}:${HOME_DIR}:rw`,
   '-w',
   WORK_DIR,
 
@@ -202,12 +231,14 @@ export const runAgentInSandbox = async (
   const args = buildSandboxArgs(config, {
     runId: options.runId,
     clonePath: options.clonePath,
+    homePath: options.homePath,
     env: {
-      // A throwaway that only has to satisfy the CLI's own local format check — it
-      // grants nothing, and the shim discards it before forwarding. Randomly
-      // generated rather than a fixed constant because an all-zeros key fails that
-      // check and makes the CLI send an unauthenticated request instead.
-      ANTHROPIC_API_KEY: placeholderApiKey(),
+      // Present only to pass the CLI's offline format check. Functionally inert: the
+      // shim strips it and the proxy attaches its own copy, so this value never
+      // authenticates anything and `api.anthropic.com` is not on the egress allowlist,
+      // so it cannot be used anywhere else either. See PLAN.md §6's A6 caveat — a
+      // synthesized key does not work, the check appears to include a checksum.
+      ANTHROPIC_API_KEY: options.modelApiKeyForCliCheck,
       // The SDK talks to the in-container shim, not the proxy directly. See
       // lease-shim.ts: the CLI rewrites whatever auth it is given, so the lease is
       // attached after it. Addressed by the container's own name rather than
