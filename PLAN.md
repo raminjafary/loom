@@ -513,6 +513,14 @@ and no API key configured anywhere.
 - **Undocumented.** Nothing here is a published integration point; the credentials-file
   shape and the CLI's handling of it could change without notice. The API-key fallback
   exists partly so that a break is a degradation rather than an outage.
+- **The API-key fallback needs one adjustment, and is not yet verified upstream.** Because
+  the sandbox always presents an OAuth-shaped credentials file, the CLI declares
+  `anthropic-beta: oauth-2025-04-20`. Forwarding that alongside `x-api-key` would ask the
+  provider to honour two contradictory auth modes, so the proxy strips `oauth-*` flags
+  when authenticating with a key and keeps the rest (dropping the whole list would
+  silently disable prompt caching and change what a run costs). That the header is
+  correct is unit-tested; that the provider then accepts the request has not been
+  confirmed, because no API key was available here.
 - A brokerable backend (`VllmApiAdapter`/`CodexAdapter`, §7 Phase 3) remains the most
   durable answer, since neither validates credentials client-side at all.
 - An in-container loopback shim is built and retained regardless: it attaches the lease

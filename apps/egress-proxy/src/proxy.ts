@@ -199,6 +199,21 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
       headers.authorization = `Bearer ${options.upstream.oauthToken}`
     } else if (options.upstream.apiKey) {
       headers['x-api-key'] = options.upstream.apiKey
+      // The sandbox always presents an OAuth-shaped credentials file (it is the only
+      // channel the CLI forwards intact), so the CLI declares `oauth-2025-04-20` in
+      // anthropic-beta. Forwarding that alongside an API key asks the provider to honour
+      // two contradictory auth modes at once. The rest of the beta list is unrelated to
+      // auth and is kept — dropping it wholesale would silently disable prompt caching
+      // and change what the run costs.
+      const beta = headers['anthropic-beta']
+      if (typeof beta === 'string') {
+        const kept = beta
+          .split(',')
+          .map((flag) => flag.trim())
+          .filter((flag) => flag.length > 0 && !flag.startsWith('oauth-'))
+        if (kept.length > 0) headers['anthropic-beta'] = kept.join(',')
+        else delete headers['anthropic-beta']
+      }
     } else {
       log('model request refused: proxy has no upstream credential configured')
       deny(response, 503, 'the egress proxy has no upstream credential configured')

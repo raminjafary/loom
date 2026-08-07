@@ -152,6 +152,12 @@ the property directly: no credential-shaped variable may appear in the sandbox e
   on the proxy remains supported and is the right choice for multi-user.
 - **Undocumented.** The credentials-file shape is not a published integration point and
   could change. The API-key fallback exists so a break degrades rather than outages.
+- **The API-key fallback is wired but unverified upstream.** The sandbox always presents
+  an OAuth-shaped credentials file, so the CLI declares `anthropic-beta:
+  oauth-2025-04-20`; the proxy now strips `oauth-*` flags when using a key, keeping the
+  rest. Unit-tested at the header level. Whether the provider accepts the resulting
+  request has **not** been confirmed — no API key was available. First thing to check if
+  anyone runs Loom key-only.
 
 A brokerable backend (vLLM/Codex, §7 Phase 3) stays the most durable answer — neither
 validates credentials client-side at all.
