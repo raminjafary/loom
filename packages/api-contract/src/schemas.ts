@@ -130,6 +130,9 @@ export const AgentRunStatusSchema = z.enum([
 
 export const AgentRunBranchDispositionSchema = z.enum(['kept', 'discarded', 'pushed'])
 
+/** How a child run attaches to its parent — see AgentRunRelation. */
+export const AgentRunRelationSchema = z.enum(['delegation', 'review', 'reconcile'])
+
 export const AgentRunSchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -137,6 +140,9 @@ export const AgentRunSchema = z.object({
  repositoryId: z.string,
  runnerId: z.string,
  persona: PersonaSpecSchema,
+ // Swarm structure — null for a run a human started.
+ parentRunId: z.string.nullable,
+ relation: AgentRunRelationSchema.nullable,
  status: AgentRunStatusSchema,
  totalCostUsd: z.number.nullable,
  errorMessage: z.string.nullable,

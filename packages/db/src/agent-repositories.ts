@@ -108,6 +108,8 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  repositoryId: input.repositoryId,
  runnerId: input.runnerId,
  persona: input.persona,
+...(input.parentRunId === undefined ? {}: { parentRunId: input.parentRunId }),
+...(input.relation === undefined ? {}: { relation: input.relation }),
  status: 'pending',
  })
 .returning
@@ -160,6 +162,15 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  return row ? toAgentRun(row as AgentRunRow): null
  },
 
+ async listByParent(workspaceId, parentRunId) {
+ const rows = await db
+.select
+.from(agentRun)
+.where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.parentRunId, parentRunId)))
+.orderBy(agentRun.createdAt)
+ return rows.map((row) => toAgentRun(row as AgentRunRow))
+ },
+
  async listActiveByWorkspace(workspaceId) {
  const rows = await db
 .select
@@ -167,6 +178,12 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
 .where(
  and(eq(agentRun.workspaceId, workspaceId), notInArray(agentRun.status, [...TERMINAL_STATUSES])),
 )
+ // Ordered, and not just for tidiness: this list is rendered as clickable rows
+ // that re-poll every second or so, and an unordered result reshuffles between
+ // polls — so a human aiming at one run can click another. Found live.
+ // `id` breaks ties, since several runs of a swarm are created in the same
+ // millisecond.
+.orderBy(agentRun.createdAt, agentRun.id)
  return rows.map((row) => toAgentRun(row as AgentRunRow))
  },
 
@@ -226,6 +243,11 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
 ),
 ),
 )
+ // Same reason as listActiveByWorkspace: the Inbox renders these as clickable
+ // rows and refreshes them, so an unordered result would move a row out from
+ // under a human mid-click. Oldest first — the thing that has been waiting
+ // longest is the thing most likely to be about to time out.
+.orderBy(agentRun.createdAt, agentRun.id)
  return rows.map((row) => toAgentRun(row as AgentRunRow))
  },
 })

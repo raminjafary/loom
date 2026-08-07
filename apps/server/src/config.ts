@@ -28,6 +28,11 @@ const EnvSchema = z.object({
  // Identifies the operator to the push service, which uses it to contact
  // whoever is sending if something goes wrong. `mailto:` or an https URL.
  VAPID_SUBJECT: z.string.default('mailto:operator@localhost'),
+ // How many runs may be active in one workspace at once. Phase 1 hardcoded one. The default of 3 is deliberately small and
+ // matches the own experiment (three workers on one repo): concurrency
+ // multiplies spend and the human attention the riskiest assumption is about, so it should be raised
+ // knowingly rather than defaulted high.
+ MAX_CONCURRENT_RUNS_PER_WORKSPACE: z.coerce.number.int.positive.default(3),
 })
 
 export type Config = z.infer<typeof EnvSchema>

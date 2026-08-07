@@ -17,7 +17,9 @@ import {
   getPersona,
   getRunControl,
   keepAgentRun,
+  listActiveAgentRuns,
   listChannels,
+  listChildAgentRuns,
   listMessages,
   listPendingApprovals,
   listPersonaGroups,
@@ -300,6 +302,19 @@ export const router = os.router({
 
     getActive: os.agentRun.getActive.handler(({ context }) =>
       guard(() => getActiveAgentRun(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+
+    listActive: os.agentRun.listActive.handler(({ context }) =>
+      guard(() => listActiveAgentRuns(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+
+    listChildren: os.agentRun.listChildren.handler(({ context, input }) =>
+      guard(() =>
+        listChildAgentRuns(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          agentRunId: asAgentRunId(input.agentRunId),
+        }),
+      ),
     ),
 
     getDiff: os.agentRun.getDiff.handler(({ context, input }) =>

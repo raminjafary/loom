@@ -11,6 +11,7 @@ import {
  timestamp,
  uniqueIndex,
  uuid,
+ type AnyPgColumn,
 } from 'drizzle-orm/pg-core'
 import { user } from './auth-schema.js'
 
@@ -156,6 +157,14 @@ export const agentRun = pgTable(
 .notNull
 .references( => runner.id, { onDelete: 'cascade' }),
  persona: jsonb('persona').notNull,
+ // Swarm structure. Null for a run a human started.
+ // `relation` distinguishes delegation from review/reconcile, which the data model is
+ // explicit should not masquerade as delegation children. Self-referencing FK
+ // declared via a callback because the table is still being defined here.
+ parentRunId: uuid('parent_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'cascade',
+ }),
+ relation: text('relation'),
  status: text('status').notNull.default('pending'),
  totalCostUsd: doublePrecision('total_cost_usd'),
  errorMessage: text('error_message'),
@@ -178,7 +187,11 @@ export const agentRun = pgTable(
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  completedAt: timestamp('completed_at', { withTimezone: true }),
  },
- (t) => [index('agent_run_thread_idx').on(t.workspaceId, t.threadId)],
+ (t) => [
+ index('agent_run_thread_idx').on(t.workspaceId, t.threadId),
+ // Backs the tree view's per-parent lookup.
+ index('agent_run_parent_idx').on(t.workspaceId, t.parentRunId),
+ ],
 )
 
 /**

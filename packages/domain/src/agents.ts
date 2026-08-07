@@ -130,6 +130,15 @@ export type AgentRunStatus =
 
 export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed'
 
+/**
+ * How a child run hangs off its parent. Kept distinct from plain
+ * `parent_run_id` presence because the data model is explicit that "reviewer and reconciler
+ * runs attach via a distinct relation field rather than pretending to be
+ * delegation children" — the tree view renders delegation, while a review or a
+ * reconcile is something done *to* a run's output, not work handed down.
+ */
+export type AgentRunRelation = 'delegation' | 'review' | 'reconcile'
+
 export interface AgentRun {
  readonly id: AgentRunId
  readonly workspaceId: WorkspaceId
@@ -137,6 +146,14 @@ export interface AgentRun {
  readonly repositoryId: RepositoryId
  readonly runnerId: RunnerId
  readonly persona: PersonaSpec
+ /**
+ * The run that spawned this one — null for a run a human started.
+ * Renders the swarm tree, and carries the capability attenuation rule: see
+ * `attenuateChildPersona`.
+ */
+ readonly parentRunId: AgentRunId | null
+ /** Null exactly when `parentRunId` is null. */
+ readonly relation: AgentRunRelation | null
  readonly status: AgentRunStatus
  readonly totalCostUsd: number | null
  readonly errorMessage: string | null

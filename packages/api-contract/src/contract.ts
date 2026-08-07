@@ -163,6 +163,17 @@ export const contract = {
  /** Lets a client resume watching an already-active run after a reload. */
  getActive: oc.output(AgentRunSchema.nullable),
 
+ /**
+ * Every run currently executing. Distinct from `listNeedsAttention`: that answers "what is blocked on
+ * me", this answers "what is running", and with concurrency those diverge.
+ */
+ listActive: oc.output(z.array(AgentRunSchema)),
+
+ /** One run's children — what the tree view is drawn from. */
+ listChildren: oc
+.input(z.object({ agentRunId: z.string }))
+.output(z.array(AgentRunSchema)),
+
  /** On-demand branch diff for end-of-run review. */
  getDiff: oc
 .input(z.object({ agentRunId: z.string }))

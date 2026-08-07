@@ -15,6 +15,7 @@ import {
  type AgentPersona,
  type AgentRun,
  type AgentRunBranchDisposition,
+ type AgentRunRelation,
  type AgentRunStatus,
  type ApprovalRequest,
  type ApprovalStatus,
@@ -221,6 +222,8 @@ export interface AgentRunRow {
  repositoryId: string
  runnerId: string
  persona: unknown
+ parentRunId: string | null
+ relation: string | null
  status: string
  totalCostUsd: number | null
  errorMessage: string | null
@@ -257,6 +260,14 @@ const toAgentRunBranchDisposition = (value: string | null): AgentRunBranchDispos
  throw new Error(`unknown agent_run branch_disposition: ${value}`)
 }
 
+const AGENT_RUN_RELATIONS: readonly AgentRunRelation[] = ['delegation', 'review', 'reconcile']
+
+const toAgentRunRelation = (value: string | null): AgentRunRelation | null => {
+ if (value === null) return null
+ if ((AGENT_RUN_RELATIONS as readonly string[]).includes(value)) return value as AgentRunRelation
+ throw new Error(`unknown agent_run relation: ${value}`)
+}
+
 export const toAgentRun = (row: AgentRunRow): AgentRun => ({
  id: asAgentRunId(row.id),
  workspaceId: asWorkspaceId(row.workspaceId),
@@ -264,6 +275,8 @@ export const toAgentRun = (row: AgentRunRow): AgentRun => ({
  repositoryId: asRepositoryId(row.repositoryId),
  runnerId: asRunnerId(row.runnerId),
  persona: toPersonaSpec(row.persona),
+ parentRunId: row.parentRunId === null ? null: asAgentRunId(row.parentRunId),
+ relation: toAgentRunRelation(row.relation),
  status: toAgentRunStatus(row.status),
  totalCostUsd: row.totalCostUsd,
  errorMessage: row.errorMessage,

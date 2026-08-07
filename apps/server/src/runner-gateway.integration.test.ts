@@ -1,6 +1,14 @@
 import type { Contract } from '@loom/api-contract'
-import { expireStaleApprovals, reapStuckRuns } from '@loom/application'
-import type { Notification } from '@loom/domain'
+import { expireStaleApprovals, reapStuckRuns, startAgentRun } from '@loom/application'
+import {
+ agentRunActor,
+ asAgentPersonaId,
+ asAgentRunId,
+ asRepositoryId,
+ asThreadId,
+ asWorkspaceId,
+ type Notification,
+} from '@loom/domain'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
@@ -780,6 +788,172 @@ describe('runner-gateway: notification fan-out', => {
  await reapStuckRuns(throwingDeps, { heartbeatTimeoutMs: 0, noProgressTimeoutMs: 0 })
 
  expect((await client.agentRun.get({ agentRunId: runId })).status).toBe('failed')
+
+ socket.close
+ })
+})
+
+/**
+ * The foundation: a workspace may run several agents at once, and
+ * a run may spawn children. Both are exercised here rather than in unit tests
+ * because the interesting parts are the guards, and the guards read real rows.
+ *
+ * Child runs are not on the contract: the only thing that should spawn one is a
+ * Planner, which does not exist yet, and a human starting a "child" by hand
+ * would mean nothing. So these drive the use-case directly against the app's real
+ * deps — the same convention the reaper and SLA tests above use.
+ */
+describe('runner-gateway: concurrency and child runs', => {
+ const WIDE_PERSONA_MARKDOWN = `---
+name: wide-worker
+description: A test persona with more tools than the narrow one.
+model: claude-opus-5
+tools: [Read, Bash]
+harness:
+ budgetCapUsd: 50
+---
+
+irrelevant for this test`
+
+ const startOne = async (socket: WebSocket, threadId: string, repositoryId: string) => {
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({ threadId, repositoryId, personaId: testPersonaId })
+ await startRun
+ return runPromise
+ }
+
+ it('runs several agents at once, and refuses past the workspace limit', async => {
+ const { socket, runnerId } = await pairFakeRunner('concurrency')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'concurrency' })
+
+ // The configured default is 3 (see config.ts on why it is deliberately small).
+ const first = await startOne(socket, created.rootThread.id, repo.id)
+ const second = await startOne(socket, created.rootThread.id, repo.id)
+ const third = await startOne(socket, created.rootThread.id, repo.id)
+ expect([first.status, second.status, third.status]).toEqual(['running', 'running', 'running'])
+
+ // Order is asserted, not just membership, and asserted twice: this list is
+ // rendered as clickable rows that re-poll, so an unordered query moves a row
+ // out from under a human mid-click. That happened live before the `orderBy`
+ // landed.
+ const expected = [first.id, second.id, third.id]
+ expect((await client.agentRun.listActive).map((run) => run.id)).toEqual(expected)
+ expect((await client.agentRun.listActive).map((run) => run.id)).toEqual(expected)
+
+ // Not silently queued: a human who asks for a fourth must be told why not.
+ await expect(
+ client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ }),
+).rejects.toThrow
+
+ socket.close
+ })
+
+ it('records a child run under its parent, with a relation', async => {
+ const { socket, runnerId } = await pairFakeRunner('child-run')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'child-run' })
+ const parent = await startOne(socket, created.rootThread.id, repo.id)
+
+ const startChild = nextFrame(socket, (v) => v.type === 'start_run')
+ const child = await startAgentRun(app.deps, {
+ workspaceId: asWorkspaceId(parent.workspaceId),
+ // The parent itself, not a human — which is the point of a Planner, and is
+ // only safe because of the attenuation asserted below.
+ actor: agentRunActor(asAgentRunId(parent.id)),
+ threadId: asThreadId(created.rootThread.id),
+ repositoryId: asRepositoryId(repo.id),
+ personaId: asAgentPersonaId(testPersonaId),
+ parentRunId: asAgentRunId(parent.id),
+ })
+ await startChild
+
+ expect(child.parentRunId).toBe(parent.id)
+ expect(child.relation).toBe('delegation')
+
+ const children = await client.agentRun.listChildren({ agentRunId: parent.id })
+ expect(children.map((run) => run.id)).toEqual([child.id])
+ // A root run has no parent and no relation — null, not a sentinel.
+ expect((await client.agentRun.get({ agentRunId: parent.id })).parentRunId).toBeNull
+
+ socket.close
+ })
+
+ it('refuses a child that reaches for more than its parent has', async => {
+ const { socket, runnerId } = await pairFakeRunner('attenuation')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'attenuation' })
+ const wide = await client.persona.create({ markdownSource: WIDE_PERSONA_MARKDOWN })
+
+ // Parent runs the narrow persona (tools: [Read], model claude-sonnet-5 via the
+ // shared fixture); the child asks for Bash and a higher tier.
+ const parent = await startOne(socket, created.rootThread.id, repo.id)
+
+ await expect(
+ startAgentRun(app.deps, {
+ workspaceId: asWorkspaceId(parent.workspaceId),
+ actor: agentRunActor(asAgentRunId(parent.id)),
+ threadId: asThreadId(created.rootThread.id),
+ repositoryId: asRepositoryId(repo.id),
+ personaId: asAgentPersonaId(wide.id),
+ parentRunId: asAgentRunId(parent.id),
+ }),
+).rejects.toThrow
+
+ expect(await client.agentRun.listChildren({ agentRunId: parent.id })).toEqual([])
+
+ socket.close
+ })
+
+ it('refuses a run spawning a child of some other run', async => {
+ const { socket, runnerId } = await pairFakeRunner('foreign-parent')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'foreign-parent' })
+ const one = await startOne(socket, created.rootThread.id, repo.id)
+ const two = await startOne(socket, created.rootThread.id, repo.id)
+
+ // Otherwise a run could graft work onto a tree it is not part of, and
+ // attenuation would be measured against the wrong parent.
+ await expect(
+ startAgentRun(app.deps, {
+ workspaceId: asWorkspaceId(one.workspaceId),
+ actor: agentRunActor(asAgentRunId(one.id)),
+ threadId: asThreadId(created.rootThread.id),
+ repositoryId: asRepositoryId(repo.id),
+ personaId: asAgentPersonaId(testPersonaId),
+ parentRunId: asAgentRunId(two.id),
+ }),
+).rejects.toThrow
+
+ socket.close
+ })
+
+ it('refuses a child run while the workspace is paused', async => {
+ const { socket, runnerId } = await pairFakeRunner('paused-child')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'paused-child' })
+ const parent = await startOne(socket, created.rootThread.id, repo.id)
+
+ await client.runControl.pauseAll
+ try {
+ // A pause a Planner could spawn its way around is not a pause.
+ await expect(
+ startAgentRun(app.deps, {
+ workspaceId: asWorkspaceId(parent.workspaceId),
+ actor: agentRunActor(asAgentRunId(parent.id)),
+ threadId: asThreadId(created.rootThread.id),
+ repositoryId: asRepositoryId(repo.id),
+ personaId: asAgentPersonaId(testPersonaId),
+ parentRunId: asAgentRunId(parent.id),
+ }),
+).rejects.toThrow
+ } finally {
+ await client.runControl.resume
+ }
 
  socket.close
  })

@@ -2,7 +2,7 @@
 
 Human + agent collaboration workspace. See the design notes for the architecture and roadmap, and [HANDOFF.md](./HANDOFF.md) for exact current state and next steps.
 
-**Current state: Phase 0 complete, Phase 1 mostly built — not yet ship-criterion-complete.** Realtime chat, real auth, and a working agent-execution pipeline, now with a real UI: pair a Runner, bind a real git repo, create/edit personas (markdown + frontmatter), start a real Claude Agent SDK run from a picker, watch it work in a thread, approve/deny risky tools from a card, review the run's diff — all with clone-per-run isolation and path-scoped write enforcement. See HANDOFF.md before starting new work, and the persona model for the next planned slice (built-in personas, persona groups, `@mention`-starts-a-run).
+**Current state: Phase 1's ship criterion is met; Phase 2 has started.** Realtime chat, real auth, and a real agent pipeline end to end: pair a Runner, bind a git repo, create or `@mention` a persona, watch it work in a thread, get **notified** when it needs you, approve/deny a risky tool from a card showing the exact argv, then review and keep/discard/push the branch — with clone-per-run isolation, a container sandbox holding no credentials, proxy-metered spend against enforced budget caps, and a global kill switch. Phase 2 so far: several runs per workspace at once, `parent_run_id`, and the capability attenuation. See HANDOFF.md before starting new work.
 
 ## Requirements
 
@@ -76,7 +76,7 @@ All of this is reachable from the web UI's sidebar now (mint a pairing token, bi
 
 ```bash
 pnpm -r typecheck # all packages
-pnpm -r test # 193 tests
+pnpm -r test # 228 tests
 npx vitest run tools/architecture.test.ts # layer boundaries
 npx eslint packages/ apps/ # boundary lint rules
 ```
@@ -114,4 +114,6 @@ See HANDOFF.md §"What's not built" for the full list. Headline items:
 - Container sandbox only — no microVM isolation (Kata/microsandbox), which is Phase 3 per the roadmap. Concurrent sandboxes also share one network.
 - No skills/MCP attachment — needs the capability registry, which is Phase 2 scope.
 - No raw provider transcript tier; the structured tier is real.
-- No Runner backpressure, and no same-tool-call-N-times stuck detection.
+- No same-tool-call-N-times stuck detection (heartbeat + no-progress reaping is real).
+- No Planner, no swarm decomposition, no merge queue, no tree view — Phase 2's concurrency
+ foundation is in, but nothing spawns child runs yet.

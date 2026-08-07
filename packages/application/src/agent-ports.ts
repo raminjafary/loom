@@ -4,6 +4,7 @@ import type {
  AgentRun,
  AgentRunBranchDisposition,
  AgentRunId,
+ AgentRunRelation,
  AgentRunStatus,
  ApprovalRequest,
  ApprovalRequestId,
@@ -49,7 +50,12 @@ export interface AgentRunRepositoryPort {
  repositoryId: RepositoryId
  runnerId: RunnerId
  persona: PersonaSpec
+ /** Set for a run another run spawned; absent for a human-started run. */
+ parentRunId?: AgentRunId
+ relation?: AgentRunRelation
  }): Promise<AgentRun>
+ /** Children of one run — the tree view's per-parent lookup. */
+ listByParent(workspaceId: WorkspaceId, parentRunId: AgentRunId): Promise<AgentRun[]>
  findById(workspaceId: WorkspaceId, id: AgentRunId): Promise<AgentRun | null>
  updateStatus(
  workspaceId: WorkspaceId,

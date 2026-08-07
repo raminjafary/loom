@@ -32,7 +32,15 @@ export interface AgentSnapshot {
  readonly repositories: Repository[]
  readonly personas: AgentPersona[]
  readonly personaGroups: PersonaGroup[]
+ /**
+ * The run this client is *watching* — the one whose approvals and diff the
+ * workspace view shows. Distinct from `activeRuns` now that a workspace may run
+ * several at once: a human watches one at a time even when
+ * three are executing.
+ */
  readonly activeRun: AgentRun | null
+ /** Everything currently executing in the workspace. */
+ readonly activeRuns: AgentRun[]
  readonly pendingApprovals: ApprovalRequest[]
  readonly lastPairing: { runnerId: string; rawToken: string } | null
  readonly diff: string | null
@@ -70,6 +78,11 @@ export interface AgentSession {
  personaId: string
  task?: string
  }): Promise<void>
+ /**
+ * Switches which of several concurrent runs this client is watching. Does not stop or change anything server-side — it is purely which
+ * run's approvals and diff are on screen.
+ */
+ watchRun(agentRunId: string): Promise<void>
  decide(approvalRequestId: string, decision: 'approve' | 'deny'): Promise<void>
  loadDiff(agentRunId: string): Promise<void>
  keepRun(agentRunId: string): Promise<void>
@@ -102,6 +115,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  personas: [],
  personaGroups: [],
  activeRun: null,
+ activeRuns: [],
  pendingApprovals: [],
  lastPairing: null,
  diff: null,
@@ -155,12 +169,19 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  pollTimer = setInterval( => {
  void (async => {
  try {
- const [run, pendingApprovals] = await Promise.all([
+ const [run, pendingApprovals, activeRuns] = await Promise.all([
  options.api.agentRun.get({ agentRunId }),
  options.api.approval.listPending({ agentRunId }),
+ // On the same tick rather than its own timer: a swarm's membership
+ // changes exactly when its runs do, and a second interval would just
+ // be a second thing to get out of step.
+ options.api.agentRun.listActive,
  ])
- patch({ activeRun: run, pendingApprovals })
- if (TERMINAL_STATUSES.has(run.status)) stopPolling
+ patch({ activeRun: run, pendingApprovals, activeRuns })
+ // Keeps polling while *others* are still running, so a sibling finishing
+ // still updates the list — stopping on the watched run alone would freeze
+ // the swarm view at whatever it looked like when this one ended.
+ if (TERMINAL_STATUSES.has(run.status) && activeRuns.length === 0) stopPolling
  } catch (error) {
  patch({ error: errorMessage(error) })
  stopPolling
@@ -186,6 +207,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  personas,
  personaGroups,
  activeRun,
+ activeRuns,
  runControl,
  notificationConfig,
  ] = await Promise.all([
@@ -194,10 +216,19 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.persona.list,
  options.api.personaGroup.list,
  options.api.agentRun.getActive,
+ options.api.agentRun.listActive,
  options.api.runControl.get,
  options.api.notification.config,
  ])
- patch({ runners, repositories, personas, personaGroups, runControl, notificationConfig })
+ patch({
+ runners,
+ repositories,
+ personas,
+ personaGroups,
+ activeRuns,
+ runControl,
+ notificationConfig,
+ })
  // Resume watching whatever run is already active — otherwise a page
  // reload during a run leaves no path back to its approval card.
  if (activeRun && !TERMINAL_STATUSES.has(activeRun.status)) {
@@ -286,6 +317,22 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  const run = await options.api.agentRun.start(input)
  patch({ activeRun: run, pendingApprovals: [], diff: null })
  pollActiveRun(run.id)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async watchRun(agentRunId) {
+ patch({ error: null })
+ try {
+ const [run, pendingApprovals] = await Promise.all([
+ options.api.agentRun.get({ agentRunId }),
+ options.api.approval.listPending({ agentRunId }),
+ ])
+ // Diff cleared: it belongs to whichever run it was loaded for, and showing
+ // one run's diff under another's name is worse than showing none.
+ patch({ activeRun: run, pendingApprovals, diff: null })
+ if (!TERMINAL_STATUSES.has(run.status)) pollActiveRun(agentRunId)
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
