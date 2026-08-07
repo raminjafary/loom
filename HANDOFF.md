@@ -10,14 +10,23 @@ remaining Phase 1 gap. Built and verified live. Test suite 166 → **193**.
 substantially met before: "is notified when it needs them". Verified end to end in a
 real browser this session, not just in tests — see "Notifications" below.
 
+Also built this session: **Runner backpressure** (§7's Runner list) and a hardening fix
+it uncovered — see "Backpressure and settings sources" below.
+
 Still open in PLAN.md §7's Phase 1 list:
 
-- **Skills attachment** (§4e). Parsed in persona frontmatter, never wired to a run.
+- **Skills attachment.** Note the plan contradicts itself here: §7 lists it under Phase 1,
+  while §4e's own phasing note puts MCP/skills behind the Phase 2 capability registry.
+  Nothing is parsed today (the earlier handoff's "parsed but never wired" was wrong — the
+  parser explicitly excludes it). The SDK does have a first-class `skills: string[] | 'all'`
+  option, so the plumbing is straightforward; what is *not* settled is where skill files
+  come from. With `settingSources: []` (see below) it is unclear whether `.claude/skills`
+  in the clone is still discovered, and that question needs a real run to answer, not a
+  guess. A registry that provisions skills into a run is squarely §4e Phase 2.
 - **Directory picker and `git init` repo creation** (§5a). Binding is still
-  by-absolute-path only.
-- **Runner backpressure.**
+  by-absolute-path only. Needs a Runner `listDirectory` capability that does not exist.
 - **Raw transcript tier** (§4d-bis tier 3). The structured tier is built; the verbatim
-  provider stream is not persisted anywhere.
+  provider stream is not persisted anywhere. Needs `BlobStoragePort` (local FS first).
 - **Effect-based gating (§6 A3) remains partial** — path-scoped writes are enforced,
   `Bash` is still gated by tool name.
 
@@ -74,6 +83,42 @@ unsubscribing removed the row. Delivery to a real push service is what
 sat on "Notifications…" forever — `config` arrives when the session's `init()` resolves.
 It is a `watch` now. This is the second session in a row where a real browser found
 something a green suite did not.
+
+### Backpressure and settings sources (§7 Phase 1) — new this session
+
+`onEvent` is awaited the whole way down — SDK stream loop, the container's stdout
+reader, and agent-host's own stdout drain — so when the socket's backlog passes a
+high-water mark the **agent loop waits** rather than the Runner buffering without
+limit. Dropping events was the cheaper option and the wrong one: the thread is the
+record of what the agent did, and §4d-bis already chose a structured tier over a
+lossy stream.
+
+Frames sent while the socket is down are now **held and replayed in order** on
+`hello_ack` (not on socket open — an event sent before the server resolves the
+Runner's identity has no run to attach to). Bounded, so an hour-long disconnect is
+not a memory leak, and a drop is logged loudly rather than leaving a silent hole.
+Only run events are held: a heartbeat replayed later would vouch for liveness at a
+moment that has passed. All of this lives in `send-queue.ts` and is unit-tested.
+
+The container's stdout reader also forwards events **one at a time**. It previously
+called an async `onEvent` concurrently for lines arriving in a single chunk, which
+would assign event sequence numbers in whatever order the awaits happened to
+resolve.
+
+**The hardening this uncovered:** the SDK was loading filesystem settings with CLI
+defaults, which includes `<clone>/.claude/settings.json` — content the agent can
+write and, in the general case, content nobody in the workspace authored. Claude
+Code's precedence puts `permissions.allow` ahead of a prompt, so a settings file
+shipped in a repository is at minimum a plausible route past the `canUseTool` gate
+that §6 A1/A3 exist to guarantee. Now `settingSources: []`, with
+`LOOM_SDK_SETTING_SOURCES` as an explicit operator opt-in. Note this also stops a
+repo's `CLAUDE.md` being auto-injected — deliberate: the persona is the instruction
+source. `claude-agent-adapter.test.ts` asserts these options by name, the way
+`sandbox.test.ts` asserts the A5 flags.
+
+Verified on a real unsandboxed run: the gate fired, the work was committed, the diff
+was 155 bytes, and $0.0189 was metered — so isolation mode does not disturb the
+SDK's own auth or execution.
 
 ### Global kill switch (§6 runtime safety)
 
@@ -266,8 +311,8 @@ validates credentials client-side at all.
    folded into a build session.
 2. **Browser-verify the kill switch** — still the one Phase 1 surface never clicked by a
    human. (The notification toggle beside it now has been, and that click found a bug.)
-3. The remaining smaller Phase 1 items: skills attachment, directory picker + `git init`,
-   Runner backpressure, raw transcript tier.
+3. The remaining smaller Phase 1 items: skills attachment (read the caveat above first),
+   directory picker + `git init`, raw transcript tier.
 4. Then Phase 2 proper (Planner/Swarm), or Phase 3's brokerable backend (vLLM/Codex),
    which removes the licensing and undocumented-integration caveats above entirely.
 
@@ -307,6 +352,10 @@ validates credentials client-side at all.
   push service must not be able to hold a run in `awaiting_approval`.
 - **Don't read `notificationConfig` once on mount** in a component — it is null until the
   session's `init()` resolves. That was this session's live-found bug.
+- **Don't re-enable SDK filesystem settings by default.** `settingSources: []` is a
+  permission boundary, not tidiness — see the backpressure/settings section above.
+- **Don't drop agent events under load, and don't forward container events
+  concurrently.** The first loses the record; the second scrambles event ordering.
 
 ### Two false trails, so they are not re-walked
 
