@@ -107,7 +107,13 @@ export interface RunAgentOptions {
   readonly cwd: string
   /** What a human asked for via `@mention` (PLAN.md §3a); absent for the sidebar-picker path. */
   readonly task?: string
-  readonly onEvent: (event: WireAgentEvent) => void
+  /**
+   * May return a promise, and the stream loop awaits it — that await is how the
+   * Runner applies backpressure (PLAN.md §7 Phase 1): while it is unresolved the
+   * SDK's iterator is not pulled, so the agent loop itself slows rather than the
+   * Runner buffering without limit.
+   */
+  readonly onEvent: (event: WireAgentEvent) => void | Promise<void>
   /**
    * Aborts the SDK's agent loop mid-flight (PLAN.md §6 kill switch). Owned by
    * the caller so a `cancel_run` frame arriving on the socket can reach a run
@@ -135,6 +141,68 @@ export interface RunAgentOptions {
     input: Record<string, unknown>,
   ) => Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>
 }
+
+/**
+ * Which filesystem settings the SDK may load (`~/.claude/settings.json`,
+ * `<cwd>/.claude/settings.json`, `.claude/settings.local.json`).
+ *
+ * **`[]` — none — is the default, deliberately.** `cwd` is the run's clone of a
+ * repository: content the agent can write to and, in the general case, content
+ * nobody on this workspace authored. Loading settings from there would let the
+ * material under review influence how the run is permitted to behave — and
+ * Claude Code's own precedence puts `permissions.allow` rules ahead of a prompt,
+ * so an allow-rule shipped in a repo is at minimum a plausible way to skip the
+ * `canUseTool` gate that PLAN.md §6 A1/A3 make the whole point. Loom does not
+ * need those files: the persona is the instruction source and the approval gate
+ * is the permission source.
+ *
+ * `LOOM_SDK_SETTING_SOURCES` re-enables them for an operator who wants
+ * repo-provided settings and accepts what that means — comma-separated, e.g.
+ * `project` or `user,project`. Anything unrecognized is ignored rather than
+ * guessed at.
+ */
+const SETTING_SOURCE_NAMES = ['user', 'project', 'local'] as const
+type SettingSourceName = (typeof SETTING_SOURCE_NAMES)[number]
+
+export const settingSourcesFromEnv = (
+  raw = process.env.LOOM_SDK_SETTING_SOURCES,
+): SettingSourceName[] =>
+  (raw ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part): part is SettingSourceName =>
+      (SETTING_SOURCE_NAMES as readonly string[]).includes(part),
+    )
+
+/**
+ * The SDK options a run executes under, minus the two things that cannot be
+ * compared in a test (the `canUseTool` closure and the abort controller).
+ *
+ * Extracted so those options can be asserted directly — same reasoning as
+ * sandbox.test.ts asserting container flags: a weakened boundary should fail a
+ * test that names the requirement, not go unnoticed because it lives inside a
+ * call expression.
+ */
+export const buildQueryOptions = (
+  options: Pick<RunAgentOptions, 'persona' | 'cwd' | 'resumeSessionId'>,
+  settingSources: SettingSourceName[] = settingSourcesFromEnv(),
+) => ({
+  cwd: options.cwd,
+  agent: options.persona.name,
+  agents: {
+    [options.persona.name]: {
+      description: options.persona.name,
+      prompt: options.persona.systemPrompt,
+      tools: options.persona.tools,
+      model: options.persona.model,
+    },
+  },
+  // 'default' rather than any of the bypass modes: every risky call must reach
+  // `canUseTool`, which is the only path a human decision can travel (§6 A1).
+  permissionMode: 'default' as const,
+  settingSources,
+  ...(options.resumeSessionId ? { resume: options.resumeSessionId } : {}),
+})
 
 export const runAgent = async (options: RunAgentOptions): Promise<void> => {
   const canUseTool: CanUseTool = async (toolName, input) => {
@@ -181,20 +249,9 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
   const stream = query({
     prompt,
     options: {
-      cwd: options.cwd,
-      agent: options.persona.name,
-      agents: {
-        [options.persona.name]: {
-          description: options.persona.name,
-          prompt: options.persona.systemPrompt,
-          tools: options.persona.tools,
-          model: options.persona.model,
-        },
-      },
+      ...buildQueryOptions(options),
       canUseTool,
-      permissionMode: 'default',
       ...(options.abortController ? { abortController: options.abortController } : {}),
-      ...(options.resumeSessionId ? { resume: options.resumeSessionId } : {}),
     },
   })
 
@@ -212,7 +269,7 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
         options.onSessionId?.(sessionId)
       }
       for (const event of toWireEvents(message)) {
-        options.onEvent(event)
+        await options.onEvent(event)
       }
     }
   } catch (error) {

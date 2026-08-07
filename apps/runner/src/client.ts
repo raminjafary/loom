@@ -18,6 +18,7 @@ import {
 import { readHostClaudeOAuth } from './host-claude-auth.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
+import { createSendQueue } from './send-queue.js'
 import {
   commitRunWork,
   discardRunWorkspace,
@@ -81,7 +82,24 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
    */
   const pendingTerminalEvents = new Map<string, WireAgentEvent>()
 
-  const send = (frame: RunnerFrame) => socket?.send(JSON.stringify(frame))
+  // Backpressure and disconnect handling (PLAN.md §7 Phase 1) — see send-queue.ts
+  // for what each knob protects against.
+  const sendQueue = createSendQueue<RunnerFrame>({
+    isOpen: () => socket !== null && socket.readyState === WebSocket.OPEN,
+    bufferedAmount: () => socket?.bufferedAmount ?? 0,
+    write: (frame) => socket?.send(JSON.stringify(frame)),
+    // Only run-scoped events are worth holding through a disconnect. A `heartbeat`
+    // replayed later would vouch for liveness at a moment that has passed, and a
+    // `check_path_result` answers a request that is long gone.
+    shouldHold: (frame) => frame.type === 'agent_event',
+    highWaterBytes: Number(process.env.LOOM_SEND_HIGH_WATER_BYTES ?? 1_000_000),
+    outboxLimit: Number(process.env.LOOM_OUTBOX_LIMIT ?? 1_000),
+    log,
+    isStopped: () => closed,
+  })
+
+  const send = (frame: RunnerFrame) => sendQueue.send(frame)
+  const awaitSendCapacity = () => sendQueue.awaitCapacity()
 
   const sendAgentEvent = (runId: string, event: WireAgentEvent) => {
     const seq = (eventSeqs.get(runId) ?? 0) + 1
@@ -209,11 +227,14 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
     abort: AbortController
     resumeSessionId?: string
   }): Promise<void> => {
-    const onEvent = (event: WireAgentEvent) => {
+    // Async, and awaited by whoever produces events (the SDK loop in-process, the
+    // container's stdout reader when sandboxed) — that await is the backpressure.
+    const onEvent = async (event: WireAgentEvent) => {
       if (event.kind === 'run_completed' || event.kind === 'run_failed') {
         pendingTerminalEvents.set(input.runId, event)
         return
       }
+      await awaitSendCapacity()
       sendAgentEvent(input.runId, event)
     }
     const onSessionId = (sessionId: string) => {
@@ -363,6 +384,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
       switch (frame.type) {
         case 'hello_ack':
           log(`paired as runner ${frame.runnerId}`)
+          // Only now, not on socket open: an event sent before the server has
+          // resolved this Runner's identity has no run to attach to and is
+          // rejected, which would turn a held event into a lost one.
+          sendQueue.flush()
           return
 
         case 'error':

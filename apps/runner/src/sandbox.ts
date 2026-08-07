@@ -46,7 +46,8 @@ export interface SandboxOptions {
   /** Where the sandbox reaches the proxy, e.g. http://loom-egress:8080. */
   readonly egressDataUrl: string
   readonly resumeSessionId?: string
-  readonly onEvent: (event: WireAgentEvent) => void
+  /** May return a promise; awaited before the next event is forwarded (see forwardEvent). */
+  readonly onEvent: (event: WireAgentEvent) => void | Promise<void>
   readonly onSessionId?: (sessionId: string) => void
   readonly onPermissionRequest: (
     toolUseId: string,
@@ -299,6 +300,37 @@ export const runAgentInSandbox = async (
     })
   }
 
+  /**
+   * Forwards container events to the host one at a time, pausing the container's
+   * stdout while the host is behind (PLAN.md §7 Phase 1 backpressure). Two
+   * properties this protects, both of which a bare `options.onEvent(...)` call
+   * broke:
+   *
+   * - **Order.** `onEvent` may be async, and readline emits several lines within
+   *   one chunk — concurrent calls would assign event sequence numbers in
+   *   whatever order their awaits happened to resolve.
+   * - **Pressure.** Pausing the pipe is what reaches the agent inside the
+   *   container: its stdout stops draining, `process.stdout.write` starts
+   *   returning false, and agent-host waits (see its `emitEvent`).
+   */
+  let queueDepth = 0
+  let forwarding: Promise<void> = Promise.resolve()
+  const forwardEvent = (event: WireAgentEvent): void => {
+    queueDepth += 1
+    stdout.pause()
+    forwarding = forwarding
+      .then(() => options.onEvent(event))
+      .catch((error: unknown) =>
+        log(
+          `failed to forward an event for run ${options.runId}: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      )
+      .then(() => {
+        queueDepth -= 1
+        if (queueDepth === 0) stdout.resume()
+      })
+  }
+
   const stdout = createInterface({ input: child.stdout })
   stdout.on('line', (line) => {
     if (process.env.LOOM_SANDBOX_TRACE === '1') log(`[run ${options.runId}:raw] ${line}`)
@@ -317,7 +349,7 @@ export const runAgentInSandbox = async (
         sendStart()
         return
       case 'event':
-        options.onEvent(frame.event)
+        forwardEvent(frame.event)
         return
       case 'session':
         options.onSessionId?.(frame.sessionId)

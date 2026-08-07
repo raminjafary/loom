@@ -1,4 +1,5 @@
 import { classifyToolEffect, isRiskyTool } from '@loom/domain'
+import { once } from 'node:events'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
 import { resolveWithinRoot } from './path-check.js'
@@ -26,6 +27,18 @@ import {
 
 const emit = (event: SandboxEvent): void => {
   process.stdout.write(encodeFrame(event))
+}
+
+/**
+ * Same as `emit`, but waits for stdout to drain (PLAN.md §7 Phase 1 backpressure).
+ * Awaited from `onEvent` only: while the Runner has the pipe paused, this is what
+ * makes the agent loop inside the container wait rather than pile turns into this
+ * process's write buffer. Node never *loses* a buffered write, so the control
+ * frames keep using the plain `emit` — the difference here is pressure, not safety.
+ */
+const emitEvent = async (event: SandboxEvent): Promise<void> => {
+  if (process.stdout.write(encodeFrame(event))) return
+  await once(process.stdout, 'drain')
 }
 
 const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>()
@@ -87,7 +100,7 @@ const main = async (): Promise<void> => {
     // does not exist in the namespace the tool will run in.
     classifyEffect: (toolName, input) =>
       classifyToolEffect(toolName, input, command.cwd, resolveWithinRoot),
-    onEvent: (event) => emit({ t: 'event', event }),
+    onEvent: (event) => emitEvent({ t: 'event', event }),
     onSessionId: (sessionId) => emit({ t: 'session', sessionId }),
     onPermissionRequest: (toolUseId, toolName, input) => {
       emit({ t: 'permission_request', toolUseId, toolName, input })
