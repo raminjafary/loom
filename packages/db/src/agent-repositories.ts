@@ -2,6 +2,7 @@ import type {
  AgentRunEventRepositoryPort,
  AgentRunRepositoryPort,
  ApprovalRepositoryPort,
+ NotificationTargetRepositoryPort,
  PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
  RepositoryRepositoryPort,
@@ -16,12 +17,14 @@ import {
  toAgentPersona,
  toAgentRun,
  toApprovalRequest,
+ toNotificationTarget,
  toPersonaGroup,
  toRepository,
  toRunner,
  type AgentPersonaRow,
  type AgentRunRow,
  type ApprovalRequestRow,
+ type NotificationTargetRow,
  type PersonaGroupRow,
  type RepositoryRow,
  type RunnerRow,
@@ -31,6 +34,7 @@ import {
  agentRun,
  agentRunEvent,
  approvalRequest,
+ notificationTarget,
  personaGroup,
  repository,
  runner,
@@ -365,6 +369,53 @@ export const workspaceRunControlRepository = (db: Database): WorkspaceRunControl
  pausedAt: row.runsPausedAt,
  pausedByUserId: row.runsPausedByUserId,
  }
+ },
+})
+
+/**
+ * Where a human can be reached. `register` upserts on
+ * (workspace, endpoint) so a browser that re-subscribes — which it does on its
+ * own schedule, whenever the push service rotates the subscription — refreshes
+ * its credentials instead of leaving a dead row behind that every later delivery
+ * would retry.
+ */
+export const notificationTargetRepository = (db: Database): NotificationTargetRepositoryPort => ({
+ async register(input) {
+ const [row] = await db
+.insert(notificationTarget)
+.values({
+ workspaceId: input.workspaceId,
+ userId: input.userId,
+ transport: input.transport,
+ endpoint: input.endpoint,
+ credentials: input.credentials,
+ })
+.onConflictDoUpdate({
+ target: [notificationTarget.workspaceId, notificationTarget.endpoint],
+ set: { userId: input.userId, transport: input.transport, credentials: input.credentials },
+ })
+.returning
+ if (!row) throw new NotFoundError('NotificationTarget')
+ return toNotificationTarget(row as NotificationTargetRow)
+ },
+
+ async unregister(workspaceId, endpoint) {
+ await db
+.delete(notificationTarget)
+.where(
+ and(
+ eq(notificationTarget.workspaceId, workspaceId),
+ eq(notificationTarget.endpoint, endpoint),
+),
+)
+ },
+
+ async listByWorkspace(workspaceId) {
+ const rows = await db
+.select
+.from(notificationTarget)
+.where(eq(notificationTarget.workspaceId, workspaceId))
+ return rows.map((row) => toNotificationTarget(row as NotificationTargetRow))
  },
 })
 

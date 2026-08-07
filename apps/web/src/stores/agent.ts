@@ -1,4 +1,9 @@
-import { createAgentSession, createApi, type AgentSnapshot } from '@loom/client-core'
+import {
+  createAgentSession,
+  createApi,
+  type AgentSnapshot,
+  type PushRegistration,
+} from '@loom/client-core'
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 
@@ -42,6 +47,10 @@ export const useAgentStore = defineStore('agent', () => {
     discardRun: (agentRunId: string) => session.discardRun(agentRunId),
     pushRun: (agentRunId: string, acknowledgeCiChange?: boolean) =>
       session.pushRun(agentRunId, acknowledgeCiChange),
+    registerNotificationTarget: (registration: PushRegistration) =>
+      session.registerNotificationTarget(registration),
+    unregisterNotificationTarget: (endpoint: string) =>
+      session.unregisterNotificationTarget(endpoint),
     pauseAllRuns: () => session.pauseAllRuns(),
     resumeAllRuns: () => session.resumeAllRuns(),
     refreshInbox: () => session.refreshInbox(),

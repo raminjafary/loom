@@ -19,6 +19,15 @@ const EnvSchema = z.object({
  // human is excluded from the no-progress signal (see reapStuckRuns), so this
  // is the only clock that governs an `awaiting_approval` run.
  APPROVAL_SLA_MS: z.coerce.number.int.positive.default(900_000),
+ // Web push. All three optional together:
+ // with none set, the notification adapter reports itself unconfigured and the
+ // UI says so, rather than offering a subscribe button that cannot work.
+ // Generate a pair with `npx web-push generate-vapid-keys`.
+ VAPID_PUBLIC_KEY: z.string.optional,
+ VAPID_PRIVATE_KEY: z.string.optional,
+ // Identifies the operator to the push service, which uses it to contact
+ // whoever is sending if something goes wrong. `mailto:` or an https URL.
+ VAPID_SUBJECT: z.string.default('mailto:operator@localhost'),
 })
 
 export type Config = z.infer<typeof EnvSchema>

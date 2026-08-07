@@ -4,6 +4,7 @@ import {
  NotFoundError,
  ValidationError,
  agentRunActor,
+ buildNotification,
  isHuman,
  isRiskyTool,
  parsePersonaMarkdown,
@@ -17,6 +18,7 @@ import {
  type AgentRunStatus,
  type ApprovalRequest,
  type ApprovalRequestId,
+ type NotificationKind,
  type PersonaGroup,
  type PersonaGroupId,
  type PersonaSpec,
@@ -39,9 +41,10 @@ import type {
  RunnerRepositoryPort,
  WorkspaceRunControlRepositoryPort,
 } from './agent-ports.js'
+import type { NotificationDeps } from './notification-use-cases.js'
 import type { Deps } from './use-cases.js'
 
-export interface AgentDeps extends Deps {
+export interface AgentDeps extends Deps, NotificationDeps {
  readonly runners: RunnerRepositoryPort
  readonly repositories: RepositoryRepositoryPort
  readonly agentRuns: AgentRunRepositoryPort
@@ -574,6 +577,39 @@ const postRunSystemMessage = async (
  })
 }
 
+/**
+ * Tells a human who is *not looking* that a run needs them. Every visible
+ * transition already posts a thread message via `postRunSystemMessage`; that
+ * message is only seen by someone watching, and the whole point of the * correction is that nobody watches for long.
+ *
+ * Failures are swallowed, deliberately: a run must not stay stuck in
+ * `awaiting_approval` because a push service was unreachable, and the human's
+ * fallback — the Inbox — is unaffected either way. The adapter logs; this layer
+ * has nothing to log with.
+ */
+const notifyRun = async (
+ deps: AgentDeps,
+ run: AgentRun,
+ kind: NotificationKind,
+ extra: { toolName?: string; detail?: string } = {},
+): Promise<void> => {
+ try {
+ await deps.notifications.deliver(
+ buildNotification({
+ workspaceId: run.workspaceId,
+ runId: run.id,
+ kind,
+ personaName: run.persona.name,
+ branchName: run.branchName,
+ totalCostUsd: run.totalCostUsd,
+...extra,
+ }),
+)
+ } catch {
+ // See above — best-effort by design.
+ }
+}
+
 export const getRunControl = (
  deps: AgentDeps,
  input: { workspaceId: WorkspaceId },
@@ -609,6 +645,11 @@ const cancelRun = async (deps: AgentDeps, run: AgentRun, reason: string): Promis
  completedAt: new Date,
  })
  await postRunSystemMessage(deps, cancelled, `Run cancelled: ${reason}.`)
+ // No notification here on purpose: every path into this function is a human
+ // deliberately stopping the work (the kill switch), and pushing "your run
+ // stopped" back at the person who just stopped it trains people to ignore
+ // notifications. Same reasoning for a failed `startAgentRun` dispatch — they
+ // are looking at the error already.
 }
 
 /**
@@ -792,6 +833,9 @@ export const reapStuckRuns = async (
  completedAt: new Date,
  })
  await postRunSystemMessage(deps, failed, `Run failed: ${reason}.`)
+ // A reaped run is the case least likely to be noticed: it produced no
+ // terminal event of its own, so a watcher sees the thread simply stop.
+ await notifyRun(deps, failed, 'run_failed', { detail: reason })
  }
 }
 
@@ -850,6 +894,9 @@ export const expireStaleApprovals = async (
  run,
  `Approval for ${approval.toolName} auto-denied after ${Math.round(options.approvalSlaMs / 60_000)} min with no decision.`,
 )
+ // Worth saying out loud rather than only in the thread: the human's window
+ // to decide closed, and the run went on with the call denied.
+ await notifyRun(deps, run, 'approval_expired', { toolName: approval.toolName })
  }
 }
 
@@ -942,17 +989,22 @@ export const recordAgentEvent = async (
  // unsandboxed run — where no proxy sat on the request path — has nothing
  // better to record.
  const metered = run.totalCostUsd !== null
- await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
+ const completed = await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
  status: 'completed',
 ...(metered ? {}: { totalCostUsd: input.event.totalCostUsd }),
  completedAt: new Date,
  })
+ // Notified from the *updated* run, not the one read at the top: the branch
+ // name and the metered cost are what make this notification actionable, and
+ // `run` predates the transition that finalizes them.
+ await notifyRun(deps, completed, 'run_finished')
  } else if (input.event.kind === 'run_failed') {
- await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
+ const failed = await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
  status: 'failed',
  errorMessage: input.event.message,
  completedAt: new Date,
  })
+ await notifyRun(deps, failed, 'run_failed', { detail: input.event.message })
  }
 }
 
@@ -1006,6 +1058,12 @@ export const requestApproval = async (
  threadId: run.threadId,
  message,
  })
+
+ // The one notification the ship criterion names outright: a gate blocks the
+ // run until a human answers, and the approval SLA will auto-*deny* it if
+ // nobody does — so being told is the difference between a decision and a
+ // timeout.
+ await notifyRun(deps, run, 'approval_needed', { toolName: input.toolName })
 
  return approval
 }

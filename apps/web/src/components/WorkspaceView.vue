@@ -8,6 +8,7 @@ import DiffView from './DiffView.vue'
 import InboxView from './InboxView.vue'
 import KillSwitch from './KillSwitch.vue'
 import MessageList from './MessageList.vue'
+import NotificationToggle from './NotificationToggle.vue'
 import PersonaForm from './PersonaForm.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
 import RepositoryPanel from './RepositoryPanel.vue'
@@ -77,12 +78,45 @@ const openInbox = => {
  void agent.refreshInbox
 }
 
+/**
+ * Where a clicked notification lands: the Inbox, with that run
+ * already selected. A notification that dropped a human on the workspace view
+ * and left them to find the run would put the search back on them, which is the
+ * cost the Inbox exists to remove.
+ */
+const openRun = async (agentRunId: string) => {
+ openInbox
+ await agent.inspectRun(agentRunId)
+}
+
+// Two arrival paths, because a service worker cannot reach into a page that
+// isn't running: a cold start carries the run in `?run=` (there is no router to
+// carry it any other way), and an already-open tab gets a postMessage from the
+// worker after it focuses this window.
+const consumeRunDeepLink = => {
+ const runId = new URLSearchParams(window.location.search).get('run')
+ if (!runId) return
+ // Strip it once used, so a reload doesn't keep yanking the view back to a run
+ // the human has already dealt with.
+ window.history.replaceState(null, '', window.location.pathname)
+ void openRun(runId)
+}
+
+const onServiceWorkerMessage = (event: MessageEvent) => {
+ const data = event.data as { type?: string; runId?: string } | null
+ if (data?.type !== 'loom:open-run' || !data.runId) return
+ void openRun(data.runId)
+}
+
 onMounted( => {
  void store.start
  void agent.start
+ consumeRunDeepLink
+ navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
 })
 
 onBeforeUnmount( => {
+ navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
  store.dispose
  agent.dispose
 })
@@ -109,6 +143,11 @@ onBeforeUnmount( => {
  <span v-if="view === 'workspace'" class="conn":class="snapshot.connection">
  {{ snapshot.connection }}
  </span>
+ <NotificationToggle
+:config="agentSnapshot.notificationConfig"
+ @subscribe="(registration) => agent.registerNotificationTarget(registration)"
+ @unsubscribe="(endpoint) => agent.unregisterNotificationTarget(endpoint)"
+ />
  <KillSwitch
 :control="agentSnapshot.runControl"
  @pause="agent.pauseAllRuns"

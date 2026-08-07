@@ -8,6 +8,9 @@ import {
  ChannelSchema,
  MessagePageSchema,
  MessageSchema,
+ NotificationConfigSchema,
+ NotificationTargetSchema,
+ NotificationTransportSchema,
  PersonaGroupSchema,
  RepositorySchema,
  RunControlSchema,
@@ -197,6 +200,34 @@ export const contract = {
 ),
 
  resume: oc.output(RunControlSchema),
+ },
+
+ /**
+ * The other half — what tells a human a run needs them instead of
+ * making them go and look. In the contract rather than a private endpoint of
+ * apps/web for the contract-first rule reason: a terminal client must be able to register a
+ * desktop-notification target through the same calls.
+ */
+ notification: {
+ /** VAPID public key and transport, or `transport: null` when unconfigured. */
+ config: oc.output(NotificationConfigSchema),
+
+ /** Upserts by endpoint — a browser re-subscribing refreshes, never duplicates. */
+ subscribe: oc
+.input(
+ z.object({
+ transport: NotificationTransportSchema,
+ endpoint: z.string.url.max(2_000),
+ // Write-only: the keys the transport needs to encrypt to this target
+ // (web push: `p256dh` and `auth`). Never echoed back in any output.
+ credentials: z.record(z.string, z.string),
+ }),
+)
+.output(NotificationTargetSchema),
+
+ unsubscribe: oc
+.input(z.object({ endpoint: z.string.max(2_000) }))
+.output(z.object({ ok: z.literal(true) })),
  },
 
  /**
