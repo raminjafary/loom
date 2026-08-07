@@ -3,15 +3,14 @@
 Read this before touching code. `PLAN.md` is the architecture/roadmap; this file is
 "what actually happened and what's next."
 
-Session scope: **complete Phase 1** (PLAN.md §7). All seven remaining items are built.
-Test suite 110 → **164**. One verification gap remains, and it needs something only you
-can supply — see "The one remaining gap".
+Session scope: **complete Phase 1** (PLAN.md §7). All seven remaining items are built and
+verified. Test suite 110 → **165**.
 
 **Phase 1's ship criterion is met and was observed end to end** (`tools/e2e-run.mts`):
 a persona was created, a run started against a real git repo, the agent worked, it hit
 an approval gate whose card carried the **exact tool argv** (not a model summary), a
 human approved, the run completed with a metered cost, the branch diff rendered, the
-Inbox surfaced it, and `keep` resolved it. Verified unsandboxed — see the gap below.
+Inbox surfaced it, and `keep` resolved it. Verified **both** unsandboxed and fully sandboxed.
 
 ---
 
@@ -121,40 +120,41 @@ Attributed to the persona, never a human.
 
 ---
 
-## The one remaining gap
+## Credentials: A6 holds, and how
 
-**A sandboxed run has never made a real model call.** Everything about the sandbox works
-except this, and the cause is understood and written up in PLAN.md §6 as "A6 caveat found
-in implementation": the SDK's bundled CLI validates `ANTHROPIC_API_KEY` *offline* —
-prefix, length, and something checksum-shaped — and on failure ignores
-`ANTHROPIC_BASE_URL` and contacts `api.anthropic.com` directly. It also rewrites the key
-it forwards. So a broker-issued opaque token cannot be used, and a sandboxed Claude Agent
-run needs a **real** key inside the sandbox.
+A sandboxed run holds **no credential of any kind** — only an opaque, per-run, revocable
+lease token. This works, and the route matters because the obvious one fails.
 
-That is now explicit opt-in: both `LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH=1` and
-`LOOM_SANDBOX_MODEL_API_KEY` are required, and without them a sandboxed run fails fast
-with an explanation rather than hanging. The key is functionally inert in the sandbox —
-the in-container shim strips it, the proxy attaches its own copy, and
-`api.anthropic.com` is not on the egress allowlist, so it cannot be used elsewhere. The
-residual risk is exfiltration of that one key.
+`ANTHROPIC_API_KEY` cannot carry a brokered token: the SDK's bundled CLI validates it
+client-side (prefix, length, something checksum-shaped — identically-shaped random keys
+are accepted or rejected by draw), rewrites what it forwards, and on failure ignores
+`ANTHROPIC_BASE_URL` and calls `api.anthropic.com` directly.
 
-**To close the gap you need to decide, then supply a key** (see PLAN.md §6 for the full
-fork): accept the caveat for now (option 1, what Phase 1 ships), or defer sandboxed
-model calls to a brokerable backend — vLLM/Codex are plain HTTP clients with no
-client-side key validation, already on the Phase 3 roadmap (option 2, preferred). Option
-3, owning the agent loop against the Messages API, makes A6 hold fully but rebuilds what
-§4b deliberately avoided.
+The **OAuth path** has none of those behaviours. Given a structurally valid
+`$HOME/.claude/.credentials.json` the CLI considers itself signed in, honors the base
+URL, and forwards the token byte-exact as `Authorization: Bearer`. So the sandbox gets a
+credentials file containing its lease token, and the proxy swaps it for the real
+credential. The upstream credential is a short-lived OAuth token rather than a permanent
+key — better than what A6 originally imagined.
 
-Subscription auth is **not** the way out: §8 records the SDK's license condition
-(claude.ai limits may not be exposed to your users, API keys only) and A5 forbids
-mounting host `~/.claude` credentials into the sandbox. The CLI's "Not logged in" on the
-OAuth path is that absence working as intended.
+That token lives in the operator's login keychain, which no container can read, so the
+Runner reads it host-side and pushes it to the proxy's loopback control plane, refreshing
+on an interval. **Explicit opt-in** via `LOOM_USE_HOST_CLAUDE_AUTH=1` — reading an
+operator's keychain is not something the Runner should start doing quietly. Never logged,
+never written to disk by Loom, never crosses into a container. `sandbox.test.ts` guards
+the property directly: no credential-shaped variable may appear in the sandbox env.
 
-Consequently unverified against a real token: metering arithmetic on real usage, a cap
-actually killing a run, and `cost_report` reaching the database. All are wired and
-unit-tested; none has executed for real.
+**Two caveats, both real and neither technical:**
 
----
+- **Licensing.** §8 records that the SDK's terms prohibit exposing claude.ai
+  subscription limits to *your users*. Single-operator self-hosted is one reading; a team
+  workspace on one person's subscription is the case the term is about. `ANTHROPIC_API_KEY`
+  on the proxy remains supported and is the right choice for multi-user.
+- **Undocumented.** The credentials-file shape is not a published integration point and
+  could change. The API-key fallback exists so a break degrades rather than outages.
+
+A brokerable backend (vLLM/Codex, §7 Phase 3) stays the most durable answer — neither
+validates credentials client-side at all.
 
 ## Also not built — do not assume these exist
 
@@ -194,14 +194,13 @@ unit-tested; none has executed for real.
 
 ## Immediate next steps, in priority order
 
-1. **Decide the A6 fork and supply a key**, then run `npx tsx tools/e2e-run.mts` with
-   `LOOM_SANDBOX_ENABLED=1` to close the last verification gap.
-2. **Browser-verify the kill switch** — the only new UI this session added.
-3. **§11's riskiest-assumption test** — three clones, three workers, one repo, measuring
+1. **Browser-verify the kill switch** — the only new UI this session added, and the only
+   Phase 1 surface never clicked by a human.
+2. **§11's riskiest-assumption test** — three clones, three workers, one repo, measuring
    human minutes to reconcile versus doing it serially. Still never run, and all of
    Phase 2 rides on it. This is the highest-value thing left in the whole plan.
-4. Then Phase 2 proper (Planner/Swarm), or Phase 3's brokerable backend if you took
-   option 2 above.
+3. Then Phase 2 proper (Planner/Swarm), or Phase 3's brokerable backend (vLLM/Codex),
+   which removes the licensing and undocumented-integration caveats above entirely.
 
 ## Things to NOT redo
 
@@ -226,6 +225,10 @@ unit-tested; none has executed for real.
   own name, and `NO_PROXY` must exempt both that and the proxy host.
 - **Don't restore the no-progress reaper for `awaiting_approval` runs.**
 - **Don't make the model commit its own work.** That was the bug.
+- **Don't try to broker a token through `ANTHROPIC_API_KEY`.** It is validated
+  client-side and rewritten. The OAuth credentials-file path is the one that works.
+- **Don't send a run's terminal event before its work is committed.** The server marks
+  the run completed on that event and clients immediately fetch the diff.
 - Don't add unit tests to `agent-use-cases.ts` expecting them to exist — the convention
   there is integration/live verification. Pure domain modules (`model-pricing.ts`,
   `egress-policy.ts`, `push-policy.ts`) do get unit tests.
@@ -262,7 +265,7 @@ See README.md. Changes this session:
 
 ```bash
 pnpm -r typecheck
-pnpm -r test                                # 164 tests
+pnpm -r test                                # 165 tests
 npx vitest run tools/architecture.test.ts   # 4 checks
 npx eslint packages/ apps/                  # clean
 
@@ -270,5 +273,10 @@ npx tsx tools/e2e-run.mts                   # real Runner, real repo, real agent
 ```
 
 `tools/e2e-run.mts` is a hand-run driver, not a test: it spends real tokens and asserts
-nothing, it prints what happened. It defaults to unsandboxed so it uses whatever model
-auth the host already has. It is what found the uncommitted-work bug.
+nothing, it prints what happened. It found both the uncommitted-work bug and the
+terminal-event ordering bug. Defaults to unsandboxed; for the sandboxed path:
+
+```bash
+set -a && . ./.env && set +a
+LOOM_SANDBOX_ENABLED=1 LOOM_USE_HOST_CLAUDE_AUTH=1 npx tsx tools/e2e-run.mts
+```
