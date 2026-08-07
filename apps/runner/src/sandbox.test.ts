@@ -80,8 +80,19 @@ describe('sandbox args meet the sandbox spec spec', => {
  expect(args).toContain('--rm')
  })
 
- it('passes env through without leaking a real credential name', => {
+ it('passes env through', => {
  expect(args).toContain('ANTHROPIC_BASE_URL=http://loom-egress:8080/anthropic')
+ })
+
+ it('never puts a credential-shaped variable in the sandbox environment', => {
+ // The core property, guarded rather than assumed. The run carries only its
+ // opaque lease token, in a credentials file; the real credential is attached by the
+ // proxy. An ANTHROPIC_API_KEY here would silently undo that — which is exactly what
+ // an earlier iteration did, before the OAuth path made it unnecessary.
+ const envArgs = args.filter((_, i) => args[i - 1] === '-e')
+ for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'LOOM_EGRESS_CONTROL_SECRET']) {
+ expect(envArgs.some((entry) => entry.startsWith(`${name}=`))).toBe(false)
+ }
  })
 })
 
