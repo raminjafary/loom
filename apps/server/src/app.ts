@@ -96,6 +96,7 @@ export const buildApp = async (
     runControl: workspaceRunControlRepository(db),
     notifications,
     notificationTargets,
+    limits: { maxConcurrentRunsPerWorkspace: config.MAX_CONCURRENT_RUNS_PER_WORKSPACE },
   }
 
   // The Runner gateway produces `dispatch` — see runner-gateway.ts for why

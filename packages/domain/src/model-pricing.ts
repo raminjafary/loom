@@ -53,6 +53,32 @@ export const findModelPrice = (model: string): ModelPrice | null => {
   return best?.price ?? null
 }
 
+/**
+ * Capability tier, ascending (PLAN.md §8's model list, §9's Planner/Worker
+ * tiering). Separate from price because they are separate questions: price is
+ * what a call costs, tier is how much capability a run is allowed to reach for —
+ * and §5's attenuation rule is about the latter. They happen to correlate today.
+ *
+ * Same longest-prefix matching as `MODEL_PRICES`, for the same reason: provider
+ * ids carry date and variant suffixes.
+ */
+const MODEL_TIERS: Readonly<Record<string, number>> = {
+  'claude-haiku-4-5': 1,
+  'claude-sonnet-5': 2,
+  'claude-opus-5': 3,
+  'claude-fable-5': 4,
+}
+
+/** Null for a model this table does not rank — see attenuateChildPersona on why that is not "allowed". */
+export const modelTierRank = (model: string): number | null => {
+  let best: { prefix: string; rank: number } | null = null
+  for (const [prefix, rank] of Object.entries(MODEL_TIERS)) {
+    if (!model.startsWith(prefix)) continue
+    if (best === null || prefix.length > best.prefix.length) best = { prefix, rank }
+  }
+  return best?.rank ?? null
+}
+
 export interface TokenUsage {
   readonly inputTokens: number
   readonly outputTokens: number

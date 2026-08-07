@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { parseMention } from '@loom/client-core'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import ActiveRunsPanel from './ActiveRunsPanel.vue'
 import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
@@ -212,6 +213,11 @@ onBeforeUnmount(() => {
     </main>
 
     <aside v-if="view === 'workspace'" class="agent-sidebar">
+      <ActiveRunsPanel
+        :runs="agentSnapshot.activeRuns"
+        :watched-run-id="agentSnapshot.activeRun?.id ?? null"
+        @watch="(agentRunId) => agent.watchRun(agentRunId)"
+      />
       <RunnerPanel
         :runners="agentSnapshot.runners"
         :last-pairing="agentSnapshot.lastPairing"

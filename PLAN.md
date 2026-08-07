@@ -626,6 +626,13 @@ The happy path (SDK stream → WS → render) is a weekend. The rest is the actu
 **Ship criterion**: a human creates a persona, `@mention`s it, watches it work on a real repo, is notified when it needs them, approves one gate whose card shows exact argv, and merges a reviewed diff — with no path by which the agent could have approved itself or pushed on its own.
 
 ### Phase 2 — Planner + Swarm, ~6–10 weeks
+
+**Foundation built** (see HANDOFF.md): concurrent runs per workspace behind a configurable
+limit, `parent_run_id` + `relation` on `agent_run`, §5's capability attenuation enforced on
+every child start, a run may spawn children only of itself, and `agentRun.listActive`/
+`listChildren` plus an Active-runs panel. Nothing calls the child-run path yet — the Planner
+below is its first real caller.
+
 - Planner with `tools: []`, structured decomposition, child runs, aggregation. Build on the SDK's `Workflow`/`SendMessage` rather than a hand-rolled scheduler (§4d).
 - **Reconciliation: agent-led, with a mechanical fallback.** The target is a reconciler *agent* that merges sibling branches and resolves contradictions, so that reconciliation scales with agents rather than with human attention. But "a reconciler agent resolves conflicts" is a research problem, not a ticket, so it ships behind a **serialized merge queue** that is always the fallback: rebase in order, run tests, and on failure hand the branch back to its owning run. Build the queue first (it is deterministic and cheap), then let the reconciler agent attempt each merge with the queue catching what it gets wrong. Measure agent-reconciled merge *correctness* and token cost before trusting it unsupervised.
 - **Do not build a custom VCS.** Cursor needed one at ~1,000 commits/sec because git's locking could not keep up — that is a major project in its own right and is not justified below double-digit concurrent workers. Plain clone-per-run (§5a) is sufficient at the scale this plan targets; revisit only if git contention is measured, not anticipated.

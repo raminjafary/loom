@@ -4,6 +4,7 @@ import {
   NotFoundError,
   ValidationError,
   agentRunActor,
+  attenuateChildPersona,
   buildNotification,
   isHuman,
   isRiskyTool,
@@ -15,6 +16,7 @@ import {
   type AgentPersonaId,
   type AgentRun,
   type AgentRunId,
+  type AgentRunRelation,
   type AgentRunStatus,
   type ApprovalRequest,
   type ApprovalRequestId,
@@ -54,6 +56,21 @@ export interface AgentDeps extends Deps, NotificationDeps {
   readonly personaGroups: PersonaGroupRepositoryPort
   readonly runControl: WorkspaceRunControlRepositoryPort
   readonly dispatch: RunDispatchPort
+  readonly limits: RunLimits
+}
+
+/**
+ * Policy values, not infrastructure — hence a plain object in deps rather than a
+ * port. They are here rather than read from the environment inside a use-case so
+ * that the application layer keeps knowing nothing about `process.env`, and a test
+ * can set them without touching the environment.
+ */
+export interface RunLimits {
+  /**
+   * How many runs may be non-terminal in one workspace at once (PLAN.md §7 Phase 2).
+   * Phase 1's hard limit of one is just this set to 1.
+   */
+  readonly maxConcurrentRunsPerWorkspace: number
 }
 
 /** Administrative action, human-only, same reasoning as createChannel. */
@@ -312,6 +329,10 @@ export const getAgentRun = async (
  * without this, a page reload during a run leaves no path back to its
  * approval card until the run happens to finish (found live during PLAN.md
  * §3a verification).
+ *
+ * Kept alongside `listActiveAgentRuns` now that a workspace may have several:
+ * this answers "which one should I show by default", which is still a question a
+ * client asks on load.
  */
 export const getActiveAgentRun = (
   deps: AgentDeps,
@@ -319,10 +340,32 @@ export const getActiveAgentRun = (
 ): Promise<AgentRun | null> => deps.agentRuns.findActiveByWorkspace(input.workspaceId)
 
 /**
+ * Every run currently executing in the workspace (PLAN.md §7 Phase 2). Distinct
+ * from the Inbox's `listNeedsAttention`, which answers "what is blocked on me" —
+ * this answers "what is running", and with concurrency those diverge.
+ */
+export const listActiveAgentRuns = (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId },
+): Promise<AgentRun[]> => deps.agentRuns.listActiveByWorkspace(input.workspaceId)
+
+/** One run's children (PLAN.md §5) — what the Phase 2 tree view is drawn from. */
+export const listChildAgentRuns = (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
+): Promise<AgentRun[]> => deps.agentRuns.listByParent(input.workspaceId, input.agentRunId)
+
+/**
  * Starts one agent run against a bound repository's working copy. The
  * persona is looked up by id and denormalized into a frozen `PersonaSpec`
  * snapshot on the run — the run must keep executing with the persona as it
  * was at start time even if the stored persona is edited later.
+ *
+ * `parentRunId` makes this a child run (PLAN.md §5, Phase 2). Two things then
+ * apply that do not for a human-started run: the child's capabilities are
+ * attenuated against its parent's, and the actor may be the parent run rather
+ * than a human — which is the whole point of a Planner, and is safe *only*
+ * because of that attenuation.
  */
 export const startAgentRun = async (
   deps: AgentDeps,
@@ -334,25 +377,48 @@ export const startAgentRun = async (
     personaId: AgentPersonaId
     /** What a human asked for via `@mention` (PLAN.md §3a); absent for the sidebar-picker path. */
     task?: string
+    /** Set when one run spawns another (PLAN.md §5). */
+    parentRunId?: AgentRunId
+    relation?: AgentRunRelation
   },
 ): Promise<AgentRun> => {
+  const parent = input.parentRunId
+    ? await deps.agentRuns.findById(input.workspaceId, input.parentRunId)
+    : null
+  if (input.parentRunId && !parent) throw new NotFoundError('Parent AgentRun')
+
+  // A human may always start a run. An agent run may start one *only* as a child
+  // of itself — anything else would let a run manufacture work outside the tree
+  // that attenuation is defined over, which is the same forgery surface §6 A1
+  // closes for approvals.
   if (!isHuman(input.actor)) {
-    throw new ForbiddenError('Only a human may start an agent run')
+    if (input.actor.kind !== 'agent_run' || parent === null) {
+      throw new ForbiddenError('Only a human may start an agent run')
+    }
+    if (input.actor.agentRunId !== parent.id) {
+      throw new ForbiddenError('An agent run may only spawn children of itself')
+    }
   }
 
   // Kill switch (PLAN.md §6 runtime safety) — checked before anything is
-  // written, so a paused workspace leaves no half-created run behind.
+  // written, so a paused workspace leaves no half-created run behind. Applies to
+  // child runs too: a pause that a Planner could spawn its way around is not a
+  // pause.
   const control = await deps.runControl.get(input.workspaceId)
   if (control.paused) {
     throw new ValidationError('Agent runs are paused for this workspace — resume them first')
   }
 
-  // Single-active-run limit, preserved not lifted (PLAN.md §3a non-scope): a
-  // second mention while a run is active must error clearly, never silently
-  // replace what's being watched.
-  const active = await deps.agentRuns.findActiveByWorkspace(input.workspaceId)
-  if (active) {
-    throw new ValidationError('An agent run is already active in this workspace — wait for it to finish first')
+  // Concurrency limit (PLAN.md §7 Phase 2 — swarm). Phase 1 allowed exactly one
+  // active run workspace-wide; a swarm is N workers on one goal, so the limit is
+  // now a number rather than a special case. It is still a *limit*: unbounded
+  // concurrency multiplies both spend and the human attention §11 is about, and a
+  // Planner that can spawn without bound is how a runaway loop gets expensive.
+  const active = await deps.agentRuns.listActiveByWorkspace(input.workspaceId)
+  if (active.length >= deps.limits.maxConcurrentRunsPerWorkspace) {
+    throw new ValidationError(
+      `This workspace already has ${active.length} active run(s), its configured maximum — wait for one to finish first`,
+    )
   }
 
   const thread = await deps.threads.findById(input.workspaceId, input.threadId)
@@ -377,12 +443,22 @@ export const startAgentRun = async (
     budgetCapUsd: persona.harnessBudgetCapUsd,
   }
 
+  // Capability attenuation (PLAN.md §5). Checked against the parent's *snapshot*,
+  // not its stored persona: the snapshot is what the parent is actually running
+  // with, and editing a persona mid-run must not widen what its children may ask
+  // for.
+  if (parent) {
+    const verdict = attenuateChildPersona(parent.persona, personaSpec)
+    if (!verdict.ok) throw new ValidationError(verdict.reason)
+  }
+
   const run = await deps.agentRuns.create({
     workspaceId: input.workspaceId,
     threadId: input.threadId,
     repositoryId: input.repositoryId,
     runnerId: repository.runnerId,
     persona: personaSpec,
+    ...(parent ? { parentRunId: parent.id, relation: input.relation ?? 'delegation' } : {}),
   })
 
   await deps.audit.record({

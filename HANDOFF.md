@@ -3,8 +3,9 @@
 Read this before touching code. `PLAN.md` is the architecture/roadmap; this file is
 "what actually happened and what's next."
 
-Session scope: **notifications** — the item the previous handoff called the largest
-remaining Phase 1 gap. Built and verified live. Test suite 166 → **193**.
+Session scope, in order: **notifications** (the item the previous handoff called the
+largest remaining Phase 1 gap), Runner **backpressure**, and then the **start of
+Phase 2**. All built and verified live. Test suite 166 → **228**.
 
 **The Phase 1 ship criterion is now fully met**, including the clause that was only
 substantially met before: "is notified when it needs them". Verified end to end in a
@@ -38,6 +39,50 @@ Inbox surfacing it, and `keep` resolving it — and now an OS notification arriv
 the gate opened, whose click landed on that run in the Inbox.
 
 ---
+
+## Phase 2 has started — the concurrency foundation is in
+
+Not the Planner, not the tree view, not the merge queue. What landed is what all
+three need first:
+
+- **A workspace runs several agents at once.** Phase 1's hard "one active run"
+  became `MAX_CONCURRENT_RUNS_PER_WORKSPACE` (default **3**, matching §11's own
+  experiment). Still a limit, deliberately: concurrency multiplies both spend and
+  the human attention §11 is about, and a fourth start gets a clear error rather
+  than a silent queue.
+- **`parent_run_id` + `relation`** on `agent_run` (migration `0014`), with
+  `relation` distinguishing delegation from review/reconcile exactly as §5 asks,
+  rather than letting a reviewer masquerade as a delegation child.
+- **Capability attenuation (§5)** as a pure domain module with 13 tests: a child
+  can't hold tools its parent lacks, can't auto-approve when its parent can't,
+  can't raise or drop the budget cap, and can't reach a higher model tier. An
+  unranked child model under a ranked parent is refused (a typo would otherwise be
+  the way past the tier check), while a parent that is itself unranked — §8's
+  open-weight path — constrains nothing. **This is what makes a `tools: []`
+  Planner meaningful**: without it, a Planner just spawns a child that has tools.
+- **A run may spawn children, and only its own.** An `agent_run` actor may start a
+  run only with itself as parent; anything else is refused, so a run can't graft
+  work onto a tree it isn't part of and have attenuation measured against the
+  wrong parent. The kill switch applies to child starts too.
+- **`agentRun.listActive` / `listChildren`** on the contract, `activeRuns` in the
+  client snapshot, and an **Active runs** sidebar panel that switches which run the
+  workspace view is watching.
+
+**Verified live in a browser**: three concurrent runs rendered, the fourth refused
+with the limit message, and switching the watched run landing on the run that was
+clicked.
+
+**The second bug a browser found this session:** `listActiveByWorkspace` and
+`listNeedsAttention` had no `ORDER BY`, so both lists — clickable rows, re-polled
+every ~1.5s — reshuffled between polls, and a click could land on a different run
+than the one aimed at. Both now order by `(createdAt, id)`; `id` breaks ties
+because a swarm's runs are created in the same millisecond. The concurrency test
+asserts order twice rather than membership.
+
+**What is deliberately not wired yet:** nothing calls the child-run path. The only
+thing that should is a Planner, which does not exist — so the path is exercised by
+integration tests against the real deps rather than exposed on the contract, where
+a human starting a "child" by hand would mean nothing.
 
 ## What's real right now (not a mock, not a stub)
 
@@ -313,8 +358,13 @@ validates credentials client-side at all.
    human. (The notification toggle beside it now has been, and that click found a bug.)
 3. The remaining smaller Phase 1 items: skills attachment (read the caveat above first),
    directory picker + `git init`, raw transcript tier.
-4. Then Phase 2 proper (Planner/Swarm), or Phase 3's brokerable backend (vLLM/Codex),
-   which removes the licensing and undocumented-integration caveats above entirely.
+4. **Phase 2, continuing from the foundation above**, in this order: the **serialized
+   merge queue** (deterministic and cheap, and the fallback the reconciler agent needs
+   to exist behind — build it first, per §7), then the **Planner** (`tools: []`,
+   structured decomposition, aggregation) which is the first real caller of the
+   child-run path, then the **tree view** over `parent_run_id`.
+5. Or Phase 3's brokerable backend (vLLM/Codex), which removes the licensing and
+   undocumented-integration caveats above entirely.
 
 ## Things to NOT redo
 
@@ -356,6 +406,11 @@ validates credentials client-side at all.
   permission boundary, not tidiness — see the backpressure/settings section above.
 - **Don't drop agent events under load, and don't forward container events
   concurrently.** The first loses the record; the second scrambles event ordering.
+- **Don't remove the `ORDER BY` from a query whose rows are clickable and re-polled.**
+  `listActiveByWorkspace` and `listNeedsAttention` both need it — see above.
+- **Don't let a run spawn a child of anything but itself**, and don't skip
+  `attenuateChildPersona` on a child start. Together they are the only reason a
+  `tools: []` Planner is a boundary rather than a suggestion.
 
 ### Two false trails, so they are not re-walked
 

@@ -40,6 +40,7 @@ export const useAgentStore = defineStore('agent', () => {
     deletePersonaGroup: (personaGroupId: string) => session.deletePersonaGroup(personaGroupId),
     startRun: (input: { threadId: string; repositoryId: string; personaId: string; task?: string }) =>
       session.startRun(input),
+    watchRun: (agentRunId: string) => session.watchRun(agentRunId),
     decide: (approvalRequestId: string, decision: 'approve' | 'deny') =>
       session.decide(approvalRequestId, decision),
     loadDiff: (agentRunId: string) => session.loadDiff(agentRunId),

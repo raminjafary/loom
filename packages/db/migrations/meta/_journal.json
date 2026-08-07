@@ -99,6 +99,13 @@
       "when": 1786086939780,
       "tag": "0013_great_crystal",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786091356067,
+      "tag": "0014_mighty_mauler",
+      "breakpoints": true
     }
   ]
 }

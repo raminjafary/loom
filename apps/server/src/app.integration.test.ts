@@ -214,6 +214,8 @@ describe('contract completeness', () => {
       'start',
       'get',
       'getActive',
+      'listActive',
+      'listChildren',
       'getDiff',
       'keep',
       'discard',
