@@ -3,14 +3,32 @@
 Read this before touching code. `PLAN.md` is the architecture/roadmap; this file is
 "what actually happened and what's next."
 
-Session scope: **complete Phase 1** (PLAN.md §7). All seven remaining items are built and
-verified. Test suite 110 → **166**.
+Session scope: the seven items previously tracked as remaining Phase 1 work. All seven
+are built and verified. Test suite 110 → **166**.
 
-**Phase 1's ship criterion is met and was observed end to end** (`tools/e2e-run.mts`):
-a persona was created, a run started against a real git repo, the agent worked, it hit
-an approval gate whose card carried the **exact tool argv** (not a model summary), a
-human approved, the run completed with a metered cost, the branch diff rendered, the
-Inbox surfaced it, and `keep` resolved it. Verified **both** unsandboxed and fully sandboxed.
+**Phase 1 is not finished.** Those seven were the list carried forward from the previous
+handoff, not PLAN.md §7's full Phase 1 list. Still open there:
+
+- **Notifications.** §3 calls the inbox-plus-notification loop "the retention hook" and
+  puts it ahead of the tree view. The Inbox exists; nothing tells a human a run needs
+  them, so they have to go and look. No `NotificationPort`, no web push. **The largest
+  remaining Phase 1 gap**, and the reason the ship criterion is only substantially met —
+  it says "is notified when it needs them".
+- **Skills attachment** (§4e). Parsed in persona frontmatter, never wired to a run.
+- **Directory picker and `git init` repo creation** (§5a). Binding is still
+  by-absolute-path only.
+- **Runner backpressure.**
+- **Raw transcript tier** (§4d-bis tier 3). The structured tier is built; the verbatim
+  provider stream is not persisted anywhere.
+- **Effect-based gating (§6 A3) remains partial** — path-scoped writes are enforced,
+  `Bash` is still gated by tool name.
+
+**What was observed end to end** (`tools/e2e-run.mts`), both unsandboxed and fully
+sandboxed: a persona created, a run against a real git repo, the agent working, an
+approval gate whose card carried the **exact tool argv** (not a model summary), a human
+approving, the run completing with proxy-metered cost, the branch diff rendering, the
+Inbox surfacing it, and `keep` resolving it. Everything in the ship criterion except
+being *notified* rather than having to look.
 
 ---
 
@@ -200,12 +218,17 @@ validates credentials client-side at all.
 
 ## Immediate next steps, in priority order
 
-1. **Browser-verify the kill switch** — the only new UI this session added, and the only
+1. **Notifications** — the largest remaining Phase 1 gap, and the one §3 argues is the
+   product's retention hook. Everything else in Phase 1 is either small or explicitly
+   deferred.
+2. **Browser-verify the kill switch** — the only new UI this session added, and the only
    Phase 1 surface never clicked by a human.
-2. **§11's riskiest-assumption test** — three clones, three workers, one repo, measuring
+3. **§11's riskiest-assumption test** — three clones, three workers, one repo, measuring
    human minutes to reconcile versus doing it serially. Still never run, and all of
    Phase 2 rides on it. This is the highest-value thing left in the whole plan.
-3. Then Phase 2 proper (Planner/Swarm), or Phase 3's brokerable backend (vLLM/Codex),
+4. The remaining smaller Phase 1 items: skills attachment, directory picker + `git init`,
+   Runner backpressure, raw transcript tier.
+5. Then Phase 2 proper (Planner/Swarm), or Phase 3's brokerable backend (vLLM/Codex),
    which removes the licensing and undocumented-integration caveats above entirely.
 
 ## Things to NOT redo
