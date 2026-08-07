@@ -4,7 +4,7 @@ Read this before touching code. `PLAN.md` is the architecture/roadmap; this file
 "what actually happened and what's next."
 
 Session scope: **complete Phase 1** (PLAN.md §7). All seven remaining items are built and
-verified. Test suite 110 → **165**.
+verified. Test suite 110 → **166**.
 
 **Phase 1's ship criterion is met and was observed end to end** (`tools/e2e-run.mts`):
 a persona was created, a run started against a real git repo, the agent worked, it hit
@@ -250,6 +250,15 @@ validates credentials client-side at all.
 
 ---
 
+## State of the machine at handoff
+
+Cleaned up: no stray containers, no scratch clones or run-state directories, and the
+only workspace left in either database is `dev`. The compose stack (postgres, valkey,
+egress-proxy) is up and healthy. The sandbox image `loom-agent-sandbox:latest` is built.
+
+Nothing is left running that a next session needs to stop first — a normal `pnpm dev`
+plus a re-paired Runner is the cold start.
+
 ## Environment / how to run
 
 See README.md. Changes this session:
@@ -271,7 +280,7 @@ See README.md. Changes this session:
 
 ```bash
 pnpm -r typecheck
-pnpm -r test                                # 165 tests
+pnpm -r test                                # 166 tests
 npx vitest run tools/architecture.test.ts   # 4 checks
 npx eslint packages/ apps/                  # clean
 
