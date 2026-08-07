@@ -552,6 +552,31 @@ stays, because a platform that *requires* a third-party network to run locally w
 contradict §8's self-hostable constraint. This is an adapter behind the same Runner
 transport, most naturally alongside Phase 4's multi-org and gradual-rollout work.
 
+**A5-bis — what the sandbox does and does not protect, for host secrets. [NEW]**
+Worth stating plainly, because the intuitive worry ("could an agent or some third-party
+tool reach my keychain?") has a sharp answer in one direction and a sharp answer in the
+other.
+
+**Sandboxed, it cannot.** Not by policy but by construction: the sandbox is a Linux
+container, and a macOS keychain is reachable only through host-OS facilities that do not
+exist inside it — no `security` binary, no Security.framework, no `~/Library/Keychains`.
+Beyond that, only two run-scoped host directories are mounted, the network has no route
+to the host, and the container socket is never mounted, so there is no path to escape
+into a context that *does* have those things. An agent can spend its lease's budget; it
+cannot read a credential, because the proxy never returns one.
+
+**Unsandboxed, it trivially can.** `LOOM_SANDBOX_ENABLED=0` runs model output with the
+Runner's own user privileges, and the risky-tool gate is a name-based heuristic rather
+than a boundary (A3 says so itself). One `Bash` call reads the login keychain, `~/.ssh`,
+`~/.aws`, and every repository on the machine. This is a categorically different exposure
+from "less isolated", so it requires a second, separate acknowledgement
+(`LOOM_ALLOW_UNSANDBOXED=i-understand-the-agent-gets-my-privileges`) rather than being one
+variable away. A typo or a copied `.env` must not reach it.
+
+The same reasoning is why third-party code inside the sandbox — npm packages, MCP
+servers, whatever a run installs — is bounded: it inherits the container's limits and the
+egress allowlist, not the operator's machine.
+
 **Runtime safety mechanics** (all previously missing): heartbeat + stuck detection (same tool call N times, no progress in T minutes); dead-run reaper; **idempotency keys on run steps** — BullMQ retrying a half-committed agent run is actively dangerous; enforced budget caps with pre-flight estimate, per-turn check, and hard kill, metered at the proxy; **approval SLA** (timeout → auto-deny → resumable); and a **global kill switch / pause-all**. One button. Nothing had one. **Heartbeat + no-progress detection and the dead-run reaper are built** (see HANDOFF.md) — same-tool-call-N-times detection, idempotency keys, budget caps, approval SLA, and the kill switch are not.
 
 ---

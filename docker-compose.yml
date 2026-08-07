@@ -42,6 +42,10 @@ services:
       LOOM_EGRESS_CONTROL_SECRET: ${LOOM_EGRESS_CONTROL_SECRET:?set it in .env — the Runner authenticates to the control plane with it}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?the proxy holds the real key so the sandbox never does}
       EGRESS_ALLOWED_HOSTS: ${EGRESS_ALLOWED_HOSTS:-}
+      # Logs the header *names* forwarded upstream (never values). Needed to answer
+      # "what shape of request is the SDK actually sending?", which decides whether an
+      # API key can stand in for the OAuth token — see PLAN.md §6's A6 section.
+      LOOM_EGRESS_TRACE_HEADERS: ${LOOM_EGRESS_TRACE_HEADERS:-0}
     ports:
       # Control plane on loopback only. A sandbox reaches the data plane by
       # container name over loom-sandbox and has no route to this port at all;

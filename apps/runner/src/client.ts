@@ -25,7 +25,12 @@ import {
   prepareRunWorkspace,
   pushRunBranch,
 } from './run-workspace.js'
-import { runAgentInSandbox, sandboxConfigFromEnv, sandboxEnabled } from './sandbox.js'
+import {
+  runAgentInSandbox,
+  sandboxConfigFromEnv,
+  sandboxEnabled,
+  unsandboxedAcknowledged,
+} from './sandbox.js'
 
 export interface RunnerClientOptions {
   readonly serverWsUrl: string
@@ -232,6 +237,20 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
     }
 
     if (!useSandbox || !egress) {
+      // Refused rather than warned. The warning was in the log; the consequence would be
+      // in the operator's keychain.
+      if (!unsandboxedAcknowledged()) {
+        sendAgentEvent(input.runId, {
+          kind: 'run_failed',
+          message:
+            'Refusing to run unsandboxed. Without a sandbox the agent executes with this ' +
+            "Runner's user privileges — it can read the login keychain, SSH keys, cloud " +
+            'credentials, and every repository on this machine. Start the egress proxy and ' +
+            'leave LOOM_SANDBOX_ENABLED=1, or, if you genuinely accept that exposure, set ' +
+            'LOOM_ALLOW_UNSANDBOXED=i-understand-the-agent-gets-my-privileges.',
+        })
+        return
+      }
       log(
         `WARNING: running ${input.runId} UNSANDBOXED — the agent has this Runner's privileges (PLAN.md §6 A5)`,
       )

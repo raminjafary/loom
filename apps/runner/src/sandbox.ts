@@ -82,6 +82,21 @@ export const sandboxEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
   (env.LOOM_SANDBOX_ENABLED ?? '1') !== '0'
 
 /**
+ * Turning the sandbox off needs a second, separate acknowledgement.
+ *
+ * Unsandboxed, model output executes with the Runner's own user privileges — which on a
+ * developer machine means it can read the login keychain, `~/.ssh`, `~/.aws`, and every
+ * repository on disk. `security find-generic-password` is one Bash call away, and the
+ * risky-tool gate is a name-based heuristic, not a boundary (§6 A3 says so itself).
+ *
+ * That is a categorically different exposure from "less isolated", so one variable
+ * should not be enough to reach it. A typo, a copied `.env`, or a stale shell export
+ * must not silently put an operator's whole machine inside the blast radius.
+ */
+export const unsandboxedAcknowledged = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  env.LOOM_ALLOW_UNSANDBOXED === 'i-understand-the-agent-gets-my-privileges'
+
+/**
  * Container name, which doubles as its DNS name on the sandbox network — that is how
  * the agent addresses its own shim (see ANTHROPIC_BASE_URL below).
  */
