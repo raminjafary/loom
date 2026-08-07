@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildSandboxArgs, sandboxConfigFromEnv, sandboxEnabled } from './sandbox.js'
+import {
+ buildSandboxArgs,
+ sandboxConfigFromEnv,
+ sandboxEnabled,
+ unsandboxedAcknowledged,
+} from './sandbox.js'
 
 /**
  * These assert the sandbox spec spec itself, not plumbing. Every clause in
@@ -102,6 +107,19 @@ describe('sandbox configuration', => {
  expect(
  sandboxConfigFromEnv({ LOOM_CONTAINER_RUNTIME: 'podman' } as NodeJS.ProcessEnv).runtime,
 ).toBe('podman')
+ })
+
+ it('requires a deliberate acknowledgement to run unsandboxed', => {
+ // Unsandboxed means the agent gets the operator's privileges — keychain, SSH keys,
+ // every repo on disk. One variable must not be enough to reach that.
+ expect(unsandboxedAcknowledged({} as NodeJS.ProcessEnv)).toBe(false)
+ expect(unsandboxedAcknowledged({ LOOM_ALLOW_UNSANDBOXED: '1' } as NodeJS.ProcessEnv)).toBe(false)
+ expect(unsandboxedAcknowledged({ LOOM_ALLOW_UNSANDBOXED: 'true' } as NodeJS.ProcessEnv)).toBe(false)
+ expect(
+ unsandboxedAcknowledged({
+ LOOM_ALLOW_UNSANDBOXED: 'i-understand-the-agent-gets-my-privileges',
+ } as NodeJS.ProcessEnv),
+).toBe(true)
  })
 
  it('is on unless explicitly disabled', => {

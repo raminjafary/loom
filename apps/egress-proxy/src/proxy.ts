@@ -204,6 +204,11 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
  return
  }
 
+ if (process.env.LOOM_EGRESS_TRACE_HEADERS === '1') {
+ log(`upstream headers: ${JSON.stringify(Object.keys(headers).sort)}`)
+ log(`anthropic-beta: ${headers['anthropic-beta'] ?? '(none)'}`)
+ }
+
  let upstream: Response
  try {
  upstream = await fetch(`${options.anthropicBaseUrl}${path}`, {
