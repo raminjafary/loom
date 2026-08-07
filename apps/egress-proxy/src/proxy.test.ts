@@ -89,6 +89,28 @@ describe('egress proxy: credential injection', => {
  leases.revoke('run-inject')
  })
 
+ it('drops the OAuth beta flag when authenticating with an API key', async => {
+ // The sandbox always presents an OAuth-shaped credentials file, so the CLI declares
+ // `oauth-2025-04-20`. Forwarding that with an API key asks the provider to honour two
+ // contradictory auth modes. Unrelated beta flags are kept: dropping them would
+ // silently disable prompt caching and change what a run costs.
+ const lease = leases.issue({ runId: 'run-beta', budgetCapUsd: null })
+ await fetch(`${proxyUrl}/anthropic/v1/messages`, {
+ method: 'POST',
+ headers: {
+ authorization: `Bearer ${lease.token}`,
+ 'content-type': 'application/json',
+ 'anthropic-beta': 'oauth-2025-04-20,prompt-caching-scope-2026-01-05',
+ },
+ body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+ })
+
+ expect(lastUpstreamHeaders['anthropic-beta']).toBe('prompt-caching-scope-2026-01-05')
+ expect(lastUpstreamHeaders['x-api-key']).toBe(REAL_KEY)
+
+ leases.revoke('run-beta')
+ })
+
  it('refuses a caller with no lease', async => {
  expect((await post(null)).status).toBe(401)
  expect((await post('a-token-nobody-issued')).status).toBe(401)
