@@ -1,5 +1,6 @@
 import type { Contract } from '@loom/api-contract'
 import { expireStaleApprovals, reapStuckRuns } from '@loom/application'
+import type { Notification } from '@loom/domain'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
@@ -35,9 +36,26 @@ let testPersonaId: string
 /** Pairing tokens by Runner name, so a test can reconnect as the same Runner. */
 const pairingTokens = new Map<string, string>()
 
+/**
+ * Notifications (PLAN.md §3, §7's "is notified when it needs them"). The real
+ * adapter hands its payload to an external push service, so the port is
+ * substituted here — what these tests prove is the *fan-out*: that the events a
+ * human must not miss actually reach `NotificationPort`. The adapter's own
+ * behaviour is covered in notifications.test.ts, and delivery to a real browser
+ * is a live check.
+ */
+const delivered: Notification[] = []
+
 beforeAll(async () => {
   const row = await seedWorkspace(db, `runner-gateway-${Date.now()}`)
-  app = await buildApp(config, devAuth({ userId: 'dev-user', workspaceId: row.id }))
+  app = await buildApp(config, devAuth({ userId: 'dev-user', workspaceId: row.id }), {
+    notifications: {
+      clientConfig: () => ({ transport: 'web_push', publicKey: 'test-public-key' }),
+      deliver: async (notification) => {
+        delivered.push(notification)
+      },
+    },
+  })
   await app.fastify.listen({ port: 0, host: '127.0.0.1' })
   const address = app.fastify.server.address()
   if (address === null || typeof address === 'string') throw new Error('no bound port')
@@ -46,6 +64,7 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
+  delivered.length = 0
   await truncateDomainTables(db)
   // agent_persona is truncated above too — recreated per test, same reason
   // the fake Runner is re-paired per test rather than reused.
@@ -622,6 +641,145 @@ describe('runner-gateway: agent run event ingest', () => {
     await expect(
       client.approval.decide({ approvalRequestId: request.id, decision: 'approve' }),
     ).rejects.toThrow()
+
+    socket.close()
+  })
+})
+
+/**
+ * PLAN.md §3's retention hook and §7's ship criterion clause "is notified when
+ * it needs them". Every case here is one where a human who is not watching would
+ * otherwise learn nothing: a gate blocking a run, a finished branch waiting for
+ * review, a reaped run that produced no terminal event of its own.
+ */
+describe('runner-gateway: notification fan-out', () => {
+  const settle = async (predicate: () => boolean, attempts = 20): Promise<void> => {
+    for (let i = 0; i < attempts && !predicate(); i += 1) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
+
+  const startRunViaFakeRunner = async (
+    name: string,
+  ): Promise<{ socket: WebSocket; runId: string; threadId: string }> => {
+    const { socket, runnerId } = await pairFakeRunner(name)
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name })
+    const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+    const runPromise = client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: testPersonaId,
+    })
+    await startRun
+    const run = await runPromise
+    return { socket, runId: run.id, threadId: created.rootThread.id }
+  }
+
+  it('notifies a human when a gate is waiting on them', async () => {
+    const { socket, runId } = await startRunViaFakeRunner('notify-approval')
+
+    socket.send(
+      JSON.stringify({
+        type: 'permission_request',
+        runId,
+        toolUseId: 'tool-use-notify',
+        toolName: 'Bash',
+        input: { command: 'rm -rf /tmp/secret' },
+      }),
+    )
+
+    await settle(() => delivered.length > 0)
+
+    const notification = delivered.find((n) => n.kind === 'approval_needed')
+    expect(notification).toBeDefined()
+    expect(notification?.runId).toBe(runId)
+    expect(notification?.body).toContain('Bash')
+    // The exact argv belongs on the approval card, in the app (PLAN.md §6 A3) —
+    // a notification a human could "decide" from is the failure mode, so the
+    // command must not travel in one.
+    expect(JSON.stringify(notification)).not.toContain('/tmp/secret')
+
+    socket.close()
+  })
+
+  it('notifies a human that a finished run has a branch to review', async () => {
+    const { socket, runId } = await startRunViaFakeRunner('notify-finished')
+
+    socket.send(
+      JSON.stringify({
+        type: 'run_workspace_ready',
+        runId,
+        clonePath: '/tmp/clone',
+        branchName: 'loom/notify-finished',
+      }),
+    )
+    socket.send(
+      JSON.stringify({
+        type: 'agent_event',
+        runId,
+        seq: 1,
+        event: { kind: 'run_completed', totalCostUsd: 0.25, result: 'done' },
+      }),
+    )
+
+    await settle(() => delivered.some((n) => n.kind === 'run_finished'))
+
+    const notification = delivered.find((n) => n.kind === 'run_finished')
+    expect(notification).toBeDefined()
+    // Read from the run *after* its terminal transition — the branch name and
+    // the metered cost are what make this notification worth acting on.
+    expect(notification?.body).toContain('loom/notify-finished')
+    expect(notification?.body).toContain('$0.25')
+
+    socket.close()
+  })
+
+  it('notifies a human when a run is reaped, since it sends no terminal event of its own', async () => {
+    const { socket, runId } = await startRunViaFakeRunner('notify-reaped')
+
+    await reapStuckRuns(app.deps, { heartbeatTimeoutMs: 0, noProgressTimeoutMs: 0 })
+
+    const notification = delivered.find((n) => n.kind === 'run_failed')
+    expect(notification).toBeDefined()
+    expect(notification?.runId).toBe(runId)
+    expect(notification?.body).toMatch(/heartbeat/)
+
+    socket.close()
+  })
+
+  it('does not notify when a human stops the work themselves', async () => {
+    const { socket } = await startRunViaFakeRunner('notify-paused')
+
+    await client.runControl.pauseAll()
+    await settle(() => delivered.length > 0, 6)
+
+    // Pushing "your run stopped" at the person who just stopped it is how
+    // notifications become noise, so the kill switch stays silent.
+    expect(delivered).toEqual([])
+
+    await client.runControl.resume()
+    socket.close()
+  })
+
+  it('still transitions a run when notification delivery throws', async () => {
+    const { socket, runId } = await startRunViaFakeRunner('notify-failure')
+
+    // A dead push service must not be able to leave a run stuck: the Inbox is
+    // the fallback and is unaffected either way, so delivery is best-effort.
+    const throwingDeps: typeof app.deps = {
+      ...app.deps,
+      notifications: {
+        clientConfig: () => ({ transport: 'web_push', publicKey: 'k' }),
+        deliver: async () => {
+          throw new Error('push service unreachable')
+        },
+      },
+    }
+
+    await reapStuckRuns(throwingDeps, { heartbeatTimeoutMs: 0, noProgressTimeoutMs: 0 })
+
+    expect((await client.agentRun.get({ agentRunId: runId })).status).toBe('failed')
 
     socket.close()
   })

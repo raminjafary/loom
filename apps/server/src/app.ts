@@ -3,6 +3,7 @@ import {
   reapStuckRuns,
   seedBuiltinPersonas,
   type AgentDeps,
+  type NotificationPort,
 } from '@loom/application'
 import { asWorkspaceId } from '@loom/domain'
 import {
@@ -15,6 +16,7 @@ import {
   createDatabase,
   ensureWorkspaceMembership,
   messageRepository,
+  notificationTargetRepository,
   personaGroupRepository,
   personaRepository,
   repositoryRepository,
@@ -30,6 +32,7 @@ import { betterAuthPort, type AuthPort } from './auth.js'
 import { createBetterAuth } from './better-auth.js'
 import type { Config } from './config.js'
 import { createEventPublisher } from './events.js'
+import { webPushNotificationPort } from './notifications.js'
 import { router } from './router.js'
 import { createRunnerGateway } from './runner-gateway.js'
 
@@ -41,9 +44,41 @@ export interface App {
 
 const DEFAULT_WORKSPACE = { slug: 'dev', name: 'Dev Workspace' }
 
-export const buildApp = async (config: Config, authOverride?: AuthPort): Promise<App> => {
+/**
+ * Test seams, not configuration. A notification is delivered to a push service
+ * outside this process, so an integration test proving the *fan-out* — that a
+ * requested approval reaches a human — has nothing to assert against unless it
+ * can substitute the port. Same reason `authOverride` exists.
+ */
+export interface AppOverrides {
+  readonly notifications?: NotificationPort
+}
+
+export const buildApp = async (
+  config: Config,
+  authOverride?: AuthPort,
+  overrides: AppOverrides = {},
+): Promise<App> => {
   const { db, close: closeDb } = createDatabase(config.DATABASE_URL)
   const events = createEventPublisher(config.VALKEY_URL)
+
+  const fastify = Fastify({ logger: config.NODE_ENV !== 'test' })
+
+  const notificationTargets = notificationTargetRepository(db)
+  const notifications =
+    overrides.notifications ??
+    webPushNotificationPort({
+      targets: notificationTargets,
+      keys:
+        config.VAPID_PUBLIC_KEY && config.VAPID_PRIVATE_KEY
+          ? {
+              publicKey: config.VAPID_PUBLIC_KEY,
+              privateKey: config.VAPID_PRIVATE_KEY,
+              subject: config.VAPID_SUBJECT,
+            }
+          : null,
+      log: (event) => fastify.log.info(event),
+    })
 
   const baseDeps = {
     channels: channelRepository(db),
@@ -59,6 +94,8 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
     personas: personaRepository(db),
     personaGroups: personaGroupRepository(db),
     runControl: workspaceRunControlRepository(db),
+    notifications,
+    notificationTargets,
   }
 
   // The Runner gateway produces `dispatch` — see runner-gateway.ts for why
@@ -84,8 +121,6 @@ export const buildApp = async (config: Config, authOverride?: AuthPort): Promise
         return result
       },
     })
-
-  const fastify = Fastify({ logger: config.NODE_ENV !== 'test' })
 
   // Background safety sweeps (PLAN.md §6) — skipped under NODE_ENV=test so a
   // stray sweep never races a test's own DB assertions. Both share one interval:

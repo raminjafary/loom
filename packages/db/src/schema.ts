@@ -338,6 +338,41 @@ export const message = pgTable(
   ],
 )
 
+/**
+ * Where a human can be reached (PLAN.md §3's notification half, §4a's
+ * `NotificationPort`). One row per registered destination — for web push, one
+ * per browser profile that granted permission.
+ *
+ * `endpoint` is the target's identity, so re-registering the same browser
+ * upserts rather than accumulating stale rows. Unique per workspace rather than
+ * globally: the same browser may legitimately be registered in two workspaces,
+ * and delivery is always workspace-scoped.
+ *
+ * No hard FK on `user_id`, same convention as `approval_request.resolved_by_user_id`:
+ * devAuth-based tests use synthetic user ids that never reach Better Auth's `user`
+ * table.
+ */
+export const notificationTarget = pgTable(
+  'notification_target',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull(),
+    transport: text('transport').notNull(),
+    endpoint: text('endpoint').notNull(),
+    // Transport-specific and opaque to everything but the adapter — for web
+    // push, the subscription's p256dh/auth keys (RFC 8291).
+    credentials: jsonb('credentials').$type<Record<string, string>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('notification_target_workspace_idx').on(t.workspaceId),
+    uniqueIndex('notification_target_endpoint_idx').on(t.workspaceId, t.endpoint),
+  ],
+)
+
 /** Append-only. No update or delete path exists by design (PLAN.md §5). */
 export const auditEvent = pgTable(
   'audit_event',

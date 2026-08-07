@@ -115,7 +115,7 @@ Enforced mechanically, not by discipline: an ESLint `no-restricted-imports` boun
 | `SandboxPort` | Podman → Kata/microsandbox | E2B (self-hosted), gVisor, Firecracker | one adapter |
 | `SecretsPort` | egress-proxy broker + host-side SOPS/age | OpenBao, cloud KMS | one adapter |
 | `AuthPort` | Better Auth | Zitadel, Keycloak, Ory (OIDC) | one adapter |
-| `NotificationPort` | web push | email, Slack mirror, desktop, webhook | one adapter |
+| `NotificationPort` | web push **[BUILT]** | email, Slack mirror, desktop, webhook | one adapter |
 | **UI framework** | **Vue 3 + Vite** | React, Svelte, TanStack Start, TUI | thin view layer only — see §4c |
 
 ### 4b. Driven side: agent execution
@@ -604,7 +604,7 @@ The happy path (SDK stream → WS → render) is a weekend. The rest is the actu
 - **Pausable/resumable agent loop** for the approval gate — `canUseTool`/`PreToolUse` hook round-tripping a human across two WS hops while the run stays suspended (§4d). Hardest single piece.
 - Sandbox to A5 spec, clone-per-run (§5a), egress proxy + credential broker (A6), host-side push policy (A2), effect-based gating (A3).
 - Repository binding: allowed roots, directory picker, bind/create repo, end-of-run diff review with merge/keep/discard. **Keep/discard/push all built** (see HANDOFF.md) — "merge" shipped as `agentRun.push` (host-side push + best-effort PR/MR via `gh`/`glab`), not a local `git merge`; see §6 A2 for why.
-- **Inbox + notifications + stuck detection** — the retention hook (§3), not a Phase 4 nicety. **Built** (see HANDOFF.md): heartbeat + no-progress dead-run reaper, and an Inbox view surfacing runs awaiting approval or with an unreviewed diff. Visually verified in a real browser this session (toggle/badge/row-select/diff-load/keep all confirmed working end to end).
+- **Inbox + notifications + stuck detection** — the retention hook (§3), not a Phase 4 nicety. **All three built** (see HANDOFF.md): heartbeat + no-progress dead-run reaper; an Inbox view surfacing runs awaiting approval or with an unreviewed diff; and `NotificationPort` with a web-push adapter, fanning out on gate-needed, run-finished, run-failed (including reaped) and approval-expired. Verified live end to end — a real gate on a real run produced an OS notification whose click opened the Inbox on that run. A notification deliberately carries no tool arguments: deciding happens against the exact argv on the approval card (§6 A3), never from a notification body.
 - Persona editing including tool declaration, skills, and harness settings (§4e); transcript persistence; cost metering at the proxy.
 - Built-in personas, persona groups, and `@mention`-starts-a-run (§3a) — built; closes this section's own ship criterion's `@mention` gap. Per-persona `harness.autoApprove` also landed alongside it (not originally scoped in §3a, added on request) — see HANDOFF.md.
 

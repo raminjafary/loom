@@ -155,6 +155,33 @@ export const RunControlSchema = z.object({
   pausedByUserId: z.string().nullable(),
 })
 
+/**
+ * PLAN.md §3/§4a notifications. `transport: null` means this deployment has no
+ * notification adapter configured — a client must be able to tell that apart
+ * from "configured, but you have not subscribed", so it can say so instead of
+ * offering a button that cannot work.
+ */
+export const NotificationTransportSchema = z.enum(['web_push'])
+
+export const NotificationConfigSchema = z.object({
+  transport: NotificationTransportSchema.nullable(),
+  publicKey: z.string().nullable(),
+})
+
+/**
+ * A registered destination. `credentials` is transport-specific — for web push,
+ * the subscription's `p256dh` and `auth` keys. Deliberately not echoed back in
+ * any output shape: it is write-only from the client's side, and the browser
+ * already holds its own copy.
+ */
+export const NotificationTargetSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  transport: NotificationTransportSchema,
+  endpoint: z.string(),
+  createdAt: z.date(),
+})
+
 export const ApprovalStatusSchema = z.enum(['pending', 'approved', 'denied'])
 
 export const ApprovalRequestSchema = z.object({
@@ -183,3 +210,6 @@ export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>
 export type RunControl = z.infer<typeof RunControlSchema>
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>
+export type NotificationTransport = z.infer<typeof NotificationTransportSchema>
+export type NotificationConfig = z.infer<typeof NotificationConfigSchema>
+export type NotificationTarget = z.infer<typeof NotificationTargetSchema>

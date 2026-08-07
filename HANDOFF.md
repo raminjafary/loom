@@ -3,17 +3,15 @@
 Read this before touching code. `PLAN.md` is the architecture/roadmap; this file is
 "what actually happened and what's next."
 
-Session scope: the seven items previously tracked as remaining Phase 1 work. All seven
-are built and verified. Test suite 110 → **166**.
+Session scope: **notifications** — the item the previous handoff called the largest
+remaining Phase 1 gap. Built and verified live. Test suite 166 → **193**.
 
-**Phase 1 is not finished.** Those seven were the list carried forward from the previous
-handoff, not PLAN.md §7's full Phase 1 list. Still open there:
+**The Phase 1 ship criterion is now fully met**, including the clause that was only
+substantially met before: "is notified when it needs them". Verified end to end in a
+real browser this session, not just in tests — see "Notifications" below.
 
-- **Notifications.** §3 calls the inbox-plus-notification loop "the retention hook" and
-  puts it ahead of the tree view. The Inbox exists; nothing tells a human a run needs
-  them, so they have to go and look. No `NotificationPort`, no web push. **The largest
-  remaining Phase 1 gap**, and the reason the ship criterion is only substantially met —
-  it says "is notified when it needs them".
+Still open in PLAN.md §7's Phase 1 list:
+
 - **Skills attachment** (§4e). Parsed in persona frontmatter, never wired to a run.
 - **Directory picker and `git init` repo creation** (§5a). Binding is still
   by-absolute-path only.
@@ -27,12 +25,55 @@ handoff, not PLAN.md §7's full Phase 1 list. Still open there:
 sandboxed: a persona created, a run against a real git repo, the agent working, an
 approval gate whose card carried the **exact tool argv** (not a model summary), a human
 approving, the run completing with proxy-metered cost, the branch diff rendering, the
-Inbox surfacing it, and `keep` resolving it. Everything in the ship criterion except
-being *notified* rather than having to look.
+Inbox surfacing it, and `keep` resolving it — and now an OS notification arriving when
+the gate opened, whose click landed on that run in the Inbox.
 
 ---
 
 ## What's real right now (not a mock, not a stub)
+
+### Notifications (§3's retention hook, §4a `NotificationPort`) — new this session
+
+`NotificationPort` with a **web-push adapter** (`apps/server/src/notifications.ts`), a
+`notification_target` table, `notification.{config,subscribe,unsubscribe}` on the
+contract, a service worker (`apps/web/public/sw.js`), and an **Enable notifications**
+control in the top bar next to the kill switch.
+
+Fan-out points, all in `agent-use-cases.ts`: a gate needing a decision, a run finishing
+(with branch name and metered cost), a run failing, a run **reaped** — that last one
+matters most, since a reaped run emits no terminal event of its own, so a watcher just
+sees the thread stop — and an approval **expiring** under the SLA. The kill switch
+deliberately sends nothing: the human who pressed it does not need telling.
+
+Four decisions worth not re-litigating:
+
+- **A notification never carries tool arguments.** §6 A3's rule is that a human decides
+  against the exact argv, which the approval card renders in the app. A body containing
+  `rm -rf …` invites deciding from a lock screen, which is the failure mode A3 exists to
+  prevent. Guarded by a domain test and an integration test.
+- **Delivery is best-effort and swallowed.** A dead push service must never leave a run
+  stuck in `awaiting_approval`; the Inbox is unaffected either way. The adapter logs,
+  the use-case layer does not (it has nothing to log with).
+- **VAPID keys alone decide whether the port is configured**, so `clientConfig()` and
+  `deliver()` can never disagree. With no keys the UI says "Notifications off (server)"
+  rather than offering a button that cannot work, and every other path is unaffected.
+- **One notification per run, coalesced on `tag: run:<id>`.** An approval notification is
+  replaced by that run's finish notification rather than stacking, because the question
+  being asked has changed. Verified live.
+
+**Verified live, not just green:** subscribing produced a real FCM endpoint stored with
+both encryption keys; the adapter's RFC 8291 payload was accepted by FCM; the service
+worker rendered it; a second push on the same tag replaced rather than stacked; a real
+run started from the UI produced `swe needs approval` and then
+`swe finished / loom/run-… is ready to review. $0.31`; clicking through both the
+cold-start (`?run=`) and warm (`postMessage`) paths opened the Inbox on that run;
+unsubscribing removed the row. Delivery to a real push service is what
+`tools/push-check.mts` exists for.
+
+**One bug the tests could not have caught:** the toggle read `config` only on mount, so it
+sat on "Notifications…" forever — `config` arrives when the session's `init()` resolves.
+It is a `watch` now. This is the second session in a row where a real browser found
+something a green suite did not.
 
 ### Global kill switch (§6 runtime safety)
 
@@ -218,17 +259,16 @@ validates credentials client-side at all.
 
 ## Immediate next steps, in priority order
 
-1. **Notifications** — the largest remaining Phase 1 gap, and the one §3 argues is the
-   product's retention hook. Everything else in Phase 1 is either small or explicitly
-   deferred.
-2. **Browser-verify the kill switch** — the only new UI this session added, and the only
-   Phase 1 surface never clicked by a human.
-3. **§11's riskiest-assumption test** — three clones, three workers, one repo, measuring
+1. **§11's riskiest-assumption test** — three clones, three workers, one repo, measuring
    human minutes to reconcile versus doing it serially. Still never run, and all of
-   Phase 2 rides on it. This is the highest-value thing left in the whole plan.
-4. The remaining smaller Phase 1 items: skills attachment, directory picker + `git init`,
+   Phase 2 rides on it. **This is the highest-value thing left in the whole plan**, and
+   it needs real token spend plus a human with a stopwatch, so it cannot be quietly
+   folded into a build session.
+2. **Browser-verify the kill switch** — still the one Phase 1 surface never clicked by a
+   human. (The notification toggle beside it now has been, and that click found a bug.)
+3. The remaining smaller Phase 1 items: skills attachment, directory picker + `git init`,
    Runner backpressure, raw transcript tier.
-5. Then Phase 2 proper (Planner/Swarm), or Phase 3's brokerable backend (vLLM/Codex),
+4. Then Phase 2 proper (Planner/Swarm), or Phase 3's brokerable backend (vLLM/Codex),
    which removes the licensing and undocumented-integration caveats above entirely.
 
 ## Things to NOT redo
@@ -260,7 +300,13 @@ validates credentials client-side at all.
   the run completed on that event and clients immediately fetch the diff.
 - Don't add unit tests to `agent-use-cases.ts` expecting them to exist — the convention
   there is integration/live verification. Pure domain modules (`model-pricing.ts`,
-  `egress-policy.ts`, `push-policy.ts`) do get unit tests.
+  `egress-policy.ts`, `push-policy.ts`, `notifications.ts`) do get unit tests.
+- **Don't put tool arguments in a notification body.** See the notification section
+  above; two tests exist specifically to stop it coming back.
+- **Don't let a notification failure propagate.** `notifyRun` swallows deliberately; a
+  push service must not be able to hold a run in `awaiting_approval`.
+- **Don't read `notificationConfig` once on mount** in a component — it is null until the
+  session's `init()` resolves. That was this session's live-found bug.
 
 ### Two false trails, so they are not re-walked
 
@@ -279,6 +325,15 @@ Cleaned up: no stray containers, no scratch clones or run-state directories, and
 only workspace left in either database is `dev`. The compose stack (postgres, valkey,
 egress-proxy) is up and healthy. The sandbox image `loom-agent-sandbox:latest` is built.
 
+This session's live-check leftovers are also gone: the fake Runner it paired, the repo it
+bound, the run it started, and its `notification_target` row (the browser unsubscribed at
+the end of the check). `dev` still holds the older `pushtest-repo` binding and its
+completed run from a previous session.
+
+**A browser has granted notification permission for `localhost:5173`.** That is Chrome
+profile state, not repo state — a next session verifying push will not see a permission
+prompt, and must click *Enable notifications* again to re-create a target row.
+
 Nothing is left running that a next session needs to stop first — a normal `pnpm dev`
 plus a re-paired Runner is the cold start.
 
@@ -286,9 +341,15 @@ plus a re-paired Runner is the cold start.
 
 See README.md. Changes this session:
 
-- **Three new migrations**: `0010` (kill-switch columns on `workspace`), `0011`
-  (`agent_run_event`), `0012` (`agent_persona.harness_budget_cap_usd`). Apply to both
-  `loom` and `loom_test`.
+- **New migration `0013`** (`notification_target`), applied to both `loom` and `loom_test`
+  this session. Earlier sessions added `0010`–`0012`.
+- **New env vars** `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`, read only
+  by apps/server. Generate with `npx web-push generate-vapid-keys`. All optional — with
+  the keys unset, notifications report themselves off and nothing else changes. The dev
+  `.env` has a locally-generated pair; the private key is a signing key, so treat it like
+  `BETTER_AUTH_SECRET`.
+- **New dependency `web-push` (MPL-2.0)** in apps/server. OSI-approved, so §8's
+  all-OSS constraint holds.
 - **New compose service `egress-proxy`**, plus a `loom-sandbox` network with
   `internal: true`. `docker compose up -d` brings all three services up.
 - **Build the sandbox image** before a sandboxed run:
@@ -303,12 +364,20 @@ See README.md. Changes this session:
 
 ```bash
 pnpm -r typecheck
-pnpm -r test                                # 166 tests
+pnpm -r test                                # 193 tests
 npx vitest run tools/architecture.test.ts   # 4 checks
-npx eslint packages/ apps/                  # clean
+npx eslint packages/ apps/ tools/           # clean
 
 npx tsx tools/e2e-run.mts                   # real Runner, real repo, real agent run
 ```
+
+```bash
+npx tsx tools/push-check.mts                # real web push to every subscribed browser
+```
+
+`tools/push-check.mts` covers the one leg no test can: the adapter's RFC 8291 encryption,
+the VAPID signature a push service validates, and whether the service worker renders what
+arrives. Needs VAPID keys in `.env` and a browser that has clicked *Enable notifications*.
 
 `tools/e2e-run.mts` is a hand-run driver, not a test: it spends real tokens and asserts
 nothing, it prints what happened. It found both the uncommitted-work bug and the

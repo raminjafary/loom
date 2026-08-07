@@ -13,6 +13,7 @@ import {
   getAgentRun,
   getAgentRunDiff,
   getChannelRootThread,
+  getNotificationConfig,
   getPersona,
   getRunControl,
   keepAgentRun,
@@ -27,8 +28,10 @@ import {
   pauseAllRuns,
   postMessage,
   pushAgentRun,
+  registerNotificationTarget,
   resumeAllRuns,
   startAgentRun,
+  unregisterNotificationTarget,
   updatePersona,
   updatePersonaGroup,
   type AgentDeps,
@@ -367,6 +370,44 @@ export const router = os.router({
           actor: context.principal.actor,
         }),
       ),
+    ),
+  },
+
+  notification: {
+    config: os.notification.config.handler(({ context }) =>
+      getNotificationConfig(context.deps),
+    ),
+
+    subscribe: os.notification.subscribe.handler(({ context, input }) =>
+      guard(async () => {
+        const target = await registerNotificationTarget(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          transport: input.transport,
+          endpoint: input.endpoint,
+          credentials: input.credentials,
+        })
+        // `credentials` and `userId` are deliberately not returned — see
+        // NotificationTargetSchema.
+        return {
+          id: target.id,
+          workspaceId: target.workspaceId,
+          transport: target.transport,
+          endpoint: target.endpoint,
+          createdAt: target.createdAt,
+        }
+      }),
+    ),
+
+    unsubscribe: os.notification.unsubscribe.handler(({ context, input }) =>
+      guard(async () => {
+        await unregisterNotificationTarget(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          endpoint: input.endpoint,
+        })
+        return { ok: true as const }
+      }),
     ),
   },
 

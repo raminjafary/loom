@@ -6,8 +6,12 @@ import type {
   Message,
   MessageBody,
   MessageId,
+  Notification,
+  NotificationTarget,
+  NotificationTransport,
   Thread,
   ThreadId,
+  UserId,
   WorkspaceId,
 } from '@loom/domain'
 
@@ -103,4 +107,47 @@ export interface EventSubscriberPort {
     workspaceId: WorkspaceId,
     handler: (event: DomainEvent) => void,
   ): Promise<() => Promise<void>>
+}
+
+/**
+ * PLAN.md §4a's `NotificationPort` — web push is the built adapter; email,
+ * Slack mirror, desktop and webhook are the swaps it exists for.
+ *
+ * Distinct from `EventPublisherPort`, which fans realtime frames out to clients
+ * that are *already watching*. This one reaches a human who is not looking, and
+ * that is precisely §3's retention hook: the Inbox answers "what needs me" once
+ * they arrive; this is what makes them arrive.
+ */
+export interface NotificationPort {
+  /**
+   * Fans one notification out to every registered target in its workspace.
+   *
+   * Callers treat this as best-effort and never let a delivery failure fail the
+   * thing being announced — a run must not stay `running` because a push
+   * service was down. The adapter owns retry/pruning policy, since what a dead
+   * subscription looks like is transport-specific.
+   */
+  deliver(notification: Notification): Promise<void>
+  /**
+   * What a client needs before it can register a target — a VAPID public key
+   * for web push, nothing at all for a transport whose targets an operator
+   * configures server-side. `transport: null` means notifications are not
+   * configured on this deployment, which a client must be able to tell apart
+   * from "configured but you haven't subscribed".
+   */
+  clientConfig(): { transport: NotificationTransport | null; publicKey: string | null }
+}
+
+export interface NotificationTargetRepositoryPort {
+  /** Upsert by (workspace, endpoint) — see NotificationTarget on why endpoint is the identity. */
+  register(input: {
+    workspaceId: WorkspaceId
+    userId: UserId
+    transport: NotificationTransport
+    endpoint: string
+    credentials: Record<string, string>
+  }): Promise<NotificationTarget>
+  /** Idempotent: unregistering an endpoint that was never registered is not an error. */
+  unregister(workspaceId: WorkspaceId, endpoint: string): Promise<void>
+  listByWorkspace(workspaceId: WorkspaceId): Promise<NotificationTarget[]>
 }

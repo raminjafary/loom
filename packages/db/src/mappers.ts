@@ -22,6 +22,8 @@ import {
   type Channel,
   type Message,
   type MessageBody,
+  type NotificationTarget,
+  type NotificationTransport,
   type PersonaGroup,
   type PersonaSpec,
   type Repository,
@@ -353,6 +355,31 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
   personaIds: Array.isArray(row.personaIds) ? (row.personaIds as string[]) : [],
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
+})
+
+export interface NotificationTargetRow {
+  id: string
+  workspaceId: string
+  userId: string
+  transport: string
+  endpoint: string
+  credentials: unknown
+  createdAt: Date
+}
+
+export const toNotificationTarget = (row: NotificationTargetRow): NotificationTarget => ({
+  id: row.id,
+  workspaceId: asWorkspaceId(row.workspaceId),
+  userId: asUserId(row.userId),
+  // Only one transport exists so far; a row with anything else is a migration
+  // artifact, and silently treating it as web push would send garbage.
+  transport: row.transport as NotificationTransport,
+  endpoint: row.endpoint,
+  credentials:
+    row.credentials !== null && typeof row.credentials === 'object'
+      ? (row.credentials as Record<string, string>)
+      : {},
+  createdAt: row.createdAt,
 })
 
 /** Cursors are opaque to callers; internally they are the `seq` watermark. */

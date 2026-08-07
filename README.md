@@ -38,6 +38,23 @@ pnpm --filter @loom/web dev          # UI on :5173
 
 Sign up through the web UI (email/password via Better Auth) — a default workspace auto-provisions on first login.
 
+### Notifications
+
+Optional, and off until configured. With no keys set the UI shows "Notifications off (server)" and everything else works unchanged.
+
+```bash
+npx web-push generate-vapid-keys     # put the pair in .env as VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY
+```
+
+Then click **Enable notifications** in the top bar once per browser. After that a run that needs you reaches you without the app being open — a gate waiting on a decision, a finished branch, a failed or reaped run — and clicking the notification opens the Inbox on that run. Web push needs a secure context: `localhost` counts, any other host needs HTTPS.
+
+To confirm delivery against a real push service after subscribing:
+
+```bash
+set -a && . ./.env && set +a
+npx tsx tools/push-check.mts        # pushes one notification to every registered browser
+```
+
 ### Running a real agent
 
 All of this is reachable from the web UI's sidebar now (mint a pairing token, bind a repo, write or pick a persona, start a run, approve/deny gates, view the diff). To drive it directly over RPC instead:
@@ -59,7 +76,7 @@ All of this is reachable from the web UI's sidebar now (mint a pairing token, bi
 
 ```bash
 pnpm -r typecheck                          # all packages
-pnpm -r test                               # 89 tests
+pnpm -r test                               # 193 tests
 npx vitest run tools/architecture.test.ts  # layer boundaries
 npx eslint packages/ apps/                 # boundary lint rules
 ```
@@ -92,9 +109,9 @@ The dependency rule — outer layers depend on inner, never the reverse — is e
 See HANDOFF.md §"What's not built" for the full list. Headline items:
 
 - No RBAC, no rate limiting, no CSP.
-- No built-in personas, no persona groups, no `@mention`-starts-a-run — planned next, see PLAN.md §3a. Persona CRUD itself (markdown + frontmatter) is real; every persona still has to be hand-authored from nothing, and starting a run is a static sidebar picker.
 - Repository binding is bind-by-absolute-path only — no directory picker, no `git init` flow (a real picker needs the Runner to expose a `listDirectory` capability, which doesn't exist yet — see PLAN.md §5a).
 - Risky-tool classification path-scopes writes against the run's clone (real, enforced, verified live), but `Bash` still gates by name only — no reliable static argv classifier exists for arbitrary shell. PLAN.md §6 A3 flags this as the honest limit short of a full sandbox rewrite.
-- No container/microVM sandbox, no egress proxy, no credential broker, no host-side git-push policy (the agent has no way to push at all yet, so there's nothing to gate). This is a substantial standalone project, not attempted yet.
-- No inbox/notifications, no stuck-run detection, no idempotency keys, no budget caps, no kill switch, no run resumption after a Runner restart — all flagged in PLAN.md §6/§7 as required runtime safety mechanics.
+- Container sandbox only — no microVM isolation (Kata/microsandbox), which is Phase 3 per PLAN.md §7. Concurrent sandboxes also share one network.
 - No skills/MCP attachment — needs the capability registry, which is Phase 2 scope (PLAN.md §4e).
+- No raw provider transcript tier (PLAN.md §4d-bis tier 3); the structured tier is real.
+- No Runner backpressure, and no same-tool-call-N-times stuck detection.

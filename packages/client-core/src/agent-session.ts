@@ -2,12 +2,14 @@ import type {
   AgentPersona,
   AgentRun,
   ApprovalRequest,
+  NotificationConfig,
   PersonaGroup,
   Repository,
   RunControl,
   Runner,
 } from '@loom/api-contract'
 import type { LoomApi } from './api.js'
+import type { PushRegistration } from './push.js'
 
 /**
  * Agent-pipeline client logic (PLAN.md §4c), separate from
@@ -44,6 +46,10 @@ export interface AgentSnapshot {
   // Global kill switch (PLAN.md §6) — null until `init` has read it, so the UI
   // can tell "not loaded yet" apart from "loaded, not paused".
   readonly runControl: RunControl | null
+  // Notifications (PLAN.md §3). Null until `init` has read it; a
+  // `transport: null` value means this deployment has none configured, which a
+  // client must show as such rather than as "not subscribed".
+  readonly notificationConfig: NotificationConfig | null
   readonly loading: boolean
   readonly error: string | null
 }
@@ -71,6 +77,14 @@ export interface AgentSession {
   pushRun(agentRunId: string, acknowledgeCiChange?: boolean): Promise<void>
   refreshInbox(): Promise<void>
   inspectRun(agentRunId: string): Promise<void>
+  /**
+   * Registers where this client can be reached (PLAN.md §3). The caller obtains
+   * the registration from its own runtime — `PushManager.subscribe` in a
+   * browser — since granting permission is inherently a platform interaction;
+   * this only carries the result to the server.
+   */
+  registerNotificationTarget(registration: PushRegistration): Promise<void>
+  unregisterNotificationTarget(endpoint: string): Promise<void>
   /** Kill switch (PLAN.md §6): stops everything in flight and blocks new starts. */
   pauseAllRuns(): Promise<void>
   /** Lifts the pause. Never restarts what the pause cancelled. */
@@ -95,6 +109,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     inspectedRun: null,
     inspectedApprovals: [],
     runControl: null,
+    notificationConfig: null,
     loading: false,
     error: null,
   }
@@ -165,16 +180,24 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     async init() {
       patch({ loading: true, error: null })
       try {
-        const [runners, repositories, personas, personaGroups, activeRun, runControl] =
-          await Promise.all([
-            options.api.runner.list(),
-            options.api.repository.list(),
-            options.api.persona.list(),
-            options.api.personaGroup.list(),
-            options.api.agentRun.getActive(),
-            options.api.runControl.get(),
-          ])
-        patch({ runners, repositories, personas, personaGroups, runControl })
+        const [
+          runners,
+          repositories,
+          personas,
+          personaGroups,
+          activeRun,
+          runControl,
+          notificationConfig,
+        ] = await Promise.all([
+          options.api.runner.list(),
+          options.api.repository.list(),
+          options.api.persona.list(),
+          options.api.personaGroup.list(),
+          options.api.agentRun.getActive(),
+          options.api.runControl.get(),
+          options.api.notification.config(),
+        ])
+        patch({ runners, repositories, personas, personaGroups, runControl, notificationConfig })
         // Resume watching whatever run is already active — otherwise a page
         // reload during a run leaves no path back to its approval card.
         if (activeRun && !TERMINAL_STATUSES.has(activeRun.status)) {
@@ -321,6 +344,30 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         if (state.activeRun?.id === run.id) patch({ activeRun: run })
         if (state.inspectedRun?.id === run.id) patch({ inspectedRun: run })
         await fetchInbox()
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async registerNotificationTarget(registration) {
+      patch({ error: null })
+      try {
+        const transport = state.notificationConfig?.transport
+        if (!transport) throw new Error('Notifications are not configured on this deployment')
+        await options.api.notification.subscribe({
+          transport,
+          endpoint: registration.endpoint,
+          credentials: registration.credentials,
+        })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async unregisterNotificationTarget(endpoint) {
+      patch({ error: null })
+      try {
+        await options.api.notification.unsubscribe({ endpoint })
       } catch (error) {
         patch({ error: errorMessage(error) })
       }
