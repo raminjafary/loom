@@ -88,3 +88,15 @@ export const drainUsage = async (config: EgressClientConfig): Promise<UsageRecor
   }
   return Array.isArray(result.records) ? (result.records as UsageRecord[]) : []
 }
+
+/**
+ * Hands the proxy the operator's current upstream OAuth token (PLAN.md §6 A6). Called on
+ * start and on an interval, because Claude Code rotates the token every few hours and the
+ * proxy has no way to notice on its own.
+ */
+export const setUpstreamOauthToken = async (
+  config: EgressClientConfig,
+  oauthToken: string | null,
+): Promise<void> => {
+  await control(config, '/_control/upstream-auth', { method: 'PUT', body: { oauthToken } })
+}

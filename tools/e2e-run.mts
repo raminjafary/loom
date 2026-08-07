@@ -71,9 +71,9 @@ const main = async () => {
       LOOM_SERVER_WS_URL: `ws://127.0.0.1:${addr.port}/ws/runner`,
       LOOM_PAIRING_TOKEN: rawToken,
       LOOM_ALLOWED_ROOTS: tmpdir(),
-      // Unsandboxed on purpose: this verifies the run/resume path using the host's
-      // own model auth, since no API key is available for the sandboxed path.
-      LOOM_SANDBOX_ENABLED: '0',
+      // Defaults to unsandboxed so the SDK uses the host's own auth; override by
+      // exporting LOOM_SANDBOX_ENABLED=1 before running this.
+      LOOM_SANDBOX_ENABLED: process.env.LOOM_SANDBOX_ENABLED ?? '0',
       LOOM_RUNNER_STATE_DIR: join(tmpdir(), `e2e-state-${Date.now()}`),
     },
     stdio: ['ignore', 'pipe', 'pipe'],

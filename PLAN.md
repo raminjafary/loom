@@ -467,51 +467,54 @@ This section is the largest revision. The security review found the original des
 
 **A5 — Sandbox spec, explicitly.** "Scoped fs/net" is not a spec, and unspecified means insecure-by-default. Required: `--network=none` by default with all egress through the authenticating proxy; **never** mount the container socket; `--cap-drop=ALL --security-opt=no-new-privileges`; default seccomp (never `unconfined`); non-root UID in a userns; read-only rootfs with tmpfs `/tmp`; mount **only** the run's clone — never `$HOME`, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.claude`, `~/.gitconfig`; memory/pids/cpu limits and a wall-clock kill. Platform asymmetry to note: rootless Podman gets a VM boundary on macOS but **not** on Linux — hence microVM isolation (§8). Accept the honest limit: **the model API call is itself an unblockable exfiltration channel**, so the real control is "secrets never enter the sandbox," not "the sandbox can't talk out."
 
-**A6 caveat found in implementation — the Claude Agent SDK defeats credential brokering for its own key.** [NEW]
-The broker below works, and is built: a run presents an opaque per-run token, the
-proxy attaches the real credential, meters authoritatively, and enforces the host
-allowlist. Verified end to end with ordinary HTTP clients.
+**A6 holds for the Claude Agent SDK, via the OAuth path — not the API-key path.** [NEW]
+Worth writing down because the obvious route fails and the working one is not obvious.
 
-It does **not** work for the Claude Agent SDK's own model calls, for a reason outside
-this platform's control. The SDK's bundled native CLI validates `ANTHROPIC_API_KEY`
-*client-side* before making any request — prefix, length, and something
+**`ANTHROPIC_API_KEY` cannot carry a brokered token.** The SDK's bundled native CLI
+validates it *client-side* before making any request — prefix, length, and something
 checksum-shaped, since randomly generated keys of identical shape are accepted or
-rejected depending on the draw. When that check fails the CLI ignores
+rejected depending on the draw. When the check fails the CLI ignores
 `ANTHROPIC_BASE_URL` entirely and contacts `api.anthropic.com` directly. It also
-rewrites the key it forwards (a 109-character value arrived as 108, then 102), so the
-token cannot ride on it even when accepted, and `ANTHROPIC_CUSTOM_HEADERS` did not
-arrive at all. `ANTHROPIC_AUTH_TOKEN` alone selects the OAuth path and reports "Not
-logged in".
+rewrites the key it forwards (a 109-character value arrived as 108, later 102), so the
+token would not survive even when accepted. `ANTHROPIC_CUSTOM_HEADERS` never arrived.
 
-Consequences, stated rather than papered over:
+**The OAuth path does carry it, byte-exact.** Given a structurally valid
+`$HOME/.claude/.credentials.json`, the CLI considers itself signed in, honors
+`ANTHROPIC_BASE_URL`, and forwards `claudeAiOauth.accessToken` verbatim as
+`Authorization: Bearer` — no validation, no rewriting. So the sandbox is handed a
+credentials file containing **its lease token**, and the proxy swaps it for the real
+credential like any other brokered call.
 
-- A sandboxed Claude Agent run needs a **real, valid** model key inside the sandbox.
-  A6's "the sandbox gets zero long-lived credentials" is therefore **not achieved for
-  that one credential**, and this plan should not claim otherwise.
-- What still holds: egress is deny-by-default, so the key is only *usable* through the
-  proxy (`api.anthropic.com` is not on the CONNECT allowlist), metering and budget
-  enforcement remain authoritative, and no other secret enters the sandbox. The
-  residual exposure is exfiltration of that one key — which A5 already concedes is
-  hard to prevent, since the model API call is itself an unblockable channel.
-- **Why not use subscription auth instead of a key at all?** Because both constraints
-  point the same way. §8 records the SDK's license condition — claude.ai
-  login/subscription limits may not be exposed to your users, API keys only — and
-  subscription auth would additionally require mounting the host's `~/.claude`
-  credentials into the sandbox, which A5 forbids outright. The CLI's "Not logged in"
-  on the OAuth path is that absence working as intended, not a misconfiguration.
-- **The open fork**, worth deciding explicitly rather than by default, is which backend
-  a *sandboxed* run uses:
-  1. Claude Agent SDK with a real key in the sandbox — works today, A6 weakened for
-     that one credential. This is what Phase 1 ships.
-  2. A brokerable backend for sandboxed runs — `VllmApiAdapter`/`CodexAdapter` (§7
-     Phase 3) are plain HTTP clients with no client-side key validation, so the broker
-     works unchanged. Already on the roadmap for other reasons, so it costs nothing
-     extra. **Preferred durable answer.**
-  3. Drop the SDK and drive the Messages API directly, owning the agent loop. A6 then
-     holds fully, but this rebuilds exactly what §4b decided not to — the unit of work
-     is a coding agent that already has its own loop, tools, permissions and session
-     state. A strategy change, not a fix; only justified if (2) also proves unworkable.
-- Provider-issued per-run scoped keys would solve it cleanly and do not exist today.
+The result is the property A6 asks for, achieved rather than compromised:
+
+- **No credential of any kind enters a sandbox.** The run holds an opaque, per-run,
+  revocable lease token and nothing else.
+- The upstream credential is a **short-lived OAuth access token** that expires in hours,
+  rather than a permanent API key — strictly better than what A6 originally imagined.
+- It lives in the operator's login keychain, which no container can read. The Runner —
+  host-side and already trusted with push authority (§6 A2) — reads it and pushes it to
+  the proxy's loopback control plane, refreshing on an interval because Claude Code
+  rotates it. That capability is explicit opt-in (`LOOM_USE_HOST_CLAUDE_AUTH=1`): reading
+  an operator's keychain is not something the Runner should start doing quietly.
+- Metering, budget caps, and the egress allowlist are unaffected — the proxy is still on
+  the request path.
+
+**Verified end to end**: a fully sandboxed run completed against a real repository, its
+approval card showing the container's own `/work` path, with cost metered at the proxy
+and no API key configured anywhere.
+
+**Remaining caveats**, which are real and not technical:
+
+- **Licensing.** §8 records that the SDK's terms prohibit exposing claude.ai
+  login/subscription limits to *your users*. A single operator running their own Loom is
+  one reading; a team workspace on one person's subscription is the case the term is
+  about. `ANTHROPIC_API_KEY` remains supported on the proxy for that reason, and is the
+  correct choice for a multi-user deployment.
+- **Undocumented.** Nothing here is a published integration point; the credentials-file
+  shape and the CLI's handling of it could change without notice. The API-key fallback
+  exists partly so that a break is a degradation rather than an outage.
+- A brokerable backend (`VllmApiAdapter`/`CodexAdapter`, §7 Phase 3) remains the most
+  durable answer, since neither validates credentials client-side at all.
 - An in-container loopback shim is built and retained regardless: it attaches the lease
   token so the proxy can still attribute and meter spend per run, which is what budget
   caps depend on.
@@ -523,6 +526,31 @@ Consequences, stated rather than papered over:
 **A8 — XSS here means "attacker approves actions."** The UI session can call the whole contract, so one XSS forges approvals and reads every transcript. Fix: markdown with raw HTML disabled; no `dangerouslySetInnerHTML`/`v-html` on model text; href scheme allowlist (`javascript:`/`data:`/`vbscript:` blocked); no model-supplied SVG; escaped highlighting. **Tool results and filenames are untrusted too**, not just prose. Serve blob artifacts from a **separate origin** with `Content-Disposition: attachment` and a sandboxed iframe — a stored HTML artifact on the app origin is same-origin XSS. Nonce CSP, no `unsafe-inline`. Step-up re-auth for approvals so a stolen session can't silently approve.
 
 **A9 — Runner pairing over-grants.** A per-workspace pairing token means pairing a Runner gives every workspace member shell on that machine. Fix: Runner binds to an owning user; channels/personas need an explicit grant to target it; pairing tokens are single-use, short-TTL, exchanged for a per-Runner credential.
+
+**A9-bis — Runner connectivity, and what a Tailscale-shaped answer would buy. [NEW, roadmap]**
+Today a Runner reaches the server over a plain WebSocket with a bearer pairing token,
+which means the server must be reachable from wherever the Runner is. That is fine for
+localhost and awkward for the actual deployment shape this plan implies: Runners live on
+the machines holding the repositories (§5a) — developer laptops and build boxes, behind
+NAT, roaming between networks.
+
+A WireGuard mesh with identity-based ACLs (Tailscale, or headscale for the
+self-hosted-all-the-way-down constraint in §8) fits three problems at once:
+
+- **Reachability.** Runners dial out; nothing needs a public listener or port forwarding,
+  and a laptop that changes networks keeps its identity.
+- **A9's over-granting.** A9 already says a Runner should bind to an owning user and need
+  an explicit grant to be targeted. Mesh ACLs express exactly that at the network layer,
+  so an unauthorized workspace cannot even open a socket to a Runner — defence that does
+  not depend on the application getting its authz right.
+- **Transport trust.** The Runner link carries job dispatch, agent events, and approval
+  round-trips. Today its confidentiality rests on TLS termination being configured
+  correctly by whoever deploys it; on a mesh it is end-to-end by construction.
+
+Not a Phase 1 change, and deliberately not a hard dependency: the pairing-token design
+stays, because a platform that *requires* a third-party network to run locally would
+contradict §8's self-hostable constraint. This is an adapter behind the same Runner
+transport, most naturally alongside Phase 4's multi-org and gradual-rollout work.
 
 **Runtime safety mechanics** (all previously missing): heartbeat + stuck detection (same tool call N times, no progress in T minutes); dead-run reaper; **idempotency keys on run steps** — BullMQ retrying a half-committed agent run is actively dangerous; enforced budget caps with pre-flight estimate, per-turn check, and hard kill, metered at the proxy; **approval SLA** (timeout → auto-deny → resumable); and a **global kill switch / pause-all**. One button. Nothing had one. **Heartbeat + no-progress detection and the dead-run reaper are built** (see HANDOFF.md) — same-tool-call-N-times detection, idempotency keys, budget caps, approval SLA, and the kill switch are not.
 

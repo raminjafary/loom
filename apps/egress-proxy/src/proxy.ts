@@ -24,10 +24,26 @@ import type { LeaseRegistry } from './leases.js'
  * is the only way out, and it answers exactly these two shapes.
  */
 
+/**
+ * How the proxy authenticates to the provider. Host-side only either way — this is the
+ * secret §6 A6 keeps out of the sandbox.
+ *
+ * `oauth` is the preferred mode: the sandbox presents its lease token in the position a
+ * credential would occupy, and this replaces it outright, so no real credential ever
+ * enters a run. It also expires in hours rather than never. The token is supplied and
+ * refreshed by the Runner over the control plane, because Claude Code keeps it in the
+ * host's keychain where a container cannot reach it.
+ */
+export interface UpstreamAuth {
+  /** Current bearer token, or null when the Runner has not supplied one yet. */
+  oauthToken: string | null
+  /** Fallback when no OAuth token is configured. */
+  readonly apiKey: string | null
+}
+
 export interface ProxyOptions {
   readonly leases: LeaseRegistry
-  /** The real model API key. Host-side only — this is the secret A6 keeps out of the sandbox. */
-  readonly anthropicApiKey: string
+  readonly upstream: UpstreamAuth
   readonly anthropicBaseUrl: string
   readonly allowedHosts: readonly string[]
   /**
@@ -176,7 +192,18 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
       if (STRIPPED_REQUEST_HEADERS.has(key.toLowerCase())) continue
       if (typeof value === 'string') headers[key] = value
     }
-    headers['x-api-key'] = options.anthropicApiKey
+    // The sandbox's lease is replaced with the real upstream credential here, and only
+    // here (§6 A6). OAuth is preferred: it is what the sandbox's fake credentials file
+    // makes the CLI send, and it expires in hours rather than never.
+    if (options.upstream.oauthToken) {
+      headers.authorization = `Bearer ${options.upstream.oauthToken}`
+    } else if (options.upstream.apiKey) {
+      headers['x-api-key'] = options.upstream.apiKey
+    } else {
+      log('model request refused: proxy has no upstream credential configured')
+      deny(response, 503, 'the egress proxy has no upstream credential configured')
+      return
+    }
 
     let upstream: Response
     try {

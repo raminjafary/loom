@@ -52,7 +52,7 @@ beforeAll(async () => {
   leases = createLeaseRegistry({ onUsage: (record) => usage.push(record) })
   proxy = createEgressProxy({
     leases,
-    anthropicApiKey: REAL_KEY,
+    upstream: { oauthToken: null, apiKey: REAL_KEY },
     anthropicBaseUrl: upstreamUrl,
     allowedHosts: DEFAULT_ALLOWED_EGRESS_HOSTS,
     onBudgetExhausted: (runId) => exhausted.push(runId),
@@ -82,7 +82,7 @@ describe('egress proxy: credential injection', () => {
     expect(response.status).toBe(200)
 
     // The whole point of A6: the sandbox held an opaque token, the provider saw
-    // the real key, and the two never met.
+    // the real credential, and the two never met.
     expect(lastUpstreamHeaders['x-api-key']).toBe(REAL_KEY)
     expect(lastUpstreamHeaders.authorization).toBeUndefined()
     expect(JSON.stringify(lastUpstreamHeaders)).not.toContain(lease.token)
