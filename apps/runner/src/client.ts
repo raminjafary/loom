@@ -13,7 +13,9 @@ import {
  egressConfigFromEnv,
  leaseEgressToken,
  revokeEgressToken,
+ setUpstreamOauthToken,
 } from './egress-client.js'
+import { readHostClaudeOAuth } from './host-claude-auth.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
 import {
@@ -23,12 +25,7 @@ import {
  prepareRunWorkspace,
  pushRunBranch,
 } from './run-workspace.js'
-import {
- runAgentInSandbox,
- sandboxConfigFromEnv,
- sandboxEnabled,
- sandboxModelKeyFromEnv,
-} from './sandbox.js'
+import { runAgentInSandbox, sandboxConfigFromEnv, sandboxEnabled } from './sandbox.js'
 
 export interface RunnerClientOptions {
  readonly serverWsUrl: string
@@ -64,7 +61,6 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const sandbox = sandboxConfigFromEnv
  const useSandbox = sandboxEnabled
  const egress = egressConfigFromEnv
- const sandboxModelKey = sandboxModelKeyFromEnv
  const USAGE_POLL_MS = Number(process.env.LOOM_USAGE_POLL_MS ?? 5_000)
 
  let socket: WebSocket | null = null
@@ -74,6 +70,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // here rather than derived from anything observable so a retransmit of an
  // already-sent event reuses its original seq and is dropped server-side.
  const eventSeqs = new Map<string, number>
+
+ /**
+ * A run's terminal event, held until its work is committed (see flushRunTerminalEvent).
+ */
+ const pendingTerminalEvents = new Map<string, WireAgentEvent>
 
  const send = (frame: RunnerFrame) => socket?.send(JSON.stringify(frame))
 
@@ -126,12 +127,46 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }
  }
 
+ /**
+ * Keeps the proxy's upstream credential current. The token lives in
+ * the host's keychain, which the proxy container cannot read, so the Runner — already
+ * the trusted host-side component — pushes it. Claude Code rotates it every few hours;
+ * re-reading is enough, the Runner never refreshes it itself.
+ */
+ const refreshUpstreamAuth = async : Promise<void> => {
+ if (!egress) return
+ const oauth = await readHostClaudeOAuth
+ await setUpstreamOauthToken(egress, oauth?.accessToken ?? null)
+ }
+
+ const upstreamAuthTimer = egress
+ ? setInterval( => {
+ void refreshUpstreamAuth.catch((error) =>
+ log(`upstream auth refresh failed: ${error instanceof Error ? error.message: String(error)}`),
+)
+ }, Number(process.env.LOOM_UPSTREAM_AUTH_REFRESH_MS ?? 300_000))
+: null
+
  const usageTimer = egress
  ? setInterval( => {
  void pumpUsage.catch((error) => log(`usage poll failed: ${error instanceof Error ? error.message: String(error)}`))
  }, USAGE_POLL_MS)
 : null
 
+
+ /**
+ * Releases the terminal event a run has been holding, after its work is committed.
+ *
+ * The order matters: the server marks a run `completed` when this arrives, and the
+ * Inbox reacts by fetching the diff. Sending it before the commit produced exactly
+ * that bug — a completed run whose diff was zero bytes.
+ */
+ const flushRunTerminalEvent = (runId: string): void => {
+ const event = pendingTerminalEvents.get(runId)
+ if (!event) return
+ pendingTerminalEvents.delete(runId)
+ sendAgentEvent(runId, event)
+ }
 
  /**
  * Commits whatever the agent left behind, so the end-of-run diff and any later push
@@ -169,7 +204,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  abort: AbortController
  resumeSessionId?: string
  }): Promise<void> => {
- const onEvent = (event: WireAgentEvent) => sendAgentEvent(input.runId, event)
+ const onEvent = (event: WireAgentEvent) => {
+ if (event.kind === 'run_completed' || event.kind === 'run_failed') {
+ pendingTerminalEvents.set(input.runId, event)
+ return
+ }
+ sendAgentEvent(input.runId, event)
+ }
  const onSessionId = (sessionId: string) => {
  const state = runStates.get(input.runId)
  if (!state) return
@@ -210,20 +251,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  return
  }
 
- // Checked before leasing or starting anything: without it the SDK's CLI refuses
- // to contact its base URL at all and the run would hang to its wall clock with no
- // explanation.
- if (!sandboxModelKey) {
- sendAgentEvent(input.runId, {
- kind: 'run_failed',
- message:
- 'Sandboxed runs need LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH=1 and LOOM_SANDBOX_MODEL_API_KEY set on the Runner. ' +
- 'The Claude Agent SDK validates its API key offline and will not use a broker-issued token, so the sandbox ' +
- 'must be handed a real key to pass that check. Set LOOM_SANDBOX_ENABLED=0 to run ' +
- 'unsandboxed instead, which is less safe.',
- })
- return
- }
+ // Refreshed immediately before the run rather than only on a timer: the token
+ // rotates every few hours, and a run starting just after a rotation would otherwise
+ // use a stale one.
+ await refreshUpstreamAuth
 
  // The lease is taken before the container starts, so the sandbox never exists
  // in a state where it could reach the model API without one.
@@ -243,7 +274,6 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  homePath: input.homePath,
  egressToken,
  egressDataUrl: egress.dataUrl,
- modelApiKeyForCliCheck: sandboxModelKey,
 ...(input.resumeSessionId === undefined ? {}: { resumeSessionId: input.resumeSessionId }),
  abortController: input.abort,
  onEvent,
@@ -388,6 +418,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
 .then(async => {
  await commitWork(runId, frame.persona.name)
+ flushRunTerminalEvent(runId)
  log(`run ${runId} finished`)
  })
 .catch((error) => {
@@ -411,6 +442,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // whole point, so it must not be removed just because this process is
  // done with the run.
  runStates.delete(runId)
+ pendingTerminalEvents.delete(runId)
  eventSeqs.delete(runId)
  void clearRunState(runId).catch( => {})
  })
@@ -466,6 +498,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
 .then(async => {
  await commitWork(frame.runId, state.persona.name)
+ flushRunTerminalEvent(frame.runId)
  log(`resumed run ${frame.runId} finished`)
  })
 .catch((error) => {
@@ -483,6 +516,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }
  aborts.delete(frame.runId)
  runStates.delete(frame.runId)
+ pendingTerminalEvents.delete(frame.runId)
  eventSeqs.delete(frame.runId)
  void clearRunState(frame.runId).catch( => {})
  })
@@ -605,6 +639,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  close: => {
  closed = true
  if (usageTimer) clearInterval(usageTimer)
+ if (upstreamAuthTimer) clearInterval(upstreamAuthTimer)
  socket?.close
  },
  }

@@ -19,6 +19,9 @@ const LeaseRequestSchema = z.object({
  budgetCapUsd: z.number.positive.nullish,
 })
 
+/** Null clears the token, e.g. when the Runner finds the host is no longer logged in. */
+const UpstreamAuthSchema = z.object({ oauthToken: z.string.min(1).nullable })
+
 const constantTimeEquals = (a: string, b: string): boolean => {
  const left = Buffer.from(a)
  const right = Buffer.from(b)
@@ -48,6 +51,7 @@ export const createControlServer = (options: {
  controlSecret: string
  /** Drained by the Runner so metered spend reaches the server over the socket it already trusts. */
  usageQueue: UsageRecord[]
+ setOauthToken: (token: string | null) => void
 }): Server =>
  createServer((request, response) => {
  void (async => {
@@ -76,6 +80,26 @@ export const createControlServer = (options: {
  spentUsd: lease.spentUsd,
  budgetCapUsd: lease.budgetCapUsd,
  })
+ return
+ }
+
+ /**
+ * The Runner supplies (and periodically refreshes) the upstream OAuth token
+ *. It lives host-side in the operator's keychain, which a
+ * container cannot read, so the trusted host-side component pushes it here rather
+ * than the proxy reaching for it.
+ *
+ * Held in memory only, like leases: a credential that outlives the process that
+ * was given it is one nobody revoked.
+ */
+ if (request.method === 'PUT' && url === '/_control/upstream-auth') {
+ const parsed = UpstreamAuthSchema.safeParse(await readJson(request))
+ if (!parsed.success) {
+ json(response, 400, { error: 'malformed upstream auth' })
+ return
+ }
+ options.setOauthToken(parsed.data.oauthToken)
+ json(response, 200, { ok: true })
  return
  }
 

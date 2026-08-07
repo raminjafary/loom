@@ -1,9 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
+import { sandboxCredentialsFile } from './host-claude-auth.js'
 import { SandboxEventSchema, decodeFrameLine, encodeFrame } from './sandbox-protocol.js'
 
 const execFileAsync = promisify(execFile)
@@ -43,13 +45,6 @@ export interface SandboxOptions {
  readonly egressToken: string
  /** Where the sandbox reaches the proxy, e.g. http://loom-egress:8080. */
  readonly egressDataUrl: string
- /**
- * A real, well-formed model key, required only to satisfy the SDK CLI's *offline*
- * format check. It is never used to authenticate: the shim
- * strips it and the proxy attaches its own copy. Opt-in, because handing a run any
- * real credential is a deliberate weakening of the credential broker and must not happen by default.
- */
- readonly modelApiKeyForCliCheck: string
  readonly resumeSessionId?: string
  readonly onEvent: (event: WireAgentEvent) => void
  readonly onSessionId?: (sessionId: string) => void
@@ -87,36 +82,10 @@ export const sandboxEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
  (env.LOOM_SANDBOX_ENABLED ?? '1') !== '0'
 
 /**
- * Header the sandbox carries its lease token in. Must match the proxy's
- * `LEASE_HEADER`; duplicated as a literal rather than imported because apps/runner
- * does not depend on apps/egress-proxy and should not start to — they are separate
- * deployables that agree on a wire detail, like the Runner protocol.
- */
-const LEASE_HEADER = 'x-loom-lease'
-
-/** Port the lease shim listens on inside the container. */
-const LEASE_SHIM_PORT = 8787
-
-/**
  * Container name, which doubles as its DNS name on the sandbox network — that is how
  * the agent addresses its own shim (see ANTHROPIC_BASE_URL below).
  */
 const containerName = (runId: string): string => `loom-run-${runId}`
-
-/**
- * The key handed to a sandbox purely to satisfy the SDK CLI's offline format check
- *. Deliberately explicit opt-in rather than a default:
- * handing a run a real credential weakens the credential broker, and that should be a decision an
- * operator made, not something that happened quietly because a variable was set
- * somewhere else.
- *
- * Returns null when not configured, and `runAgentForRun` then fails the run with an
- * explanation instead of letting it hang on a CLI that will not talk to anything.
- */
-export const sandboxModelKeyFromEnv = (env: NodeJS.ProcessEnv = process.env): string | null =>
- env.LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH === '1' && env.LOOM_SANDBOX_MODEL_API_KEY
- ? env.LOOM_SANDBOX_MODEL_API_KEY
-: null
 
 /** The run's clone. */
 const WORK_DIR = '/work'
@@ -228,29 +197,25 @@ export const runAgentInSandbox = async (
 ): Promise<void> => {
  const log = options.log ?? ( => {})
 
+ // The lease, in the only place the CLI will carry it intact. Written into the run's
+ // own HOME, which is a host-backed directory destroyed with the run — so the file
+ // never outlives the run and never contains anything real.
+ await mkdir(join(options.homePath, '.claude'), { recursive: true })
+ await writeFile(
+ join(options.homePath, '.claude', '.credentials.json'),
+ sandboxCredentialsFile(options.egressToken),
+ { mode: 0o600 },
+)
+
  const args = buildSandboxArgs(config, {
  runId: options.runId,
  clonePath: options.clonePath,
  homePath: options.homePath,
  env: {
- // Present only to pass the CLI's offline format check. Functionally inert: the
- // shim strips it and the proxy attaches its own copy, so this value never
- // authenticates anything and `api.anthropic.com` is not on the egress allowlist,
- // so it cannot be used anywhere else either. See the credential broker caveat — a
- // synthesized key does not work, the check appears to include a checksum.
- ANTHROPIC_API_KEY: options.modelApiKeyForCliCheck,
- // The SDK talks to the in-container shim, not the proxy directly. See
- // lease-shim.ts: the CLI rewrites whatever auth it is given, so the lease is
- // attached after it. Addressed by the container's own name rather than
- // 127.0.0.1 because the CLI ignores a loopback base URL and goes straight to
- // api.anthropic.com — observed, not assumed.
- ANTHROPIC_BASE_URL: `http://${containerName(options.runId)}:${LEASE_SHIM_PORT}`,
- // Read by the agent host to configure that shim. Not names the CLI knows, so
- // nothing rewrites them.
- LOOM_LEASE_TOKEN: options.egressToken,
- LOOM_EGRESS_URL: options.egressDataUrl,
- LOOM_LEASE_SHIM_PORT: String(LEASE_SHIM_PORT),
- LOOM_LEASE_HEADER: LEASE_HEADER,
+ // Straight to the proxy. The lease travels in the sandbox's credentials file
+ // (see writeSandboxCredentials), which the CLI forwards byte-exact as a bearer
+ // token — unlike ANTHROPIC_API_KEY, which it validates offline and rewrites.
+ ANTHROPIC_BASE_URL: options.egressDataUrl,
  // Everything that is not the model API goes through the same proxy, where it
  // meets the host allowlist. The lease token rides in the URL's userinfo
  // because that is the only channel `HTTP_PROXY`-aware tools (npm, curl, git)
@@ -265,7 +230,7 @@ export const runAgentInSandbox = async (
  // Both the proxy host and the container's own name. Without the latter the CLI
  // would route its shim call through the egress proxy, arriving on the
  // forward-proxy path instead of the shim.
- NO_PROXY: `localhost,127.0.0.1,${proxyHost(options.egressDataUrl)},${containerName(options.runId)}`,
+ NO_PROXY: `localhost,127.0.0.1,${proxyHost(options.egressDataUrl)}`,
  HOME: HOME_DIR,
  },
  })

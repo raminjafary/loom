@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
- buildSandboxArgs,
- sandboxConfigFromEnv,
- sandboxEnabled,
- sandboxModelKeyFromEnv,
-} from './sandbox.js'
+import { buildSandboxArgs, sandboxConfigFromEnv, sandboxEnabled } from './sandbox.js'
 
 /**
  * These assert the sandbox spec spec itself, not plumbing. Every clause in
@@ -96,25 +91,6 @@ describe('sandbox configuration', => {
  expect(
  sandboxConfigFromEnv({ LOOM_CONTAINER_RUNTIME: 'podman' } as NodeJS.ProcessEnv).runtime,
 ).toBe('podman')
- })
-
- it('requires an explicit opt-in before handing a run a real model key', => {
- // Weakening the credential broker must be a decision an operator made, not a side effect of a
- // variable being set somewhere else.
- const key = 'sk-ant-api03-whatever'
- expect(sandboxModelKeyFromEnv({} as NodeJS.ProcessEnv)).toBeNull
- expect(
- sandboxModelKeyFromEnv({ LOOM_SANDBOX_MODEL_API_KEY: key } as NodeJS.ProcessEnv),
-).toBeNull
- expect(
- sandboxModelKeyFromEnv({ LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH: '1' } as NodeJS.ProcessEnv),
-).toBeNull
- expect(
- sandboxModelKeyFromEnv({
- LOOM_SANDBOX_MODEL_KEY_PASSTHROUGH: '1',
- LOOM_SANDBOX_MODEL_API_KEY: key,
- } as NodeJS.ProcessEnv),
-).toBe(key)
  })
 
  it('is on unless explicitly disabled', => {

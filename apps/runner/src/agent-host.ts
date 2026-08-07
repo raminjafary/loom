@@ -1,7 +1,6 @@
 import { classifyToolEffect, isRiskyTool } from '@loom/domain'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
-import { startLeaseShim } from './lease-shim.js'
 import { resolveWithinRoot } from './path-check.js'
 import {
  SandboxCommandSchema,
@@ -68,26 +67,6 @@ const main = async : Promise<void> => {
  })
  },
 )
-
- // Started before the agent, so the SDK's very first request already has somewhere
- // to go. Absent config means this container is not using the proxy at all, which is
- // only the unsandboxed/debug path.
- const leaseToken = process.env.LOOM_LEASE_TOKEN
- const egressUrl = process.env.LOOM_EGRESS_URL
- const shimPort = Number(process.env.LOOM_LEASE_SHIM_PORT ?? 8787)
-
- if (leaseToken && egressUrl) {
- await startLeaseShim({
- port: shimPort,
- leaseToken,
- egressUrl,
- leaseHeader: process.env.LOOM_LEASE_HEADER ?? 'x-loom-lease',
- log: note,
- })
- note(`lease shim listening on 127.0.0.1:${shimPort} -> ${egressUrl}`)
- } else {
- note('no lease configured — model calls will not be proxied')
- }
 
  // Only now: the host holds its `start` frame until it sees this, because stdin
  // written before the container attaches is discarded (see SandboxEventSchema).

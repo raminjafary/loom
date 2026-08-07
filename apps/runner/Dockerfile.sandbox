@@ -48,7 +48,7 @@ RUN node -e "const p=require.resolve('@anthropic-ai/claude-agent-sdk');const m=p
 # policy stay out: those are host-side, and the push policy depends on them being somewhere
 # the agent cannot reach.
 COPY apps/runner/src/agent-host.ts src/
-COPY apps/runner/src/lease-shim.ts src/
+
 COPY apps/runner/src/sandbox-protocol.ts src/
 COPY apps/runner/src/claude-agent-adapter.ts src/
 COPY apps/runner/src/path-check.ts src/
