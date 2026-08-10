@@ -8,6 +8,28 @@ import { z } from 'zod'
  * server ship in lockstep; a real versioning story is a Phase 3+ concern.
  */
 
+/**
+ * A registry capability, resolved and snapshotted onto the run.
+ *
+ * A skill carries its `content` rather than a path, because with
+ * `settingSources: []` a skill living in the run's clone would be content the
+ * agent itself can write — the registry provisions it instead.
+ */
+export const CapabilitySpecSchema = z.discriminatedUnion('kind', [
+ z.object({
+ kind: z.literal('mcp'),
+ name: z.string,
+ transport: z.enum(['stdio', 'sse', 'http']),
+ command: z.string.nullable,
+ args: z.array(z.string),
+ url: z.string.nullable,
+ /** The pinned tool-list hash; null until a first observation is recorded. */
+ toolListHash: z.string.nullable,
+ allowedTools: z.array(z.string),
+ }),
+ z.object({ kind: z.literal('skill'), name: z.string, content: z.string }),
+])
+
 export const PersonaSpecSchema = z.object({
  name: z.string,
  systemPrompt: z.string,
@@ -15,6 +37,10 @@ export const PersonaSpecSchema = z.object({
  tools: z.array(z.string),
  autoApprove: z.boolean,
  budgetCapUsd: z.number.nullable,
+ // Optional on the wire: a Runner resumed from a state file written before the
+ // registry existed has no capabilities recorded, and refusing to parse that
+ // would turn an upgrade into a lost run.
+ capabilities: z.array(CapabilitySpecSchema).optional,
 })
 
 export const AgentEventSchema = z.discriminatedUnion('kind', [
@@ -292,3 +318,4 @@ export type RunnerFrame = z.infer<typeof RunnerFrameSchema>
 export type ServerFrame = z.infer<typeof ServerFrameSchema>
 export type WireAgentEvent = z.infer<typeof AgentEventSchema>
 export type WirePersonaSpec = z.infer<typeof PersonaSpecSchema>
+export type WireCapabilitySpec = z.infer<typeof CapabilitySpecSchema>

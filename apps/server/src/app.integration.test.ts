@@ -198,6 +198,7 @@ describe('contract completeness', => {
  'repository',
  'mergeQueue',
  'persona',
+ 'capability',
  'personaGroup',
  'agentRun',
  'runControl',

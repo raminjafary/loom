@@ -21,6 +21,7 @@ import {
  setUpstreamOauthToken,
 } from './egress-client.js'
 import { readHostClaudeOAuth } from './host-claude-auth.js'
+import { provisionSkills } from './capabilities.js'
 import { mergeRunBranch } from './merge.js'
 import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
@@ -306,6 +307,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  pendingPermissions.set(toolUseId, resolve)
  })
  }
+
+ // Skills are written into the run's HOME before the SDK starts, so the
+ // registry — not the clone — is where a run's skills come from. HOME is
+ // run-scoped and destroyed with the run, so nothing outlives it.
+ const skillNames = await provisionSkills(input.homePath, input.persona.capabilities ?? [])
+ if (skillNames.length > 0) log(`provisioned ${skillNames.length} skill(s) for run ${input.runId}`)
 
  if (!useSandbox || !egress) {
  // Refused rather than warned. The warning was in the log; the consequence would be

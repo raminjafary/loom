@@ -8,8 +8,12 @@ import {
   createRunnerPairingToken,
   decideApproval,
   deletePersonaGroup,
+  attachCapability,
   cancelMergeQueueEntry,
+  createCapability,
   createRepository,
+  deleteCapability,
+  detachCapability,
   discardAgentRun,
   enqueueMergeRun,
   getActiveAgentRun,
@@ -24,6 +28,8 @@ import {
   listActiveAgentRuns,
   listChannels,
   listChildAgentRuns,
+  listCapabilities,
+  listCapabilityAttachments,
   listMergeQueue,
   listMessages,
   listRunnerDirectory,
@@ -50,6 +56,7 @@ import {
   asAgentPersonaId,
   asAgentRunId,
   asApprovalRequestId,
+  asCapabilityId,
   asChannelId,
   asMergeQueueEntryId,
   asMessageId,
@@ -329,6 +336,70 @@ export const router = os.router({
           markdownSource: input.markdownSource,
         }),
       ),
+    ),
+  },
+
+  capability: {
+    list: os.capability.list.handler(({ context }) =>
+      guard(() => listCapabilities(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+
+    listAttachments: os.capability.listAttachments.handler(({ context }) =>
+      guard(() =>
+        listCapabilityAttachments(context.deps, { workspaceId: context.principal.workspaceId }),
+      ),
+    ),
+
+    register: os.capability.register.handler(({ context, input }) =>
+      guard(() =>
+        createCapability(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          kind: input.kind,
+          name: input.name,
+          description: input.description,
+          transport: input.transport ?? null,
+          command: input.command ?? null,
+          args: input.args ?? [],
+          url: input.url ?? null,
+          content: input.content ?? null,
+        }),
+      ),
+    ),
+
+    remove: os.capability.remove.handler(({ context, input }) =>
+      guard(async () => {
+        await deleteCapability(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          capabilityId: asCapabilityId(input.capabilityId),
+        })
+        return { ok: true as const }
+      }),
+    ),
+
+    attach: os.capability.attach.handler(({ context, input }) =>
+      guard(() =>
+        attachCapability(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          personaId: asAgentPersonaId(input.personaId),
+          capabilityId: asCapabilityId(input.capabilityId),
+          ...(input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools }),
+        }),
+      ),
+    ),
+
+    detach: os.capability.detach.handler(({ context, input }) =>
+      guard(async () => {
+        await detachCapability(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          personaId: asAgentPersonaId(input.personaId),
+          capabilityId: asCapabilityId(input.capabilityId),
+        })
+        return { ok: true as const }
+      }),
     ),
   },
 

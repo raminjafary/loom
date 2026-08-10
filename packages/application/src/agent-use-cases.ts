@@ -25,10 +25,16 @@ import {
  type AgentRunStatus,
  type ApprovalRequest,
  type ApprovalRequestId,
+ type Capability,
+ type CapabilityId,
+ type CapabilityKind,
+ type CapabilitySpec,
+ type McpTransport,
  type MergeFailureReason,
  type MergeQueueEntry,
  type MergeQueueEntryId,
  type NotificationKind,
+ type PersonaCapability,
  type PersonaGroup,
  type PersonaGroupId,
  type PersonaSpec,
@@ -44,6 +50,7 @@ import type {
  AgentRunEventRepositoryPort,
  AgentRunRepositoryPort,
  ApprovalRepositoryPort,
+ CapabilityRepositoryPort,
  MergeQueueRepositoryPort,
  PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
@@ -64,6 +71,7 @@ export interface AgentDeps extends Deps, NotificationDeps {
  readonly agentRunEvents: AgentRunEventRepositoryPort
  readonly approvals: ApprovalRepositoryPort
  readonly mergeQueue: MergeQueueRepositoryPort
+ readonly capabilities: CapabilityRepositoryPort
  readonly personas: PersonaRepositoryPort
  readonly personaGroups: PersonaGroupRepositoryPort
  readonly runControl: WorkspaceRunControlRepositoryPort
@@ -327,6 +335,194 @@ export const updatePersona = async (
 }
 
 /**
+ * The capability registry. Human-only throughout: the
+ * whole security property is that a capability is something an operator added
+ * deliberately, not something a repository under review can introduce.
+ */
+export const createCapability = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ kind: CapabilityKind
+ name: string
+ description: string
+ transport?: McpTransport | null
+ command?: string | null
+ args?: string[]
+ url?: string | null
+ content?: string | null
+ },
+): Promise<Capability> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may register a capability')
+ }
+
+ // Shape validation here rather than in the schema, because what a capability
+ // needs depends on what it is, and a half-specified MCP server fails at run
+ // start — which is the worst possible moment to discover it.
+ if (input.kind === 'mcp') {
+ if (input.transport === 'stdio' && !input.command?.trim) {
+ throw new ValidationError('A stdio MCP server needs a command')
+ }
+ if ((input.transport === 'sse' || input.transport === 'http') && !input.url?.trim) {
+ throw new ValidationError(`A ${input.transport} MCP server needs a URL`)
+ }
+ if (!input.transport) throw new ValidationError('An MCP capability needs a transport')
+ }
+ if (input.kind === 'skill' && !input.content?.trim) {
+ throw new ValidationError('A skill needs content')
+ }
+
+ const existing = await deps.capabilities.listByWorkspace(input.workspaceId)
+ if (existing.some((candidate) => candidate.name === input.name)) {
+ throw new ValidationError(`Capability "${input.name}" already exists`)
+ }
+
+ const created = await deps.capabilities.create({
+ workspaceId: input.workspaceId,
+ kind: input.kind,
+ name: input.name,
+ description: input.description,
+ transport: input.transport ?? null,
+ command: input.command ?? null,
+ args: input.args ?? [],
+ url: input.url ?? null,
+ content: input.content ?? null,
+ })
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'capability.registered',
+ subjectType: 'capability',
+ subjectId: created.id,
+ metadata: { kind: input.kind, name: input.name },
+ })
+
+ return created
+}
+
+export const listCapabilities = (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<Capability[]> => deps.capabilities.listByWorkspace(input.workspaceId)
+
+export const listCapabilityAttachments = (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<PersonaCapability[]> => deps.capabilities.listAttachments(input.workspaceId)
+
+export const deleteCapability = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; capabilityId: CapabilityId },
+): Promise<void> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may remove a capability')
+ }
+ await deps.capabilities.delete(input.workspaceId, input.capabilityId)
+}
+
+/**
+ * Attaches a registry capability to a persona, with the per-attachment scope.
+ *
+ * `allowedTools` narrows what the persona may use from an MCP server. Empty means
+ * everything the server offers — which is a real decision, not a default to reach
+ * for: it is also what makes the child-attenuation check on scopes meaningful.
+ */
+export const attachCapability = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ personaId: AgentPersonaId
+ capabilityId: CapabilityId
+ allowedTools?: string[]
+ },
+): Promise<PersonaCapability> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may attach a capability')
+ }
+ const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+ if (!persona) throw new NotFoundError('AgentPersona')
+ const capability = await deps.capabilities.findById(input.workspaceId, input.capabilityId)
+ if (!capability) throw new NotFoundError('Capability')
+
+ const attachment = await deps.capabilities.attach({
+ workspaceId: input.workspaceId,
+ personaId: input.personaId,
+ capabilityId: input.capabilityId,
+ allowedTools: input.allowedTools ?? [],
+ })
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'capability.attached',
+ subjectType: 'agent_persona',
+ subjectId: persona.id,
+ metadata: { capability: capability.name, allowedTools: input.allowedTools ?? [] },
+ })
+
+ return attachment
+}
+
+export const detachCapability = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ personaId: AgentPersonaId
+ capabilityId: CapabilityId
+ },
+): Promise<void> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may detach a capability')
+ }
+ await deps.capabilities.detach(input.workspaceId, input.personaId, input.capabilityId)
+}
+
+/**
+ * Resolves a persona's attached capabilities into the specs a run executes with.
+ *
+ * Snapshotted onto the run like the rest of the persona: revoking a capability
+ * must not change what a run already in flight is using, and attaching one must
+ * not silently widen it. A capability row that vanished between attach and start
+ * is skipped rather than failing the run — the attachment is stale, not the run.
+ */
+const resolveCapabilities = async (
+ deps: AgentDeps,
+ workspaceId: WorkspaceId,
+ personaId: AgentPersonaId,
+): Promise<CapabilitySpec[]> => {
+ const attachments = await deps.capabilities.listByPersona(workspaceId, personaId)
+ const specs: CapabilitySpec[] = []
+
+ for (const attachment of attachments) {
+ const capability = await deps.capabilities.findById(workspaceId, attachment.capabilityId)
+ if (!capability) continue
+
+ if (capability.kind === 'skill') {
+ specs.push({ kind: 'skill', name: capability.name, content: capability.content ?? '' })
+ continue
+ }
+ if (!capability.transport) continue
+ specs.push({
+ kind: 'mcp',
+ name: capability.name,
+ transport: capability.transport,
+ command: capability.command,
+ args: capability.args,
+ url: capability.url,
+ toolListHash: capability.toolListHash,
+ allowedTools: attachment.allowedTools,
+ })
+ }
+
+ return specs
+}
+
+/**
  * Validates every member id resolves within the workspace — a group
  * referencing a persona that doesn't exist (typo, deleted persona) is a
  * client error, not a silently-stored dangling reference.
@@ -534,6 +730,7 @@ export const startAgentRun = async (
  tools: persona.tools,
  autoApprove: persona.harnessAutoApprove,
  budgetCapUsd: persona.harnessBudgetCapUsd,
+ capabilities: await resolveCapabilities(deps, input.workspaceId, input.personaId),
  }
 
  // Capability attenuation. Checked against the parent's *snapshot*,

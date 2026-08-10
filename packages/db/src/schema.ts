@@ -326,6 +326,74 @@ export const agentPersona = pgTable(
 )
 
 /**
+ * The capability registry. Workspace-owned
+ * and human-curated — which is the security story in one line: a capability is
+ * something an operator added deliberately, never something a repository under
+ * review can introduce.
+ *
+ * `toolListHash` is the "pinned tool-list hash for MCP". An MCP server decides
+ * for itself what it exposes, so without a pin a server reviewed offering three
+ * read-only tools can quietly start offering a fourth that writes.
+ *
+ * Skills store their `content` here rather than on any run's disk, because with
+ * `settingSources: []` a skill in the clone is content the agent can write — see
+ * packages/domain/src/capabilities.ts for why that settles the roadmap vs the capability registry.
+ */
+export const capability = pgTable(
+ 'capability',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ kind: text('kind').notNull,
+ name: text('name').notNull,
+ description: text('description').notNull.default(''),
+ transport: text('transport'),
+ command: text('command'),
+ args: jsonb('args').$type<string[]>.notNull.default([]),
+ url: text('url'),
+ toolListHash: text('tool_list_hash'),
+ content: text('content'),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ index('capability_workspace_idx').on(t.workspaceId),
+ uniqueIndex('capability_workspace_name_idx').on(t.workspaceId, t.name),
+ ],
+)
+
+/**
+ * The `persona_capability` join table, "with per-attachment scopes" — which is
+ * why this is a table rather than a jsonb array on the persona, unlike
+ * `personaGroup.personaIds`.
+ */
+export const personaCapability = pgTable(
+ 'persona_capability',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ capabilityId: uuid('capability_id')
+.notNull
+.references( => capability.id, { onDelete: 'cascade' }),
+ // Empty means "everything this capability offers". Narrowing here is what
+ // makes attenuation on a child's scope meaningful.
+ allowedTools: jsonb('allowed_tools').$type<string[]>.notNull.default([]),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ index('persona_capability_persona_idx').on(t.workspaceId, t.personaId),
+ uniqueIndex('persona_capability_unique_idx').on(t.personaId, t.capabilityId),
+ ],
+)
+
+/**
  * Organizational persona grouping — a jsonb array of member
  * persona ids, same convention as `agentPersona.tools`. No join table: there
  * is no per-attachment metadata, unlike `persona_capability` (the capability registry, Phase 2).

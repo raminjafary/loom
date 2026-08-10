@@ -2,6 +2,7 @@ import type {
  AgentRunEventRepositoryPort,
  AgentRunRepositoryPort,
  ApprovalRepositoryPort,
+ CapabilityRepositoryPort,
  MergeQueueRepositoryPort,
  NotificationTargetRepositoryPort,
  PersonaGroupRepositoryPort,
@@ -18,7 +19,9 @@ import {
  toAgentPersona,
  toAgentRun,
  toApprovalRequest,
+ toCapability,
  toMergeQueueEntry,
+ toPersonaCapability,
  toNotificationTarget,
  toPersonaGroup,
  toRepository,
@@ -26,7 +29,9 @@ import {
  type AgentPersonaRow,
  type AgentRunRow,
  type ApprovalRequestRow,
+ type CapabilityRow,
  type MergeQueueEntryRow,
+ type PersonaCapabilityRow,
  type NotificationTargetRow,
  type PersonaGroupRow,
  type RepositoryRow,
@@ -37,7 +42,9 @@ import {
  agentRun,
  agentRunEvent,
  approvalRequest,
+ capability,
  mergeQueueEntry,
+ personaCapability,
  notificationTarget,
  personaGroup,
  repository,
@@ -219,6 +226,119 @@ export const mergeQueueRepository = (db: Database): MergeQueueRepositoryPort => 
 )
 .returning
  return row ? toMergeQueueEntry(row as MergeQueueEntryRow): null
+ },
+})
+
+export const capabilityRepository = (db: Database): CapabilityRepositoryPort => ({
+ async create(input) {
+ const [row] = await db
+.insert(capability)
+.values({
+ workspaceId: input.workspaceId,
+ kind: input.kind,
+ name: input.name,
+ description: input.description,
+ transport: input.transport,
+ command: input.command,
+ args: input.args,
+ url: input.url,
+ content: input.content,
+ })
+.returning
+ if (!row) throw new Error('capability insert returned no row')
+ return toCapability(row as CapabilityRow)
+ },
+
+ async findById(workspaceId, id) {
+ const [row] = await db
+.select
+.from(capability)
+.where(and(eq(capability.workspaceId, workspaceId), eq(capability.id, id)))
+.limit(1)
+ return row ? toCapability(row as CapabilityRow): null
+ },
+
+ async listByWorkspace(workspaceId) {
+ const rows = await db
+.select
+.from(capability)
+.where(eq(capability.workspaceId, workspaceId))
+.orderBy(capability.name)
+ return rows.map((row) => toCapability(row as CapabilityRow))
+ },
+
+ async update(workspaceId, id, patch) {
+ const [row] = await db
+.update(capability)
+.set({...patch, updatedAt: new Date })
+.where(and(eq(capability.workspaceId, workspaceId), eq(capability.id, id)))
+.returning
+ if (!row) throw new NotFoundError('Capability')
+ return toCapability(row as CapabilityRow)
+ },
+
+ async pinToolListHash(workspaceId, id, toolListHash) {
+ await db
+.update(capability)
+.set({ toolListHash, updatedAt: new Date })
+.where(and(eq(capability.workspaceId, workspaceId), eq(capability.id, id)))
+ },
+
+ async delete(workspaceId, id) {
+ await db
+.delete(capability)
+.where(and(eq(capability.workspaceId, workspaceId), eq(capability.id, id)))
+ },
+
+ async attach(input) {
+ const [row] = await db
+.insert(personaCapability)
+.values({
+ workspaceId: input.workspaceId,
+ personaId: input.personaId,
+ capabilityId: input.capabilityId,
+ allowedTools: input.allowedTools,
+ })
+.onConflictDoUpdate({
+ target: [personaCapability.personaId, personaCapability.capabilityId],
+ set: { allowedTools: input.allowedTools },
+ })
+.returning
+ if (!row) throw new Error('persona_capability insert returned no row')
+ return toPersonaCapability(row as PersonaCapabilityRow)
+ },
+
+ async detach(workspaceId, personaId, capabilityId) {
+ await db
+.delete(personaCapability)
+.where(
+ and(
+ eq(personaCapability.workspaceId, workspaceId),
+ eq(personaCapability.personaId, personaId),
+ eq(personaCapability.capabilityId, capabilityId),
+),
+)
+ },
+
+ async listByPersona(workspaceId, personaId) {
+ const rows = await db
+.select
+.from(personaCapability)
+.where(
+ and(
+ eq(personaCapability.workspaceId, workspaceId),
+ eq(personaCapability.personaId, personaId),
+),
+)
+ return rows.map((row) => toPersonaCapability(row as PersonaCapabilityRow))
+ },
+
+ async listAttachments(workspaceId) {
+ const rows = await db
+.select
+.from(personaCapability)
+.where(eq(personaCapability.workspaceId, workspaceId))
+ return rows.map((row) => toPersonaCapability(row as PersonaCapabilityRow))
  },
 })
 

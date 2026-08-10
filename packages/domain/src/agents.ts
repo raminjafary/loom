@@ -1,3 +1,4 @@
+import type { CapabilitySpec } from './capabilities.js'
 import type {
  AgentPersonaId,
  AgentRunId,
@@ -73,6 +74,17 @@ export interface PersonaSpec {
  * in flight.
  */
  readonly budgetCapUsd: number | null
+ /**
+ * Registry capabilities attached to this persona, resolved and
+ * snapshotted at run start like everything else here — so revoking a capability
+ * does not change what a run already in flight is using, and attaching one does
+ * not silently widen it.
+ *
+ * Optional in the type because runs that predate the registry have stored
+ * persona JSON without it; the mapper defaults it rather than failing to read a
+ * completed run's row.
+ */
+ readonly capabilities?: CapabilitySpec[]
 }
 
 /**

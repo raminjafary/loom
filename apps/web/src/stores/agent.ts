@@ -40,6 +40,13 @@ export const useAgentStore = defineStore('agent', () => {
       displayName: string
     }) => session.createRepository(input),
     createPersona: (markdownSource: string) => session.createPersona(markdownSource),
+    registerCapability: (input: Parameters<typeof session.registerCapability>[0]) =>
+      session.registerCapability(input),
+    removeCapability: (capabilityId: string) => session.removeCapability(capabilityId),
+    attachCapability: (input: { personaId: string; capabilityId: string; allowedTools?: string[] }) =>
+      session.attachCapability(input),
+    detachCapability: (input: { personaId: string; capabilityId: string }) =>
+      session.detachCapability(input),
     createPersonaGroup: (input: { name: string; personaIds: string[] }) =>
       session.createPersonaGroup(input),
     updatePersonaGroup: (input: { personaGroupId: string; name: string; personaIds: string[] }) =>

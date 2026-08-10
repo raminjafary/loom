@@ -3,6 +3,7 @@ import {
  asAgentRunId,
  asApprovalRequestId,
  asAuditEventId,
+ asCapabilityId,
  asChannelId,
  asMergeQueueEntryId,
  asMessageId,
@@ -21,6 +22,8 @@ import {
  type ApprovalRequest,
  type ApprovalStatus,
  type AuditEvent,
+ type Capability,
+ type CapabilitySpec,
  type Channel,
  type MergeFailureReason,
  type MergeQueueEntry,
@@ -29,6 +32,7 @@ import {
  type MessageBody,
  type NotificationTarget,
  type NotificationTransport,
+ type PersonaCapability,
  type PersonaGroup,
  type PersonaSpec,
  type Repository,
@@ -198,6 +202,63 @@ export const toRepository = (row: RepositoryRow): Repository => ({
  createdAt: row.createdAt,
 })
 
+export interface CapabilityRow {
+ id: string
+ workspaceId: string
+ kind: string
+ name: string
+ description: string
+ transport: string | null
+ command: string | null
+ args: string[]
+ url: string | null
+ toolListHash: string | null
+ content: string | null
+ createdAt: Date
+ updatedAt: Date
+}
+
+export const toCapability = (row: CapabilityRow): Capability => {
+ if (row.kind !== 'mcp' && row.kind !== 'skill') {
+ throw new Error(`unknown capability kind: ${row.kind}`)
+ }
+ const transport =
+ row.transport === 'stdio' || row.transport === 'sse' || row.transport === 'http'
+ ? row.transport
+: null
+ return {
+ id: asCapabilityId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ kind: row.kind,
+ name: row.name,
+ description: row.description,
+ transport,
+ command: row.command,
+ args: row.args,
+ url: row.url,
+ toolListHash: row.toolListHash,
+ content: row.content,
+ createdAt: row.createdAt,
+ updatedAt: row.updatedAt,
+ }
+}
+
+export interface PersonaCapabilityRow {
+ id: string
+ workspaceId: string
+ personaId: string
+ capabilityId: string
+ allowedTools: string[]
+}
+
+export const toPersonaCapability = (row: PersonaCapabilityRow): PersonaCapability => ({
+ id: row.id,
+ workspaceId: asWorkspaceId(row.workspaceId),
+ personaId: asAgentPersonaId(row.personaId),
+ capabilityId: asCapabilityId(row.capabilityId),
+ allowedTools: row.allowedTools,
+})
+
 export interface MergeQueueEntryRow {
  id: string
  position: bigint
@@ -279,11 +340,14 @@ const toPersonaSpec = (value: unknown): PersonaSpec => {
  // row fail output validation the first time something re-fetches it in bulk.
  // `budgetCapUsd` defaults to null (uncapped) because that is what those runs
  // actually executed under; inventing a cap retroactively would misreport history.
- const raw = value as { autoApprove?: unknown; budgetCapUsd?: unknown }
+ // `capabilities` postdates the registry landing, same story: a run that
+ // completed before it existed held none, and defaulting to [] says so.
+ const raw = value as { autoApprove?: unknown; budgetCapUsd?: unknown; capabilities?: unknown }
  return {
 ...value,
  autoApprove: Boolean(raw.autoApprove),
  budgetCapUsd: typeof raw.budgetCapUsd === 'number' ? raw.budgetCapUsd: null,
+ capabilities: Array.isArray(raw.capabilities) ? (raw.capabilities as CapabilitySpec[]): [],
  }
 }
 

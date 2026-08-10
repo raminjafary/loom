@@ -2,7 +2,9 @@ import type {
  AgentPersona,
  AgentRun,
  ApprovalRequest,
+ Capability,
  DirectoryListing,
+ PersonaCapability,
  MergeQueueEntry,
  NotificationConfig,
  PersonaGroup,
@@ -34,6 +36,9 @@ export interface AgentSnapshot {
  readonly repositories: Repository[]
  readonly personas: AgentPersona[]
  readonly personaGroups: PersonaGroup[]
+ /** The capability registry and its attachments. */
+ readonly capabilities: Capability[]
+ readonly capabilityAttachments: PersonaCapability[]
  /**
  * The run this client is *watching* — the one whose approvals and diff the
  * workspace view shows. Distinct from `activeRuns` now that a workspace may run
@@ -91,6 +96,19 @@ export interface AgentSession {
  displayName: string
  }): Promise<void>
  createPersona(markdownSource: string): Promise<void>
+ registerCapability(input: {
+ kind: 'mcp' | 'skill'
+ name: string
+ description: string
+ transport?: 'stdio' | 'sse' | 'http' | null
+ command?: string | null
+ args?: string[]
+ url?: string | null
+ content?: string | null
+ }): Promise<void>
+ removeCapability(capabilityId: string): Promise<void>
+ attachCapability(input: { personaId: string; capabilityId: string; allowedTools?: string[] }): Promise<void>
+ detachCapability(input: { personaId: string; capabilityId: string }): Promise<void>
  createPersonaGroup(input: { name: string; personaIds: string[] }): Promise<void>
  updatePersonaGroup(input: { personaGroupId: string; name: string; personaIds: string[] }): Promise<void>
  deletePersonaGroup(personaGroupId: string): Promise<void>
@@ -152,6 +170,8 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  repositories: [],
  personas: [],
  personaGroups: [],
+ capabilities: [],
+ capabilityAttachments: [],
  activeRun: null,
  activeRuns: [],
  pendingApprovals: [],
@@ -260,6 +280,8 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  runControl,
  notificationConfig,
  mergeQueue,
+ capabilities,
+ capabilityAttachments,
  ] = await Promise.all([
  options.api.runner.list,
  options.api.repository.list,
@@ -270,6 +292,8 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.runControl.get,
  options.api.notification.config,
  options.api.mergeQueue.list,
+ options.api.capability.list,
+ options.api.capability.listAttachments,
  ])
  patch({
  runners,
@@ -280,6 +304,8 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  runControl,
  notificationConfig,
  mergeQueue,
+ capabilities,
+ capabilityAttachments,
  })
  // Resume watching whatever run is already active — otherwise a page
  // reload during a run leaves no path back to its approval card.
@@ -337,6 +363,52 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  await options.api.persona.create({ markdownSource })
  const personas = await options.api.persona.list
  patch({ personas })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async registerCapability(input) {
+ patch({ error: null })
+ try {
+ await options.api.capability.register(input)
+ patch({ capabilities: await options.api.capability.list })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async removeCapability(capabilityId) {
+ patch({ error: null })
+ try {
+ await options.api.capability.remove({ capabilityId })
+ const [capabilities, capabilityAttachments] = await Promise.all([
+ options.api.capability.list,
+ options.api.capability.listAttachments,
+ ])
+ // Attachments are re-read too: removing a capability cascades its
+ // attachments away, and a stale list would show a persona holding one.
+ patch({ capabilities, capabilityAttachments })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async attachCapability(input) {
+ patch({ error: null })
+ try {
+ await options.api.capability.attach(input)
+ patch({ capabilityAttachments: await options.api.capability.listAttachments })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async detachCapability(input) {
+ patch({ error: null })
+ try {
+ await options.api.capability.detach(input)
+ patch({ capabilityAttachments: await options.api.capability.listAttachments })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

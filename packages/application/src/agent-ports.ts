@@ -9,10 +9,15 @@ import type {
  ApprovalRequest,
  ApprovalRequestId,
  ApprovalStatus,
+ Capability,
+ CapabilityId,
+ CapabilityKind,
+ McpTransport,
  MergeFailureReason,
  MergeQueueEntry,
  MergeQueueEntryId,
  MergeQueueEntryStatus,
+ PersonaCapability,
  PersonaGroup,
  PersonaGroupId,
  PersonaSpec,
@@ -189,6 +194,61 @@ export interface AgentRunRepositoryPort {
  * falls into the latter — it already got a chat message explaining why.
  */
  listNeedsAttention(workspaceId: WorkspaceId): Promise<AgentRun[]>
+}
+
+/**
+ * The capability registry's persistence. Attachments live here
+ * too rather than on `PersonaRepositoryPort`: the data model models them as a join table
+ * precisely because they carry per-attachment scopes, and a persona that owned
+ * them would make the scope a property of the persona instead of the pairing.
+ */
+export interface CapabilityRepositoryPort {
+ create(input: {
+ workspaceId: WorkspaceId
+ kind: CapabilityKind
+ name: string
+ description: string
+ transport: McpTransport | null
+ command: string | null
+ args: string[]
+ url: string | null
+ content: string | null
+ }): Promise<Capability>
+ findById(workspaceId: WorkspaceId, id: CapabilityId): Promise<Capability | null>
+ listByWorkspace(workspaceId: WorkspaceId): Promise<Capability[]>
+ update(
+ workspaceId: WorkspaceId,
+ id: CapabilityId,
+ patch: {
+ description: string
+ transport: McpTransport | null
+ command: string | null
+ args: string[]
+ url: string | null
+ content: string | null
+ /** Cleared on any edit — an edited server has not been reviewed in its new form. */
+ toolListHash: string | null
+ },
+): Promise<Capability>
+ /** Records the tool list a human reviewed (the pinned tool-list hash). */
+ pinToolListHash(workspaceId: WorkspaceId, id: CapabilityId, toolListHash: string): Promise<void>
+ delete(workspaceId: WorkspaceId, id: CapabilityId): Promise<void>
+ attach(input: {
+ workspaceId: WorkspaceId
+ personaId: AgentPersonaId
+ capabilityId: CapabilityId
+ allowedTools: string[]
+ }): Promise<PersonaCapability>
+ detach(
+ workspaceId: WorkspaceId,
+ personaId: AgentPersonaId,
+ capabilityId: CapabilityId,
+): Promise<void>
+ listByPersona(
+ workspaceId: WorkspaceId,
+ personaId: AgentPersonaId,
+): Promise<PersonaCapability[]>
+ listAttachments(workspaceId: WorkspaceId): Promise<PersonaCapability[]>
 }
 
 export interface PersonaRepositoryPort {

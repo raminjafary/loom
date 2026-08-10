@@ -1,3 +1,4 @@
+import { attenuateChildCapabilities } from './capabilities.js'
 import { modelTierRank } from './model-pricing.js'
 import type { PersonaSpec } from './agents.js'
 
@@ -55,6 +56,11 @@ export const attenuateChildPersona = (
  }
  }
  }
+
+ // Capabilities are the sharpest case of this rule: a `tools: []` Planner has no
+ // shell of its own, but an MCP server is a route to one.
+ const capabilities = attenuateChildCapabilities(parent.capabilities ?? [], child.capabilities ?? [])
+ if (!capabilities.ok) return capabilities
 
  const parentRank = modelTierRank(parent.model)
  const childRank = modelTierRank(child.model)

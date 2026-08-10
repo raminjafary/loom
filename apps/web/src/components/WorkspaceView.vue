@@ -5,6 +5,7 @@ import ActiveRunsPanel from './ActiveRunsPanel.vue'
 import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
+import CapabilityPanel from './CapabilityPanel.vue'
 import DiffView from './DiffView.vue'
 import InboxView from './InboxView.vue'
 import MergeQueuePanel from './MergeQueuePanel.vue'
@@ -245,6 +246,15 @@ onBeforeUnmount( => {
 :disabled="!snapshot.activeThread"
  @start="startRun"
  @create-persona="(markdownSource) => agent.createPersona(markdownSource)"
+ />
+ <CapabilityPanel
+:capabilities="agentSnapshot.capabilities"
+:attachments="agentSnapshot.capabilityAttachments"
+:personas="agentSnapshot.personas"
+ @register="(input) => agent.registerCapability(input)"
+ @remove="(capabilityId) => agent.removeCapability(capabilityId)"
+ @attach="(input) => agent.attachCapability(input)"
+ @detach="(input) => agent.detachCapability(input)"
  />
  <PersonaGroupPanel
 :personas="agentSnapshot.personas"

@@ -84,6 +84,33 @@ export const RepositorySchema = z.object({
  createdAt: z.date,
 })
 
+/** A registry capability. MCP `command`/`url` are operator-authored config. */
+export const CapabilitySchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ kind: z.enum(['mcp', 'skill']),
+ name: z.string,
+ description: z.string,
+ transport: z.enum(['stdio', 'sse', 'http']).nullable,
+ command: z.string.nullable,
+ args: z.array(z.string),
+ url: z.string.nullable,
+ /** The pinned tool-list hash; null until first observed. */
+ toolListHash: z.string.nullable,
+ content: z.string.nullable,
+ createdAt: z.date,
+ updatedAt: z.date,
+})
+
+export const PersonaCapabilitySchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ personaId: z.string,
+ capabilityId: z.string,
+ /** Empty means everything the capability offers — the opposite of "no tools". */
+ allowedTools: z.array(z.string),
+})
+
 /** One entry from a Runner's scoped directory listing. */
 export const DirectoryEntrySchema = z.object({
  name: z.string,
@@ -264,6 +291,8 @@ export type ServerEvent = z.infer<typeof ServerEventSchema>
 export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
 export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
+export type Capability = z.infer<typeof CapabilitySchema>
+export type PersonaCapability = z.infer<typeof PersonaCapabilitySchema>
 export type DirectoryEntry = z.infer<typeof DirectoryEntrySchema>
 export type DirectoryListing = z.infer<typeof DirectoryListingSchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>

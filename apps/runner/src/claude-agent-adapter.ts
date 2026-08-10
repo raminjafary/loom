@@ -1,5 +1,6 @@
 import { query, type CanUseTool, type PermissionResult, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
+import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
 
 /**
  * `AgentExecutionPort` implementation for the Claude Agent SDK —
@@ -194,7 +195,15 @@ export const settingSourcesFromEnv = (
 export const buildQueryOptions = (
  options: Pick<RunAgentOptions, 'persona' | 'cwd' | 'resumeSessionId'>,
  settingSources: SettingSourceName[] = settingSourcesFromEnv,
-) => ({
+) => {
+ const capabilities = options.persona.capabilities ?? []
+ const mcpServers = toMcpServers(capabilities)
+ const skills = capabilities
+.filter((capability) => capability.kind === 'skill')
+.map((capability) => capability.name)
+ const scopedMcpTools = allowedMcpToolNames(capabilities)
+
+ return {
  cwd: options.cwd,
  agent: options.persona.name,
  agents: {
@@ -209,8 +218,30 @@ export const buildQueryOptions = (
  // `canUseTool`, which is the only path a human decision can travel.
  permissionMode: 'default' as const,
  settingSources,
+ /**
+ * The MCP analogue of `settingSources: []`, and load-bearing for the same
+ * reason. Without it the SDK also reads the project's `.mcp.json` — a file
+ * inside the run's clone, which the agent can write and which in the general
+ * case nobody in this workspace authored. An MCP server is a route to a shell,
+ * so a repository able to add one would walk straight around the gate.
+ * The registry is meant to be the only way a capability enters a run;
+ * this is what makes that true rather than intended.
+ */
+ strictMcpConfig: true,
+...(Object.keys(mcpServers).length > 0 ? { mcpServers }: {}),
+ /**
+ * Explicit list, never `'all'`. The SDK documents `skills` as "a context
+ * filter, not a sandbox" — unlisted skills stay on disk and remain readable —
+ * so this narrows what the model is *offered*, while the registry provisioning
+ * only those attached is what actually bounds what exists.
+ */
+...(skills.length > 0 ? { skills }: {}),
+ // Only when an attachment narrowed scope: an empty list would mean "no tools",
+ // the opposite of the "everything this server offers" default.
+...(scopedMcpTools ? { allowedTools: scopedMcpTools }: {}),
 ...(options.resumeSessionId ? { resume: options.resumeSessionId }: {}),
-})
+ }
+}
 
 export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  const canUseTool: CanUseTool = async (toolName, input) => {

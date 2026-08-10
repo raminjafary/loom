@@ -2,7 +2,9 @@ import { oc } from '@orpc/contract'
 import { z } from 'zod'
 import {
  ActorSchema,
+ CapabilitySchema,
  DirectoryListingSchema,
+ PersonaCapabilitySchema,
  AgentPersonaSchema,
  AgentRunSchema,
  ApprovalRequestSchema,
@@ -175,6 +177,54 @@ export const contract = {
  update: oc
 .input(z.object({ personaId: z.string, markdownSource: z.string.min(1).max(40_000) }))
 .output(AgentPersonaSchema),
+ },
+
+ /**
+ * The capability registry — MCP servers and skills,
+ * attached per persona with per-attachment scopes.
+ *
+ * Human-only throughout, and that is the security property rather than a
+ * convenience: a capability is something an operator registered deliberately,
+ * never something a repository under review can introduce. Skills live here
+ * rather than in a run's clone for the same reason `settingSources: []` exists.
+ */
+ capability: {
+ list: oc.output(z.array(CapabilitySchema)),
+
+ /** Lists attachments workspace-wide, so a client can render them per persona without N calls. */
+ listAttachments: oc.output(z.array(PersonaCapabilitySchema)),
+
+ register: oc
+.input(
+ z.object({
+ kind: z.enum(['mcp', 'skill']),
+ name: z.string.min(1).max(100),
+ description: z.string.max(1_000).default(''),
+ transport: z.enum(['stdio', 'sse', 'http']).nullish,
+ command: z.string.max(2_000).nullish,
+ args: z.array(z.string.max(500)).max(50).optional,
+ url: z.string.max(2_000).nullish,
+ content: z.string.max(100_000).nullish,
+ }),
+)
+.output(CapabilitySchema),
+
+ remove: oc.input(z.object({ capabilityId: z.string })).output(z.object({ ok: z.literal(true) })),
+
+ /** `allowedTools` narrows an MCP server; empty means everything it offers. */
+ attach: oc
+.input(
+ z.object({
+ personaId: z.string,
+ capabilityId: z.string,
+ allowedTools: z.array(z.string.max(200)).max(200).optional,
+ }),
+)
+.output(PersonaCapabilitySchema),
+
+ detach: oc
+.input(z.object({ personaId: z.string, capabilityId: z.string }))
+.output(z.object({ ok: z.literal(true) })),
  },
 
  /** The persona model — organizational only; does not start anything, does not bind a channel/Planner. */

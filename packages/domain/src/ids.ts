@@ -15,6 +15,7 @@ export type ApprovalRequestId = Brand<string, 'ApprovalRequestId'>
 export type AgentPersonaId = Brand<string, 'AgentPersonaId'>
 export type PersonaGroupId = Brand<string, 'PersonaGroupId'>
 export type MergeQueueEntryId = Brand<string, 'MergeQueueEntryId'>
+export type CapabilityId = Brand<string, 'CapabilityId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -29,3 +30,4 @@ export const asApprovalRequestId = (v: string): ApprovalRequestId => v as Approv
 export const asAgentPersonaId = (v: string): AgentPersonaId => v as AgentPersonaId
 export const asPersonaGroupId = (v: string): PersonaGroupId => v as PersonaGroupId
 export const asMergeQueueEntryId = (v: string): MergeQueueEntryId => v as MergeQueueEntryId
+export const asCapabilityId = (v: string): CapabilityId => v as CapabilityId
