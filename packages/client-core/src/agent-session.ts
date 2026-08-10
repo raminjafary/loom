@@ -2,6 +2,7 @@ import type {
   AgentPersona,
   AgentRun,
   ApprovalRequest,
+  MergeQueueEntry,
   NotificationConfig,
   PersonaGroup,
   Repository,
@@ -42,6 +43,13 @@ export interface AgentSnapshot {
   /** Everything currently executing in the workspace. */
   readonly activeRuns: AgentRun[]
   readonly pendingApprovals: ApprovalRequest[]
+  /**
+   * The serialized merge queue (PLAN.md §7 Phase 2), workspace-wide and in
+   * `position` order. Polled with the rest rather than pushed: a queue advances on
+   * the server's sweep, so a client that only re-read it on its own actions would
+   * show a stale one exactly while it is doing the interesting thing.
+   */
+  readonly mergeQueue: MergeQueueEntry[]
   readonly lastPairing: { runnerId: string; rawToken: string } | null
   readonly diff: string | null
   // Inbox (PLAN.md §3) — runs needing a human decision, workspace-wide.
@@ -89,6 +97,16 @@ export interface AgentSession {
   keepRun(agentRunId: string): Promise<void>
   discardRun(agentRunId: string): Promise<void>
   pushRun(agentRunId: string, acknowledgeCiChange?: boolean): Promise<void>
+  /**
+   * Queues a finished run's branch (PLAN.md §7 Phase 2). Deliberately not
+   * `mergeRun`: nothing merges here, and naming it for the outcome would hide that
+   * the merge happens later, in order, behind other branches.
+   */
+  enqueueMerge(agentRunId: string): Promise<void>
+  cancelMerge(entryId: string): Promise<void>
+  refreshMergeQueue(): Promise<void>
+  /** What the merge queue runs before merging into this repository; null merges unverified. */
+  setVerifyCommand(repositoryId: string, verifyCommand: string | null): Promise<void>
   refreshInbox(): Promise<void>
   inspectRun(agentRunId: string): Promise<void>
   /**
@@ -118,6 +136,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     activeRun: null,
     activeRuns: [],
     pendingApprovals: [],
+    mergeQueue: [],
     lastPairing: null,
     diff: null,
     needsAttention: [],
@@ -137,10 +156,20 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     for (const listener of listeners) listener(state)
   }
 
+  /**
+   * The Inbox and the merge queue are read together, deliberately: they are the
+   * same question ("what is outstanding") split by whether a human or the queue is
+   * the one who has to act, and a merge that just failed becomes an Inbox item.
+   * Refreshing one while leaving the other stale is how a human ends up deciding
+   * against a screen that disagrees with itself.
+   */
   const fetchInbox = async (): Promise<void> => {
     try {
-      const needsAttention = await options.api.agentRun.listNeedsAttention()
-      patch({ needsAttention })
+      const [needsAttention, mergeQueue] = await Promise.all([
+        options.api.agentRun.listNeedsAttention(),
+        options.api.mergeQueue.list(),
+      ])
+      patch({ needsAttention, mergeQueue })
     } catch (error) {
       patch({ error: errorMessage(error) })
     }
@@ -211,6 +240,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
           activeRuns,
           runControl,
           notificationConfig,
+          mergeQueue,
         ] = await Promise.all([
           options.api.runner.list(),
           options.api.repository.list(),
@@ -220,6 +250,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
           options.api.agentRun.listActive(),
           options.api.runControl.get(),
           options.api.notification.config(),
+          options.api.mergeQueue.list(),
         ])
         patch({
           runners,
@@ -229,6 +260,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
           activeRuns,
           runControl,
           notificationConfig,
+          mergeQueue,
         })
         // Resume watching whatever run is already active — otherwise a page
         // reload during a run leaves no path back to its approval card.
@@ -392,6 +424,52 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         if (state.activeRun?.id === run.id) patch({ activeRun: run })
         if (state.inspectedRun?.id === run.id) patch({ inspectedRun: run })
         await fetchInbox()
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async enqueueMerge(agentRunId) {
+      patch({ error: null })
+      try {
+        await options.api.mergeQueue.enqueue({ agentRunId })
+        // The run itself is re-read, not patched from the entry: queueing does not
+        // set a disposition, but it *does* change what the run's buttons may do,
+        // and that state lives on the run.
+        const run = await options.api.agentRun.get({ agentRunId })
+        if (state.activeRun?.id === run.id) patch({ activeRun: run })
+        if (state.inspectedRun?.id === run.id) patch({ inspectedRun: run })
+        patch({ mergeQueue: await options.api.mergeQueue.list() })
+        await fetchInbox()
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async cancelMerge(entryId) {
+      patch({ error: null })
+      try {
+        await options.api.mergeQueue.cancel({ entryId })
+        patch({ mergeQueue: await options.api.mergeQueue.list() })
+        await fetchInbox()
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async refreshMergeQueue() {
+      try {
+        patch({ mergeQueue: await options.api.mergeQueue.list() })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async setVerifyCommand(repositoryId, verifyCommand) {
+      patch({ error: null })
+      try {
+        await options.api.repository.setVerifyCommand({ repositoryId, verifyCommand })
+        patch({ repositories: await options.api.repository.list() })
       } catch (error) {
         patch({ error: errorMessage(error) })
       }

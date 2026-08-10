@@ -6,9 +6,12 @@ import {
   agentRunActor,
   attenuateChildPersona,
   buildNotification,
+  describeMergeFailure,
   isHuman,
+  isMergeQueueEntryTerminal,
   isRiskyTool,
   parsePersonaMarkdown,
+  selectNextMergeEntry,
   systemActor,
   type Actor,
   type AgentEvent,
@@ -20,6 +23,9 @@ import {
   type AgentRunStatus,
   type ApprovalRequest,
   type ApprovalRequestId,
+  type MergeFailureReason,
+  type MergeQueueEntry,
+  type MergeQueueEntryId,
   type NotificationKind,
   type PersonaGroup,
   type PersonaGroupId,
@@ -36,6 +42,7 @@ import type {
   AgentRunEventRepositoryPort,
   AgentRunRepositoryPort,
   ApprovalRepositoryPort,
+  MergeQueueRepositoryPort,
   PersonaGroupRepositoryPort,
   PersonaRepositoryPort,
   RepositoryRepositoryPort,
@@ -52,6 +59,7 @@ export interface AgentDeps extends Deps, NotificationDeps {
   readonly agentRuns: AgentRunRepositoryPort
   readonly agentRunEvents: AgentRunEventRepositoryPort
   readonly approvals: ApprovalRepositoryPort
+  readonly mergeQueue: MergeQueueRepositoryPort
   readonly personas: PersonaRepositoryPort
   readonly personaGroups: PersonaGroupRepositoryPort
   readonly runControl: WorkspaceRunControlRepositoryPort
@@ -632,6 +640,19 @@ const requireDisposableRun = async (
   if (run.branchDisposition) {
     throw new ValidationError(`Run's branch was already ${run.branchDisposition}`)
   }
+  // A branch waiting in the merge queue is spoken for. Without this, discarding it
+  // would delete the clone the queue is about to rebase, and queueing it twice
+  // would ask the queue to merge the same commits into a branch that already has
+  // them. The database's partial unique index blocks the second case regardless;
+  // this is what turns that into an explanation rather than a constraint error.
+  const open = (await deps.mergeQueue.listByRepository(input.workspaceId, run.repositoryId)).filter(
+    (entry) => entry.agentRunId === run.id && !isMergeQueueEntryTerminal(entry.status),
+  )
+  if (open.length > 0) {
+    throw new ValidationError(
+      `Run's branch is already ${open[0]?.status === 'merging' ? 'being merged' : 'queued for merge'}`,
+    )
+  }
   return run
 }
 
@@ -870,6 +891,282 @@ export const pushAgentRun = async (
     `Branch ${run.branchName ?? '(unknown)'} pushed. ${outcome}${warning}`,
   )
   return updated
+}
+
+/**
+ * Sets what the merge queue runs before merging a branch into this repository
+ * (PLAN.md §7 Phase 2's "run tests"). Human-only, same reasoning as
+ * `bindRepository`: it is administrative configuration, and — since the command
+ * executes against an agent's branch — it is also a security-relevant setting no
+ * run should be able to change about itself.
+ *
+ * Empty is normalized to null so "  " and "not configured" cannot mean different
+ * things to `planMergeVerification`.
+ */
+export const setRepositoryVerifyCommand = async (
+  deps: AgentDeps,
+  input: {
+    workspaceId: WorkspaceId
+    actor: Actor
+    repositoryId: RepositoryId
+    verifyCommand: string | null
+  },
+): Promise<Repository> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError("Only a human may change a repository's verification command")
+  }
+  const repository = await deps.repositories.findById(input.workspaceId, input.repositoryId)
+  if (!repository) throw new NotFoundError('Repository')
+
+  const normalized = input.verifyCommand?.trim()
+  const updated = await deps.repositories.setVerifyCommand(
+    input.workspaceId,
+    input.repositoryId,
+    normalized && normalized.length > 0 ? normalized : null,
+  )
+
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'repository.verify_command_set',
+    subjectType: 'repository',
+    subjectId: repository.id,
+    metadata: { configured: updated.verifyCommand !== null },
+  })
+
+  return updated
+}
+
+/**
+ * Queues a finished run's branch for merge into its repository's default branch
+ * (PLAN.md §7 Phase 2's serialized merge queue, §5a's "merge" case).
+ *
+ * Queueing is all this does. The merge itself happens in `advanceMergeQueue`, one
+ * repository-entry at a time — which is the entire point: "sibling branches
+ * converge through the merge queue, not a race" (§5a), and a merge that ran
+ * immediately on click would be exactly the race.
+ *
+ * Human-only and terminal-only, same gate as keep/discard/push.
+ */
+export const enqueueMergeRun = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; agentRunId: AgentRunId },
+): Promise<MergeQueueEntry> => {
+  const run = await requireDisposableRun(deps, input)
+  if (!run.branchName) throw new ValidationError('Run has no branch to merge')
+  if (!run.clonePath) throw new ValidationError('Run has no workspace to merge from')
+
+  const entry = await deps.mergeQueue.enqueue({
+    workspaceId: input.workspaceId,
+    repositoryId: run.repositoryId,
+    agentRunId: run.id,
+    branchName: run.branchName,
+    enqueuedByUserId: input.actor.kind === 'user' ? input.actor.userId : null,
+  })
+
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'merge_queue.enqueued',
+    subjectType: 'merge_queue_entry',
+    subjectId: entry.id,
+    metadata: { agentRunId: run.id, branchName: run.branchName },
+  })
+
+  await postRunSystemMessage(deps, run, `${run.branchName} queued for merge.`)
+  return entry
+}
+
+export const listMergeQueue = (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId },
+): Promise<MergeQueueEntry[]> => deps.mergeQueue.listByWorkspace(input.workspaceId)
+
+/**
+ * Removes an entry a human queued but no longer wants merged. Only while it is
+ * still `queued`: once it is `merging` a rebase is in flight on the Runner, and
+ * cancelling the row would leave the queue's state disagreeing with the repository's.
+ */
+export const cancelMergeQueueEntry = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; entryId: MergeQueueEntryId },
+): Promise<MergeQueueEntry> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError('Only a human may cancel a queued merge')
+  }
+  const entry = await deps.mergeQueue.findById(input.workspaceId, input.entryId)
+  if (!entry) throw new NotFoundError('MergeQueueEntry')
+  if (entry.status === 'merging') {
+    throw new ValidationError('This merge is already running and cannot be cancelled')
+  }
+  if (isMergeQueueEntryTerminal(entry.status)) {
+    throw new ValidationError(`This merge is already ${entry.status}`)
+  }
+
+  const cancelled = await deps.mergeQueue.finish(input.workspaceId, entry.id, {
+    status: 'cancelled',
+  })
+  if (!cancelled) throw new ValidationError('This merge was resolved before it could be cancelled')
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'merge_queue.cancelled',
+    subjectType: 'merge_queue_entry',
+    subjectId: entry.id,
+  })
+  return cancelled
+}
+
+/**
+ * Merges one claimed entry. Every exit finishes the entry — a `merging` row left
+ * behind would wedge that repository's queue permanently, since the unique partial
+ * index means nothing else can claim while it stands.
+ */
+const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<void> => {
+  const fail = async (reason: MergeFailureReason, detail: string, run: AgentRun | null) => {
+    const finished = await deps.mergeQueue.finish(entry.workspaceId, entry.id, {
+      status: 'failed',
+      failureReason: reason,
+      detail,
+    })
+    // Null means this entry was already resolved — the stuck check abandoned it
+    // while the Runner was still working. It has already had its say in the
+    // thread; saying it again from here would just contradict the timestamps.
+    if (!finished || !run) return
+    // The branch goes back to its owning run (§7): its disposition stays unset, so
+    // the human can fix and re-queue, push, or discard it.
+    await postRunSystemMessage(deps, run, describeMergeFailure(reason, entry.branchName, detail))
+    await notifyRun(deps, run, 'merge_failed', {
+      detail: describeMergeFailure(reason, entry.branchName, null),
+    })
+  }
+
+  const run = await deps.agentRuns.findById(entry.workspaceId, entry.agentRunId)
+  if (!run) {
+    await deps.mergeQueue.finish(entry.workspaceId, entry.id, {
+      status: 'failed',
+      failureReason: 'runner_error',
+      detail: 'the run this entry belongs to no longer exists',
+    })
+    return
+  }
+
+  const repository = await deps.repositories.findById(entry.workspaceId, entry.repositoryId)
+  if (!repository) {
+    await fail('runner_error', 'the repository this entry belongs to no longer exists', run)
+    return
+  }
+
+  let result: Awaited<ReturnType<RunDispatchPort['mergeRun']>>
+  try {
+    result = await deps.dispatch.mergeRun({
+      runnerId: run.runnerId,
+      runId: run.id,
+      verifyCommand: repository.verifyCommand,
+    })
+  } catch (error) {
+    // A disconnected or unresponsive Runner is a failed *attempt*, not a lost
+    // entry — the human is told, and re-queueing is one click.
+    await fail('runner_error', error instanceof Error ? error.message : String(error), run)
+    return
+  }
+
+  if (!result.ok) {
+    await fail(result.reason, result.detail, run)
+    return
+  }
+
+  const merged = await deps.mergeQueue.finish(entry.workspaceId, entry.id, {
+    status: 'merged',
+    mergedCommitSha: result.commitSha,
+    verified: result.verified,
+  })
+  // A late success must not overwrite an entry already reported as abandoned, and
+  // must not set a disposition on a branch the human was told is theirs again.
+  if (!merged) return
+  await deps.agentRuns.setBranchDisposition(entry.workspaceId, run.id, 'merged')
+
+  // Says outright when nothing verified the merge. A queue that reports "merged"
+  // identically whether or not tests ran would make the distinction invisible at
+  // exactly the moment it matters.
+  const verification = result.verified
+    ? 'verified'
+    : `unverified — ${result.note ?? 'no verification ran'}`
+  await postRunSystemMessage(
+    deps,
+    run,
+    `${entry.branchName} merged into ${repository.defaultBranch} as ${result.commitSha.slice(0, 8)} (${verification}).`,
+  )
+  await notifyRun(deps, run, 'merge_succeeded', {
+    detail: `Merged into ${repository.defaultBranch} (${verification}).`,
+  })
+}
+
+/**
+ * Advances every repository's merge queue by at most one entry (PLAN.md §7 Phase
+ * 2). A periodic sweep like `reapStuckRuns`, called from the same interval in
+ * apps/server and never through the contract.
+ *
+ * Serial *per repository*, concurrent *across* them: two repositories share no
+ * target branch, so making one wait on the other's test suite would be a queue
+ * that is slow for no safety reason. Within a repository, `selectNextMergeEntry`
+ * returns nothing while one is in flight, and the database's unique partial index
+ * is what makes that true rather than merely intended.
+ *
+ * Overlapping ticks are expected and safe: a merge can take as long as a test
+ * suite, so later ticks will run while an earlier one is still merging. They find
+ * the entry already `merging` and do nothing.
+ */
+export const advanceMergeQueue = async (
+  deps: AgentDeps,
+  options: { mergeStuckMs: number },
+): Promise<void> => {
+  const open = await deps.mergeQueue.listAllOpen()
+
+  // An entry left `merging` by a server that died mid-merge would block its
+  // repository forever — nothing else can claim while the unique index holds. Same
+  // shape of problem, and the same answer, as the dead-run reaper.
+  const now = Date.now()
+  for (const entry of open) {
+    if (entry.status !== 'merging') continue
+    const startedAt = (entry.startedAt ?? entry.createdAt).getTime()
+    if (now - startedAt <= options.mergeStuckMs) continue
+
+    const run = await deps.agentRuns.findById(entry.workspaceId, entry.agentRunId)
+    await deps.mergeQueue.finish(entry.workspaceId, entry.id, {
+      status: 'failed',
+      failureReason: 'runner_error',
+      detail: `merge abandoned after ${Math.round(options.mergeStuckMs / 60_000)} min with no result`,
+    })
+    if (run) {
+      await postRunSystemMessage(
+        deps,
+        run,
+        `${entry.branchName} was not merged: the merge did not finish and was abandoned.`,
+      )
+    }
+  }
+
+  const byRepository = new Map<string, MergeQueueEntry[]>()
+  for (const entry of await deps.mergeQueue.listAllOpen()) {
+    const bucket = byRepository.get(entry.repositoryId)
+    if (bucket) bucket.push(entry)
+    else byRepository.set(entry.repositoryId, [entry])
+  }
+
+  await Promise.all(
+    [...byRepository.values()].map(async (entries) => {
+      const next = selectNextMergeEntry(entries)
+      if (!next) return
+
+      // Null means another sweep claimed it first — the serialization working, not
+      // an error. Nothing to do this tick.
+      const claimed = await deps.mergeQueue.claim(next.workspaceId, next.id)
+      if (!claimed) return
+
+      await runMergeEntry(deps, claimed)
+    }),
+  )
 }
 
 /**

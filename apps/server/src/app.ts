@@ -1,4 +1,5 @@
 import {
+  advanceMergeQueue,
   expireStaleApprovals,
   reapStuckRuns,
   seedBuiltinPersonas,
@@ -10,6 +11,7 @@ import {
   agentRunEventRepository,
   agentRunRepository,
   approvalRepository,
+  mergeQueueRepository,
   auditAdapter,
   channelRepository,
   clearAllRunnerConnections,
@@ -91,6 +93,7 @@ export const buildApp = async (
     agentRuns: agentRunRepository(db),
     agentRunEvents: agentRunEventRepository(db),
     approvals: approvalRepository(db),
+    mergeQueue: mergeQueueRepository(db),
     personas: personaRepository(db),
     personaGroups: personaGroupRepository(db),
     runControl: workspaceRunControlRepository(db),
@@ -141,6 +144,12 @@ export const buildApp = async (
               heartbeatTimeoutMs: config.REAPER_HEARTBEAT_TIMEOUT_MS,
               noProgressTimeoutMs: config.REAPER_NO_PROGRESS_TIMEOUT_MS,
             })
+            // Last, and deliberately not awaited *into* the two above: a merge
+            // runs a test suite, so this call can outlive its own interval tick.
+            // Overlapping ticks are safe — see advanceMergeQueue — and running it
+            // after the reapers means a run this sweep just failed is already
+            // terminal when the queue looks at its entry.
+            await advanceMergeQueue(deps, { mergeStuckMs: config.MERGE_STUCK_TIMEOUT_MS })
           })().catch((error) => {
             fastify.log.error({ error }, 'background safety sweep failed')
           })

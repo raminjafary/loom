@@ -2,6 +2,7 @@ import type {
   AgentRunEventRepositoryPort,
   AgentRunRepositoryPort,
   ApprovalRepositoryPort,
+  MergeQueueRepositoryPort,
   NotificationTargetRepositoryPort,
   PersonaGroupRepositoryPort,
   PersonaRepositoryPort,
@@ -17,6 +18,7 @@ import {
   toAgentPersona,
   toAgentRun,
   toApprovalRequest,
+  toMergeQueueEntry,
   toNotificationTarget,
   toPersonaGroup,
   toRepository,
@@ -24,6 +26,7 @@ import {
   type AgentPersonaRow,
   type AgentRunRow,
   type ApprovalRequestRow,
+  type MergeQueueEntryRow,
   type NotificationTargetRow,
   type PersonaGroupRow,
   type RepositoryRow,
@@ -34,6 +37,7 @@ import {
   agentRun,
   agentRunEvent,
   approvalRequest,
+  mergeQueueEntry,
   notificationTarget,
   personaGroup,
   repository,
@@ -95,6 +99,126 @@ export const repositoryRepository = (db: Database): RepositoryRepositoryPort => 
   async listByWorkspace(workspaceId) {
     const rows = await db.select().from(repository).where(eq(repository.workspaceId, workspaceId))
     return rows.map((row) => toRepository(row as RepositoryRow))
+  },
+
+  async setVerifyCommand(workspaceId, id, verifyCommand) {
+    const [row] = await db
+      .update(repository)
+      .set({ verifyCommand })
+      .where(and(eq(repository.workspaceId, workspaceId), eq(repository.id, id)))
+      .returning()
+    if (!row) throw new NotFoundError('Repository')
+    return toRepository(row as RepositoryRow)
+  },
+})
+
+export const mergeQueueRepository = (db: Database): MergeQueueRepositoryPort => ({
+  async enqueue(input) {
+    const [row] = await db
+      .insert(mergeQueueEntry)
+      .values({
+        workspaceId: input.workspaceId,
+        repositoryId: input.repositoryId,
+        agentRunId: input.agentRunId,
+        branchName: input.branchName,
+        enqueuedByUserId: input.enqueuedByUserId,
+        status: 'queued',
+      })
+      .returning()
+    if (!row) throw new Error('merge_queue_entry insert returned no row')
+    return toMergeQueueEntry(row as MergeQueueEntryRow)
+  },
+
+  async findById(workspaceId, id) {
+    const [row] = await db
+      .select()
+      .from(mergeQueueEntry)
+      .where(and(eq(mergeQueueEntry.workspaceId, workspaceId), eq(mergeQueueEntry.id, id)))
+      .limit(1)
+    return row ? toMergeQueueEntry(row as MergeQueueEntryRow) : null
+  },
+
+  async listByRepository(workspaceId, repositoryId) {
+    const rows = await db
+      .select()
+      .from(mergeQueueEntry)
+      .where(
+        and(
+          eq(mergeQueueEntry.workspaceId, workspaceId),
+          eq(mergeQueueEntry.repositoryId, repositoryId),
+        ),
+      )
+      .orderBy(mergeQueueEntry.position)
+    return rows.map((row) => toMergeQueueEntry(row as MergeQueueEntryRow))
+  },
+
+  async listByWorkspace(workspaceId) {
+    const rows = await db
+      .select()
+      .from(mergeQueueEntry)
+      .where(eq(mergeQueueEntry.workspaceId, workspaceId))
+      .orderBy(mergeQueueEntry.position)
+    return rows.map((row) => toMergeQueueEntry(row as MergeQueueEntryRow))
+  },
+
+  async listAllOpen() {
+    const rows = await db
+      .select()
+      .from(mergeQueueEntry)
+      .where(inArray(mergeQueueEntry.status, ['queued', 'merging']))
+      .orderBy(mergeQueueEntry.position)
+    return rows.map((row) => toMergeQueueEntry(row as MergeQueueEntryRow))
+  },
+
+  /**
+   * The claim, and the one place the queue's serialization is actually enforced.
+   *
+   * Two guards, both needed. The `status = 'queued'` predicate stops a second claim
+   * of the *same* entry; the unique partial index on (repository_id) where
+   * status = 'merging' stops a concurrent claim of a *different* entry in the same
+   * repository — which no predicate on this row could see. The index raises, and a
+   * raise here means "someone else is merging", not a failure to report upward.
+   */
+  async claim(workspaceId, id) {
+    try {
+      const [row] = await db
+        .update(mergeQueueEntry)
+        .set({ status: 'merging', startedAt: new Date() })
+        .where(
+          and(
+            eq(mergeQueueEntry.workspaceId, workspaceId),
+            eq(mergeQueueEntry.id, id),
+            eq(mergeQueueEntry.status, 'queued'),
+          ),
+        )
+        .returning()
+      return row ? toMergeQueueEntry(row as MergeQueueEntryRow) : null
+    } catch {
+      return null
+    }
+  },
+
+  async finish(workspaceId, id, patch) {
+    const [row] = await db
+      .update(mergeQueueEntry)
+      .set({
+        status: patch.status,
+        finishedAt: new Date(),
+        ...(patch.failureReason === undefined ? {} : { failureReason: patch.failureReason }),
+        ...(patch.detail === undefined ? {} : { detail: patch.detail }),
+        ...(patch.mergedCommitSha === undefined ? {} : { mergedCommitSha: patch.mergedCommitSha }),
+        ...(patch.verified === undefined ? {} : { verified: patch.verified }),
+      })
+      .where(
+        and(
+          eq(mergeQueueEntry.workspaceId, workspaceId),
+          eq(mergeQueueEntry.id, id),
+          // First resolution wins — see the port's note on late Runner answers.
+          inArray(mergeQueueEntry.status, ['queued', 'merging']),
+        ),
+      )
+      .returning()
+    return row ? toMergeQueueEntry(row as MergeQueueEntryRow) : null
   },
 })
 

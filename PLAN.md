@@ -635,6 +635,16 @@ below is its first real caller.
 
 - Planner with `tools: []`, structured decomposition, child runs, aggregation. Build on the SDK's `Workflow`/`SendMessage` rather than a hand-rolled scheduler (§4d).
 - **Reconciliation: agent-led, with a mechanical fallback.** The target is a reconciler *agent* that merges sibling branches and resolves contradictions, so that reconciliation scales with agents rather than with human attention. But "a reconciler agent resolves conflicts" is a research problem, not a ticket, so it ships behind a **serialized merge queue** that is always the fallback: rebase in order, run tests, and on failure hand the branch back to its owning run. Build the queue first (it is deterministic and cheap), then let the reconciler agent attempt each merge with the queue catching what it gets wrong. Measure agent-reconciled merge *correctness* and token cost before trusting it unsupervised.
+  **[QUEUE BUILT — see HANDOFF.md.** Rebase-in-order, verify, fast-forward, one entry
+  per repository at a time, enforced by a unique partial index rather than by the sweep
+  that reads it. Four decisions worth knowing before building on it: the merge target is
+  the bound repository's **local** default branch, not `origin` (pushing stays the
+  separate §6 A2 path, and this keeps the queue exercisable with no remote); a **dirty
+  target is refused, never stashed**; verification runs **inside the sandbox**, because
+  the command is the operator's but the code it executes is the agent's — with no sandbox
+  it needs the same acknowledgement an unsandboxed run needs; and a repository with no
+  verification command merges **unverified and says so**, rather than reporting an
+  unverified merge as a pass. The reconciler agent in front of it is not built.**]**
 - **Do not build a custom VCS.** Cursor needed one at ~1,000 commits/sec because git's locking could not keep up — that is a major project in its own right and is not justified below double-digit concurrent workers. Plain clone-per-run (§5a) is sufficient at the scale this plan targets; revisit only if git contention is measured, not anticipated.
 - **Human intervention becomes checkpoint-shaped, not merge-shaped.** As reconciliation moves to agents, the human's role narrows to explicitly-placed gates — labeling/judgement steps, approvals on risky effects (§6 A3), and arbitration when the reconciler and merge queue disagree. Those checkpoints are declared per team/persona rather than triggered by every conflict.
 - **MCP server registry + per-persona attachment** (§4e) — registry is small; credential-broker integration and the review/tool-hash-pinning flow are the real work.

@@ -3,6 +3,87 @@
 Read this before touching code. `PLAN.md` is the architecture/roadmap; this file is
 "what actually happened and what's next."
 
+## Latest session: the serialized merge queue (PLAN.md §7 Phase 2)
+
+§7 is explicit that the merge queue must exist *before* the reconciler agent, as the
+fallback that catches what the agent gets wrong. It is built, tested at three levels,
+and driven live. Test suite 228 → **260**.
+
+**What it does.** A human queues a finished run's branch (**Queue for merge**, alongside
+keep/discard/push). A server sweep then advances every repository's queue by at most one
+entry: rebase the branch onto the repository's current default-branch tip, run the
+repository's verification command, fast-forward. Success marks the run `merged`; failure
+hands the branch back to its owning run with its disposition left unset, so it can be
+fixed and re-queued.
+
+**Six decisions not to re-litigate:**
+
+- **The merge target is the bound repository's local default branch, not `origin`.**
+  Pushing stays the separate §6 A2 path with its own policy and credentials. This also
+  keeps the queue exercisable on a repository with no remote, which is what this machine
+  has.
+- **Serialization is a unique partial index**, `merge_queue_entry(repository_id) where
+  status = 'merging'` — not the sweep that reads it. Two servers sweeping concurrently
+  both see the same queued entry and both try to claim it; the index lets exactly one
+  win. `selectNextMergeEntry` is the *scheduling* rule and is unit-tested, but it is
+  advisory, and the code says so.
+- **Serial per repository, concurrent across them.** Two repositories share no target
+  branch, so making one wait on the other's test suite would be slow for no safety
+  reason.
+- **Verification runs inside the sandbox**, with `--network none` — tighter than a run
+  gets, since verification needs no model API and therefore no egress proxy. The command
+  is operator-authored but the code it runs is on the agent's branch, so host execution
+  is agent code with the Runner's privileges (§6 A5) — and it happens *after* a human
+  approved a merge, which reads as the safe moment. Without a sandbox it needs the same
+  `LOOM_ALLOW_UNSANDBOXED` acknowledgement an unsandboxed run needs, and is refused
+  before any git runs so a refusal never leaves a branch rewritten.
+- **No verification command → the entry merges unverified and says so.** `verified`
+  records whether tests ran and passed, not whether any were configured.
+- **A dirty target is refused, never stashed** — and only when the target branch is the
+  one checked out, since moving a ref no working tree is on touches no files.
+
+**Three failure modes that each needed their own answer**, and are why `MergeFailureReason`
+is a closed set rather than free text: a conflict is the run's to fix, a dirty target is
+the human's, and a target that moved mid-merge is neither. The fast-forward is a
+compare-and-swap (`git update-ref <ref> <new> <old>`, or `merge --ff-only`) against the
+tip captured before the rebase, so a target that moved is `stale_target` rather than a
+silent overwrite.
+
+**Two bugs the tests found, both real:**
+
+1. `toAgentRunBranchDisposition` did not know `merged`, so the first successful merge
+   threw at the mapper. A widened union with a hand-written validator either side of it.
+2. **A late Runner answer could overwrite an entry the stuck-check had already given up
+   on** — flipping a branch a human was told had been abandoned to `merged`, with a thread
+   saying both. `finish` now only applies to a non-terminal entry and returns null
+   otherwise; first resolution wins, and the callers skip their messages and notifications
+   when they lose.
+
+**And one in the live-check script itself, worth recording** because it is the failure mode
+the script exists to catch: its "conflict" case cloned *after* the previous merge landed,
+so there was nothing to diverge from and every case was quietly a fast-forward. Two
+branches only conflict if both were cloned from the same base before either merged. The
+script now clones all three up front — the shape a swarm actually produces.
+
+**Verified live** (`tools/merge-queue-check.mts` — real server, real Runner *process*, real
+WebSocket protocol, real git, **no tokens**): a branch merged and fast-forwarded, a sibling
+cloned from the same base rebased on top of it rather than beside it, a genuine conflict
+failed with the conflicting path named and the repository untouched, an unsandboxed
+verification refused, and a dirty target refused with the human's uncommitted edit intact.
+Sandboxed verification was driven separately against the real container: a passing command
+merged, a failing one did not, and DNS does not resolve inside it.
+
+The script spends no tokens because it starts runs the Runner's own unsandboxed guard
+refuses — the guard fires *after* the clone, so each run has a real workspace and branch,
+and the script writes the commits an agent would have left.
+
+**Known limitation, shared with `getDiff` and `push`:** a merge needs the Runner that ran
+the branch to still hold its clone in memory. A Runner restart after the run finished
+fails the merge with a clear reason rather than losing the entry, but it does fail.
+
+**Not built:** the reconciler agent that §7 wants in front of this queue. The queue is the
+fallback it is supposed to sit behind, and it exists now.
+
 Session scope, in order: **notifications** (the item the previous handoff called the
 largest remaining Phase 1 gap), Runner **backpressure**, and then the **start of
 Phase 2**. All built and verified live. Test suite 166 → **228**.
@@ -349,6 +430,9 @@ validates credentials client-side at all.
 
 ## Immediate next steps, in priority order
 
+0. **A reconciler agent in front of the merge queue** (§7 Phase 2) — now unblocked, since
+   §7 required the mechanical queue to exist first and it does. Measure agent-reconciled
+   merge *correctness* and token cost before trusting it unsupervised, per §7.
 1. **§11's riskiest-assumption test** — three clones, three workers, one repo, measuring
    human minutes to reconcile versus doing it serially. Still never run, and all of
    Phase 2 rides on it. **This is the highest-value thing left in the whole plan**, and
@@ -408,6 +492,17 @@ validates credentials client-side at all.
   concurrently.** The first loses the record; the second scrambles event ordering.
 - **Don't remove the `ORDER BY` from a query whose rows are clickable and re-polled.**
   `listActiveByWorkspace` and `listNeedsAttention` both need it — see above.
+- **Don't merge on click.** `mergeQueue.enqueue` queues; the sweep merges. A synchronous
+  "merge now" endpoint would be exactly the race §5a says the queue replaces, and there is
+  deliberately no way to jump the queue.
+- **Don't rebase at enqueue time.** Entry N+1 must land on the *result* of entry N, which
+  is the only reason the ordering is worth anything.
+- **Don't run a merge's verification command on the host without the acknowledgement**,
+  and don't move the refusal after the rebase. See the merge-queue section above.
+- **Don't report a merge with no verification command as verified.**
+- **Don't let a late `merge_result` overwrite a terminal entry.** `finish` returns null for
+  an already-resolved entry, and callers must honour it.
+- **Don't stash or commit a human's uncommitted work to make a merge fit.**
 - **Don't let a run spawn a child of anything but itself**, and don't skip
   `attenuateChildPersona` on a child start. Together they are the only reason a
   `tools: []` Planner is a boundary rather than a suggestion.
@@ -445,8 +540,16 @@ plus a re-paired Runner is the cold start.
 
 See README.md. Changes this session:
 
+- **New migration `0015`** (`merge_queue_entry`, plus `repository.verify_command`), applied
+  to both `loom` and `loom_test`. Earlier sessions added `0010`–`0014`.
+- **New env var `MERGE_STUCK_TIMEOUT_MS`** (default 30 min) — how long an entry may sit
+  `merging` before the queue abandons it. This is the merge queue's dead-run reaper, and it
+  exists for one failure: a server dying mid-merge leaves a `merging` row that the unique
+  index makes unclaimable, stalling that repository's queue with nothing to notice.
+  `LOOM_MERGE_TIMEOUT_MS` (gateway, 15 min) and `LOOM_MERGE_VERIFY_TIMEOUT_MS` (Runner, 10
+  min) bound the two halves under it.
 - **New migration `0013`** (`notification_target`), applied to both `loom` and `loom_test`
-  this session. Earlier sessions added `0010`–`0012`.
+  in an earlier session. Earlier sessions added `0010`–`0012`.
 - **New env vars** `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`, read only
   by apps/server. Generate with `npx web-push generate-vapid-keys`. All optional — with
   the keys unset, notifications report themselves off and nothing else changes. The dev
@@ -468,7 +571,7 @@ See README.md. Changes this session:
 
 ```bash
 pnpm -r typecheck
-pnpm -r test                                # 193 tests
+pnpm -r test                                # 260 tests
 npx vitest run tools/architecture.test.ts   # 4 checks
 npx eslint packages/ apps/ tools/           # clean
 
@@ -477,6 +580,7 @@ npx tsx tools/e2e-run.mts                   # real Runner, real repo, real agent
 
 ```bash
 npx tsx tools/push-check.mts                # real web push to every subscribed browser
+npx tsx tools/merge-queue-check.mts         # real Runner, real git, real merges, no tokens
 ```
 
 `tools/push-check.mts` covers the one leg no test can: the adapter's RFC 8291 encryption,

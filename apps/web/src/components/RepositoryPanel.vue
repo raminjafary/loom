@@ -9,11 +9,32 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   bind: [input: { runnerId: string; path: string; displayName: string }]
+  'set-verify-command': [repositoryId: string, verifyCommand: string | null]
 }>()
 
 const runnerId = ref('')
 const path = ref('')
 const displayName = ref('')
+
+/**
+ * What the merge queue runs before merging into this repository (PLAN.md §7 Phase
+ * 2). Editing is per row, and an empty value clears it — a repository with no
+ * command merges *unverified*, which the queue's entries then say outright rather
+ * than reporting as a pass.
+ */
+const editing = ref<string | null>(null)
+const draft = ref('')
+
+const startEditing = (repo: Repository) => {
+  editing.value = repo.id
+  draft.value = repo.verifyCommand ?? ''
+}
+
+const saveVerifyCommand = (repositoryId: string) => {
+  const value = draft.value.trim()
+  emit('set-verify-command', repositoryId, value.length > 0 ? value : null)
+  editing.value = null
+}
 
 const submit = () => {
   if (!runnerId.value || !path.value.trim() || !displayName.value.trim()) return
@@ -31,6 +52,14 @@ const submit = () => {
       <li v-for="repo in props.repositories" :key="repo.id" class="item">
         <span class="name">{{ repo.displayName }}</span>
         <span class="meta" :title="repo.absolutePath">{{ repo.absolutePath }}</span>
+        <form v-if="editing === repo.id" class="verify-form" @submit.prevent="saveVerifyCommand(repo.id)">
+          <input v-model="draft" placeholder="pnpm -r test" aria-label="Verification command" />
+          <button type="submit">Save</button>
+          <button type="button" class="link" @click="editing = null">Cancel</button>
+        </form>
+        <button v-else type="button" class="link verify" @click="startEditing(repo)">
+          {{ repo.verifyCommand ? `verify: ${repo.verifyCommand}` : 'merges unverified — set a command' }}
+        </button>
       </li>
       <li v-if="props.repositories.length === 0" class="empty">No repositories bound yet</li>
     </ul>
@@ -52,6 +81,33 @@ const submit = () => {
 </template>
 
 <style scoped>
+.verify-form {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+}
+
+.verify-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+button.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+button.link:hover {
+  color: var(--text);
+}
+
 .panel {
   padding: 0.85rem 1rem;
   border: 1px solid var(--border);

@@ -1,5 +1,10 @@
 import type { Contract } from '@loom/api-contract'
-import { expireStaleApprovals, reapStuckRuns, startAgentRun } from '@loom/application'
+import {
+  advanceMergeQueue,
+  expireStaleApprovals,
+  reapStuckRuns,
+  startAgentRun,
+} from '@loom/application'
 import {
   agentRunActor,
   asAgentPersonaId,
@@ -954,6 +959,270 @@ irrelevant for this test`
     } finally {
       await client.runControl.resume()
     }
+
+    socket.close()
+  })
+})
+
+/**
+ * The serialized merge queue (PLAN.md §7 Phase 2). Driven over the real protocol
+ * and against real Postgres, because two of the properties that matter are not
+ * expressible in a unit test: the unique partial index that makes "one merge per
+ * repository" true rather than intended, and the sweep's behaviour when a claim
+ * loses that race.
+ */
+describe('runner-gateway: serialized merge queue', () => {
+  /** Drives a run all the way to `completed` with a branch, which is what the queue accepts. */
+  const finishRun = async (
+    socket: WebSocket,
+    threadId: string,
+    repositoryId: string,
+    branchName: string,
+  ) => {
+    const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+    const runPromise = client.agentRun.start({ threadId, repositoryId, personaId: testPersonaId })
+    await startRun
+    const run = await runPromise
+
+    socket.send(
+      JSON.stringify({ type: 'run_workspace_ready', runId: run.id, clonePath: `/tmp/${branchName}`, branchName }),
+    )
+    socket.send(
+      JSON.stringify({
+        type: 'agent_event',
+        runId: run.id,
+        seq: 1,
+        event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'done' },
+      }),
+    )
+
+    for (let i = 0; i < 40; i += 1) {
+      const current = await client.agentRun.get({ agentRunId: run.id })
+      if (current.status === 'completed' && current.branchName === branchName) return current
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    throw new Error(`run ${run.id} never reached completed with a branch`)
+  }
+
+  /** Answers one `merge_run` frame with whatever the test scripts, and reports what it was asked. */
+  const answerMerge = async (
+    socket: WebSocket,
+    reply: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const frame = await nextFrame(socket, (v) => v.type === 'merge_run', 10_000)
+    socket.send(JSON.stringify({ type: 'merge_result', requestId: frame.requestId, ...reply }))
+    return frame
+  }
+
+  const sweep = () => advanceMergeQueue(app.deps, { mergeStuckMs: 1_800_000 })
+
+  it('merges a queued branch and records the commit, the disposition and the verification', async () => {
+    const { socket, runnerId } = await pairFakeRunner('merge-happy')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'merge-happy' })
+    const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/merge-1')
+
+    await client.repository.setVerifyCommand({ repositoryId: repo.id, verifyCommand: 'true' })
+
+    const entry = await client.mergeQueue.enqueue({ agentRunId: run.id })
+    expect(entry.status).toBe('queued')
+    // Queueing must not merge anything by itself — that immediacy is the race the
+    // queue replaces (PLAN.md §5a).
+    expect((await client.agentRun.get({ agentRunId: run.id })).branchDisposition).toBeNull()
+
+    const swept = sweep()
+    const asked = await answerMerge(socket, {
+      ok: true,
+      commitSha: 'abc1234567890',
+      verified: true,
+    })
+    // The repository's command reaches the Runner, rather than the Runner reading
+    // its own idea of how this repository is tested.
+    expect(asked.verifyCommand).toBe('true')
+    await swept
+
+    const [merged] = await client.mergeQueue.list()
+    expect(merged?.status).toBe('merged')
+    expect(merged?.mergedCommitSha).toBe('abc1234567890')
+    expect(merged?.verified).toBe(true)
+    expect((await client.agentRun.get({ agentRunId: run.id })).branchDisposition).toBe('merged')
+
+    socket.close()
+  })
+
+  it('merges in queue order, one at a time, never two branches at once', async () => {
+    const { socket, runnerId } = await pairFakeRunner('merge-order')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'merge-order' })
+
+    const first = await finishRun(socket, created.rootThread.id, repo.id, 'loom/order-1')
+    const second = await finishRun(socket, created.rootThread.id, repo.id, 'loom/order-2')
+    const third = await finishRun(socket, created.rootThread.id, repo.id, 'loom/order-3')
+
+    await client.mergeQueue.enqueue({ agentRunId: first.id })
+    await client.mergeQueue.enqueue({ agentRunId: second.id })
+    await client.mergeQueue.enqueue({ agentRunId: third.id })
+
+    const mergedBranches: string[] = []
+    for (const expected of [first.id, second.id, third.id]) {
+      const swept = sweep()
+      const frame = await answerMerge(socket, { ok: true, commitSha: `sha-${expected}`, verified: false })
+      // One merge_run per sweep — a second in-flight frame here would mean the
+      // serialization is decorative.
+      expect(frame.runId).toBe(expected)
+      await swept
+      mergedBranches.push(frame.runId as string)
+    }
+    expect(mergedBranches).toEqual([first.id, second.id, third.id])
+
+    const entries = await client.mergeQueue.list()
+    expect(entries.map((e) => e.status)).toEqual(['merged', 'merged', 'merged'])
+    // Unverified, and saying so: no verify command was configured for this repo.
+    expect(entries.every((e) => e.verified === false)).toBe(true)
+
+    socket.close()
+  })
+
+  it('starts nothing new while a merge is in flight', async () => {
+    const { socket, runnerId } = await pairFakeRunner('merge-inflight')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'merge-inflight' })
+    const first = await finishRun(socket, created.rootThread.id, repo.id, 'loom/inflight-1')
+    const second = await finishRun(socket, created.rootThread.id, repo.id, 'loom/inflight-2')
+
+    await client.mergeQueue.enqueue({ agentRunId: first.id })
+    await client.mergeQueue.enqueue({ agentRunId: second.id })
+
+    // Hold the first merge open, then sweep repeatedly. Entry two must not be
+    // claimed: it rebases onto the *result* of entry one, which does not exist yet.
+    const swept = sweep()
+    const held = await nextFrame(socket, (v) => v.type === 'merge_run', 10_000)
+    expect(held.runId).toBe(first.id)
+
+    const seen: unknown[] = []
+    socket.on('message', (raw: WebSocket.RawData) => {
+      const parsed = JSON.parse(raw.toString()) as Record<string, unknown>
+      if (parsed.type === 'merge_run' && parsed.requestId !== held.requestId) seen.push(parsed)
+    })
+    await sweep()
+    await sweep()
+    expect(seen).toEqual([])
+
+    const midway = await client.mergeQueue.list()
+    expect(midway.map((e) => e.status)).toEqual(['merging', 'queued'])
+
+    socket.send(JSON.stringify({ type: 'merge_result', requestId: held.requestId, ok: true, commitSha: 'x', verified: false }))
+    await swept
+
+    socket.close()
+  })
+
+  it('hands a conflicting branch back to its run and lets the next one through', async () => {
+    const { socket, runnerId } = await pairFakeRunner('merge-conflict')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'merge-conflict' })
+    const first = await finishRun(socket, created.rootThread.id, repo.id, 'loom/conflict-1')
+    const second = await finishRun(socket, created.rootThread.id, repo.id, 'loom/conflict-2')
+
+    await client.mergeQueue.enqueue({ agentRunId: first.id })
+    await client.mergeQueue.enqueue({ agentRunId: second.id })
+
+    const failing = sweep()
+    await answerMerge(socket, { ok: false, reason: 'conflict', detail: 'src/app.ts' })
+    await failing
+
+    const afterFailure = await client.mergeQueue.list()
+    expect(afterFailure[0]?.status).toBe('failed')
+    expect(afterFailure[0]?.failureReason).toBe('conflict')
+    // "Hand the branch back to its owning run" (§7): the disposition stays unset,
+    // so the human can fix it and re-queue, or push, or discard.
+    expect((await client.agentRun.get({ agentRunId: first.id })).branchDisposition).toBeNull()
+
+    // And a failed entry must not wedge the queue behind it.
+    const next = sweep()
+    const frame = await answerMerge(socket, { ok: true, commitSha: 'ok', verified: false })
+    expect(frame.runId).toBe(second.id)
+    await next
+
+    // The human is told, since a queued merge is exactly the case where nobody is
+    // watching the thread (PLAN.md §3).
+    expect(delivered.some((n) => n.kind === 'merge_failed')).toBe(true)
+
+    socket.close()
+  })
+
+  it('refuses to queue the same branch twice, or to discard one already queued', async () => {
+    const { socket, runnerId } = await pairFakeRunner('merge-guard')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'merge-guard' })
+    const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/guard-1')
+
+    await client.mergeQueue.enqueue({ agentRunId: run.id })
+    await expect(client.mergeQueue.enqueue({ agentRunId: run.id })).rejects.toThrow(/queued/i)
+    // Discarding would delete the clone the queue is about to rebase.
+    await expect(client.agentRun.discard({ agentRunId: run.id })).rejects.toThrow(/queued/i)
+    await expect(client.agentRun.keep({ agentRunId: run.id })).rejects.toThrow(/queued/i)
+
+    socket.close()
+  })
+
+  it('cancels a queued entry, and refuses to cancel one already merging', async () => {
+    const { socket, runnerId } = await pairFakeRunner('merge-cancel')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'merge-cancel' })
+    const first = await finishRun(socket, created.rootThread.id, repo.id, 'loom/cancel-1')
+    const second = await finishRun(socket, created.rootThread.id, repo.id, 'loom/cancel-2')
+
+    const one = await client.mergeQueue.enqueue({ agentRunId: first.id })
+    const two = await client.mergeQueue.enqueue({ agentRunId: second.id })
+
+    const cancelled = await client.mergeQueue.cancel({ entryId: two.id })
+    expect(cancelled.status).toBe('cancelled')
+    // A cancelled entry releases its run: keeping the branch is available again.
+    expect((await client.agentRun.keep({ agentRunId: second.id })).branchDisposition).toBe('kept')
+
+    const swept = sweep()
+    const frame = await nextFrame(socket, (v) => v.type === 'merge_run', 10_000)
+    expect(frame.runId).toBe(first.id)
+    // Mid-merge, a cancel would leave the queue's state disagreeing with the
+    // repository's — the rebase is already running on the Runner.
+    await expect(client.mergeQueue.cancel({ entryId: one.id })).rejects.toThrow(/already running/i)
+    socket.send(JSON.stringify({ type: 'merge_result', requestId: frame.requestId, ok: true, commitSha: 'y', verified: false }))
+    await swept
+
+    socket.close()
+  })
+
+  it('fails an entry whose Runner never answers, rather than leaving the queue wedged', async () => {
+    const { socket, runnerId } = await pairFakeRunner('merge-stuck')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'merge-stuck' })
+    const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/stuck-1')
+    await client.mergeQueue.enqueue({ agentRunId: run.id })
+
+    // Claim it, then abandon it exactly as a server dying mid-merge would. The
+    // unique partial index means nothing else can claim while that row stands, so
+    // without the stuck check this repository's queue would stall forever.
+    const swept = sweep()
+    const held = await nextFrame(socket, (v) => v.type === 'merge_run', 10_000)
+    expect((await client.mergeQueue.list())[0]?.status).toBe('merging')
+
+    await advanceMergeQueue(app.deps, { mergeStuckMs: 0 })
+    const [entry] = await client.mergeQueue.list()
+    expect(entry?.status).toBe('failed')
+    expect(entry?.failureReason).toBe('runner_error')
+
+    // The Runner then answers late, after the queue already gave up and told the
+    // human so. First resolution wins: a success arriving now must not flip the
+    // entry to merged, or set a disposition on a branch that was handed back.
+    socket.send(
+      JSON.stringify({ type: 'merge_result', requestId: held.requestId, ok: true, commitSha: 'late', verified: true }),
+    )
+    await swept
+    const [afterLate] = await client.mergeQueue.list()
+    expect(afterLate?.status).toBe('failed')
+    expect(afterLate?.mergedCommitSha).toBeNull()
+    expect((await client.agentRun.get({ agentRunId: run.id })).branchDisposition).toBeNull()
 
     socket.close()
   })

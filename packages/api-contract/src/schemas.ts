@@ -79,7 +79,43 @@ export const RepositorySchema = z.object({
   displayName: z.string(),
   absolutePath: z.string(),
   defaultBranch: z.string(),
+  /** What the merge queue runs before merging; null merges unverified (PLAN.md §7 Phase 2). */
+  verifyCommand: z.string().nullable(),
   createdAt: z.date(),
+})
+
+/**
+ * One branch waiting in, or resolved by, the serialized merge queue (PLAN.md §7
+ * Phase 2).
+ *
+ * `position` crosses the wire as a string: it is a Postgres bigserial, and JSON
+ * numbers cannot carry one faithfully. Clients only ever compare and display it.
+ */
+export const MergeQueueEntrySchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  repositoryId: z.string(),
+  agentRunId: z.string(),
+  branchName: z.string(),
+  status: z.enum(['queued', 'merging', 'merged', 'failed', 'cancelled']),
+  position: z.string(),
+  failureReason: z
+    .enum([
+      'conflict',
+      'verification_failed',
+      'verification_refused',
+      'dirty_target',
+      'stale_target',
+      'runner_error',
+    ])
+    .nullable(),
+  detail: z.string().nullable(),
+  mergedCommitSha: z.string().nullable(),
+  /** Whether tests actually ran and passed — not whether any were configured. */
+  verified: z.boolean(),
+  createdAt: z.date(),
+  startedAt: z.date().nullable(),
+  finishedAt: z.date().nullable(),
 })
 
 /** Inline for Phase 1 — no markdown/git-backed persona storage yet (PLAN.md §4/§4e). */
@@ -128,7 +164,8 @@ export const AgentRunStatusSchema = z.enum([
   'cancelled',
 ])
 
-export const AgentRunBranchDispositionSchema = z.enum(['kept', 'discarded', 'pushed'])
+/** `merged` is set by the merge queue on success, never by a direct human action (PLAN.md §7 Phase 2). */
+export const AgentRunBranchDispositionSchema = z.enum(['kept', 'discarded', 'pushed', 'merged'])
 
 /** How a child run attaches to its parent (PLAN.md §5) — see AgentRunRelation. */
 export const AgentRunRelationSchema = z.enum(['delegation', 'review', 'reconcile'])
@@ -210,6 +247,7 @@ export type MessagePage = z.infer<typeof MessagePageSchema>
 export type ServerEvent = z.infer<typeof ServerEventSchema>
 export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
+export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>

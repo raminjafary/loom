@@ -8,7 +8,9 @@ import {
   createRunnerPairingToken,
   decideApproval,
   deletePersonaGroup,
+  cancelMergeQueueEntry,
   discardAgentRun,
+  enqueueMergeRun,
   getActiveAgentRun,
   getAgentRun,
   getAgentRunDiff,
@@ -20,6 +22,7 @@ import {
   listActiveAgentRuns,
   listChannels,
   listChildAgentRuns,
+  listMergeQueue,
   listMessages,
   listPendingApprovals,
   listPersonaGroups,
@@ -32,18 +35,20 @@ import {
   pushAgentRun,
   registerNotificationTarget,
   resumeAllRuns,
+  setRepositoryVerifyCommand,
   startAgentRun,
   unregisterNotificationTarget,
   updatePersona,
   updatePersonaGroup,
   type AgentDeps,
 } from '@loom/application'
-import { DomainError } from '@loom/domain'
+import { DomainError, type MergeQueueEntry } from '@loom/domain'
 import {
   asAgentPersonaId,
   asAgentRunId,
   asApprovalRequestId,
   asChannelId,
+  asMergeQueueEntryId,
   asMessageId,
   asPersonaGroupId,
   asRepositoryId,
@@ -52,6 +57,16 @@ import {
 } from '@loom/domain'
 import { ORPCError, implement } from '@orpc/server'
 import type { Principal } from './auth.js'
+
+/**
+ * `position` is a Postgres bigserial, which a JSON number cannot carry faithfully,
+ * so the wire form is a string (see MergeQueueEntrySchema). Everything else on the
+ * entry passes through and is narrowed by the output schema.
+ */
+const toWireMergeQueueEntry = (entry: MergeQueueEntry) => ({
+  ...entry,
+  position: entry.position.toString(),
+})
 
 export interface RouterContext {
   readonly principal: Principal
@@ -197,6 +212,51 @@ export const router = os.router({
           path: input.path,
           displayName: input.displayName,
         }),
+      ),
+    ),
+
+    setVerifyCommand: os.repository.setVerifyCommand.handler(({ context, input }) =>
+      guard(() =>
+        setRepositoryVerifyCommand(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          repositoryId: asRepositoryId(input.repositoryId),
+          verifyCommand: input.verifyCommand,
+        }),
+      ),
+    ),
+  },
+
+  mergeQueue: {
+    list: os.mergeQueue.list.handler(({ context }) =>
+      guard(async () =>
+        (await listMergeQueue(context.deps, { workspaceId: context.principal.workspaceId })).map(
+          toWireMergeQueueEntry,
+        ),
+      ),
+    ),
+
+    enqueue: os.mergeQueue.enqueue.handler(({ context, input }) =>
+      guard(async () =>
+        toWireMergeQueueEntry(
+          await enqueueMergeRun(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            agentRunId: asAgentRunId(input.agentRunId),
+          }),
+        ),
+      ),
+    ),
+
+    cancel: os.mergeQueue.cancel.handler(({ context, input }) =>
+      guard(async () =>
+        toWireMergeQueueEntry(
+          await cancelMergeQueueEntry(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            entryId: asMergeQueueEntryId(input.entryId),
+          }),
+        ),
       ),
     ),
   },

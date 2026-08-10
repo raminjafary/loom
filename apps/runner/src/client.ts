@@ -16,6 +16,7 @@ import {
   setUpstreamOauthToken,
 } from './egress-client.js'
 import { readHostClaudeOAuth } from './host-claude-auth.js'
+import { mergeRunBranch } from './merge.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
 import { createSendQueue } from './send-queue.js'
@@ -620,6 +621,66 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 requestId: frame.requestId,
                 ok: false,
                 error: error instanceof Error ? error.message : String(error),
+              }),
+            )
+          return
+        }
+
+        /**
+         * One merge-queue entry (PLAN.md §7 Phase 2). Like get_diff and push_run,
+         * this resolves the run through `runWorkspaces` — so it shares their
+         * limitation: a Runner that restarted after the run finished no longer holds
+         * the clone's location and answers "Run has no workspace". Reported as a
+         * `runner_error` the human can act on rather than as a merge that quietly
+         * never happened.
+         */
+        case 'merge_run': {
+          const workspace = runWorkspaces.get(frame.runId)
+          if (!workspace) {
+            send({
+              type: 'merge_result',
+              requestId: frame.requestId,
+              ok: false,
+              reason: 'runner_error',
+              detail: 'this Runner no longer holds the run\'s workspace',
+            })
+            return
+          }
+          void mergeRunBranch({
+            sourcePath: workspace.sourcePath,
+            clonePath: workspace.clonePath,
+            branchName: workspace.branchName,
+            defaultBranch: workspace.defaultBranch,
+            verifyCommand: frame.verifyCommand,
+            log,
+          })
+            .then((result) =>
+              send(
+                result.ok
+                  ? {
+                      type: 'merge_result',
+                      requestId: frame.requestId,
+                      ok: true,
+                      commitSha: result.commitSha,
+                      verified: result.verified,
+                      ...(result.note === undefined ? {} : { note: result.note }),
+                    }
+                  : {
+                      type: 'merge_result',
+                      requestId: frame.requestId,
+                      ok: false,
+                      reason: result.reason,
+                      detail: result.detail,
+                    },
+              ),
+            )
+            .catch((error) =>
+              send({
+                type: 'merge_result',
+                requestId: frame.requestId,
+                ok: false,
+                reason: 'runner_error',
+                detail: error instanceof Error ? error.message : String(error),
               }),
             )
           return

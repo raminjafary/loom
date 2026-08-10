@@ -12,6 +12,7 @@ import {
   asRunnerId,
   asWorkspaceId,
   type AgentEvent,
+  type MergeFailureReason,
   type RunnerId,
   type WorkspaceId,
 } from '@loom/domain'
@@ -53,6 +54,23 @@ interface PendingPush {
   reject(error: Error): void
 }
 
+interface PendingMerge {
+  resolve(
+    result:
+      | { ok: true; commitSha: string; verified: boolean; note?: string }
+      | { ok: false; reason: MergeFailureReason; detail: string },
+  ): void
+  reject(error: Error): void
+}
+
+/**
+ * A merge runs a repository's whole test suite (PLAN.md §7 Phase 2), so it gets a
+ * budget measured in minutes rather than the seconds every other dispatch call
+ * needs. Still bounded: an entry with no answer would otherwise sit `merging` and
+ * block its repository's queue until the sweep's stuck check notices.
+ */
+const MERGE_TIMEOUT_MS = Number(process.env.LOOM_MERGE_TIMEOUT_MS ?? 900_000)
+
 /**
  * Runner-facing WS endpoint (PLAN.md §4c note): corrected placement, lives on
  * apps/server rather than apps/ws-gateway because it needs the application
@@ -77,6 +95,7 @@ export const createRunnerGateway = (
   const pendingDiffs = new Map<string, PendingDiff>()
   const pendingDiscards = new Map<string, PendingDiscard>()
   const pendingPushes = new Map<string, PendingPush>()
+  const pendingMerges = new Map<string, PendingMerge>()
 
   const send = (runnerId: RunnerId, frame: ServerFrame): void => {
     const conn = connections.get(runnerId)
@@ -211,6 +230,33 @@ export const createRunnerGateway = (
         send(runnerId, { type: 'push_run', requestId, runId, acknowledgeCiChange })
       })
     },
+
+    async mergeRun({ runnerId, runId, verifyCommand }) {
+      if (!connections.has(runnerId)) {
+        return { ok: false, reason: 'runner_error', detail: 'Runner is not currently connected' }
+      }
+      const requestId = randomUUID()
+      return new Promise<
+        | { ok: true; commitSha: string; verified: boolean; note?: string }
+        | { ok: false; reason: MergeFailureReason; detail: string }
+      >((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingMerges.delete(requestId)
+          reject(new Error('Runner did not respond to merge_run in time'))
+        }, MERGE_TIMEOUT_MS)
+        pendingMerges.set(requestId, {
+          resolve: (r) => {
+            clearTimeout(timer)
+            resolve(r)
+          },
+          reject: (e) => {
+            clearTimeout(timer)
+            reject(e)
+          },
+        })
+        send(runnerId, { type: 'merge_run', requestId, runId, verifyCommand })
+      })
+    },
   }
 
   const deps: AgentDeps = { ...baseDeps, dispatch }
@@ -308,6 +354,30 @@ export const createRunnerGateway = (
                 ...(frame.warning === undefined ? {} : { warning: frame.warning }),
               }
             : { ok: false, error: frame.error ?? 'Runner failed to push the run' },
+        )
+        return
+      }
+
+      case 'merge_result': {
+        const pending = pendingMerges.get(frame.requestId)
+        if (!pending) return
+        pendingMerges.delete(frame.requestId)
+        pending.resolve(
+          frame.ok
+            ? {
+                ok: true,
+                commitSha: frame.commitSha ?? '',
+                verified: frame.verified ?? false,
+                ...(frame.note === undefined ? {} : { note: frame.note }),
+              }
+            : {
+                ok: false,
+                // A result frame with no reason is a Runner/server version skew, not
+                // a merge outcome — reported as a Runner problem rather than being
+                // guessed at as a conflict.
+                reason: frame.reason ?? 'runner_error',
+                detail: frame.detail ?? 'Runner failed to merge the branch',
+              },
         )
         return
       }

@@ -4,6 +4,7 @@ import {
   asApprovalRequestId,
   asAuditEventId,
   asChannelId,
+  asMergeQueueEntryId,
   asMessageId,
   asPersonaGroupId,
   asRepositoryId,
@@ -21,6 +22,9 @@ import {
   type ApprovalStatus,
   type AuditEvent,
   type Channel,
+  type MergeFailureReason,
+  type MergeQueueEntry,
+  type MergeQueueEntryStatus,
   type Message,
   type MessageBody,
   type NotificationTarget,
@@ -179,6 +183,7 @@ export interface RepositoryRow {
   displayName: string
   absolutePath: string
   defaultBranch: string
+  verifyCommand: string | null
   createdAt: Date
 }
 
@@ -189,8 +194,75 @@ export const toRepository = (row: RepositoryRow): Repository => ({
   displayName: row.displayName,
   absolutePath: row.absolutePath,
   defaultBranch: row.defaultBranch,
+  verifyCommand: row.verifyCommand,
   createdAt: row.createdAt,
 })
+
+export interface MergeQueueEntryRow {
+  id: string
+  position: bigint
+  workspaceId: string
+  repositoryId: string
+  agentRunId: string
+  branchName: string
+  status: string
+  failureReason: string | null
+  detail: string | null
+  mergedCommitSha: string | null
+  verified: boolean
+  enqueuedByUserId: string | null
+  createdAt: Date
+  startedAt: Date | null
+  finishedAt: Date | null
+}
+
+const MERGE_QUEUE_STATUSES: readonly MergeQueueEntryStatus[] = [
+  'queued',
+  'merging',
+  'merged',
+  'failed',
+  'cancelled',
+]
+
+const MERGE_FAILURE_REASONS: readonly MergeFailureReason[] = [
+  'conflict',
+  'verification_failed',
+  'verification_refused',
+  'dirty_target',
+  'stale_target',
+  'runner_error',
+]
+
+export const toMergeQueueEntry = (row: MergeQueueEntryRow): MergeQueueEntry => {
+  const status = MERGE_QUEUE_STATUSES.find((candidate) => candidate === row.status)
+  if (!status) throw new Error(`unknown merge_queue_entry.status: ${row.status}`)
+
+  const failureReason =
+    row.failureReason === null
+      ? null
+      : (MERGE_FAILURE_REASONS.find((candidate) => candidate === row.failureReason) ?? null)
+
+  return {
+    id: asMergeQueueEntryId(row.id),
+    // postgres.js hands bigserial back as a string unless told otherwise; both
+    // shapes are accepted here rather than depending on driver configuration for
+    // an ordering key.
+    position: BigInt(row.position),
+    workspaceId: asWorkspaceId(row.workspaceId),
+    repositoryId: asRepositoryId(row.repositoryId),
+    agentRunId: asAgentRunId(row.agentRunId),
+    branchName: row.branchName,
+    status,
+    failureReason,
+    detail: row.detail,
+    mergedCommitSha: row.mergedCommitSha,
+    verified: row.verified,
+    enqueuedByUserId: row.enqueuedByUserId,
+    createdAt: row.createdAt,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
+  }
+}
 
 const isPersonaSpec = (value: unknown): value is PersonaSpec =>
   typeof value === 'object' &&
@@ -250,7 +322,12 @@ const toAgentRunStatus = (value: string): AgentRunStatus => {
   throw new Error(`unknown agent_run status: ${value}`)
 }
 
-const AGENT_RUN_BRANCH_DISPOSITIONS: readonly AgentRunBranchDisposition[] = ['kept', 'discarded', 'pushed']
+const AGENT_RUN_BRANCH_DISPOSITIONS: readonly AgentRunBranchDisposition[] = [
+  'kept',
+  'discarded',
+  'pushed',
+  'merged',
+]
 
 const toAgentRunBranchDisposition = (value: string | null): AgentRunBranchDisposition | null => {
   if (value === null) return null

@@ -48,6 +48,11 @@ export const useAgentStore = defineStore('agent', () => {
     discardRun: (agentRunId: string) => session.discardRun(agentRunId),
     pushRun: (agentRunId: string, acknowledgeCiChange?: boolean) =>
       session.pushRun(agentRunId, acknowledgeCiChange),
+    enqueueMerge: (agentRunId: string) => session.enqueueMerge(agentRunId),
+    cancelMerge: (entryId: string) => session.cancelMerge(entryId),
+    refreshMergeQueue: () => session.refreshMergeQueue(),
+    setVerifyCommand: (repositoryId: string, verifyCommand: string | null) =>
+      session.setVerifyCommand(repositoryId, verifyCommand),
     registerNotificationTarget: (registration: PushRegistration) =>
       session.registerNotificationTarget(registration),
     unregisterNotificationTarget: (endpoint: string) =>

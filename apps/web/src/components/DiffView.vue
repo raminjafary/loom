@@ -11,6 +11,7 @@ const emit = defineEmits<{
   keep: [agentRunId: string]
   discard: [agentRunId: string]
   push: [agentRunId: string, acknowledgeCiChange: boolean]
+  merge: [agentRunId: string]
 }>()
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
@@ -36,6 +37,12 @@ const canDecideDisposition = () =>
     <footer v-else-if="canDecideDisposition()">
       <button type="button" @click="emit('keep', props.run.id)">Keep branch</button>
       <button type="button" class="danger" @click="emit('discard', props.run.id)">Discard branch</button>
+      <!--
+        Queues; it does not merge. The queue rebases in order and may reach this
+        branch behind others (PLAN.md §7 Phase 2), so a label promising a merge
+        here would be describing something that has not happened yet.
+      -->
+      <button type="button" @click="emit('merge', props.run.id)">Queue for merge</button>
       <button type="button" @click="emit('push', props.run.id, false)">Push &amp; open PR</button>
       <button type="button" class="muted" @click="emit('push', props.run.id, true)">
         Push anyway (CI/workflow changes)

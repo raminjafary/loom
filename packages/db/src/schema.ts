@@ -131,6 +131,12 @@ export const repository = pgTable(
     displayName: text('display_name').notNull(),
     absolutePath: text('absolute_path').notNull(),
     defaultBranch: text('default_branch').notNull(),
+    // What the merge queue runs against a rebased branch before merging it
+    // (PLAN.md §7 Phase 2's "run tests"). Null merges unverified — see
+    // `planMergeVerification`, which also explains why this executes in the
+    // sandbox: the command is the operator's, but the code it runs is the
+    // agent's.
+    verifyCommand: text('verify_command'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('repository_workspace_idx').on(t.workspaceId)],
@@ -227,6 +233,66 @@ export const agentRunEvent = pgTable(
   (t) => [
     uniqueIndex('agent_run_event_run_seq_idx').on(t.agentRunId, t.seq),
     index('agent_run_event_workspace_run_idx').on(t.workspaceId, t.agentRunId, t.seq),
+  ],
+)
+
+/**
+ * The serialized merge queue (PLAN.md §7 Phase 2, §5a). One row per branch a
+ * human queued for merge into its repository's default branch.
+ *
+ * Two indexes carry the invariants rather than leaving them to application code:
+ *
+ * - `merge_queue_active_per_repo_idx` — **at most one `merging` entry per
+ *   repository**. This is the serialization, and it is here rather than in the
+ *   sweep because two servers sweeping concurrently would both read the same
+ *   queued entry and both try to claim it. One insert wins; the other's claim
+ *   fails, which is exactly right.
+ * - `merge_queue_open_per_run_idx` — a run may have at most one *open* entry, so
+ *   double-clicking Merge cannot queue the same branch twice. Terminal entries are
+ *   exempt: a branch that failed and was re-queued is a second, legitimate attempt.
+ *
+ * `position` is a bigserial for the reason `message.seq` is: a swarm's siblings are
+ * queued in the same millisecond, so `created_at` cannot order them.
+ */
+export const mergeQueueEntry = pgTable(
+  'merge_queue_entry',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    position: bigserial('position', { mode: 'bigint' }).notNull(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references(() => agentRun.id, { onDelete: 'cascade' }),
+    // Snapshotted at enqueue time, so an entry still says which branch it was
+    // about even after the run's own row changes underneath it.
+    branchName: text('branch_name').notNull(),
+    status: text('status').notNull().default('queued'),
+    failureReason: text('failure_reason'),
+    detail: text('detail'),
+    mergedCommitSha: text('merged_commit_sha'),
+    // Whether a verification command actually ran and passed — not whether one was
+    // configured. A repository with no command merges unverified, and this says so.
+    verified: boolean('verified').notNull().default(false),
+    // No hard FK, same convention as approvalRequest.resolvedByUserId: who queued a
+    // merge is an audit fact that must survive the user being removed.
+    enqueuedByUserId: text('enqueued_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('merge_queue_repo_idx').on(t.workspaceId, t.repositoryId, t.position),
+    uniqueIndex('merge_queue_active_per_repo_idx')
+      .on(t.repositoryId)
+      .where(sql`${t.status} = 'merging'`),
+    uniqueIndex('merge_queue_open_per_run_idx')
+      .on(t.agentRunId)
+      .where(sql`${t.status} in ('queued', 'merging')`),
   ],
 )
 

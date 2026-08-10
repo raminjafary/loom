@@ -40,6 +40,13 @@ export type NotificationKind =
   | 'approval_expired'
   | 'run_finished'
   | 'run_failed'
+  /**
+   * The merge queue's outcomes (PLAN.md §7 Phase 2). A queued merge is the case
+   * §3's retention hook is most about: the human handed the branch over and stopped
+   * watching precisely because a queue is supposed to be unattended.
+   */
+  | 'merge_succeeded'
+  | 'merge_failed'
 
 /**
  * What a transport actually sends. `tag` is a coalescing key — a run that needs
@@ -114,6 +121,22 @@ export const buildNotification = (input: {
         ...base,
         title: `${input.personaName} failed`,
         body: input.detail ?? 'The run ended without finishing its task.',
+      }
+    case 'merge_succeeded':
+      return {
+        ...base,
+        title: `${input.branchName ?? input.personaName} merged`,
+        body: input.detail ?? 'The branch is in the default branch.',
+      }
+    case 'merge_failed':
+      return {
+        ...base,
+        // Deliberately the short per-reason line, never the raw detail: a
+        // conflicted file list or a test-log tail is what the thread is for. Same
+        // instinct as keeping tool argv out of a notification — the notification
+        // gets someone to the place where they can actually decide.
+        title: `${input.branchName ?? input.personaName} did not merge`,
+        body: input.detail ?? 'The merge queue could not merge this branch.',
       }
   }
 }

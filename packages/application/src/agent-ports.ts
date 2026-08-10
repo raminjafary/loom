@@ -9,6 +9,10 @@ import type {
   ApprovalRequest,
   ApprovalRequestId,
   ApprovalStatus,
+  MergeFailureReason,
+  MergeQueueEntry,
+  MergeQueueEntryId,
+  MergeQueueEntryStatus,
   PersonaGroup,
   PersonaGroupId,
   PersonaSpec,
@@ -41,6 +45,78 @@ export interface RepositoryRepositoryPort {
   }): Promise<Repository>
   findById(workspaceId: WorkspaceId, id: RepositoryId): Promise<Repository | null>
   listByWorkspace(workspaceId: WorkspaceId): Promise<Repository[]>
+  /**
+   * What the merge queue runs before merging (PLAN.md §7 Phase 2). Its own method
+   * rather than a general `update`: it is the only mutable field a bound repository
+   * has, and the path and default branch must stay immutable — a repository that
+   * could be re-pointed after binding would make every past run's clone provenance
+   * a guess.
+   */
+  setVerifyCommand(
+    workspaceId: WorkspaceId,
+    id: RepositoryId,
+    verifyCommand: string | null,
+  ): Promise<Repository>
+}
+
+/**
+ * The serialized merge queue's persistence (PLAN.md §7 Phase 2). Its own port
+ * rather than methods on `AgentRunRepositoryPort`: an entry belongs to a
+ * repository's queue, and its lifecycle (queued → merging → terminal) is
+ * independent of the run whose branch it carries.
+ */
+export interface MergeQueueRepositoryPort {
+  enqueue(input: {
+    workspaceId: WorkspaceId
+    repositoryId: RepositoryId
+    agentRunId: AgentRunId
+    branchName: string
+    enqueuedByUserId: UserId | null
+  }): Promise<MergeQueueEntry>
+  findById(workspaceId: WorkspaceId, id: MergeQueueEntryId): Promise<MergeQueueEntry | null>
+  /** One repository's queue in `position` order — what a client renders. */
+  listByRepository(
+    workspaceId: WorkspaceId,
+    repositoryId: RepositoryId,
+  ): Promise<MergeQueueEntry[]>
+  listByWorkspace(workspaceId: WorkspaceId): Promise<MergeQueueEntry[]>
+  /**
+   * Every non-terminal entry, workspace-agnostic — the same deliberate exception to
+   * this layer's per-workspace convention as `AgentRunRepositoryPort.listAllActive`,
+   * for the same reason: it backs an internal sweep that is never reachable through
+   * the contract, so there is no caller whose authz boundary it could cross.
+   */
+  listAllOpen(): Promise<MergeQueueEntry[]>
+  /**
+   * Moves one entry `queued` → `merging`, or returns null.
+   *
+   * Null is not an error — it is the serialization working. Two servers sweeping
+   * concurrently both see the same queued entry; the unique partial index on
+   * (repository_id) where status = 'merging' lets exactly one claim succeed, and the
+   * loser simply has nothing to do this tick.
+   */
+  claim(workspaceId: WorkspaceId, id: MergeQueueEntryId): Promise<MergeQueueEntry | null>
+  /**
+   * Terminal transition. `verified` records whether tests ran and passed, not
+   * whether any were configured.
+   *
+   * Returns null when the entry is *already* terminal, and writes nothing. That
+   * case is real: the queue's stuck check can abandon an entry whose Runner then
+   * answers late, and letting the late answer win would flip a merge a human was
+   * already told had been given up on — with a thread that now says both.
+   * First resolution wins.
+   */
+  finish(
+    workspaceId: WorkspaceId,
+    id: MergeQueueEntryId,
+    patch: {
+      status: Extract<MergeQueueEntryStatus, 'merged' | 'failed' | 'cancelled'>
+      failureReason?: MergeFailureReason
+      detail?: string
+      mergedCommitSha?: string
+      verified?: boolean
+    },
+  ): Promise<MergeQueueEntry | null>
 }
 
 export interface AgentRunRepositoryPort {
@@ -293,5 +369,21 @@ export interface RunDispatchPort {
   }): Promise<
     | { ok: true; prUrl?: string; compareUrl?: string; warning?: string }
     | { ok: false; error: string }
+  >
+  /**
+   * Rebases one queued branch onto its repository's default branch, verifies it,
+   * and fast-forwards (PLAN.md §7 Phase 2). Serialization is the caller's — this
+   * port merges exactly the one entry it is given.
+   *
+   * A far longer timeout than the other dispatch calls: verification is a test
+   * suite, not a git command.
+   */
+  mergeRun(input: {
+    runnerId: RunnerId
+    runId: AgentRunId
+    verifyCommand: string | null
+  }): Promise<
+    | { ok: true; commitSha: string; verified: boolean; note?: string }
+    | { ok: false; reason: MergeFailureReason; detail: string }
   >
 }
