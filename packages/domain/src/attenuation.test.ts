@@ -43,6 +43,54 @@ describe('attenuateChildPersona', => {
  expect(verdict.ok).toBe(false)
  })
 
+ /**
+ * The envelope. The roadmap says a Planner
+ * declares `tools: []` and the data model says a child may not exceed its parent — read
+ * together against the same list, a Planner can only delegate to workers that
+ * also have nothing, which makes the feature not exist. `delegates` is the
+ * human-set ceiling that separates what a run may do *itself* from what it may
+ * hand down.
+ */
+ it('lets a Planner delegate within its declared envelope', => {
+ const planner = spec({ name: 'planner', tools: [], planner: true, delegates: ['Read', 'Edit'] })
+ expect(attenuateChildPersona(planner, spec({ tools: ['Read', 'Edit'] }))).toEqual({ ok: true })
+ })
+
+ it('refuses a child asking for more than the envelope allows', => {
+ const planner = spec({ name: 'planner', tools: [], planner: true, delegates: ['Read'] })
+ const verdict = attenuateChildPersona(planner, spec({ tools: ['Read', 'Bash'] }))
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('Bash')
+ // Names the envelope, not "its parent lacks" — the parent lacks everything,
+ // and saying so would send someone looking at the wrong list.
+ expect(verdict.reason).toContain('envelope')
+ })
+
+ // The envelope only widens what may be *handed down*. Everything else still
+ // measures against the parent's own values.
+ it('does not let the envelope widen budget, tier or auto-approve', => {
+ const planner = spec({
+ name: 'planner',
+ tools: [],
+ planner: true,
+ delegates: ['Read'],
+ budgetCapUsd: 1,
+ autoApprove: false,
+ })
+ expect(attenuateChildPersona(planner, spec({ tools: ['Read'], budgetCapUsd: 5 })).ok).toBe(false)
+ expect(
+ attenuateChildPersona(planner, spec({ tools: ['Read'], budgetCapUsd: 1, autoApprove: true })).ok,
+).toBe(false)
+ })
+
+ // An envelope on a non-planner would be a general way to hand children more
+ // than the parent holds — refused where personas are authored, and ignored here.
+ it('ignores an envelope on a persona that is not a planner', => {
+ const parent = spec({ tools: ['Read'], delegates: ['Bash'] })
+ expect(attenuateChildPersona(parent, spec({ tools: ['Bash'] })).ok).toBe(false)
+ })
+
  it('refuses a child that would skip the approval its parent cannot skip', => {
  const verdict = attenuateChildPersona(spec({ autoApprove: false }), spec({ autoApprove: true }))
  expect(verdict.ok).toBe(false)
