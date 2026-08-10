@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AgentRun } from '@loom/api-contract'
+import { ref, watch } from 'vue'
 
 const props = defineProps<{
  run: AgentRun | null
@@ -12,7 +13,34 @@ const emit = defineEmits<{
  discard: [agentRunId: string]
  push: [agentRunId: string, acknowledgeCiChange: boolean]
  merge: [agentRunId: string]
+ 'load-raw': [agentRunId: string, done: (result: { lines: string[]; chunks: number }) => void]
 }>
+
+/**
+ * The raw transcript is fetched only when asked for. It is the verbatim provider stream — far
+ * larger than the thread, and the reason the event-tiering design tiers the write path at all —
+ * so loading it alongside the diff would undo the point of the tiering.
+ */
+const raw = ref<{ lines: string[]; chunks: number } | null>(null)
+const rawLoading = ref(false)
+
+const loadRaw = => {
+ if (!props.run) return
+ rawLoading.value = true
+ emit('load-raw', props.run.id, (result) => {
+ raw.value = result
+ rawLoading.value = false
+ })
+}
+
+// A transcript belongs to one run; keeping it on screen while the view switches
+// would attribute one run's output to another.
+watch(
+ => props.run?.id,
+ => {
+ raw.value = null
+ },
+)
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 
@@ -33,6 +61,17 @@ const canDecideDisposition = =>
  </header>
  <!-- Raw diff text only, no v-html -->
  <pre v-if="props.diff !== null" class="diff">{{ props.diff || '(no changes yet)' }}</pre>
+ <details class="raw" @toggle="(e) => (e.target as HTMLDetailsElement).open && raw === null && loadRaw">
+ <summary>Raw transcript</summary>
+ <p v-if="rawLoading" class="raw-note">Loading…</p>
+ <template v-else-if="raw">
+ <p class="raw-note">{{ raw.lines.length }} lines in {{ raw.chunks }} chunk(s), redacted at write.</p>
+ <!-- Plain text, never v-html: this is verbatim provider output. -->
+ <pre v-if="raw.lines.length > 0" class="diff">{{ raw.lines.join('\n') }}</pre>
+ <p v-else class="raw-note">Nothing was recorded for this run.</p>
+ </template>
+ </details>
+
  <p v-if="props.run.branchDisposition" class="disposition">Branch {{ props.run.branchDisposition }}.</p>
  <footer v-else-if="canDecideDisposition">
  <button type="button" @click="emit('keep', props.run.id)">Keep branch</button>
@@ -106,6 +145,25 @@ footer {
  display: flex;
  gap: 0.5rem;
  margin-top: 0.6rem;
+}
+
+.raw {
+ margin-top: 0.6rem;
+ font-size: 0.78rem;
+}
+
+.raw summary {
+ cursor: pointer;
+ color: var(--text-faint);
+ font-size: 0.72rem;
+ text-transform: uppercase;
+ letter-spacing: 0.05em;
+}
+
+.raw-note {
+ margin: 0.35rem 0;
+ font-size: 0.72rem;
+ color: var(--text-faint);
 }
 
 .disposition {

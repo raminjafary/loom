@@ -211,6 +211,7 @@ onBeforeUnmount( => {
  @discard="(agentRunId) => agent.discardRun(agentRunId)"
  @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
  @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
+ @load-raw="(agentRunId, done) => agent.getRawTranscript(agentRunId).then(done)"
  />
  </main>
 
@@ -260,6 +261,7 @@ onBeforeUnmount( => {
  @discard="(agentRunId) => agent.discardRun(agentRunId)"
  @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
  @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
+ @load-raw="(agentRunId, done) => agent.getRawTranscript(agentRunId).then(done)"
  />
  </aside>
  </div>

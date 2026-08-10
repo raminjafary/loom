@@ -111,6 +111,23 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  error: z.string.optional,
  }),
  /**
+ * A batch of verbatim provider-stream lines. Batched
+ * rather than per-event because the raw stream is an order of magnitude chattier
+ * than the structured tier, and a frame per event would spend the socket's
+ * capacity on the tier nobody is watching live.
+ *
+ * `chunkIndex` is assigned by the Runner and is the blob's identity, so a
+ * retransmitted chunk overwrites rather than duplicating — the same idempotency
+ * reasoning as `agent_event.seq`, with the blob key playing the role of the
+ * unique index.
+ */
+ z.object({
+ type: z.literal('raw_transcript_chunk'),
+ runId: z.string,
+ chunkIndex: z.number.int.nonnegative,
+ lines: z.array(z.string),
+ }),
+ /**
  * Scoped directory listing, backing the web picker and the TUI equivalent alike
  *. `parent` is null when stepping up would leave the Runner's
  * allowed roots, so a client cannot render a door out of the boundary.

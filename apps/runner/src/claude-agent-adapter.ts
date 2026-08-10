@@ -115,6 +115,11 @@ export interface RunAgentOptions {
  */
  readonly onEvent: (event: WireAgentEvent) => void | Promise<void>
  /**
+ * The verbatim SDK message, before `toWireEvents` maps it down. Optional: an unsandboxed debugging run has no reason to persist one,
+ * and a caller that does not want the tier should not pay to serialize it.
+ */
+ readonly onRawMessage?: (line: string) => void | Promise<void>
+ /**
  * Aborts the SDK's agent loop mid-flight. Owned by
  * the caller so a `cancel_run` frame arriving on the socket can reach a run
  * that is already streaming.
@@ -268,6 +273,9 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  reportedSessionId = sessionId
  options.onSessionId?.(sessionId)
  }
+ // Before mapping down: tier 3 is defined as what the provider actually sent,
+ // so anything this platform's own model would drop must be captured first.
+ if (options.onRawMessage) await options.onRawMessage(JSON.stringify(message))
  for (const event of toWireEvents(message)) {
  await options.onEvent(event)
  }

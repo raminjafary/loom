@@ -22,6 +22,23 @@ import type {
  * and it is enforced by the boundary lint rule, not by convention.
  */
 
+/**
+ * The raw transcript tier's storage.
+ *
+ * Deliberately a byte/string store keyed by an opaque path, with no notion of
+ * runs, chunks or JSONL: those belong to the domain (`transcriptChunkKey`) and
+ * the use-case. An object store that knew what a transcript was could not be
+ * swapped for one that does not.
+ */
+export interface BlobStoragePort {
+ put(key: string, body: string): Promise<void>
+ get(key: string): Promise<string | null>
+ /** Keys under a prefix, lexicographically — which `transcriptChunkKey` makes chronological. */
+ list(prefix: string): Promise<string[]>
+ /** Removes everything under a prefix. Used when a human discards a run's branch. */
+ deletePrefix(prefix: string): Promise<void>
+}
+
 export interface ClockPort {
  now: Date
 }

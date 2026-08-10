@@ -1,4 +1,9 @@
-import { classifyToolEffect, isRiskyTool } from '@loom/domain'
+import {
+ classifyToolEffect,
+ isRiskyTool,
+ prepareTranscriptLine,
+ TRANSCRIPT_CHUNK_LINES,
+} from '@loom/domain'
 import {
  RunnerFrameSchema,
  ServerFrameSchema,
@@ -103,6 +108,44 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const send = (frame: RunnerFrame) => sendQueue.send(frame)
  const awaitSendCapacity = => sendQueue.awaitCapacity
 
+ /**
+ * The raw transcript tier's batching (the event-tiering design: "batched writes (chunked
+ * JSONL, flushed on size/interval)").
+ *
+ * Size is `TRANSCRIPT_CHUNK_LINES`; the interval is here because only the Runner
+ * knows when a run has gone quiet — a run blocked on a human approval for ten
+ * minutes should not leave its last few lines unwritten that whole time.
+ *
+ * Redaction happens here, on the host, before the line ever reaches the socket
+ * (the credential broker, "redacted at write"). Doing it server-side would mean the unredacted
+ * text had already crossed a network and sat in a log buffer.
+ */
+ const rawBuffers = new Map<string, string[]>
+ const rawChunkIndexes = new Map<string, number>
+ const RAW_FLUSH_MS = Number(process.env.LOOM_TRANSCRIPT_FLUSH_MS ?? 10_000)
+
+ const flushRawTranscript = (runId: string): void => {
+ const lines = rawBuffers.get(runId)
+ if (!lines || lines.length === 0) return
+ rawBuffers.set(runId, [])
+ const chunkIndex = rawChunkIndexes.get(runId) ?? 0
+ rawChunkIndexes.set(runId, chunkIndex + 1)
+ send({ type: 'raw_transcript_chunk', runId, chunkIndex, lines })
+ }
+
+ const recordRawLine = async (runId: string, line: string): Promise<void> => {
+ const buffer = rawBuffers.get(runId) ?? []
+ buffer.push(prepareTranscriptLine(line))
+ rawBuffers.set(runId, buffer)
+ if (buffer.length < TRANSCRIPT_CHUNK_LINES) return
+ await awaitSendCapacity
+ flushRawTranscript(runId)
+ }
+
+ const rawFlushTimer = setInterval( => {
+ for (const runId of rawBuffers.keys) flushRawTranscript(runId)
+ }, RAW_FLUSH_MS)
+
  const sendAgentEvent = (runId: string, event: WireAgentEvent) => {
  const seq = (eventSeqs.get(runId) ?? 0) + 1
  eventSeqs.set(runId, seq)
@@ -187,6 +230,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  * that bug — a completed run whose diff was zero bytes.
  */
  const flushRunTerminalEvent = (runId: string): void => {
+ // The transcript's tail goes first, for the same reason the commit does: the
+ // server marks the run terminal on this event and a client may immediately ask
+ // for the raw transcript, which would then be missing its last chunk.
+ flushRawTranscript(runId)
  const event = pendingTerminalEvents.get(runId)
  if (!event) return
  pendingTerminalEvents.delete(runId)
@@ -239,6 +286,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  await awaitSendCapacity
  sendAgentEvent(input.runId, event)
  }
+ const onRawMessage = (line: string) => recordRawLine(input.runId, line)
  const onSessionId = (sessionId: string) => {
  const state = runStates.get(input.runId)
  if (!state) return
@@ -287,6 +335,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  classifyEffect: (toolName, toolInput) =>
  classifyToolEffect(toolName, toolInput, input.clonePath, resolveWithinRoot),
  onEvent,
+ onRawMessage,
  onSessionId,
  onPermissionRequest,
  })
@@ -319,6 +368,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 ...(input.resumeSessionId === undefined ? {}: { resumeSessionId: input.resumeSessionId }),
  abortController: input.abort,
  onEvent,
+ onRawMessage,
  onSessionId,
  onPermissionRequest,
  log,
@@ -524,6 +574,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  runStates.delete(runId)
  pendingTerminalEvents.delete(runId)
  eventSeqs.delete(runId)
+ rawBuffers.delete(runId)
+ rawChunkIndexes.delete(runId)
  void clearRunState(runId).catch( => {})
  })
  return
@@ -598,6 +650,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  runStates.delete(frame.runId)
  pendingTerminalEvents.delete(frame.runId)
  eventSeqs.delete(frame.runId)
+ rawBuffers.delete(frame.runId)
+ rawChunkIndexes.delete(frame.runId)
  void clearRunState(frame.runId).catch( => {})
  })
  return
@@ -778,6 +832,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  return {
  close: => {
  closed = true
+ clearInterval(rawFlushTimer)
  if (usageTimer) clearInterval(usageTimer)
  if (upstreamAuthTimer) clearInterval(upstreamAuthTimer)
  socket?.close

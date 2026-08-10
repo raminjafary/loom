@@ -1227,3 +1227,122 @@ describe('runner-gateway: serialized merge queue', => {
  socket.close
  })
 })
+
+/**
+ * The raw transcript tier. Driven over the real protocol
+ * against the real filesystem blob store, because the two properties that matter
+ * are both about what crosses a boundary: that chunks reassemble in the order the
+ * Runner sent them, and that discarding a branch really removes the transcript
+ * rather than merely stopping it being listed.
+ */
+describe('runner-gateway: raw transcript tier', => {
+ const startWithWorkspace = async (socket: WebSocket, threadId: string, repositoryId: string) => {
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({ threadId, repositoryId, personaId: testPersonaId })
+ await startRun
+ const run = await runPromise
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: run.id,
+ clonePath: '/tmp/transcript-clone',
+ branchName: 'loom/transcript',
+ }),
+)
+ return run
+ }
+
+ const waitFor = async (predicate: => Promise<boolean>) => {
+ for (let i = 0; i < 40; i += 1) {
+ if (await predicate) return true
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ return false
+ }
+
+ it('reassembles chunks in the order they were sent, not the order they arrived', async => {
+ const { socket, runnerId } = await pairFakeRunner('transcript-order')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'transcript-order' })
+ const run = await startWithWorkspace(socket, created.rootThread.id, repo.id)
+
+ // Sent out of order on purpose. The chunk *key* carries the ordering, so a
+ // late chunk cannot land in the wrong place — object stores sort by key, which
+ // is why transcriptChunkKey pads its index.
+ socket.send(JSON.stringify({ type: 'raw_transcript_chunk', runId: run.id, chunkIndex: 1, lines: ['second'] }))
+ socket.send(JSON.stringify({ type: 'raw_transcript_chunk', runId: run.id, chunkIndex: 0, lines: ['first'] }))
+ socket.send(JSON.stringify({ type: 'raw_transcript_chunk', runId: run.id, chunkIndex: 2, lines: ['third'] }))
+
+ const arrived = await waitFor(async => {
+ const t = await client.agentRun.getRawTranscript({ agentRunId: run.id })
+ return t.lines.length === 3
+ })
+ expect(arrived).toBe(true)
+
+ const transcript = await client.agentRun.getRawTranscript({ agentRunId: run.id })
+ expect(transcript.lines).toEqual(['first', 'second', 'third'])
+ expect(transcript.chunks).toBe(3)
+
+ socket.close
+ })
+
+ // A retransmitted chunk overwrites its own blob rather than appending a second
+ // copy — the store's addressing giving tier 3 the property the unique (run, seq)
+ // index gives tier 2.
+ it('is idempotent on retransmission', async => {
+ const { socket, runnerId } = await pairFakeRunner('transcript-idempotent')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'transcript-idempotent' })
+ const run = await startWithWorkspace(socket, created.rootThread.id, repo.id)
+
+ const chunk = { type: 'raw_transcript_chunk', runId: run.id, chunkIndex: 0, lines: ['a', 'b'] }
+ socket.send(JSON.stringify(chunk))
+ socket.send(JSON.stringify(chunk))
+
+ await waitFor(async => (await client.agentRun.getRawTranscript({ agentRunId: run.id })).lines.length > 0)
+ await new Promise((r) => setTimeout(r, 200))
+
+ const transcript = await client.agentRun.getRawTranscript({ agentRunId: run.id })
+ expect(transcript.lines).toEqual(['a', 'b'])
+
+ socket.close
+ })
+
+ /**
+ * The event-tiering design calls this tier "policy-bound". Discarding a branch is a human saying
+ * they do not want the work kept, and the verbatim record of it is part of that.
+ */
+ it('deletes the transcript when the branch is discarded', async => {
+ const { socket, runnerId } = await pairFakeRunner('transcript-discard')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'transcript-discard' })
+ const run = await startWithWorkspace(socket, created.rootThread.id, repo.id)
+
+ socket.send(
+ JSON.stringify({ type: 'raw_transcript_chunk', runId: run.id, chunkIndex: 0, lines: ['kept for now'] }),
+)
+ await waitFor(async => (await client.agentRun.getRawTranscript({ agentRunId: run.id })).lines.length > 0)
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: run.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'done' },
+ }),
+)
+ await waitFor(async => (await client.agentRun.get({ agentRunId: run.id })).status === 'completed')
+
+ const discardFrame = nextFrame(socket, (v) => v.type === 'discard_run')
+ const discarding = client.agentRun.discard({ agentRunId: run.id })
+ const frame = await discardFrame
+ socket.send(JSON.stringify({ type: 'discard_result', requestId: frame.requestId, ok: true }))
+ await discarding
+
+ const after = await client.agentRun.getRawTranscript({ agentRunId: run.id })
+ expect(after.lines).toEqual([])
+ expect(after.chunks).toBe(0)
+
+ socket.close
+ })
+})

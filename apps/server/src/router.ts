@@ -18,6 +18,7 @@ import {
   getChannelRootThread,
   getNotificationConfig,
   getPersona,
+  getRawTranscript,
   getRunControl,
   keepAgentRun,
   listActiveAgentRuns,
@@ -418,6 +419,15 @@ export const router = os.router({
           agentRunId: asAgentRunId(input.agentRunId),
         }),
       })),
+    ),
+
+    getRawTranscript: os.agentRun.getRawTranscript.handler(({ context, input }) =>
+      guard(() =>
+        getRawTranscript(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          agentRunId: asAgentRunId(input.agentRunId),
+        }),
+      ),
     ),
 
     keep: os.agentRun.keep.handler(({ context, input }) =>

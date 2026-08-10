@@ -18,6 +18,7 @@ const emit = defineEmits<{
   discard: [agentRunId: string]
   push: [agentRunId: string, acknowledgeCiChange: boolean]
   merge: [agentRunId: string]
+  'load-raw': [agentRunId: string, done: (result: { lines: string[]; chunks: number }) => void]
 }>()
 
 const reasonFor = (run: AgentRun): string =>
@@ -54,6 +55,7 @@ const reasonFor = (run: AgentRun): string =>
           @discard="(agentRunId) => emit('discard', agentRunId)"
           @push="(agentRunId, ack) => emit('push', agentRunId, ack)"
           @merge="(agentRunId) => emit('merge', agentRunId)"
+          @load-raw="(agentRunId, done) => emit('load-raw', agentRunId, done)"
         />
       </template>
     </div>

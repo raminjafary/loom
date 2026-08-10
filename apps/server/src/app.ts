@@ -36,6 +36,7 @@ import type { Config } from './config.js'
 import { createEventPublisher } from './events.js'
 import { webPushNotificationPort } from './notifications.js'
 import { router } from './router.js'
+import { fileBlobStorage } from './blob-storage.js'
 import { createRunnerGateway } from './runner-gateway.js'
 
 export interface App {
@@ -97,6 +98,7 @@ export const buildApp = async (
  personas: personaRepository(db),
  personaGroups: personaGroupRepository(db),
  runControl: workspaceRunControlRepository(db),
+ blobs: fileBlobStorage(config.BLOB_STORAGE_ROOT),
  notifications,
  notificationTargets,
  limits: { maxConcurrentRunsPerWorkspace: config.MAX_CONCURRENT_RUNS_PER_WORKSPACE },

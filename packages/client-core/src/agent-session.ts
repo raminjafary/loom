@@ -120,6 +120,12 @@ export interface AgentSession {
  refreshMergeQueue: Promise<void>
  /** What the merge queue runs before merging into this repository; null merges unverified. */
  setVerifyCommand(repositoryId: string, verifyCommand: string | null): Promise<void>
+ /**
+ * The raw transcript tier's "expand raw". Returns rather than
+ * patching the snapshot: it is a large, explicitly-requested artifact, and
+ * parking it in shared state would push it into every view that reads a run.
+ */
+ getRawTranscript(agentRunId: string): Promise<{ lines: string[]; chunks: number }>
  refreshInbox: Promise<void>
  inspectRun(agentRunId: string): Promise<void>
  /**
@@ -552,6 +558,8 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: errorMessage(error) })
  }
  },
+
+ getRawTranscript: (agentRunId) => options.api.agentRun.getRawTranscript({ agentRunId }),
 
  refreshInbox: fetchInbox,
  inspectRun: fetchInspected,

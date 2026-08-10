@@ -48,6 +48,13 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  */
  z.object({ t: z.literal('ready') }),
  z.object({ t: z.literal('event'), event: AgentEventSchema }),
+ /**
+ * One verbatim provider-stream message, as JSON text.
+ * Carried as an opaque string rather than a parsed shape on purpose: the point
+ * of the raw tier is that it is *not* mapped down to what this platform models,
+ * so giving it a schema here would defeat it.
+ */
+ z.object({ t: z.literal('raw'), line: z.string }),
  z.object({
  t: z.literal('permission_request'),
  toolUseId: z.string,

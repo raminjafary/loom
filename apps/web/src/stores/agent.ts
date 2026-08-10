@@ -66,6 +66,7 @@ export const useAgentStore = defineStore('agent', () => {
       session.unregisterNotificationTarget(endpoint),
     pauseAllRuns: () => session.pauseAllRuns(),
     resumeAllRuns: () => session.resumeAllRuns(),
+    getRawTranscript: (agentRunId: string) => session.getRawTranscript(agentRunId),
     refreshInbox: () => session.refreshInbox(),
     inspectRun: (agentRunId: string) => session.inspectRun(agentRunId),
     dispose: () => session.dispose(),

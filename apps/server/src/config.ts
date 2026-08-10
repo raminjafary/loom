@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod'
 
 const EnvSchema = z.object({
@@ -41,6 +43,11 @@ const EnvSchema = z.object({
  // Longer than the gateway's own merge timeout, so a Runner that is merely slow
  // is failed by the request that is actually watching it rather than by a sweep
  // that cannot tell slow from dead.
+ // Where the raw transcript tier's blobs live. A directory
+ // rather than a database because these are append-once chunks nobody queries —
+ // putting them in Postgres is exactly what the event-tiering design says does not survive ten
+ // concurrent swarm runs.
+ BLOB_STORAGE_ROOT: z.string.default('.loom-blobs'),
  MERGE_STUCK_TIMEOUT_MS: z.coerce.number.int.positive.default(1_800_000),
 })
 
@@ -58,7 +65,14 @@ const DEFAULT_TEST_DATABASE_URL = 'postgres://loom:loom@localhost:5432/loom_test
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
  const config = EnvSchema.parse(env)
  if (config.NODE_ENV === 'test') {
- return {...config, DATABASE_URL: env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL }
+ return {
+...config,
+ DATABASE_URL: env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL,
+ // Same reasoning as the database override directly above: a test run must
+ // never write transcript blobs into a directory a developer is using, and
+ // must never be able to delete one.
+ BLOB_STORAGE_ROOT: env.TEST_BLOB_STORAGE_ROOT ?? join(tmpdir, 'loom-test-blobs'),
+ }
  }
  return config
 }

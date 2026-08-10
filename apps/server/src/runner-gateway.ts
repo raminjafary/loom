@@ -3,6 +3,7 @@ import {
  reconcileRunnerRuns,
  recordAgentEvent,
  recordRunCost,
+ recordRawTranscriptChunk,
  recordRunHeartbeat,
  recordRunWorkspace,
  requestApproval,
@@ -475,6 +476,15 @@ export const createRunnerGateway = (
 )
  return
  }
+
+ case 'raw_transcript_chunk':
+ await recordRawTranscriptChunk(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ chunkIndex: frame.chunkIndex,
+ lines: frame.lines,
+ })
+ return
 
  case 'heartbeat':
  await recordRunHeartbeat(deps, { workspaceId, agentRunId: asAgentRunId(frame.runId) })

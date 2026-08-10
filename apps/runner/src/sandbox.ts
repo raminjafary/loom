@@ -48,6 +48,8 @@ export interface SandboxOptions {
  readonly resumeSessionId?: string
  /** May return a promise; awaited before the next event is forwarded (see forwardEvent). */
  readonly onEvent: (event: WireAgentEvent) => void | Promise<void>
+ /** Verbatim provider-stream line, forwarded under the same backpressure. */
+ readonly onRawMessage?: (line: string) => void | Promise<void>
  readonly onSessionId?: (sessionId: string) => void
  readonly onPermissionRequest: (
  toolUseId: string,
@@ -331,6 +333,22 @@ export const runAgentInSandbox = async (
  })
  }
 
+ const forwardRaw = (line: string): void => {
+ if (!options.onRawMessage) return
+ queueDepth += 1
+ stdout.pause
+ forwarding = forwarding
+.then( => options.onRawMessage?.(line))
+.catch( => {
+ // A transcript is an artifact, not a control path: failing to persist one
+ // line must never take down the run that produced it.
+ })
+.then( => {
+ queueDepth -= 1
+ if (queueDepth === 0) stdout.resume
+ })
+ }
+
  const stdout = createInterface({ input: child.stdout })
  stdout.on('line', (line) => {
  if (process.env.LOOM_SANDBOX_TRACE === '1') log(`[run ${options.runId}:raw] ${line}`)
@@ -350,6 +368,12 @@ export const runAgentInSandbox = async (
  return
  case 'event':
  forwardEvent(frame.event)
+ return
+ case 'raw':
+ // Through the same serialized queue as events, so a raw line and the
+ // structured events derived from it cannot be reordered relative to
+ // each other, and so the pipe pauses for both.
+ forwardRaw(frame.line)
  return
  case 'session':
  options.onSessionId?.(frame.sessionId)

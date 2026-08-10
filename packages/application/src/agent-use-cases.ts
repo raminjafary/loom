@@ -13,6 +13,8 @@ import {
  parsePersonaMarkdown,
  selectNextMergeEntry,
  systemActor,
+ transcriptChunkKey,
+ transcriptPrefix,
  type Actor,
  type AgentEvent,
  type AgentPersona,
@@ -51,6 +53,7 @@ import type {
  RunnerRepositoryPort,
  WorkspaceRunControlRepositoryPort,
 } from './agent-ports.js'
+import type { BlobStoragePort } from './ports.js'
 import type { NotificationDeps } from './notification-use-cases.js'
 import type { Deps } from './use-cases.js'
 
@@ -64,6 +67,8 @@ export interface AgentDeps extends Deps, NotificationDeps {
  readonly personas: PersonaRepositoryPort
  readonly personaGroups: PersonaGroupRepositoryPort
  readonly runControl: WorkspaceRunControlRepositoryPort
+ /** The raw transcript tier's store. */
+ readonly blobs: BlobStoragePort
  readonly dispatch: RunDispatchPort
  readonly limits: RunLimits
 }
@@ -616,6 +621,63 @@ export const recordRunWorkspace = async (
  })
 
 /**
+ * Persists one batch of verbatim provider lines, called
+ * by runner-gateway.ts on every `raw_transcript_chunk` frame.
+ *
+ * The chunk key *is* the idempotency mechanism: a retransmitted chunk overwrites
+ * its own blob rather than appending a second copy, which is the same property
+ * the unique `(run, seq)` index gives the structured tier, obtained for free from
+ * the store's own addressing.
+ *
+ * Lines arrive already redacted — that happens on the Runner, before the socket,
+ * so unredacted text never crosses a network. This layer must not assume
+ * it can redact later: by the time a line is here it has already been logged,
+ * buffered and framed somewhere else.
+ */
+export const recordRawTranscriptChunk = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ chunkIndex: number
+ lines: readonly string[]
+ },
+): Promise<void> => {
+ if (input.lines.length === 0) return
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!run) throw new NotFoundError('AgentRun')
+
+ await deps.blobs.put(
+ transcriptChunkKey(input.agentRunId, input.chunkIndex),
+ `${input.lines.join('\n')}\n`,
+)
+}
+
+/**
+ * The "expand raw" fetch.
+ *
+ * Explicitly not part of any list or subscription payload. The event-tiering design is direct
+ * about why: it is what "keeps `subscribeToRunTree` light — it carries structure
+ * and status only, never content."
+ */
+export const getRawTranscript = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
+): Promise<{ lines: string[]; chunks: number }> => {
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!run) throw new NotFoundError('AgentRun')
+
+ const keys = await deps.blobs.list(transcriptPrefix(input.agentRunId))
+ const chunks = await Promise.all(keys.map((key) => deps.blobs.get(key)))
+ const lines = chunks
+.filter((chunk): chunk is string => chunk !== null)
+.flatMap((chunk) => chunk.split('\n'))
+.filter((line) => line.length > 0)
+
+ return { lines, chunks: keys.length }
+}
+
+/**
  * Called by runner-gateway.ts on every `cost_report` frame — spend the egress
  * proxy metered and the Runner relayed.
  *
@@ -923,6 +985,12 @@ export const discardAgentRun = async (
  const result = await deps.dispatch.discardRun({ runnerId: run.runnerId, runId: run.id })
  if (!result.ok) throw new ValidationError(result.error)
  }
+
+ // The raw transcript goes with the branch, for the same reason the Runner
+ // deletes the run's HOME: it is a record of work a human has just said they do
+ // not want kept, and the event-tiering design calls this tier "policy-bound" precisely so that
+ // retaining it is a decision rather than a default.
+ await deps.blobs.deletePrefix(transcriptPrefix(run.id)).catch( => {})
 
  const updated = await deps.agentRuns.setBranchDisposition(input.workspaceId, run.id, 'discarded')
  await postRunSystemMessage(deps, run, `Branch ${run.branchName ?? '(unknown)'} discarded.`)

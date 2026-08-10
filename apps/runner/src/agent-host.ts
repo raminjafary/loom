@@ -101,6 +101,10 @@ const main = async : Promise<void> => {
  classifyEffect: (toolName, input) =>
  classifyToolEffect(toolName, input, command.cwd, resolveWithinRoot),
  onEvent: (event) => emitEvent({ t: 'event', event }),
+ // Same backpressure path as onEvent (see emitEvent): the raw tier is chattier
+ // than the structured one, so it is the more likely of the two to outrun the
+ // host's ability to drain.
+ onRawMessage: (line) => emitEvent({ t: 'raw', line }),
  onSessionId: (sessionId) => emit({ t: 'session', sessionId }),
  onPermissionRequest: (toolUseId, toolName, input) => {
  emit({ t: 'permission_request', toolUseId, toolName, input })

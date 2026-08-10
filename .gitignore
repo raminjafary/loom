@@ -8,3 +8,4 @@ dist/
 coverage/
 personas/
 graphify-out/
+.loom-blobs/

@@ -232,6 +232,18 @@ export const contract = {
 .input(z.object({ agentRunId: z.string }))
 .output(z.object({ diff: z.string })),
 
+ /**
+ * The raw transcript tier's "expand raw" fetch — the
+ * verbatim provider stream, redacted at write.
+ *
+ * Explicitly on demand and never folded into a list or a subscription: the event-tiering design
+ * says a late-joining client backfills from the structured tier and fetches
+ * this only when asked, which is what keeps the run-tree payload light.
+ */
+ getRawTranscript: oc
+.input(z.object({ agentRunId: z.string }))
+.output(z.object({ lines: z.array(z.string), chunks: z.number.int })),
+
  /** Keeps a finished run's branch as-is — no push, no host action. */
  keep: oc.input(z.object({ agentRunId: z.string })).output(AgentRunSchema),
 
