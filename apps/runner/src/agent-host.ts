@@ -2,6 +2,7 @@ import { classifyToolEffect, isRiskyTool } from '@loom/domain'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
+import { createPlannerTool } from './planner-tool.js'
 import { resolveWithinRoot } from './path-check.js'
 import {
  SandboxCommandSchema,
@@ -88,6 +89,9 @@ const main = async : Promise<void> => {
 
  const command = await started
  const persona = command.persona as Parameters<typeof runAgent>[0]['persona']
+ // A Planner's delegation tool is an in-process MCP server, so inside a sandbox
+ // it lives here and its result crosses the stdio boundary like everything else.
+ const plannerTool = persona.planner ? createPlannerTool: null
 
  await runAgent({
  persona,
@@ -105,6 +109,7 @@ const main = async : Promise<void> => {
  // than the structured one, so it is the more likely of the two to outrun the
  // host's ability to drain.
  onRawMessage: (line) => emitEvent({ t: 'raw', line }),
+...(plannerTool ? { plannerTool: plannerTool.server }: {}),
  onSessionId: (sessionId) => emit({ t: 'session', sessionId }),
  onPermissionRequest: (toolUseId, toolName, input) => {
  emit({ t: 'permission_request', toolUseId, toolName, input })
@@ -113,6 +118,9 @@ const main = async : Promise<void> => {
  })
  },
  })
+
+ const subtasks = plannerTool?.taken
+ if (subtasks && subtasks.length > 0) emit({ t: 'plan', subtasks })
 
  emit({ t: 'done' })
  lines.close

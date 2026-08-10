@@ -26,11 +26,21 @@ export const attenuateChildPersona = (
  parent: PersonaSpec,
  child: PersonaSpec,
 ): AttenuationVerdict => {
- const escalatedTools = child.tools.filter((tool) => !parent.tools.includes(tool))
+ /**
+ * A Planner is measured against its declared envelope rather than its own
+ * tools — see `PersonaSpec.delegates` for why the `tools: []` and the * "never exceeding its parent's" cannot both apply to the same list.
+ *
+ * Only a planner may carry one, which is checked where personas are authored;
+ * for every other parent this is just its own tool list, unchanged.
+ */
+ const ceiling = parent.planner && parent.delegates ? parent.delegates: parent.tools
+ const escalatedTools = child.tools.filter((tool) => !ceiling.includes(tool))
  if (escalatedTools.length > 0) {
  return {
  ok: false,
- reason: `Child run may not use tools its parent lacks: ${escalatedTools.join(', ')}`,
+ reason: parent.planner
+ ? `Child run may not use tools outside its planner's delegation envelope: ${escalatedTools.join(', ')}`
+: `Child run may not use tools its parent lacks: ${escalatedTools.join(', ')}`,
  }
  }
 

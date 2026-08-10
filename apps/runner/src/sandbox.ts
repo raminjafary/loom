@@ -50,6 +50,8 @@ export interface SandboxOptions {
  readonly onEvent: (event: WireAgentEvent) => void | Promise<void>
  /** Verbatim provider-stream line, forwarded under the same backpressure. */
  readonly onRawMessage?: (line: string) => void | Promise<void>
+ /** A Planner's decomposition, submitted inside the container. */
+ readonly onPlan?: (subtasks: { title: string; task: string; personaName: string }[]) => void
  readonly onSessionId?: (sessionId: string) => void
  readonly onPermissionRequest: (
  toolUseId: string,
@@ -377,6 +379,9 @@ export const runAgentInSandbox = async (
  return
  case 'session':
  options.onSessionId?.(frame.sessionId)
+ return
+ case 'plan':
+ options.onPlan?.(frame.subtasks)
  return
  case 'permission_request':
  void options

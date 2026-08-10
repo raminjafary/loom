@@ -120,6 +120,20 @@
       "when": 1786399342526,
       "tag": "0016_puzzling_wilson_fisk",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786400096596,
+      "tag": "0017_regular_betty_ross",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786400390913,
+      "tag": "0018_lucky_gunslinger",
+      "breakpoints": true
     }
   ]
 }

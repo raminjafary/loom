@@ -1,0 +1,1 @@
+ALTER TABLE "agent_persona" ADD COLUMN "harness_delegates" jsonb DEFAULT '[]'::jsonb NOT NULL;

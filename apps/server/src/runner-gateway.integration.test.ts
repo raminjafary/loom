@@ -1346,3 +1346,186 @@ describe('runner-gateway: raw transcript tier', => {
  socket.close
  })
 })
+
+/**
+ * The Planner, driven over the real protocol. The child-run
+ * path has existed since last session but nothing called it; this is its first
+ * real caller, so what is worth proving is that a plan turns into *attenuated*
+ * children rather than merely into children.
+ */
+describe('runner-gateway: planner', => {
+ const PLANNER_MARKDOWN = `---
+name: test-planner
+description: Decomposes and delegates.
+# Unranked on purpose, matching the worker: a ranked parent with an unranked
+# child is refused by design (a typo would otherwise be the way past the tier
+# check), and that is not what this test is about.
+model: test-model
+tools: []
+harness:
+ planner: true
+ delegates: [Read]
+---
+
+Decompose and delegate.`
+
+ const startPlanner = async (socket: WebSocket, threadId: string, repositoryId: string, personaId: string) => {
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({ threadId, repositoryId, personaId })
+ const frame = await startRun
+ return { run: await runPromise, frame }
+ }
+
+ it('refuses to author a planner persona that also holds tools', async => {
+ // The `tools: []` is the trust boundary — a planner with Bash would make
+ // every attenuation check below it meaningless, since children could
+ // legitimately inherit it.
+ await expect(
+ client.persona.create({
+ markdownSource: PLANNER_MARKDOWN.replace('tools: []', 'tools: [Bash]'),
+ }),
+).rejects.toThrow(/tools: \[\]/)
+ })
+
+ it('sends the planner its delegation flag, and no tools', async => {
+ const { socket, runnerId } = await pairFakeRunner('planner-flag')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'planner-flag' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+
+ const { frame } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+ const persona = frame.persona as { planner?: boolean; tools: string[] }
+ expect(persona.planner).toBe(true)
+ expect(persona.tools).toEqual([])
+
+ socket.close
+ })
+
+ it('turns a submitted plan into child runs linked to the planner', async => {
+ const { socket, runnerId } = await pairFakeRunner('planner-plan')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'planner-plan' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+
+ // Two children, so the concurrency limit of 3 still admits them alongside
+ // the planner itself. Polled rather than awaited on two nextFrame promises:
+ // both would resolve on the *same* first frame, and the test would proceed
+ // before the second child existed.
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Docs', task: 'Write docs.', personaName: 'fake-worker' },
+ { title: 'Tests', task: 'Write tests.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+ let children = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 40 && children.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+ expect(children).toHaveLength(2)
+ // The data model is explicit that a reconciler or reviewer must not masquerade as a
+ // delegation child; these genuinely are delegations.
+ expect(children.every((child) => child.relation === 'delegation')).toBe(true)
+ expect(children.every((child) => child.parentRunId === run.id)).toBe(true)
+
+ socket.close
+ })
+
+ /**
+ * The property that makes `tools: []` a boundary rather than a label: a Planner
+ * holding nothing cannot delegate to a worker that holds something.
+ */
+ it('refuses a subtask whose worker would exceed the planner, and keeps the rest', async => {
+ const { socket, runnerId } = await pairFakeRunner('planner-attenuate')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'planner-attenuate' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ const armed = await client.persona.create({
+ markdownSource: `---\nname: armed-worker\ndescription: Has tools the planner lacks.\nmodel: test-model\ntools: [Bash, Write]\n---\n\nwork`,
+ })
+ expect(armed.tools).toEqual(['Bash', 'Write'])
+
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [{ title: 'Escalate', task: 'Run anything.', personaName: 'armed-worker' }],
+ }),
+)
+
+ // Nothing starts, because the only subtask was refused.
+ for (let i = 0; i < 20; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ if ((await client.agentRun.listChildren({ agentRunId: run.id })).length > 0) break
+ }
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toEqual([])
+
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ expect(page.messages.some((m) => m.body.text.includes('Escalate'))).toBe(true)
+
+ socket.close
+ })
+
+ it('refuses a plan naming a persona that does not exist, and says which', async => {
+ const { socket, runnerId } = await pairFakeRunner('planner-unknown')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'planner-unknown' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [{ title: 'Ghost', task: 'Do it.', personaName: 'nobody' }],
+ }),
+)
+
+ let seen = false
+ for (let i = 0; i < 30 && !seen; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ seen = page.messages.some((m) => m.body.text.includes('no persona named "nobody"'))
+ }
+ expect(seen).toBe(true)
+
+ socket.close
+ })
+
+ // A malformed plan must not reach the child-run path at all: the Runner is
+ // trusted to relay, not to decide what a valid plan is.
+ it('refuses a malformed plan server-side even though the tool schema also checks it', async => {
+ const { socket, runnerId } = await pairFakeRunner('planner-malformed')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'planner-malformed' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [{ title: 'x', task: '', personaName: 'fake-worker' }],
+ }),
+)
+
+ let refused = false
+ for (let i = 0; i < 30 && !refused; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ refused = page.messages.some((m) => m.body.text.includes('Plan refused'))
+ }
+ expect(refused).toBe(true)
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toEqual([])
+
+ socket.close
+ })
+})

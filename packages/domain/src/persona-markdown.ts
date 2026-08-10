@@ -22,6 +22,16 @@
  * mis-handle) far more than this ever needs to.
  */
 
+/** `[A, B]` → `['A','B']`; anything else → `[]`. Shared by `tools` and `harness.delegates`. */
+const parseToolList = (value: string): string[] => {
+ const inner = /^\[(.*)\]$/.exec(value)?.[1]
+ if (inner === undefined) return []
+ return inner
+.split(',')
+.map((tool) => tool.trim)
+.filter((tool) => tool.length > 0)
+}
+
 export interface ParsedPersonaMarkdown {
  readonly name: string
  readonly description: string
@@ -30,6 +40,10 @@ export interface ParsedPersonaMarkdown {
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
  readonly harnessAutoApprove: boolean
+ /** `harness.planner: true` — see PersonaSpec.planner. */
+ readonly harnessPlanner: boolean
+ /** `harness.delegates: [Tool,...]` — a planner's delegation envelope. */
+ readonly harnessDelegates: string[]
  readonly harnessBudgetCapUsd: number | null
  readonly systemPrompt: string
 }
@@ -53,6 +67,8 @@ export const parsePersonaMarkdown = (source: string): ParsedPersonaMarkdown => {
  let harnessEffort: string | null = null
  let harnessMaxTurns: number | null = null
  let harnessAutoApprove = false
+ let harnessPlanner = false
+ let harnessDelegates: string[] = []
  let harnessBudgetCapUsd: number | null = null
  let inHarness = false
 
@@ -61,13 +77,15 @@ export const parsePersonaMarkdown = (source: string): ParsedPersonaMarkdown => {
 
  if (/^\s/.test(rawLine)) {
  if (!inHarness) continue
- const match = /^\s*(effort|maxTurns|autoApprove|budgetCapUsd):\s*(.+?)\s*$/.exec(rawLine)
+ const match = /^\s*(effort|maxTurns|autoApprove|budgetCapUsd|planner|delegates):\s*(.+?)\s*$/.exec(rawLine)
  if (!match?.[1] || match[2] === undefined) continue
  const key = match[1]
  const value = match[2]
  if (key === 'effort') harnessEffort = value
  if (key === 'maxTurns') harnessMaxTurns = Number(value)
  if (key === 'autoApprove') harnessAutoApprove = value === 'true'
+ if (key === 'planner') harnessPlanner = value === 'true'
+ if (key === 'delegates') harnessDelegates = parseToolList(value)
  if (key === 'budgetCapUsd') {
  const parsed = Number(value)
  // A malformed cap is dropped rather than defaulted to a number: a wrong
@@ -91,16 +109,7 @@ export const parsePersonaMarkdown = (source: string): ParsedPersonaMarkdown => {
  if (key === 'name') name = value
  else if (key === 'description') description = value
  else if (key === 'model') model = value
- else if (key === 'tools') {
- const arrayMatch = /^\[(.*)\]$/.exec(value)
- const inner = arrayMatch?.[1]
- tools = inner
- ? inner
-.split(',')
-.map((t) => t.trim)
-.filter((t) => t.length > 0)
-: []
- }
+ else if (key === 'tools') tools = parseToolList(value)
  }
 
  if (!name) throw new Error('Persona markdown frontmatter missing required "name"')
@@ -120,6 +129,8 @@ export const parsePersonaMarkdown = (source: string): ParsedPersonaMarkdown => {
  harnessEffort,
  harnessMaxTurns,
  harnessAutoApprove,
+ harnessPlanner,
+ harnessDelegates,
  harnessBudgetCapUsd,
  systemPrompt,
  }
@@ -137,12 +148,16 @@ export const serializePersonaMarkdown = (persona: ParsedPersonaMarkdown): string
  persona.harnessEffort !== null ||
  persona.harnessMaxTurns !== null ||
  persona.harnessAutoApprove ||
+ persona.harnessPlanner ||
+ persona.harnessDelegates.length > 0 ||
  persona.harnessBudgetCapUsd !== null
 ) {
  lines.push('harness:')
  if (persona.harnessEffort !== null) lines.push(` effort: ${persona.harnessEffort}`)
  if (persona.harnessMaxTurns !== null) lines.push(` maxTurns: ${persona.harnessMaxTurns}`)
  if (persona.harnessAutoApprove) lines.push(` autoApprove: true`)
+ if (persona.harnessPlanner) lines.push(` planner: true`)
+ if (persona.harnessDelegates.length > 0) lines.push(` delegates: [${persona.harnessDelegates.join(', ')}]`)
  if (persona.harnessBudgetCapUsd !== null) {
  lines.push(` budgetCapUsd: ${persona.harnessBudgetCapUsd}`)
  }

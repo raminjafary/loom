@@ -262,6 +262,8 @@ export interface PersonaRepositoryPort {
  harnessEffort: string | null
  harnessMaxTurns: number | null
  harnessAutoApprove: boolean
+ harnessPlanner: boolean
+ harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
  }): Promise<AgentPersona>
  findById(workspaceId: WorkspaceId, id: AgentPersonaId): Promise<AgentPersona | null>
@@ -277,6 +279,8 @@ export interface PersonaRepositoryPort {
  harnessEffort: string | null
  harnessMaxTurns: number | null
  harnessAutoApprove: boolean
+ harnessPlanner: boolean
+ harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
  },
 ): Promise<AgentPersona>

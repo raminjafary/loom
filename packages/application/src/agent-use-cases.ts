@@ -10,8 +10,10 @@ import {
  isHuman,
  isMergeQueueEntryTerminal,
  isRiskyTool,
+ parseDecomposition,
  parsePersonaMarkdown,
  selectNextMergeEntry,
+ summarizeChildOutcomes,
  systemActor,
  transcriptChunkKey,
  transcriptPrefix,
@@ -242,6 +244,32 @@ export const listRunners = (
  input: { workspaceId: WorkspaceId },
 ): Promise<Runner[]> => deps.runners.listByWorkspace(input.workspaceId)
 
+/**
+ * The product shape gives a Planner no filesystem and no shell, and the roadmap writes it as `tools: []`.
+ * Enforced at authoring time rather than trusted: a Planner that also held `Bash`
+ * would make every attenuation check downstream meaningless, since its children
+ * could then legitimately inherit it.
+ */
+const assertPlannerHasNoTools = (parsed: {
+ harnessPlanner: boolean
+ tools: string[]
+ harnessDelegates: string[]
+}): void => {
+ if (parsed.harnessPlanner && parsed.tools.length > 0) {
+ throw new ValidationError(
+ `A planner persona must declare "tools: []" — it delegates rather than acting. Got: ${parsed.tools.join(', ')}`,
+)
+ }
+ // Only a planner may carry an envelope. On any other persona it would be a
+ // general way to hand children more than the parent holds, which is the exact
+ // escalation the attenuation exists to prevent.
+ if (!parsed.harnessPlanner && parsed.harnessDelegates.length > 0) {
+ throw new ValidationError(
+ 'Only a planner persona may declare "harness.delegates" — it is the envelope its children are attenuated against.',
+)
+ }
+}
+
 /** Human-only, same reasoning as bindRepository — a persona is an administrative artifact, not something a run edits about itself. */
 export const createPersona = async (
  deps: AgentDeps,
@@ -251,6 +279,7 @@ export const createPersona = async (
  throw new ForbiddenError('Only a human may create a persona')
  }
  const parsed = parsePersonaMarkdown(input.markdownSource)
+ assertPlannerHasNoTools(parsed)
  const existing = await deps.personas.listByWorkspace(input.workspaceId)
  if (existing.some((p) => p.name === parsed.name)) {
  throw new ValidationError(`Persona "${parsed.name}" already exists`)
@@ -265,6 +294,8 @@ export const createPersona = async (
  harnessEffort: parsed.harnessEffort,
  harnessMaxTurns: parsed.harnessMaxTurns,
  harnessAutoApprove: parsed.harnessAutoApprove,
+ harnessPlanner: parsed.harnessPlanner,
+ harnessDelegates: parsed.harnessDelegates,
  harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
  })
 }
@@ -290,6 +321,8 @@ export const seedBuiltinPersonas = async (
  harnessEffort: persona.harnessEffort,
  harnessMaxTurns: persona.harnessMaxTurns,
  harnessAutoApprove: persona.harnessAutoApprove,
+ harnessPlanner: persona.harnessPlanner,
+ harnessDelegates: persona.harnessDelegates,
  harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
  })
  }
@@ -322,6 +355,7 @@ export const updatePersona = async (
  throw new ForbiddenError('Only a human may update a persona')
  }
  const parsed = parsePersonaMarkdown(input.markdownSource)
+ assertPlannerHasNoTools(parsed)
  return deps.personas.update(input.workspaceId, input.personaId, {
  description: parsed.description,
  markdownSource: input.markdownSource,
@@ -330,6 +364,8 @@ export const updatePersona = async (
  harnessEffort: parsed.harnessEffort,
  harnessMaxTurns: parsed.harnessMaxTurns,
  harnessAutoApprove: parsed.harnessAutoApprove,
+ harnessPlanner: parsed.harnessPlanner,
+ harnessDelegates: parsed.harnessDelegates,
  harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
  })
 }
@@ -730,6 +766,8 @@ export const startAgentRun = async (
  tools: persona.tools,
  autoApprove: persona.harnessAutoApprove,
  budgetCapUsd: persona.harnessBudgetCapUsd,
+ planner: persona.harnessPlanner,
+ delegates: persona.harnessDelegates,
  capabilities: await resolveCapabilities(deps, input.workspaceId, input.personaId),
  }
 
@@ -816,6 +854,123 @@ export const recordRunWorkspace = async (
  clonePath: input.clonePath,
  branchName: input.branchName,
  })
+
+/**
+ * Acts on a Planner's decomposition, called by
+ * runner-gateway.ts on a `plan_submitted` frame.
+ *
+ * Re-validated here with the domain schema even though the tool's own schema
+ * already checked it. The Runner is trusted to *relay*, not to decide what a
+ * valid plan is, and what a plan turns into is runs — the most expensive thing a
+ * bad payload could cause.
+ *
+ * Every child goes through `startAgentRun` with the Planner as parent, so it
+ * inherits the whole existing story for free: the data model attenuation against the
+ * Planner's own snapshot, the workspace concurrency limit, and the kill switch. A
+ * Planner asking for a worker with tools it does not itself hold gets a refusal,
+ * which is exactly what makes `tools: []` a boundary rather than a label.
+ *
+ * Failures are per-subtask and reported, never fatal: one unresolvable persona
+ * name should not discard the rest of a plan a human is paying for.
+ */
+export const applySubmittedPlan = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ subtasks: readonly { title: string; task: string; personaName: string }[]
+ },
+): Promise<{ started: AgentRunId[]; refused: string[] }> => {
+ const planner = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!planner) throw new NotFoundError('AgentRun')
+
+ const verdict = parseDecomposition({ subtasks: [...input.subtasks] })
+ if (!verdict.ok) {
+ await postRunSystemMessage(deps, planner, `Plan refused: ${verdict.reason}`)
+ return { started: [], refused: [verdict.reason] }
+ }
+
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const started: AgentRunId[] = []
+ const refused: string[] = []
+
+ for (const subtask of verdict.decomposition.subtasks) {
+ const persona = personas.find((candidate) => candidate.name === subtask.personaName)
+ if (!persona) {
+ refused.push(`${subtask.title}: no persona named "${subtask.personaName}"`)
+ continue
+ }
+
+ try {
+ const child = await startAgentRun(deps, {
+ workspaceId: input.workspaceId,
+ // The Planner acts as itself. `startAgentRun` enforces that a run may only
+ // spawn children *of itself*, so this is also what ties attenuation to the
+ // right parent.
+ actor: agentRunActor(planner.id),
+ threadId: planner.threadId,
+ repositoryId: planner.repositoryId,
+ personaId: persona.id,
+ task: subtask.task,
+ parentRunId: planner.id,
+ relation: 'delegation',
+ })
+ started.push(child.id)
+ } catch (error) {
+ refused.push(`${subtask.title}: ${error instanceof Error ? error.message: String(error)}`)
+ }
+ }
+
+ const summary = [
+ `Plan accepted: ${started.length} subtask(s) started.`,
+...verdict.decomposition.subtasks
+.filter((_, index) => index < started.length)
+.map((subtask) => `• ${subtask.title} → ${subtask.personaName}`),
+...refused.map((reason) => `✗ ${reason}`),
+ ].join('\n')
+ await postRunSystemMessage(deps, planner, summary)
+
+ return { started, refused }
+}
+
+/**
+ * Aggregation, the other half of the Planner line and the return leg of the * "schema-validated decomposition, both directions".
+ *
+ * Called whenever a run reaches a terminal status. A child that is the last of
+ * its siblings to finish triggers one summary into the parent's thread — a line
+ * per child including the failures and what each cost, rather than a précis,
+ * because this is the moment a human judges whether the decomposition was any
+ * good and summarizing would hide exactly what they need.
+ */
+const aggregateForParent = async (deps: AgentDeps, child: AgentRun): Promise<void> => {
+ if (!child.parentRunId) return
+ const parent = await deps.agentRuns.findById(child.workspaceId, child.parentRunId)
+ if (!parent) return
+
+ const siblings = await deps.agentRuns.listByParent(child.workspaceId, parent.id)
+ const delegated = siblings.filter((sibling) => sibling.relation === 'delegation')
+ if (delegated.length === 0) return
+ // Only the last one reports. Anything else would post a partial summary per
+ // child finishing, which is noise at exactly the wrong moment.
+ if (!delegated.every((sibling) => TERMINAL_RUN_STATUSES.includes(sibling.status))) return
+
+ await postRunSystemMessage(
+ deps,
+ parent,
+ summarizeChildOutcomes(
+ delegated.map((sibling) => ({
+ runId: sibling.id,
+ personaName: sibling.persona.name,
+ title: sibling.persona.name,
+ status: sibling.status,
+ branchName: sibling.branchName,
+ totalCostUsd: sibling.totalCostUsd,
+ errorMessage: sibling.errorMessage,
+ })),
+),
+)
+ await notifyRun(deps, parent, 'run_finished')
+}
 
 /**
  * Persists one batch of verbatim provider lines, called
@@ -1715,6 +1870,7 @@ export const recordAgentEvent = async (
  // name and the metered cost are what make this notification actionable, and
  // `run` predates the transition that finalizes them.
  await notifyRun(deps, completed, 'run_finished')
+ await aggregateForParent(deps, completed)
  } else if (input.event.kind === 'run_failed') {
  const failed = await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
  status: 'failed',
@@ -1722,6 +1878,7 @@ export const recordAgentEvent = async (
  completedAt: new Date,
  })
  await notifyRun(deps, failed, 'run_failed', { detail: input.event.message })
+ await aggregateForParent(deps, failed)
  }
 }
 

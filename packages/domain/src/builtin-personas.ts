@@ -13,6 +13,8 @@ export interface BuiltinPersona {
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
  readonly harnessAutoApprove: boolean
+ readonly harnessPlanner: boolean
+ readonly harnessDelegates: string[]
  readonly harnessBudgetCapUsd: number | null
  readonly systemPrompt: string
  readonly markdownSource: string
@@ -36,6 +38,8 @@ const define = (spec: {
  tools: string[]
  systemPrompt: string
  budgetCapUsd?: number
+ planner?: boolean
+ delegates?: string[]
 }): BuiltinPersona => {
  const persona = {
  name: spec.name,
@@ -45,6 +49,8 @@ const define = (spec: {
  harnessEffort: null,
  harnessMaxTurns: null,
  harnessAutoApprove: false,
+ harnessPlanner: spec.planner ?? false,
+ harnessDelegates: spec.delegates ?? [],
  harnessBudgetCapUsd: spec.budgetCapUsd ?? DEFAULT_BUDGET_CAP_USD,
  systemPrompt: spec.systemPrompt,
  }
@@ -52,6 +58,32 @@ const define = (spec: {
 }
 
 export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
+ /**
+ * The Planner. `tools: []` is not a
+ * scope cut — it is the boundary: a Planner cannot read, write, or run anything,
+ * so the only effect it can have is the decomposition it submits, and every
+ * child it asks for is attenuated against what it does *not* have. Give it Bash
+ * and every attenuation check below it becomes meaningless.
+ */
+ define({
+ name: 'planner',
+ description: 'Decomposes a goal into subtasks and delegates them to workers. Runs nothing itself.',
+ model: 'claude-opus-5',
+ tools: [],
+ planner: true,
+ // The envelope: what the Planner
+ // may hand *down*, which is necessarily more than the nothing it holds itself.
+ // Deliberately excludes Bash — a plan should decompose editing work, and a
+ // worker that needs a shell is one a human should choose knowingly.
+ delegates: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
+ systemPrompt:
+ 'You are a Planner. You cannot read files, write code, or run commands — you decompose and delegate. ' +
+ 'Break the goal into the smallest number of subtasks that can each be done independently on their own ' +
+ 'branch, and submit them with the submit_plan tool in one call. Name a persona for each subtask from ' +
+ 'the ones registered in this workspace. Two subtasks that edit the same file will conflict when their ' +
+ 'branches merge, so prefer splitting by file or by area rather than by phase. Submit exactly one plan, ' +
+ 'then stop.',
+ }),
  define({
  name: 'product-manager',
  description: 'Turns a goal into an explicit, scoped spec before any code is written.',

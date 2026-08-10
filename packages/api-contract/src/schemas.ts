@@ -183,6 +183,8 @@ export const AgentPersonaSchema = z.object({
  harnessEffort: z.string.nullable,
  harnessMaxTurns: z.number.nullable,
  harnessAutoApprove: z.boolean,
+ harnessPlanner: z.boolean,
+ harnessDelegates: z.array(z.string),
  harnessBudgetCapUsd: z.number.nullable,
  createdAt: z.date,
  updatedAt: z.date,

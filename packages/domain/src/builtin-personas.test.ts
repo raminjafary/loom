@@ -3,9 +3,20 @@ import { BUILTIN_PERSONAS } from './builtin-personas.js'
 import { parsePersonaMarkdown } from './persona-markdown.js'
 
 describe('BUILTIN_PERSONAS', => {
- it('has exactly seven roles with unique names', => {
- expect(BUILTIN_PERSONAS).toHaveLength(7)
- expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(7)
+ it('has exactly eight roles with unique names', => {
+ expect(BUILTIN_PERSONAS).toHaveLength(8)
+ expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(8)
+ })
+
+ /**
+ * The `tools: []` is the Planner's trust boundary, not a scope cut —
+ * The attenuation measures every child against what the parent holds, so a
+ * Planner with tools would make every check below it meaningless.
+ */
+ it('ships the planner with no tools at all', => {
+ const planner = BUILTIN_PERSONAS.find((p) => p.name === 'planner')
+ expect(planner?.harnessPlanner).toBe(true)
+ expect(planner?.tools).toEqual([])
  })
 
  it.each(BUILTIN_PERSONAS.map((p) => [p.name, p] as const))(
@@ -20,6 +31,8 @@ describe('BUILTIN_PERSONAS', => {
  harnessEffort: persona.harnessEffort,
  harnessMaxTurns: persona.harnessMaxTurns,
  harnessAutoApprove: persona.harnessAutoApprove,
+ harnessPlanner: persona.harnessPlanner,
+ harnessDelegates: persona.harnessDelegates,
  harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
  systemPrompt: persona.systemPrompt,
  })

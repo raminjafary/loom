@@ -41,6 +41,19 @@ export const PersonaSpecSchema = z.object({
  // registry existed has no capabilities recorded, and refusing to parse that
  // would turn an upgrade into a lost run.
  capabilities: z.array(CapabilitySpecSchema).optional,
+ /** Planner — gets the delegation tool, must declare `tools: []`. */
+ planner: z.boolean.optional,
+ /** A planner's delegation envelope; empty for every other persona. */
+ delegates: z.array(z.string).optional,
+})
+
+/**
+ * One subtask of a Planner's decomposition.
+ */
+export const PlanSubtaskSchema = z.object({
+ title: z.string,
+ task: z.string,
+ personaName: z.string,
 })
 
 export const AgentEventSchema = z.discriminatedUnion('kind', [
@@ -147,6 +160,16 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  * reasoning as `agent_event.seq`, with the blob key playing the role of the
  * unique index.
  */
+ /**
+ * A Planner's decomposition, relayed after it submitted one. The server validates it again with the domain schema before acting: the
+ * Runner is trusted to relay, not to decide what a valid plan is, and the
+ * subtasks become *runs* — the most expensive thing a bad payload could cause.
+ */
+ z.object({
+ type: z.literal('plan_submitted'),
+ runId: z.string,
+ subtasks: z.array(PlanSubtaskSchema),
+ }),
  z.object({
  type: z.literal('raw_transcript_chunk'),
  runId: z.string,
@@ -319,3 +342,4 @@ export type ServerFrame = z.infer<typeof ServerFrameSchema>
 export type WireAgentEvent = z.infer<typeof AgentEventSchema>
 export type WirePersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type WireCapabilitySpec = z.infer<typeof CapabilitySpecSchema>
+export type WirePlanSubtask = z.infer<typeof PlanSubtaskSchema>

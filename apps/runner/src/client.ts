@@ -22,6 +22,7 @@ import {
 } from './egress-client.js'
 import { readHostClaudeOAuth } from './host-claude-auth.js'
 import { provisionSkills } from './capabilities.js'
+import { createPlannerTool } from './planner-tool.js'
 import { mergeRunBranch } from './merge.js'
 import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
@@ -311,6 +312,18 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // Skills are written into the run's HOME before the SDK starts, so the
  // registry — not the clone — is where a run's skills come from. HOME is
  // run-scoped and destroyed with the run, so nothing outlives it.
+ // A Planner gets exactly one channel it can act through; everything else it
+ // might want happens because the server decided to, not because it asked.
+ const plannerTool = input.persona.planner ? createPlannerTool: null
+ // Sandboxed, the tool lives inside the container and its result arrives as a
+ // frame; unsandboxed, it is the in-process handle above. One holder either way.
+ let sandboxPlan: { title: string; task: string; personaName: string }[] | null = null
+ const flushPlan = => {
+ const subtasks = sandboxPlan ?? plannerTool?.taken
+ if (!subtasks || subtasks.length === 0) return
+ send({ type: 'plan_submitted', runId: input.runId, subtasks })
+ }
+
  const skillNames = await provisionSkills(input.homePath, input.persona.capabilities ?? [])
  if (skillNames.length > 0) log(`provisioned ${skillNames.length} skill(s) for run ${input.runId}`)
 
@@ -335,6 +348,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  await runAgent({
  persona: input.persona,
  cwd: input.clonePath,
+...(plannerTool ? { plannerTool: plannerTool.server }: {}),
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(input.resumeSessionId === undefined ? {}: { resumeSessionId: input.resumeSessionId }),
  abortController: input.abort,
@@ -346,6 +360,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onSessionId,
  onPermissionRequest,
  })
+ flushPlan
  return
  }
 
@@ -376,10 +391,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  abortController: input.abort,
  onEvent,
  onRawMessage,
+...(input.persona.planner ? { onPlan: (subtasks) => (sandboxPlan = subtasks) }: {}),
  onSessionId,
  onPermissionRequest,
  log,
  })
+ // Sent after the loop, not from inside the tool handler: a plan submitted by
+ // a run that then failed or was cancelled should not spawn children, and
+ // only the loop ending tells us which happened.
+ flushPlan
  } finally {
  // Drained before revoking: the final turn's spend is usually still queued
  // when the container exits, and revoking first would not lose it but

@@ -699,6 +699,8 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  harnessEffort: input.harnessEffort,
  harnessMaxTurns: input.harnessMaxTurns,
  harnessAutoApprove: input.harnessAutoApprove,
+ harnessPlanner: input.harnessPlanner,
+ harnessDelegates: input.harnessDelegates,
  harnessBudgetCapUsd: input.harnessBudgetCapUsd,
  })
 .returning
@@ -734,6 +736,8 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  harnessEffort: patch.harnessEffort,
  harnessMaxTurns: patch.harnessMaxTurns,
  harnessAutoApprove: patch.harnessAutoApprove,
+ harnessPlanner: patch.harnessPlanner,
+ harnessDelegates: patch.harnessDelegates,
  harnessBudgetCapUsd: patch.harnessBudgetCapUsd,
  updatedAt: new Date,
  })

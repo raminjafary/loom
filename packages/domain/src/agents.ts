@@ -85,6 +85,35 @@ export interface PersonaSpec {
  * completed run's row.
  */
  readonly capabilities?: CapabilitySpec[]
+ /**
+ * Marks this persona as a Planner. A Planner gets one
+ * extra channel — the delegation tool it submits a decomposition through — and
+ * is required to declare `tools: []`, which is what makes the "no filesystem,
+ * no shell" trust boundary a boundary rather than a description.
+ *
+ * Optional for the same reason `capabilities` is: runs that predate it have
+ * stored persona JSON without it.
+ */
+ readonly planner?: boolean
+ /**
+ * The **envelope** a Planner's children are attenuated against.
+ *
+ * This exists because the roadmap and the data model contradict each other as written. The roadmap says a
+ * Planner declares `tools: []`; the data model says "a child run can never request tools …
+ * exceeding its parent's". Taken together a Planner can only delegate to
+ * workers that also have no tools, which makes it useless — the boundary would
+ * be real and the feature would not exist.
+ *
+ * The resolution is to separate two things the data model conflates: what a run may do
+ * *itself*, and what it may hand down. A Planner still has `tools: []`, so it
+ * cannot read, write or execute anything; `delegates` is the separate,
+ * human-set ceiling on what its children may hold. A Planner can never widen
+ * it, and everything else — budget, model tier, capabilities — still attenuates
+ * against the parent's own values.
+ *
+ * Only meaningful on a planner; enforced at authoring time.
+ */
+ readonly delegates?: string[]
 }
 
 /**
@@ -103,6 +132,9 @@ export interface AgentPersona {
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
  readonly harnessAutoApprove: boolean
+ /** Phase 2 — see PersonaSpec.planner. */
+ readonly harnessPlanner: boolean
+ readonly harnessDelegates: string[]
  readonly harnessBudgetCapUsd: number | null
  readonly createdAt: Date
  readonly updatedAt: Date

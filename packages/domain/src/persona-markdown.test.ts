@@ -24,6 +24,8 @@ describe('parsePersonaMarkdown', => {
  harnessEffort: 'medium',
  harnessMaxTurns: 40,
  harnessAutoApprove: false,
+ harnessPlanner: false,
+ harnessDelegates: [],
  harnessBudgetCapUsd: null,
  systemPrompt: 'You are backend-worker. Implement exactly what the spec says, nothing more.',
  })
@@ -79,6 +81,8 @@ describe('serializePersonaMarkdown', => {
  harnessEffort: null,
  harnessMaxTurns: null,
  harnessAutoApprove: false,
+ harnessPlanner: false,
+ harnessDelegates: [],
  harnessBudgetCapUsd: null,
  systemPrompt: 'body',
  })
@@ -94,6 +98,8 @@ describe('serializePersonaMarkdown', => {
  harnessEffort: null,
  harnessMaxTurns: null,
  harnessAutoApprove: true,
+ harnessPlanner: false,
+ harnessDelegates: [],
  harnessBudgetCapUsd: null,
  systemPrompt: 'body',
  })
@@ -109,6 +115,8 @@ describe('serializePersonaMarkdown', => {
  harnessEffort: null,
  harnessMaxTurns: null,
  harnessAutoApprove: false,
+ harnessPlanner: false,
+ harnessDelegates: [],
  harnessBudgetCapUsd: 2.5,
  systemPrompt: 'body',
  })

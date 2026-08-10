@@ -1,6 +1,14 @@
-import { query, type CanUseTool, type PermissionResult, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import {
+ query,
+ type CanUseTool,
+ type McpSdkServerConfigWithInstance,
+ type McpServerConfig,
+ type PermissionResult,
+ type SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk'
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
+import { PLANNER_SERVER_NAME, PLANNER_TOOL_NAME } from './planner-tool.js'
 
 /**
  * `AgentExecutionPort` implementation for the Claude Agent SDK —
@@ -121,6 +129,11 @@ export interface RunAgentOptions {
  */
  readonly onRawMessage?: (line: string) => void | Promise<void>
  /**
+ * The Planner's in-process delegation server. Absent for
+ * every ordinary run — a worker has no business submitting plans.
+ */
+ readonly plannerTool?: McpSdkServerConfigWithInstance
+ /**
  * Aborts the SDK's agent loop mid-flight. Owned by
  * the caller so a `cancel_run` frame arriving on the socket can reach a run
  * that is already streaming.
@@ -193,11 +206,15 @@ export const settingSourcesFromEnv = (
  * call expression.
  */
 export const buildQueryOptions = (
- options: Pick<RunAgentOptions, 'persona' | 'cwd' | 'resumeSessionId'>,
+ options: Pick<RunAgentOptions, 'persona' | 'cwd' | 'resumeSessionId' | 'plannerTool'>,
  settingSources: SettingSourceName[] = settingSourcesFromEnv,
 ) => {
  const capabilities = options.persona.capabilities ?? []
- const mcpServers = toMcpServers(capabilities)
+ const mcpServers: Record<string, McpServerConfig> = toMcpServers(capabilities)
+ // The Planner's one channel. Registered as an in-process
+ // MCP server so the decomposition schema is enforced by the tool call, not by
+ // parsing prose after the fact.
+ if (options.plannerTool) mcpServers[PLANNER_SERVER_NAME] = options.plannerTool
  const skills = capabilities
 .filter((capability) => capability.kind === 'skill')
 .map((capability) => capability.name)
@@ -238,7 +255,11 @@ export const buildQueryOptions = (
 ...(skills.length > 0 ? { skills }: {}),
  // Only when an attachment narrowed scope: an empty list would mean "no tools",
  // the opposite of the "everything this server offers" default.
-...(scopedMcpTools ? { allowedTools: scopedMcpTools }: {}),
+ // A Planner's tool must survive the scope narrowing above, or a Planner that
+ // also holds a scoped MCP capability would lose the only thing it can do.
+...(scopedMcpTools
+ ? { allowedTools: options.plannerTool ? [...scopedMcpTools, PLANNER_TOOL_NAME]: scopedMcpTools }
+: {}),
 ...(options.resumeSessionId ? { resume: options.resumeSessionId }: {}),
  }
 }

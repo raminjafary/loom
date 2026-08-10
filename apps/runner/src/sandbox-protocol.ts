@@ -55,6 +55,17 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  * so giving it a schema here would defeat it.
  */
  z.object({ t: z.literal('raw'), line: z.string }),
+ /**
+ * A Planner's decomposition. The delegation tool is an
+ * in-process MCP server, so when the agent runs in a container the tool lives
+ * there too and its result has to cross this boundary like everything else.
+ */
+ z.object({
+ t: z.literal('plan'),
+ subtasks: z.array(
+ z.object({ title: z.string, task: z.string, personaName: z.string }),
+),
+ }),
  z.object({
  t: z.literal('permission_request'),
  toolUseId: z.string,

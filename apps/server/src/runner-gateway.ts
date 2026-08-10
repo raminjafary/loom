@@ -1,5 +1,6 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
 import {
+ applySubmittedPlan,
  reconcileRunnerRuns,
  recordAgentEvent,
  recordRunCost,
@@ -476,6 +477,14 @@ export const createRunnerGateway = (
 )
  return
  }
+
+ case 'plan_submitted':
+ await applySubmittedPlan(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ subtasks: frame.subtasks,
+ })
+ return
 
  case 'raw_transcript_chunk':
  await recordRawTranscriptChunk(deps, {

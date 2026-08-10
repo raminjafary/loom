@@ -1,0 +1,1 @@
+ALTER TABLE "agent_persona" ADD COLUMN "harness_planner" boolean DEFAULT false NOT NULL;

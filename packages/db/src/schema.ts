@@ -314,6 +314,11 @@ export const agentPersona = pgTable(
  harnessEffort: text('harness_effort'),
  harnessMaxTurns: doublePrecision('harness_max_turns'),
  harnessAutoApprove: boolean('harness_auto_approve').notNull.default(false),
+ // Phase 2. A planner persona gets the delegation tool and is
+ // required to declare `tools: []` — enforced in the use-case, not here.
+ harnessPlanner: boolean('harness_planner').notNull.default(false),
+ // A planner's delegation envelope. Its own `tools` stay empty.
+ harnessDelegates: jsonb('harness_delegates').$type<string[]>.notNull.default([]),
  // Enforced at the egress proxy, not advisory. Null = uncapped.
  harnessBudgetCapUsd: doublePrecision('harness_budget_cap_usd'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
