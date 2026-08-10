@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import type { Repository, Runner } from '@loom/api-contract'
+import type { DirectoryListing, Repository, Runner } from '@loom/api-contract'
 import { ref } from 'vue'
+import DirectoryPicker from './DirectoryPicker.vue'
 
 const props = defineProps<{
  repositories: Repository[]
@@ -9,8 +10,15 @@ const props = defineProps<{
 
 const emit = defineEmits<{
  bind: [input: { runnerId: string; path: string; displayName: string }]
+ create: [input: { runnerId: string; parentPath: string; name: string; displayName: string }]
+ list: [input: { runnerId: string; path: string }, done: (listing: DirectoryListing) => void]
  'set-verify-command': [repositoryId: string, verifyCommand: string | null]
 }>
+
+// The picker replaces typing an absolute path. The old form stays
+// behind a toggle rather than being deleted: a headless or scripted setup still
+// needs to name a path directly, and the Runner validates either way.
+const showPathForm = ref(false)
 
 const runnerId = ref('')
 const path = ref('')
@@ -63,7 +71,18 @@ const submit = => {
  <li v-if="props.repositories.length === 0" class="empty">No repositories bound yet</li>
  </ul>
 
- <form class="bind-form" @submit.prevent="submit">
+ <DirectoryPicker
+:runners="props.runners"
+ @list="(input, done) => emit('list', input, done)"
+ @bind="(input) => emit('bind', input)"
+ @create="(input) => emit('create', input)"
+ />
+
+ <button type="button" class="link toggle" @click="showPathForm = !showPathForm">
+ {{ showPathForm ? 'hide': 'or bind by absolute path' }}
+ </button>
+
+ <form v-if="showPathForm" class="bind-form" @submit.prevent="submit">
  <select v-model="runnerId" aria-label="Runner">
  <option value="" disabled>Select runner…</option>
  <option v-for="runner in props.runners":key="runner.id":value="runner.id">
@@ -80,6 +99,10 @@ const submit = => {
 </template>
 
 <style scoped>
+.toggle {
+ margin-top: 0.4rem;
+}
+
 .verify-form {
  display: flex;
  gap: 0.3rem;

@@ -2,6 +2,7 @@ import type {
  AgentPersona,
  AgentRun,
  ApprovalRequest,
+ DirectoryListing,
  MergeQueueEntry,
  NotificationConfig,
  PersonaGroup,
@@ -76,6 +77,19 @@ export interface AgentSession {
  init: Promise<void>
  createPairingToken(name: string): Promise<void>
  bindRepository(input: { runnerId: string; path: string; displayName: string }): Promise<void>
+ /**
+ * Browses a Runner's allowed roots. Returns rather than patching
+ * state: a picker is transient UI a client opens, walks and closes, and parking
+ * a filesystem cursor in the session snapshot would make every other view
+ * re-render on every keystroke of browsing.
+ */
+ listDirectory(input: { runnerId: string; path: string }): Promise<DirectoryListing>
+ createRepository(input: {
+ runnerId: string
+ parentPath: string
+ name: string
+ displayName: string
+ }): Promise<void>
  createPersona(markdownSource: string): Promise<void>
  createPersonaGroup(input: { name: string; personaIds: string[] }): Promise<void>
  updatePersonaGroup(input: { personaGroupId: string; name: string; personaIds: string[] }): Promise<void>
@@ -294,6 +308,18 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  await options.api.repository.bindExisting(input)
  const repositories = await options.api.repository.list
  patch({ repositories })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ listDirectory: (input) => options.api.repository.listDirectory(input),
+
+ async createRepository(input) {
+ patch({ error: null })
+ try {
+ await options.api.repository.createNew(input)
+ patch({ repositories: await options.api.repository.list })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

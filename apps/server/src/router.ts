@@ -9,6 +9,7 @@ import {
   decideApproval,
   deletePersonaGroup,
   cancelMergeQueueEntry,
+  createRepository,
   discardAgentRun,
   enqueueMergeRun,
   getActiveAgentRun,
@@ -24,6 +25,7 @@ import {
   listChildAgentRuns,
   listMergeQueue,
   listMessages,
+  listRunnerDirectory,
   listPendingApprovals,
   listPersonaGroups,
   listPersonas,
@@ -210,6 +212,38 @@ export const router = os.router({
           actor: context.principal.actor,
           runnerId: asRunnerId(input.runnerId),
           path: input.path,
+          displayName: input.displayName,
+        }),
+      ),
+    ),
+
+    listDirectory: os.repository.listDirectory.handler(({ context, input }) =>
+      guard(async () => {
+        const result = await listRunnerDirectory(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          runnerId: asRunnerId(input.runnerId),
+          path: input.path,
+        })
+        // The union's ok:true discriminant is stripped here — a thrown
+        // ValidationError already carried the failure case to the client.
+        return {
+          path: result.ok ? result.path : '',
+          parent: result.ok ? result.parent : null,
+          entries: result.ok ? result.entries : [],
+          truncated: result.ok ? result.truncated : false,
+        }
+      }),
+    ),
+
+    createNew: os.repository.createNew.handler(({ context, input }) =>
+      guard(() =>
+        createRepository(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          runnerId: asRunnerId(input.runnerId),
+          parentPath: input.parentPath,
+          name: input.name,
           displayName: input.displayName,
         }),
       ),

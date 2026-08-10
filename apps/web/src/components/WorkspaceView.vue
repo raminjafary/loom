@@ -234,6 +234,8 @@ onBeforeUnmount( => {
 :repositories="agentSnapshot.repositories"
 :runners="agentSnapshot.runners"
  @bind="(input) => agent.bindRepository(input)"
+ @create="(input) => agent.createRepository(input)"
+ @list="(input, done) => agent.listDirectory(input).then(done)"
  @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
  />
  <PersonaForm

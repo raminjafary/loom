@@ -32,6 +32,13 @@ export const useAgentStore = defineStore('agent', () => {
     createPairingToken: (name: string) => session.createPairingToken(name),
     bindRepository: (input: { runnerId: string; path: string; displayName: string }) =>
       session.bindRepository(input),
+    listDirectory: (input: { runnerId: string; path: string }) => session.listDirectory(input),
+    createRepository: (input: {
+      runnerId: string
+      parentPath: string
+      name: string
+      displayName: string
+    }) => session.createRepository(input),
     createPersona: (markdownSource: string) => session.createPersona(markdownSource),
     createPersonaGroup: (input: { name: string; personaIds: string[] }) =>
       session.createPersonaGroup(input),

@@ -46,6 +46,7 @@ import type {
  PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
  RepositoryRepositoryPort,
+ ListDirectoryResult,
  RunDispatchPort,
  RunnerRepositoryPort,
  WorkspaceRunControlRepositoryPort,
@@ -141,6 +142,85 @@ export const bindRepository = async (
  absolutePath: input.path,
  defaultBranch: check.defaultBranch,
  })
+}
+
+/**
+ * Backs the directory picker. Human-only for the same reason
+ * `bindRepository` is: browsing a Runner's filesystem is an administrative
+ * capability, and it is exactly the one that looks harmless enough to leave
+ * ungated. The boundary itself is the Runner's — it refuses anything outside its
+ * allowed roots regardless of who asks — but a run has no business enumerating
+ * the machine it happens to be executing on.
+ */
+export const listRunnerDirectory = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; runnerId: RunnerId; path: string },
+): Promise<ListDirectoryResult> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError("Only a human may browse a Runner's filesystem")
+ }
+ const runner = await deps.runners.findById(input.workspaceId, input.runnerId)
+ if (!runner) throw new NotFoundError('Runner')
+ if (!runner.connected) throw new ValidationError('Runner is not currently connected')
+
+ const result = await deps.dispatch.listDirectory({ runnerId: input.runnerId, path: input.path })
+ if (!result.ok) throw new ValidationError(result.error)
+ return result
+}
+
+/**
+ * Creates a repository on the Runner and binds it in one action (the * "creates one (`git init`)").
+ *
+ * One use-case rather than create-then-bind, because the half-done state is
+ * worse than either end: a repository on disk that the workspace does not know
+ * about is invisible, and a binding to a path that was never created is broken.
+ * If the bind fails the repository is still on disk — reported, not silently
+ * cleaned up, since deleting a directory to tidy up an error is how you delete
+ * the wrong directory.
+ */
+export const createRepository = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ runnerId: RunnerId
+ parentPath: string
+ name: string
+ displayName: string
+ },
+): Promise<Repository> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may create a repository')
+ }
+ const runner = await deps.runners.findById(input.workspaceId, input.runnerId)
+ if (!runner) throw new NotFoundError('Runner')
+ if (!runner.connected) throw new ValidationError('Runner is not currently connected')
+
+ const created = await deps.dispatch.initRepository({
+ runnerId: input.runnerId,
+ parentPath: input.parentPath,
+ name: input.name,
+ })
+ if (!created.ok) throw new ValidationError(created.error)
+
+ const repository = await deps.repositories.create({
+ workspaceId: input.workspaceId,
+ runnerId: input.runnerId,
+ displayName: input.displayName,
+ absolutePath: created.path,
+ defaultBranch: created.defaultBranch,
+ })
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'repository.created',
+ subjectType: 'repository',
+ subjectId: repository.id,
+ metadata: { path: created.path },
+ })
+
+ return repository
 }
 
 /** What a real client needs to render a runner-picker; no actor restriction, same as listRepositories. */

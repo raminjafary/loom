@@ -2,6 +2,7 @@ import { oc } from '@orpc/contract'
 import { z } from 'zod'
 import {
  ActorSchema,
+ DirectoryListingSchema,
  AgentPersonaSchema,
  AgentRunSchema,
  ApprovalRequestSchema,
@@ -92,10 +93,7 @@ export const contract = {
 .output(z.object({ runnerId: z.string, rawToken: z.string })),
  },
 
- /**
- * Phase 1 scope cut: bind an existing repo by absolute path on
- * an already-paired Runner. No directory-picker or `git init` flow yet.
- */
+ /** Repository binding: browse a Runner's allowed roots, bind an existing repo, or create one. */
  repository: {
  list: oc.output(z.array(RepositorySchema)),
 
@@ -104,6 +102,29 @@ export const contract = {
  z.object({
  runnerId: z.string,
  path: z.string.min(1),
+ displayName: z.string.min(1).max(100),
+ }),
+)
+.output(RepositorySchema),
+
+ /**
+ * Scoped directory listing for the picker. An empty `path` lists the Runner's
+ * allowed roots, so a client never needs to know a filesystem path to begin —
+ * the first thing it can name is something the Runner already permitted.
+ */
+ listDirectory: oc
+.input(z.object({ runnerId: z.string, path: z.string }))
+.output(DirectoryListingSchema),
+
+ /** Creates a repository on the Runner (`git init` + an initial commit) and binds it. */
+ createNew: oc
+.input(
+ z.object({
+ runnerId: z.string,
+ parentPath: z.string.min(1),
+ // A single directory name, never a path — enforced again on the Runner,
+ // where the allowed-root boundary actually lives.
+ name: z.string.min(1).max(100),
  displayName: z.string.min(1).max(100),
  }),
 )

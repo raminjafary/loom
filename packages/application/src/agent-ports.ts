@@ -303,6 +303,23 @@ export interface ApprovalRepositoryPort {
 ): Promise<ApprovalRequest>
 }
 
+export interface DirectoryEntry {
+ readonly name: string
+ readonly path: string
+ readonly isDirectory: boolean
+ readonly isRepository: boolean
+}
+
+export type ListDirectoryResult =
+ | {
+ readonly ok: true
+ readonly path: string
+ readonly parent: string | null
+ readonly entries: DirectoryEntry[]
+ readonly truncated: boolean
+ }
+ | { readonly ok: false; readonly error: string }
+
 export type PathCheckResult =
  | { readonly ok: true; readonly defaultBranch: string }
  | { readonly ok: false; readonly error: string }
@@ -315,6 +332,18 @@ export type PathCheckResult =
 export interface RunDispatchPort {
  /** Validates `path` against the Runner's own allowed roots and confirms it's a git repo. */
  checkPath(input: { runnerId: RunnerId; path: string }): Promise<PathCheckResult>
+ /**
+ * Scoped directory listing — what backs the directory picker. An
+ * empty `path` lists the Runner's allowed roots, so no client needs to know a
+ * real filesystem path to start browsing.
+ */
+ listDirectory(input: { runnerId: RunnerId; path: string }): Promise<ListDirectoryResult>
+ /** Creates a new git repository under an allowed root. */
+ initRepository(input: {
+ runnerId: RunnerId
+ parentPath: string
+ name: string
+ }): Promise<{ ok: true; path: string; defaultBranch: string } | { ok: false; error: string }>
  /** Fire-and-forget: instructs the connected Runner to start executing. Throws if not connected. */
  startRun(input: {
  runnerId: RunnerId

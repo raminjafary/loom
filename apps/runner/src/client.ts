@@ -17,6 +17,7 @@ import {
 } from './egress-client.js'
 import { readHostClaudeOAuth } from './host-claude-auth.js'
 import { mergeRunBranch } from './merge.js'
+import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
 import { createSendQueue } from './send-queue.js'
@@ -408,6 +409,40 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 : { type: 'check_path_result', requestId: frame.requestId, ok: false, error: result.error },
 )
  })
+ return
+
+ case 'list_directory':
+ void listDirectory(frame.path, options.allowedRoots).then((result) =>
+ send(
+ result.ok
+ ? {
+ type: 'list_directory_result',
+ requestId: frame.requestId,
+ ok: true,
+ path: result.path,
+ parent: result.parent,
+ entries: result.entries,
+ truncated: result.truncated,
+ }
+: { type: 'list_directory_result', requestId: frame.requestId, ok: false, error: result.error },
+),
+)
+ return
+
+ case 'init_repository':
+ void initRepository(frame.parentPath, frame.name, options.allowedRoots).then((result) =>
+ send(
+ result.ok
+ ? {
+ type: 'init_repository_result',
+ requestId: frame.requestId,
+ ok: true,
+ path: result.path,
+ defaultBranch: result.defaultBranch,
+ }
+: { type: 'init_repository_result', requestId: frame.requestId, ok: false, error: result.error },
+),
+)
  return
 
  case 'start_run': {

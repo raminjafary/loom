@@ -84,6 +84,23 @@ export const RepositorySchema = z.object({
  createdAt: z.date,
 })
 
+/** One entry from a Runner's scoped directory listing. */
+export const DirectoryEntrySchema = z.object({
+ name: z.string,
+ path: z.string,
+ isDirectory: z.boolean,
+ isRepository: z.boolean,
+})
+
+export const DirectoryListingSchema = z.object({
+ path: z.string,
+ /** Null when stepping up would leave the Runner's allowed roots. */
+ parent: z.string.nullable,
+ entries: z.array(DirectoryEntrySchema),
+ /** The listing hit the Runner's cap; the picker must say so rather than imply a short directory. */
+ truncated: z.boolean,
+})
+
 /**
  * One branch waiting in, or resolved by, the serialized merge queue.
  *
@@ -247,6 +264,8 @@ export type ServerEvent = z.infer<typeof ServerEventSchema>
 export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
 export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
+export type DirectoryEntry = z.infer<typeof DirectoryEntrySchema>
+export type DirectoryListing = z.infer<typeof DirectoryListingSchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>

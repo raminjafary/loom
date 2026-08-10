@@ -111,6 +111,38 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  error: z.string.optional,
  }),
  /**
+ * Scoped directory listing, backing the web picker and the TUI equivalent alike
+ *. `parent` is null when stepping up would leave the Runner's
+ * allowed roots, so a client cannot render a door out of the boundary.
+ */
+ z.object({
+ type: z.literal('list_directory_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ path: z.string.optional,
+ parent: z.string.nullable.optional,
+ entries: z
+.array(
+ z.object({
+ name: z.string,
+ path: z.string,
+ isDirectory: z.boolean,
+ isRepository: z.boolean,
+ }),
+)
+.optional,
+ truncated: z.boolean.optional,
+ error: z.string.optional,
+ }),
+ z.object({
+ type: z.literal('init_repository_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ path: z.string.optional,
+ defaultBranch: z.string.optional,
+ error: z.string.optional,
+ }),
+ /**
  * Result of one serialized merge-queue entry: rebase, run
  * tests, fast-forward the repository's default branch.
  *
@@ -223,6 +255,14 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  * repository configuration lives. Whether it may *run* is still the Runner's
  * decision, since only the Runner knows if it has a sandbox.
  */
+ /** An empty `path` lists the allowed roots themselves, so a client never has to guess one. */
+ z.object({ type: z.literal('list_directory'), requestId: z.string, path: z.string }),
+ z.object({
+ type: z.literal('init_repository'),
+ requestId: z.string,
+ parentPath: z.string,
+ name: z.string,
+ }),
  z.object({
  type: z.literal('merge_run'),
  requestId: z.string,

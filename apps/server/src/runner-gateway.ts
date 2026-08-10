@@ -35,6 +35,18 @@ interface PendingCheck {
  reject(error: Error): void
 }
 
+interface PendingList {
+ resolve(result: import('@loom/application').ListDirectoryResult): void
+ reject(error: Error): void
+}
+
+interface PendingInit {
+ resolve(
+ result: { ok: true; path: string; defaultBranch: string } | { ok: false; error: string },
+): void
+ reject(error: Error): void
+}
+
 interface PendingDiff {
  resolve(result: { ok: true; diff: string } | { ok: false; error: string }): void
  reject(error: Error): void
@@ -92,6 +104,8 @@ export const createRunnerGateway = (
 ): { register(fastify: FastifyInstance): Promise<void>; dispatch: RunDispatchPort } => {
  const connections = new Map<string, ConnectedRunner>
  const pendingChecks = new Map<string, PendingCheck>
+ const pendingLists = new Map<string, PendingList>
+ const pendingInits = new Map<string, PendingInit>
  const pendingDiffs = new Map<string, PendingDiff>
  const pendingDiscards = new Map<string, PendingDiscard>
  const pendingPushes = new Map<string, PendingPush>
@@ -129,6 +143,56 @@ export const createRunnerGateway = (
  send(runnerId, { type: 'check_path', requestId, path })
  })
  return result
+ },
+
+ async listDirectory({ runnerId, path }) {
+ if (!connections.has(runnerId)) {
+ return { ok: false, error: 'Runner is not currently connected' }
+ }
+ const requestId = randomUUID
+ return new Promise<import('@loom/application').ListDirectoryResult>((resolve, reject) => {
+ const timer = setTimeout( => {
+ pendingLists.delete(requestId)
+ reject(new Error('Runner did not respond to list_directory in time'))
+ }, CHECK_PATH_TIMEOUT_MS)
+ pendingLists.set(requestId, {
+ resolve: (r) => {
+ clearTimeout(timer)
+ resolve(r)
+ },
+ reject: (e) => {
+ clearTimeout(timer)
+ reject(e)
+ },
+ })
+ send(runnerId, { type: 'list_directory', requestId, path })
+ })
+ },
+
+ async initRepository({ runnerId, parentPath, name }) {
+ if (!connections.has(runnerId)) {
+ return { ok: false, error: 'Runner is not currently connected' }
+ }
+ const requestId = randomUUID
+ return new Promise<
+ { ok: true; path: string; defaultBranch: string } | { ok: false; error: string }
+ >((resolve, reject) => {
+ const timer = setTimeout( => {
+ pendingInits.delete(requestId)
+ reject(new Error('Runner did not respond to init_repository in time'))
+ }, CHECK_PATH_TIMEOUT_MS)
+ pendingInits.set(requestId, {
+ resolve: (r) => {
+ clearTimeout(timer)
+ resolve(r)
+ },
+ reject: (e) => {
+ clearTimeout(timer)
+ reject(e)
+ },
+ })
+ send(runnerId, { type: 'init_repository', requestId, parentPath, name })
+ })
  },
 
  async startRun({ runnerId, runId, persona, cwd, defaultBranch, task }) {
@@ -285,6 +349,36 @@ export const createRunnerGateway = (
  frame.ok
  ? { ok: true, defaultBranch: frame.defaultBranch ?? 'main' }
 : { ok: false, error: frame.error ?? 'Runner rejected the path' },
+)
+ return
+ }
+
+ case 'list_directory_result': {
+ const pending = pendingLists.get(frame.requestId)
+ if (!pending) return
+ pendingLists.delete(frame.requestId)
+ pending.resolve(
+ frame.ok
+ ? {
+ ok: true,
+ path: frame.path ?? '',
+ parent: frame.parent ?? null,
+ entries: frame.entries ?? [],
+ truncated: frame.truncated ?? false,
+ }
+: { ok: false, error: frame.error ?? 'Runner rejected the path' },
+)
+ return
+ }
+
+ case 'init_repository_result': {
+ const pending = pendingInits.get(frame.requestId)
+ if (!pending) return
+ pendingInits.delete(frame.requestId)
+ pending.resolve(
+ frame.ok
+ ? { ok: true, path: frame.path ?? '', defaultBranch: frame.defaultBranch ?? 'main' }
+: { ok: false, error: frame.error ?? 'Runner failed to create the repository' },
 )
  return
  }
