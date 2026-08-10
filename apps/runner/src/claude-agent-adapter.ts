@@ -144,7 +144,10 @@ export interface RunAgentOptions {
  readonly classifyEffect: (
  toolName: string,
  input: Record<string, unknown>,
-) => Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>
+) => Promise<
+ | { readonly ok: true; readonly requiresApproval: boolean; readonly effects?: string }
+ | { readonly ok: false; readonly reason: string }
+ >
 }
 
 /**
@@ -229,6 +232,14 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  const effect = await options.classifyEffect(toolName, input)
  if (!effect.ok) {
  return { behavior: 'deny', message: effect.reason }
+ }
+
+ // Effect-based gating: a call the classifier *proved*
+ // harmless skips the round-trip. This is the approval-fatigue half of effect-based classification's
+ // complaint about name-based gating — and it is one-directional, since
+ // anything unproven still asks.
+ if (!effect.requiresApproval) {
+ return { behavior: 'allow' }
  }
 
  // Per-persona opt-in:
