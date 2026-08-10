@@ -111,6 +111,35 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  error: z.string.optional,
  }),
  /**
+ * Result of one serialized merge-queue entry: rebase, run
+ * tests, fast-forward the repository's default branch.
+ *
+ * `reason` is the closed set from the domain's `MergeFailureReason` rather than a
+ * free-text error, because what a human should do next differs per reason — a
+ * conflict is the run's to fix, a dirty target is theirs. `verified` reports
+ * whether tests actually ran and passed, not whether any were configured.
+ */
+ z.object({
+ type: z.literal('merge_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ commitSha: z.string.optional,
+ verified: z.boolean.optional,
+ /** Why verification did not run, when it did not. */
+ note: z.string.optional,
+ reason: z
+.enum([
+ 'conflict',
+ 'verification_failed',
+ 'verification_refused',
+ 'dirty_target',
+ 'stale_target',
+ 'runner_error',
+ ])
+.optional,
+ detail: z.string.optional,
+ }),
+ /**
  * Periodic liveness signal while a run is in flight — deliberately a sibling of `agent_event`, not folded into
  * `AgentEventSchema`: it must never become a chat message, only bump
  * `agent_run.last_heartbeat_at`.
@@ -183,6 +212,22 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  requestId: z.string,
  runId: z.string,
  acknowledgeCiChange: z.boolean,
+ }),
+ /**
+ * Merge one queued branch into its repository's default branch. Sent by the server's queue sweep, one at a time per repository — the
+ * serialization is the server's, so the Runner does exactly what it is told and
+ * holds no queue of its own.
+ *
+ * `verifyCommand` travels with the request rather than being read from the
+ * Runner's environment: it is repository configuration, and the server is where
+ * repository configuration lives. Whether it may *run* is still the Runner's
+ * decision, since only the Runner knows if it has a sandbox.
+ */
+ z.object({
+ type: z.literal('merge_run'),
+ requestId: z.string,
+ runId: z.string,
+ verifyCommand: z.string.nullable,
  }),
 ])
 

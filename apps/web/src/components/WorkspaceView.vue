@@ -7,6 +7,7 @@ import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
 import DiffView from './DiffView.vue'
 import InboxView from './InboxView.vue'
+import MergeQueuePanel from './MergeQueuePanel.vue'
 import KillSwitch from './KillSwitch.vue'
 import MessageList from './MessageList.vue'
 import NotificationToggle from './NotificationToggle.vue'
@@ -209,6 +210,7 @@ onBeforeUnmount( => {
  @keep="(agentRunId) => agent.keepRun(agentRunId)"
  @discard="(agentRunId) => agent.discardRun(agentRunId)"
  @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
+ @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
  />
  </main>
 
@@ -217,6 +219,11 @@ onBeforeUnmount( => {
 :runs="agentSnapshot.activeRuns"
 :watched-run-id="agentSnapshot.activeRun?.id ?? null"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
+ />
+ <MergeQueuePanel
+:entries="agentSnapshot.mergeQueue"
+ @cancel="(entryId) => agent.cancelMerge(entryId)"
+ @refresh=" => agent.refreshMergeQueue"
  />
  <RunnerPanel
 :runners="agentSnapshot.runners"
@@ -227,6 +234,7 @@ onBeforeUnmount( => {
 :repositories="agentSnapshot.repositories"
 :runners="agentSnapshot.runners"
  @bind="(input) => agent.bindRepository(input)"
+ @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
  />
  <PersonaForm
 :repositories="agentSnapshot.repositories"
@@ -249,6 +257,7 @@ onBeforeUnmount( => {
  @keep="(agentRunId) => agent.keepRun(agentRunId)"
  @discard="(agentRunId) => agent.discardRun(agentRunId)"
  @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
+ @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
  />
  </aside>
  </div>

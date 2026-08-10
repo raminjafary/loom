@@ -196,6 +196,7 @@ describe('contract completeness', => {
  'message',
  'runner',
  'repository',
+ 'mergeQueue',
  'persona',
  'personaGroup',
  'agentRun',
@@ -206,7 +207,8 @@ describe('contract completeness', => {
  expect(Object.keys(contract.channel)).toEqual(['list', 'create', 'rootThread'])
  expect(Object.keys(contract.message)).toEqual(['list', 'post', 'backfill'])
  expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken'])
- expect(Object.keys(contract.repository)).toEqual(['list', 'bindExisting'])
+ expect(Object.keys(contract.repository)).toEqual(['list', 'bindExisting', 'setVerifyCommand'])
+ expect(Object.keys(contract.mergeQueue)).toEqual(['list', 'enqueue', 'cancel'])
  expect(Object.keys(contract.persona)).toEqual(['list', 'get', 'create', 'update'])
  expect(Object.keys(contract.personaGroup)).toEqual(['list', 'create', 'update', 'delete'])
  expect(Object.keys(contract.agentRun)).toEqual([

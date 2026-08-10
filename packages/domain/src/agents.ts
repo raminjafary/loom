@@ -38,6 +38,11 @@ export interface Repository {
  readonly displayName: string
  readonly absolutePath: string
  readonly defaultBranch: string
+ /**
+ * What the merge queue runs against a rebased branch before merging it. Null merges unverified — see `planMergeVerification`
+ * for why this executes in the sandbox rather than on the Runner host.
+ */
+ readonly verifyCommand: string | null
  readonly createdAt: Date
 }
 
@@ -128,7 +133,14 @@ export type AgentRunStatus =
  | 'failed'
  | 'cancelled'
 
-export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed'
+/**
+ * `merged` is set by the merge queue on success, never by a
+ * human directly — queueing is the human action, and until the queue reaches the
+ * entry the branch is still undecided. A failed merge leaves the disposition unset
+ * on purpose: the "hand the branch back to its owning run" means it is actionable
+ * again, not that it has been dealt with.
+ */
+export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed' | 'merged'
 
 /**
  * How a child run hangs off its parent. Kept distinct from plain

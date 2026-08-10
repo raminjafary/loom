@@ -17,6 +17,7 @@ const emit = defineEmits<{
   keep: [agentRunId: string]
   discard: [agentRunId: string]
   push: [agentRunId: string, acknowledgeCiChange: boolean]
+  merge: [agentRunId: string]
 }>()
 
 const reasonFor = (run: AgentRun): string =>
@@ -52,6 +53,7 @@ const reasonFor = (run: AgentRun): string =>
           @keep="(agentRunId) => emit('keep', agentRunId)"
           @discard="(agentRunId) => emit('discard', agentRunId)"
           @push="(agentRunId, ack) => emit('push', agentRunId, ack)"
+          @merge="(agentRunId) => emit('merge', agentRunId)"
         />
       </template>
     </div>

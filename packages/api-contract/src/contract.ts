@@ -6,6 +6,7 @@ import {
  AgentRunSchema,
  ApprovalRequestSchema,
  ChannelSchema,
+ MergeQueueEntrySchema,
  MessagePageSchema,
  MessageSchema,
  NotificationConfigSchema,
@@ -107,6 +108,37 @@ export const contract = {
  }),
 )
 .output(RepositorySchema),
+
+ /**
+ * What the merge queue runs against a rebased branch before merging it
+ *. Null or empty merges unverified — and says so on the
+ * entry, rather than reporting an unverified merge as a verified one.
+ */
+ setVerifyCommand: oc
+.input(
+ z.object({
+ repositoryId: z.string,
+ verifyCommand: z.string.max(2_000).nullable,
+ }),
+)
+.output(RepositorySchema),
+ },
+
+ /**
+ * The serialized merge queue.
+ *
+ * There is no "merge now" call, deliberately. Queueing is the only human action;
+ * the queue itself rebases in order, one repository-entry at a time, in a server
+ * sweep. A synchronous merge endpoint would be the race this replaces.
+ */
+ mergeQueue: {
+ list: oc.output(z.array(MergeQueueEntrySchema)),
+
+ /** Queues a finished run's branch. The run's own `agentRun.merge` is the same action from the diff view. */
+ enqueue: oc.input(z.object({ agentRunId: z.string })).output(MergeQueueEntrySchema),
+
+ /** Only while still `queued` — a merge already running cannot be called back. */
+ cancel: oc.input(z.object({ entryId: z.string })).output(MergeQueueEntrySchema),
  },
 
  /** Phase 1 subset — markdown+frontmatter, read/CRUD only. */

@@ -33,6 +33,15 @@ const EnvSchema = z.object({
  // multiplies spend and the human attention the riskiest assumption is about, so it should be raised
  // knowingly rather than defaulted high.
  MAX_CONCURRENT_RUNS_PER_WORKSPACE: z.coerce.number.int.positive.default(3),
+ // How long an entry may sit `merging` before the queue gives up on it. This is the merge queue's equivalent of the dead-run reaper, and
+ // it exists for a specific failure: a server that dies mid-merge leaves a
+ // `merging` row that the unique partial index makes unclaimable, so that
+ // repository's queue would stall permanently with nothing to notice it.
+ //
+ // Longer than the gateway's own merge timeout, so a Runner that is merely slow
+ // is failed by the request that is actually watching it rather than by a sweep
+ // that cannot tell slow from dead.
+ MERGE_STUCK_TIMEOUT_MS: z.coerce.number.int.positive.default(1_800_000),
 })
 
 export type Config = z.infer<typeof EnvSchema>
