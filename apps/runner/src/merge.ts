@@ -56,9 +56,25 @@ const errorText = (error: unknown): string => {
  return String(error)
 }
 
-/** Last few lines only — a thread message is not the place for a full test log. */
+/**
+ * Last few lines only — a thread message is not the place for a full test log.
+ *
+ * Stack frames are dropped *before* the window is taken, and that is the whole point
+ * rather than tidiness. A failing `node --test` prints the assertion message, then the
+ * frames, then a dump of the error object — so the last twelve lines are frames and
+ * field names, and the one sentence saying what failed sits just above the cut. Live,
+ * that turned the queue catching a wrong reconcile into a thread message that opened
+ * `at TestContext.<anonymous>` and never said why. Every runner puts its frames in this
+ * shape and none of them carry information a human reading a merge failure needs.
+ */
 const tail = (text: string, lines = 12): string =>
- text.trim.split('\n').slice(-lines).join('\n').slice(0, 4_000)
+ text
+.trim
+.split('\n')
+.filter((line) => !/^\s+at\s/.test(line))
+.slice(-lines)
+.join('\n')
+.slice(0, 4_000)
 
 /**
  * Runs the repository's verification command against the rebased tree.

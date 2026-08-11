@@ -1818,12 +1818,20 @@ const RECONCILER_PERSONA_NAME = 'reconciler'
  * each. That cost is the thing this removes, and leaving it off by default means the
  * measured problem stays unsolved for anyone who does not read the docs.
  *
- * **The evidence is thinner than the default implies, and that is worth stating.** The
- * correctness gate is four scenarios (12/12 over three trials), and the end-to-end path
- * has been watched on exactly one live conflict — of the same additive shape as all the
- * others, against a repository with no verification command configured. Configure
- * `verifyCommand` and the queue's own tests become the check on the agent's work, which
- * is the configuration this default assumes.
+ * **What the safety case now rests on, measured rather than asserted.** The correctness
+ * gate gives the agent alone (four scenarios, 12/12 over three trials). The *queue's*
+ * half is `tools/reconcile-queue-check.mts`: four conflict shapes driven end to end
+ * through real runs, a real paused rebase and a repository whose own tests judge the
+ * result. All four hold, and between them they cover the three outcomes the design
+ * needs — a union verified and merged, a contradiction refused, and, in
+ * `over-budget-union`, **a resolution the agent had no way to know was wrong, failed by
+ * the repository's tests and handed back**. That last one is the case the ordering
+ * exists for, and it is the one that had never been observed.
+ *
+ * The remaining caveat is narrow and worth keeping: verification can only run what is
+ * already in the clone (`--network none`, and `git clone` does not carry
+ * `node_modules`), so on a project whose suite needs an install step the check under
+ * this agent is whatever `verifyCommand` can do without one.
  *
  * `LOOM_RECONCILER_ENABLED=0` turns it off.
  */

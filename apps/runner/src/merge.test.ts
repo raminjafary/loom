@@ -219,6 +219,44 @@ describe('mergeRunBranch', => {
  })
 
  /**
+ * Found live, by the merge queue catching a reconciler that had merged two branches
+ * over a limit the tests held (tools/reconcile-queue-check.mts, `over-budget-union`).
+ *
+ * The catch worked and the explanation did not: a real runner prints the assertion,
+ * then its stack, then a dump of the error object, so the last twelve lines were
+ * frames and field names and the thread message opened mid-stack. A safety net that
+ * cannot say what it caught leaves the human worse off than the conflict did.
+ */
+ it('reports why verification failed rather than where, when the output ends in a stack', async => {
+ const clone = await makeRunClone('loom/run-i2')
+ await commitFile(clone, 'feature.txt', 'one\n', 'add feature')
+
+ process.env.LOOM_SANDBOX_ENABLED = '0'
+ process.env.LOOM_ALLOW_UNSANDBOXED = 'i-understand-the-agent-gets-my-privileges'
+ try {
+ const noisy = [
+ 'echo " AssertionError: the chain must stay at 4 or fewer"',
+...Array.from({ length: 20 }, (_, i) => `echo " at frame${i} (node:internal/x:${i}:1)"`),
+ 'exit 1',
+ ].join(' && ')
+ const result = await mergeRunBranch({
+ sourcePath: source,
+ clonePath: clone,
+ branchName: 'loom/run-i2',
+ defaultBranch: 'main',
+ verifyCommand: noisy,
+ })
+ expect(result.ok).toBe(false)
+ if (result.ok) return
+ expect(result.detail).toContain('the chain must stay at 4 or fewer')
+ expect(result.detail).not.toContain('node:internal')
+ } finally {
+ delete process.env.LOOM_SANDBOX_ENABLED
+ delete process.env.LOOM_ALLOW_UNSANDBOXED
+ }
+ })
+
+ /**
  * The boundary, at the one point the merge queue could quietly cross it: the
  * verification command executes code from the agent's own branch, so with no
  * sandbox it is agent code with the Runner's privileges. Refused before any git
