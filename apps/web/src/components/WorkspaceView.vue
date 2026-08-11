@@ -18,6 +18,7 @@ import SidebarSection from './SidebarSection.vue'
 import CostDashboardPanel from './CostDashboardPanel.vue'
 import RunTreePanel from './RunTreePanel.vue'
 import SwarmBoardPanel from './SwarmBoardPanel.vue'
+import SwarmGraphPanel from './SwarmGraphPanel.vue'
 import WorkerNotesPanel from './WorkerNotesPanel.vue'
 import { useAgentStore } from '../stores/agent'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -439,9 +440,15 @@ onBeforeUnmount( => {
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
  <!--
- Beneath the board and fed by the same payload: the board is "what state is
- everything in", the tree is "who asked for what, and what did it cost".
+ Three readings of one payload, and that is the point: the board is "what state is
+ everything in", the graph is "who called whom, and who is about to collide"
+, and the tree is "who asked for what, and what did it cost".
  -->
+ <SwarmGraphPanel
+:board="agentSnapshot.swarmBoard"
+ @watch="(agentRunId) => agent.watchRun(agentRunId)"
+ @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
+ />
  <RunTreePanel
 :board="agentSnapshot.swarmBoard"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
