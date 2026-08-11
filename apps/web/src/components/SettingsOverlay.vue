@@ -49,6 +49,12 @@ const emit = defineEmits<{
  repositoryId: string,
  done: (result: { ok: boolean; detail: string | null }) => void,
  ]
+ 'remove-runner': [runnerId: string, done: (r: { ok: boolean; reason: string | null }) => void]
+ unbind: [
+ input: { repositoryId: string; acknowledge: boolean },
+ done: (r: { ok: boolean; reason: string | null }) => void,
+ ]
+ 'delete-persona': [personaId: string]
  'create-persona': [markdownSource: string]
  'update-persona': [input: { personaId: string; markdownSource: string }]
  register: [
@@ -120,6 +126,7 @@ const onKeydown = (event: KeyboardEvent) => {
 :runners="runners"
 :last-pairing="lastPairing"
  @create-pairing-token="(name) => emit('create-pairing-token', name)"
+ @remove="(runnerId, done) => emit('remove-runner', runnerId, done)"
  />
  <RepositoryPanel
 :repositories="repositories"
@@ -130,6 +137,7 @@ const onKeydown = (event: KeyboardEvent) => {
  @set-verify-command="(id, command) => emit('set-verify-command', id, command)"
  @set-install-command="(id, command) => emit('set-install-command', id, command)"
  @warm-cache="(id, done) => emit('warm-cache', id, done)"
+ @unbind="(input, done) => emit('unbind', input, done)"
  />
  </template>
 
@@ -138,6 +146,7 @@ const onKeydown = (event: KeyboardEvent) => {
 :personas="personas"
  @create-persona="(source) => emit('create-persona', source)"
  @update-persona="(input) => emit('update-persona', input)"
+ @delete-persona="(personaId) => emit('delete-persona', personaId)"
  />
  <PersonaGroupPanel
 :personas="personas"

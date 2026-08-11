@@ -43,6 +43,10 @@ export const useAgentStore = defineStore('agent', () => {
     createPersona: (markdownSource: string) => session.createPersona(markdownSource),
     updatePersona: (input: { personaId: string; markdownSource: string }) =>
       session.updatePersona(input),
+    deletePersona: (personaId: string) => session.deletePersona(personaId),
+    unbindRepository: (input: { repositoryId: string; acknowledge?: boolean }) =>
+      session.unbindRepository(input),
+    removeRunner: (runnerId: string) => session.removeRunner(runnerId),
     registerCapability: (input: Parameters<typeof session.registerCapability>[0]) =>
       session.registerCapability(input),
     removeCapability: (capabilityId: string) => session.removeCapability(capabilityId),
@@ -55,8 +59,10 @@ export const useAgentStore = defineStore('agent', () => {
     updatePersonaGroup: (input: { personaGroupId: string; name: string; personaIds: string[] }) =>
       session.updatePersonaGroup(input),
     deletePersonaGroup: (personaGroupId: string) => session.deletePersonaGroup(personaGroupId),
-    startRun: (input: { threadId: string; repositoryId: string; personaId: string; task?: string }) =>
-      session.startRun(input),
+    // Typed from the session rather than restated: the local copy had already fallen
+    // behind `responseStyle`, `model` and `budgetCapUsd`, and a store that silently
+    // drops a field is worse than one that will not compile.
+    startRun: (input: Parameters<typeof session.startRun>[0]) => session.startRun(input),
     watchRun: (agentRunId: string) => session.watchRun(agentRunId),
     decide: (approvalRequestId: string, decision: 'approve' | 'deny') =>
       session.decide(approvalRequestId, decision),

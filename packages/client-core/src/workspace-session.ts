@@ -54,6 +54,15 @@ export interface WorkspaceSession {
  init: Promise<void>
  selectChannel(channelId: string): Promise<void>
  createChannel(name: string): Promise<void>
+ /**
+ * Deletes a channel and everything said in it. Returns the server's refusal rather
+ * than raising it, because the refusal is a question for the human ("this also
+ * deletes 12 runs"), which a caller re-asks with `acknowledge`.
+ */
+ deleteChannel(input: {
+ channelId: string
+ acknowledge?: boolean
+ }): Promise<{ ok: boolean; reason: string | null }>
  send(text: string): Promise<void>
  /**
  * Prepends the next older page. A no-op when a page is already in flight or the
@@ -272,6 +281,28 @@ export const createWorkspaceSession = (options: {
  await this.selectChannel(created.channel.id)
  } catch (error) {
  patch({ error: errorMessage(error) })
+ }
+ },
+
+ async deleteChannel(input) {
+ patch({ error: null })
+ try {
+ await options.api.channel.delete({
+ channelId: input.channelId,
+...(input.acknowledge ? { acknowledgeRunHistoryLoss: true }: {}),
+ })
+ const channels = await options.api.channel.list
+ patch({ channels })
+ // The deleted channel may be the one on screen, and a view left pointing at a
+ // channel that no longer exists shows an empty thread with no explanation.
+ if (state.activeChannelId === input.channelId) {
+ const next = channels[0]
+ if (next) await this.selectChannel(next.id)
+ else patch({ activeChannelId: null, activeThread: null, messages: [] })
+ }
+ return { ok: true, reason: null }
+ } catch (error) {
+ return { ok: false, reason: errorMessage(error) }
  }
  },
 

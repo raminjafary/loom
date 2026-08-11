@@ -1,13 +1,28 @@
 <script setup lang="ts">
 import type { Runner } from '@loom/api-contract'
 import { ref } from 'vue'
+import ConfirmButton from './ConfirmButton.vue'
 
 const props = defineProps<{
  runners: Runner[]
  lastPairing: { runnerId: string; name: string; rawToken: string } | null
 }>
 
-const emit = defineEmits<{ 'create-pairing-token': [name: string] }>
+const emit = defineEmits<{
+ 'create-pairing-token': [name: string]
+ remove: [runnerId: string, done: (result: { ok: boolean; reason: string | null }) => void]
+}>
+
+// A runner cascades to its repositories and through them to every run, so the server
+// refuses while anything is bound rather than offering to take it all. The refusal is
+// the instruction — "unbind them first" — so it is shown where the click happened.
+const removeRefusal = ref<{ runnerId: string; reason: string } | null>(null)
+
+const tryRemove = (runnerId: string) => {
+ emit('remove', runnerId, (result) => {
+ removeRefusal.value = result.ok ? null: { runnerId, reason: result.reason ?? 'Refused' }
+ })
+}
 
 const draft = ref('')
 
@@ -47,6 +62,15 @@ const relativeTime = (value: Date | null): string => {
  <span class="dot":class="{ connected: runner.connected }" />
  <span class="name">{{ runner.name }}</span>
  <span class="meta">{{ runner.connected ? 'connected': `seen ${relativeTime(runner.lastSeenAt)}` }}</span>
+ <ConfirmButton
+ variant="link"
+ label="Remove"
+ confirm-label="Remove runner"
+ @confirm="tryRemove(runner.id)"
+ />
+ <p v-if="removeRefusal && removeRefusal.runnerId === runner.id" class="refusal" role="alert">
+ {{ removeRefusal.reason }}
+ </p>
  </li>
  <li v-if="props.runners.length === 0" class="empty">No runners paired yet</li>
  </ul>
@@ -99,9 +123,14 @@ h3 {
 
 .item {
  display: flex;
+ flex-wrap: wrap;
  align-items: center;
  gap: 0.4rem;
  font-size: 0.85rem;
+}
+
+.item.name {
+ margin-right: auto;
 }
 
 .dot {
@@ -197,5 +226,16 @@ h3 {
  font: inherit;
  font-size: 0.75rem;
  cursor: pointer;
+}
+
+.refusal {
+ flex-basis: 100%;
+ margin: 0.25rem 0 0;
+ padding: 0.3rem 0.5rem;
+ border-radius: 0.35rem;
+ background: color-mix(in oklab, var(--danger) 12%, transparent);
+ color: var(--danger);
+ font-size: 0.75rem;
+ line-height: 1.4;
 }
 </style>

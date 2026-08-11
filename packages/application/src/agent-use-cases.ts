@@ -35,6 +35,7 @@ import {
  type Capability,
  type CapabilityId,
  type CapabilityKind,
+ type ChannelId,
  type CapabilitySpec,
  type McpTransport,
  type MergeFailureReason,
@@ -2574,3 +2575,209 @@ export const decideApproval = async (
 }
 
 export { isRiskyTool }
+
+/**
+ * Removing things a workspace accumulated.
+ *
+ * Nothing here could be removed before, which is a gap the UI reachability audit did
+ * not catch because it checks whether a client can *reach* a procedure, not whether
+ * the procedure exists. A workspace could only grow.
+ *
+ * Every gate below exists for the same reason: the schema cascades. `runner` →
+ * `repository` → `agent_run` → its events, notes, approvals and merge-queue entries;
+ * `channel` → `thread` → `message` and the runs started in it. A naive delete would
+ * therefore destroy run history and the spend recorded against it — and the figures
+ * are what budget enforcement is judged against, so losing them silently is not a
+ * cosmetic loss. So: a refusal states what is in the way and how much of it there is,
+ * and where history really would be destroyed the caller must say so explicitly
+ * rather than be told afterwards.
+ */
+
+const requireHuman = (actor: Actor, what: string): void => {
+ if (!isHuman(actor)) throw new ForbiddenError(`Only a human may ${what}`)
+}
+
+export const deletePersona = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; personaId: AgentPersonaId },
+): Promise<void> => {
+ requireHuman(input.actor, 'delete a persona')
+
+ const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+ if (!persona) throw new NotFoundError('AgentPersona')
+
+ /**
+ * The one deletion with no history to lose: a run snapshots the whole `PersonaSpec`
+ * at start, so past runs keep their persona, their model and their cost whether
+ * or not the registry row survives. Only a run *in flight* is a problem, and only
+ * because its children resolve the persona registry by name (the Planner
+ * delegation), so deleting one mid-swarm breaks a delegation that has not happened yet.
+ */
+ const active = await deps.agentRuns.listActiveByWorkspace(input.workspaceId)
+ if (active.some((run) => run.persona.name === persona.name)) {
+ throw new ValidationError(
+ `"${persona.name}" is running right now — wait for it to finish, or stop it first`,
+)
+ }
+
+ // Group membership is a plain id array, so a deleted persona would leave a dangling
+ // entry that renders as a blank chip. Pruned here rather than left for the reader.
+ const groups = await deps.personaGroups.listByWorkspace(input.workspaceId)
+ for (const group of groups) {
+ if (!group.personaIds.includes(persona.id)) continue
+ await deps.personaGroups.update(input.workspaceId, group.id, {
+ name: group.name,
+ personaIds: group.personaIds.filter((id) => id !== persona.id),
+ })
+ }
+
+ await deps.personas.delete(input.workspaceId, input.personaId)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'persona.deleted',
+ subjectType: 'agent_persona',
+ subjectId: persona.id,
+ metadata: { name: persona.name },
+ })
+}
+
+export const unbindRepository = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ repositoryId: RepositoryId
+ /**
+ * Required when runs reference this repository, because unbinding cascades them
+ * away along with the spend recorded against them. Naming it after what is
+ * lost rather than `force`: an operator should have to agree to the consequence,
+ * not to the verb.
+ */
+ acknowledgeRunHistoryLoss?: boolean
+ },
+): Promise<void> => {
+ requireHuman(input.actor, 'unbind a repository')
+
+ const repository = await deps.repositories.findById(input.workspaceId, input.repositoryId)
+ if (!repository) throw new NotFoundError('Repository')
+
+ const runs = await deps.agentRuns.countByRepository(input.workspaceId, input.repositoryId)
+ // Unconditional: a live run has a clone on a Runner and a branch in flight, and
+ // there is no acknowledgement that makes deleting the record of it coherent.
+ if (runs.active > 0) {
+ throw new ValidationError(
+ `${runs.active} run(s) are still working in "${repository.displayName}" — wait for them to finish, or stop them first`,
+)
+ }
+ if (runs.total > 0 && input.acknowledgeRunHistoryLoss !== true) {
+ throw new ValidationError(
+ `Unbinding "${repository.displayName}" also deletes ${runs.total} run(s) and the spend recorded against them. Confirm to proceed.`,
+)
+ }
+
+ await deps.repositories.delete(input.workspaceId, input.repositoryId)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'repository.unbound',
+ subjectType: 'repository',
+ subjectId: repository.id,
+ metadata: { displayName: repository.displayName, runsDeleted: runs.total },
+ })
+}
+
+export const deleteRunner = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; runnerId: RunnerId },
+): Promise<void> => {
+ requireHuman(input.actor, 'remove a Runner')
+
+ const runner = await deps.runners.findById(input.workspaceId, input.runnerId)
+ if (!runner) throw new NotFoundError('Runner')
+
+ /**
+ * No acknowledgement path, deliberately. A runner cascades to its repositories and
+ * through them to every run — an amount of history nobody can weigh from a single
+ * confirmation. Unbinding the repositories first makes the operator confront each
+ * one, with its own count in front of them.
+ */
+ const bound = await deps.repositories.countByRunner(input.workspaceId, input.runnerId)
+ if (bound > 0) {
+ throw new ValidationError(
+ `${bound} repositor${bound === 1 ? 'y is': 'ies are'} still bound to "${runner.name}" — unbind ${bound === 1 ? 'it': 'them'} first`,
+)
+ }
+
+ await deps.runners.delete(input.workspaceId, input.runnerId)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'runner.removed',
+ subjectType: 'runner',
+ subjectId: runner.id,
+ metadata: { name: runner.name },
+ })
+}
+
+/**
+ * Removes a channel and everything said in it.
+ *
+ * Lives here rather than beside the other channel use-cases only because it needs
+ * `AgentDeps`: whether a channel is safe to delete is a question about runs.
+ *
+ * The heaviest cascade in the schema: channel → thread → message, and every
+ * `agent_run` started in those threads, with its events, notes, approvals and the
+ * spend recorded against it. So this asks twice — once by refusing while work is
+ * live, once by requiring the caller to acknowledge what the count actually is.
+ */
+export const deleteChannel = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ channelId: ChannelId
+ /** Required when runs were started in this channel; named for what is lost. */
+ acknowledgeRunHistoryLoss?: boolean
+ },
+): Promise<void> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may delete a channel')
+ }
+
+ const channel = await deps.channels.findById(input.workspaceId, input.channelId)
+ if (!channel) throw new NotFoundError('Channel')
+
+ // A workspace with no channel has nowhere to say anything, and every client picks
+ // the first channel on load — so the last one is not a thing to be able to delete.
+ const remaining = await deps.channels.countByWorkspace(input.workspaceId)
+ if (remaining <= 1) {
+ throw new ValidationError('This is the only channel — create another one first')
+ }
+
+ const runs = await deps.agentRuns.countByChannel(input.workspaceId, input.channelId)
+ if (runs.active > 0) {
+ throw new ValidationError(
+ `${runs.active} run(s) are still working in #${channel.name} — wait for them to finish, or stop them first`,
+)
+ }
+ if (runs.total > 0 && input.acknowledgeRunHistoryLoss !== true) {
+ throw new ValidationError(
+ `Deleting #${channel.name} also deletes its messages, ${runs.total} run(s), and the spend recorded against them. Confirm to proceed.`,
+)
+ }
+
+ await deps.channels.delete(input.workspaceId, input.channelId)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'channel.deleted',
+ subjectType: 'channel',
+ subjectId: channel.id,
+ metadata: { name: channel.name, runsDeleted: runs.total },
+ })
+}

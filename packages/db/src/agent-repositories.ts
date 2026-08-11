@@ -82,6 +82,12 @@ export const runnerRepository = (db: Database): RunnerRepositoryPort => ({
  })
  return { runnerId: asRunnerId(runnerId), rawToken }
  },
+
+ async delete(workspaceId, id) {
+ // `deleteRunner` refuses while any repository is still bound, so the cascade
+ // this could otherwise trigger has already been ruled out by the caller.
+ await db.delete(runner).where(and(eq(runner.workspaceId, workspaceId), eq(runner.id, id)))
+ },
 })
 
 export const repositoryRepository = (db: Database): RepositoryRepositoryPort => ({
@@ -112,6 +118,20 @@ export const repositoryRepository = (db: Database): RepositoryRepositoryPort => 
  async listByWorkspace(workspaceId) {
  const rows = await db.select.from(repository).where(eq(repository.workspaceId, workspaceId))
  return rows.map((row) => toRepository(row as RepositoryRow))
+ },
+
+ async delete(workspaceId, id) {
+ await db
+.delete(repository)
+.where(and(eq(repository.workspaceId, workspaceId), eq(repository.id, id)))
+ },
+
+ async countByRunner(workspaceId, runnerId) {
+ const [row] = await db
+.select({ value: count })
+.from(repository)
+.where(and(eq(repository.workspaceId, workspaceId), eq(repository.runnerId, runnerId)))
+ return row?.value ?? 0
  },
 
  async setVerifyCommand(workspaceId, id, verifyCommand) {
@@ -475,6 +495,36 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
 .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.parentRunId, parentRunId)))
 .orderBy(agentRun.createdAt)
  return rows.map((row) => toAgentRun(row as AgentRunRow))
+ },
+
+ async countByRepository(workspaceId, repositoryId) {
+ const [row] = await db
+.select({
+ total: count,
+ // Counted in the same pass rather than by a second query: the two numbers
+ // answer one question ("can this go, and what goes with it"), and reading
+ // them apart lets a run finish between them.
+ active: count(
+ sql`case when ${notInArray(agentRun.status, [...TERMINAL_STATUSES])} then 1 end`,
+),
+ })
+.from(agentRun)
+.where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.repositoryId, repositoryId)))
+ return { total: row?.total ?? 0, active: row?.active ?? 0 }
+ },
+
+ async countByChannel(workspaceId, channelId) {
+ const [row] = await db
+.select({
+ total: count,
+ active: count(
+ sql`case when ${notInArray(agentRun.status, [...TERMINAL_STATUSES])} then 1 end`,
+),
+ })
+.from(agentRun)
+.innerJoin(thread, eq(agentRun.threadId, thread.id))
+.where(and(eq(agentRun.workspaceId, workspaceId), eq(thread.channelId, channelId)))
+ return { total: row?.total ?? 0, active: row?.active ?? 0 }
  },
 
  async listActiveByWorkspace(workspaceId) {
@@ -847,6 +897,14 @@ export const notificationTargetRepository = (db: Database): NotificationTargetRe
 })
 
 export const personaRepository = (db: Database): PersonaRepositoryPort => ({
+ async delete(workspaceId, id) {
+ // Safe for history by design: a run stores its whole persona spec as JSON, so
+ // nothing here is the source of a past run's persona, model or cost.
+ await db
+.delete(agentPersona)
+.where(and(eq(agentPersona.workspaceId, workspaceId), eq(agentPersona.id, id)))
+ },
+
  async create(input) {
  const [row] = await db
 .insert(agentPersona)

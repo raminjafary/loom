@@ -249,6 +249,7 @@ onBeforeUnmount( => {
 :active-channel-id="snapshot.activeChannelId"
  @select="store.selectChannel"
  @create="store.createChannel"
+ @delete="(input, done) => void store.deleteChannel(input).then(done)"
  />
 
  <main class="main">
@@ -509,6 +510,9 @@ onBeforeUnmount( => {
 :last-pairing="agentSnapshot.lastPairing"
  @close="settingsOpen = false"
  @create-pairing-token="(name) => agent.createPairingToken(name)"
+ @remove-runner="(runnerId, done) => void agent.removeRunner(runnerId).then(done)"
+ @unbind="(input, done) => void agent.unbindRepository(input).then(done)"
+ @delete-persona="(personaId) => agent.deletePersona(personaId)"
  @bind="(input) => agent.bindRepository(input)"
  @create-repository="(input) => agent.createRepository(input)"
  @list="(input, done) => agent.listDirectory(input).then(done)"

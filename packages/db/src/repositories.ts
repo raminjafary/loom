@@ -6,7 +6,7 @@ import type {
   ThreadRepositoryPort,
 } from '@loom/application'
 import { NotFoundError } from '@loom/domain'
-import { and, asc, desc, eq, gt, lt } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gt, lt } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
   decodeCursor,
@@ -20,6 +20,20 @@ import {
 import { auditEvent, channel, message, thread } from './schema.js'
 
 export const channelRepository = (db: Database): ChannelRepositoryPort => ({
+  async delete(workspaceId, id) {
+    // The cascade does the rest: threads, their messages, and every run started in
+    // them. See `deleteChannel` for the gate that makes that deliberate.
+    await db.delete(channel).where(and(eq(channel.workspaceId, workspaceId), eq(channel.id, id)))
+  },
+
+  async countByWorkspace(workspaceId) {
+    const [row] = await db
+      .select({ value: count() })
+      .from(channel)
+      .where(eq(channel.workspaceId, workspaceId))
+    return row?.value ?? 0
+  },
+
   async create(input) {
     const [row] = await db
       .insert(channel)

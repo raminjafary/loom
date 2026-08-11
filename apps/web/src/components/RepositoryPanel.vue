@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DirectoryListing, Repository, Runner } from '@loom/api-contract'
 import { ref } from 'vue'
+import ConfirmButton from './ConfirmButton.vue'
 import DirectoryPicker from './DirectoryPicker.vue'
 
 const props = defineProps<{
@@ -15,7 +16,25 @@ const emit = defineEmits<{
  'set-verify-command': [repositoryId: string, verifyCommand: string | null]
  'set-install-command': [repositoryId: string, installCommand: string | null]
  'warm-cache': [repositoryId: string, done: (result: { ok: boolean; detail: string | null }) => void]
+ unbind: [
+ input: { repositoryId: string; acknowledge: boolean },
+ done: (result: { ok: boolean; reason: string | null }) => void,
+ ]
 }>
+
+/**
+ * Unbinding deletes the repository's runs and the spend recorded against them, and
+ * the server will not do it until told the count is acceptable. So the first attempt
+ * is a question: it comes back refused, carrying the number, and that number is what
+ * the human is actually asked to agree to.
+ */
+const unbindWarning = ref<{ repositoryId: string; reason: string } | null>(null)
+
+const tryUnbind = (repositoryId: string, acknowledge: boolean) => {
+ emit('unbind', { repositoryId, acknowledge }, (result) => {
+ unbindWarning.value = result.ok ? null: { repositoryId, reason: result.reason ?? 'Refused' }
+ })
+}
 
 // The picker replaces typing an absolute path. The old form stays
 // behind a toggle rather than being deleted: a headless or scripted setup still
@@ -119,6 +138,23 @@ const submit = => {
  Warming needs the install command, so the button says so rather than failing
  into a detail message a human has to read to learn what was missing.
  -->
+ <div class="unbind-row">
+ <ConfirmButton
+ variant="link"
+ label="Unbind"
+ confirm-label="Unbind repository"
+ @confirm="tryUnbind(repo.id, false)"
+ />
+ </div>
+ <p v-if="unbindWarning?.repositoryId === repo.id" class="unbind-warning" role="alert">
+ {{ unbindWarning.reason }}
+ <!-- Shown only once the server has said what would be lost. -->
+ <button type="button" class="link danger" @click="tryUnbind(repo.id, true)">
+ Unbind anyway
+ </button>
+ <button type="button" class="link" @click="unbindWarning = null">Keep it</button>
+ </p>
+
  <button
  type="button"
  class="link warm"
@@ -291,5 +327,23 @@ h3 {
 .bind-form button:disabled {
  opacity: 0.45;
  cursor: not-allowed;
+}
+
+.unbind-row {
+ margin-top: 0.15rem;
+}
+
+.unbind-warning {
+ margin: 0.25rem 0 0;
+ padding: 0.35rem 0.5rem;
+ border-radius: 0.35rem;
+ background: color-mix(in oklab, var(--danger) 12%, transparent);
+ color: var(--danger);
+ font-size: 0.75rem;
+ line-height: 1.45;
+}
+
+.unbind-warning.link {
+ margin-left: 0.4rem;
 }
 </style>

@@ -70,6 +70,20 @@ export const fakeChannels = (s: FakeStore): ChannelRepositoryPort => ({
  async findByName(workspaceId, name) {
  return s.channels.find((c) => c.workspaceId === workspaceId && c.name === name) ?? null
  },
+ async delete(workspaceId, id) {
+ const index = s.channels.findIndex((c) => c.workspaceId === workspaceId && c.id === id)
+ if (index >= 0) s.channels.splice(index, 1)
+ // The real schema cascades through threads to messages; the fake does the same by
+ // hand, or a test would see a deleted channel's messages survive it.
+ const threadIds = new Set(
+ s.threads.filter((t) => t.channelId === id).map((t) => t.id),
+)
+ s.threads = s.threads.filter((t) => t.channelId !== id)
+ s.messages = s.messages.filter((m) => !threadIds.has(m.threadId))
+ },
+ async countByWorkspace(workspaceId) {
+ return s.channels.filter((c) => c.workspaceId === workspaceId).length
+ },
 })
 
 export const fakeThreads = (s: FakeStore): ThreadRepositoryPort => ({

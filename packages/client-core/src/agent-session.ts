@@ -173,6 +173,22 @@ export interface AgentSession {
  * harness settings, `autoApprove` above all, without forking it under a new name.
  */
  updatePersona(input: { personaId: string; markdownSource: string }): Promise<void>
+ /**
+ * Removes a persona. Loses no history — a run snapshots its persona at start — so
+ * the server only refuses while a run of that persona is in flight.
+ */
+ deletePersona(personaId: string): Promise<void>
+ /**
+ * Unbinds a repository, deleting its runs and their recorded spend with it.
+ * Resolves `{ ok: false, reason }` when the server wants that loss acknowledged,
+ * so a caller can show the count before asking again with `acknowledge`.
+ */
+ unbindRepository(input: {
+ repositoryId: string
+ acknowledge?: boolean
+ }): Promise<{ ok: boolean; reason: string | null }>
+ /** Forgets a Runner. Refused while any repository is still bound to it. */
+ removeRunner(runnerId: string): Promise<{ ok: boolean; reason: string | null }>
  registerCapability(input: {
  kind: 'mcp' | 'skill'
  name: string
@@ -584,6 +600,46 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  await loadAll
  } catch (error) {
  patch({ error: errorMessage(error) })
+ }
+ },
+
+ async deletePersona(personaId) {
+ patch({ error: null })
+ try {
+ await options.api.persona.delete({ personaId })
+ patch({ personas: await options.api.persona.list })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ /**
+ * Returns the refusal instead of parking it in `error`, unlike almost everything
+ * else here: the server's answer is the *question* the UI has to put to the human
+ * ("this also deletes 12 runs"), and a banner is the wrong place for a question.
+ */
+ async unbindRepository(input) {
+ patch({ error: null })
+ try {
+ await options.api.repository.unbind({
+ repositoryId: input.repositoryId,
+...(input.acknowledge ? { acknowledgeRunHistoryLoss: true }: {}),
+ })
+ patch({ repositories: await options.api.repository.list })
+ return { ok: true, reason: null }
+ } catch (error) {
+ return { ok: false, reason: errorMessage(error) }
+ }
+ },
+
+ async removeRunner(runnerId) {
+ patch({ error: null })
+ try {
+ await options.api.runner.remove({ runnerId })
+ patch({ runners: await options.api.runner.list })
+ return { ok: true, reason: null }
+ } catch (error) {
+ return { ok: false, reason: errorMessage(error) }
  }
  },
 

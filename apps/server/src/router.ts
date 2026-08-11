@@ -6,6 +6,9 @@ import {
  createPersona,
  createPersonaGroup,
  createRunnerPairingToken,
+ deleteChannel,
+ deletePersona,
+ deleteRunner,
  decideApproval,
  deletePersonaGroup,
  attachCapability,
@@ -15,6 +18,7 @@ import {
  deleteCapability,
  detachCapability,
  discardAgentRun,
+ unbindRepository,
  enqueueMergeRun,
  getActiveAgentRun,
  getAgentRun,
@@ -159,6 +163,20 @@ export const router = os.router({
  }),
 ),
 ),
+
+ delete: os.channel.delete.handler(({ context, input }) =>
+ guard(async => {
+ await deleteChannel(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ channelId: asChannelId(input.channelId),
+...(input.acknowledgeRunHistoryLoss === undefined
+ ? {}
+: { acknowledgeRunHistoryLoss: input.acknowledgeRunHistoryLoss }),
+ })
+ return { ok: true as const }
+ }),
+),
  },
 
  message: {
@@ -214,6 +232,17 @@ export const router = os.router({
  name: input.name,
  }),
 ),
+),
+
+ remove: os.runner.remove.handler(({ context, input }) =>
+ guard(async => {
+ await deleteRunner(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ runnerId: asRunnerId(input.runnerId),
+ })
+ return { ok: true as const }
+ }),
 ),
  },
 
@@ -296,6 +325,20 @@ export const router = os.router({
  verifyCommand: input.verifyCommand,
  }),
 ),
+),
+
+ unbind: os.repository.unbind.handler(({ context, input }) =>
+ guard(async => {
+ await unbindRepository(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ repositoryId: asRepositoryId(input.repositoryId),
+...(input.acknowledgeRunHistoryLoss === undefined
+ ? {}
+: { acknowledgeRunHistoryLoss: input.acknowledgeRunHistoryLoss }),
+ })
+ return { ok: true as const }
+ }),
 ),
  },
 
@@ -426,6 +469,17 @@ export const router = os.router({
  markdownSource: input.markdownSource,
  }),
 ),
+),
+
+ delete: os.persona.delete.handler(({ context, input }) =>
+ guard(async => {
+ await deletePersona(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ personaId: asAgentPersonaId(input.personaId),
+ })
+ return { ok: true as const }
+ }),
 ),
  },
 

@@ -62,6 +62,21 @@ export const contract = {
  rootThread: oc
 .input(z.object({ channelId: z.string }))
 .output(ThreadSchema),
+
+ /**
+ * Removes a channel and everything said in it. The heaviest cascade there is —
+ * threads, messages, and every run started in them with its recorded spend — so
+ * the server refuses while work is live and refuses again unless the caller has
+ * acknowledged the count it was told.
+ */
+ delete: oc
+.input(
+ z.object({
+ channelId: z.string,
+ acknowledgeRunHistoryLoss: z.boolean.optional,
+ }),
+)
+.output(z.object({ ok: z.literal(true) })),
  },
 
  message: {
@@ -97,6 +112,11 @@ export const contract = {
  createPairingToken: oc
 .input(z.object({ name: z.string.min(1).max(100) }))
 .output(z.object({ runnerId: z.string, rawToken: z.string })),
+
+ /** Forgets a Runner. Refused while any repository is still bound to it. */
+ remove: oc
+.input(z.object({ runnerId: z.string }))
+.output(z.object({ ok: z.literal(true) })),
  },
 
  /** Repository binding: browse a Runner's allowed roots, bind an existing repo, or create one. */
@@ -168,6 +188,19 @@ export const contract = {
  }),
 )
 .output(RepositorySchema),
+
+ /**
+ * Unbinds a repository. Its runs and their recorded spend go with it, so this is
+ * refused while any is live and refused again unless the loss is acknowledged.
+ */
+ unbind: oc
+.input(
+ z.object({
+ repositoryId: z.string,
+ acknowledgeRunHistoryLoss: z.boolean.optional,
+ }),
+)
+.output(z.object({ ok: z.literal(true) })),
  },
 
  /**
@@ -248,6 +281,14 @@ export const contract = {
  update: oc
 .input(z.object({ personaId: z.string, markdownSource: z.string.min(1).max(40_000) }))
 .output(AgentPersonaSchema),
+
+ /**
+ * Removes a persona. No history is lost — a run snapshots its whole persona spec
+ * at start — so this only refuses while a run of that persona is in flight.
+ */
+ delete: oc
+.input(z.object({ personaId: z.string }))
+.output(z.object({ ok: z.literal(true) })),
  },
 
  /**

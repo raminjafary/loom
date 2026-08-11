@@ -39,6 +39,8 @@ export const useWorkspaceStore = defineStore('workspace', => {
  start,
  selectChannel: (channelId: string) => session.selectChannel(channelId),
  createChannel: (name: string) => session.createChannel(name),
+ deleteChannel: (input: { channelId: string; acknowledge?: boolean }) =>
+ session.deleteChannel(input),
  send: (text: string) => session.send(text),
  loadOlderMessages: => session.loadOlderMessages,
  onServerEvent: (listener: Parameters<typeof session.onServerEvent>[0]) =>

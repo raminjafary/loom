@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AgentPersona } from '@loom/api-contract'
 import { computed, ref } from 'vue'
+import ConfirmButton from './ConfirmButton.vue'
 
 /**
  * Authoring personas. Split out of the run launcher and moved into
@@ -22,6 +23,7 @@ const props = defineProps<{ personas: AgentPersona[] }>
 const emit = defineEmits<{
  'create-persona': [markdownSource: string]
  'update-persona': [input: { personaId: string; markdownSource: string }]
+ 'delete-persona': [personaId: string]
 }>
 
 const DEFAULT_MARKDOWN = `---
@@ -88,7 +90,16 @@ const harnessSummary = (persona: AgentPersona): string => {
  <span class="model">{{ persona.model }}</span>
  <span class="harness">{{ harnessSummary(persona) }}</span>
  </div>
+ <div class="row-actions">
  <button type="button" class="link" @click="startEditing(persona)">Edit</button>
+ <!-- Loses no history: a run snapshots its persona, so past runs keep theirs. -->
+ <ConfirmButton
+ variant="link"
+ label="Delete"
+ confirm-label="Delete persona"
+ @confirm="emit('delete-persona', persona.id)"
+ />
+ </div>
  </li>
  </ul>
 
@@ -155,6 +166,13 @@ const harnessSummary = (persona: AgentPersona): string => {
 
 .model {
  font-family: ui-monospace, monospace;
+}
+
+.row-actions {
+ display: flex;
+ align-items: center;
+ gap: 0.6rem;
+ flex-shrink: 0;
 }
 
 .link {
