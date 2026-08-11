@@ -104,7 +104,15 @@ export interface AgentSnapshot {
  * `resolvePersonaNames` fills the gaps for runs that predate this session.
  */
  readonly personaNameByRunId: Record<string, string>
- readonly lastPairing: { runnerId: string; rawToken: string } | null
+ /**
+ * The pairing token just minted, shown once.
+ *
+ * Carries the `name` the operator typed as well as the id, because the id is what
+ * the contract returns and a uuid is not what anyone called the machine they are
+ * standing at — the banner used to identify a single-use secret by the one field
+ * in it that means nothing to a human.
+ */
+ readonly lastPairing: { runnerId: string; name: string; rawToken: string } | null
  readonly diff: string | null
  // Inbox — runs needing a human decision, workspace-wide.
  readonly needsAttention: AgentRun[]
@@ -579,7 +587,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  const pairing = await options.api.runner.createPairingToken({ name })
- patch({ lastPairing: pairing })
+ patch({ lastPairing: {...pairing, name } })
  const runners = await options.api.runner.list
  patch({ runners })
  } catch (error) {

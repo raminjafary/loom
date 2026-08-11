@@ -1,21 +1,20 @@
 <script setup lang="ts">
+import type { ResponseStyle } from '@loom/api-contract'
 import { parseMention } from '@loom/client-core'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ActiveRunsPanel from './ActiveRunsPanel.vue'
 import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
 import ChannelList from './ChannelList.vue'
-import CapabilityPanel from './CapabilityPanel.vue'
 import DiffView from './DiffView.vue'
 import InboxView from './InboxView.vue'
 import MergeQueuePanel from './MergeQueuePanel.vue'
 import KillSwitch from './KillSwitch.vue'
 import MessageList from './MessageList.vue'
 import NotificationToggle from './NotificationToggle.vue'
-import PersonaForm from './PersonaForm.vue'
-import PersonaGroupPanel from './PersonaGroupPanel.vue'
-import RepositoryPanel from './RepositoryPanel.vue'
-import RunnerPanel from './RunnerPanel.vue'
+import RunLauncher from './RunLauncher.vue'
+import SettingsOverlay from './SettingsOverlay.vue'
+import SidebarSection from './SidebarSection.vue'
 import CostDashboardPanel from './CostDashboardPanel.vue'
 import RunTreePanel from './RunTreePanel.vue'
 import SwarmBoardPanel from './SwarmBoardPanel.vue'
@@ -36,11 +35,67 @@ const activeChannel = computed(
 // run that finished before the page opened — rendered as a raw run id.
 const personaNameByRunId = computed( => agentSnapshot.value.personaNameByRunId)
 
-const startRun = (input: { repositoryId: string; personaId: string }) => {
+const startRun = (input: {
+ repositoryId: string
+ personaId: string
+ responseStyle: ResponseStyle
+}) => {
  const threadId = snapshot.value.activeThread?.id
  if (!threadId) return
- void agent.startRun({ threadId, repositoryId: input.repositoryId, personaId: input.personaId })
+ void agent.startRun({ threadId,...input })
 }
+
+const settingsOpen = ref(false)
+
+/**
+ * Each collapsed section still answers its own question.
+ *
+ * That is the whole reason collapsing is acceptable here: a header that says only
+ * "Merge queue" trades one scrolling problem for a clicking one, whereas one that
+ * says "2 queued · 1 failed" is often the entire answer.
+ */
+const watchedSummary = computed( => {
+ const run = agentSnapshot.value.activeRun
+ if (!run) return null
+ const cost = run.totalCostUsd === null ? null: `$${run.totalCostUsd.toFixed(2)}`
+ return [run.persona.name, run.status, cost].filter(Boolean).join(' · ')
+})
+
+const boardCardCount = computed( => agentSnapshot.value.swarmBoard?.cards.length ?? 0)
+
+const blockerCount = computed( =>
+ (agentSnapshot.value.swarmBoard?.cards ?? []).reduce((sum, card) => sum + card.blockerCount, 0),
+)
+
+const swarmSummary = computed( => {
+ if (boardCardCount.value === 0) return null
+ const parts = [`${boardCardCount.value} run${boardCardCount.value === 1 ? '': 's'}`]
+ const collisions = agentSnapshot.value.swarmBoard?.pathCollisions.length ?? 0
+ if (collisions > 0) parts.push(`${collisions} path collision${collisions === 1 ? '': 's'}`)
+ if (blockerCount.value > 0) parts.push(`${blockerCount.value} blocker${blockerCount.value === 1 ? '': 's'}`)
+ return parts.join(' · ')
+})
+
+const failedMergeCount = computed(
+ => agentSnapshot.value.mergeQueue.filter((entry) => entry.status === 'failed').length,
+)
+
+const mergeSummary = computed( => {
+ const entries = agentSnapshot.value.mergeQueue
+ if (entries.length === 0) return null
+ const queued = entries.filter((entry) => entry.status === 'queued').length
+ const parts: string[] = []
+ if (queued > 0) parts.push(`${queued} queued`)
+ if (failedMergeCount.value > 0) parts.push(`${failedMergeCount.value} failed`)
+ return parts.length > 0 ? parts.join(' · '): `${entries.length} entries`
+})
+
+const spendSummary = computed( => {
+ const summary = agentSnapshot.value.costSummary
+ if (!summary) return null
+ const window = costWindowHours.value === null ? 'all time': `${costWindowHours.value}h`
+ return `$${summary.totals.totalUsd.toFixed(2)} · ${window}`
+})
 
 // `@mention` starts a run: the message always posts as
 // ordinary chat; if it mentions a known persona, a repo-picker bar appears
@@ -208,6 +263,15 @@ onBeforeUnmount( => {
  v-if="view === 'workspace'"
  type="button"
  class="inbox-toggle"
+ aria-label="Settings"
+ @click="settingsOpen = true"
+ >
+ ⚙
+ </button>
+ <button
+ v-if="view === 'workspace'"
+ type="button"
+ class="inbox-toggle"
  @click="openInbox"
  >
  Inbox<span v-if="agentSnapshot.needsAttention.length" class="badge">{{
@@ -279,12 +343,54 @@ onBeforeUnmount( => {
  />
  </main>
 
+ <!--
+ The sidebar answers "what is happening", in one order: what you can start, what
+ needs you, what is running, what it costs. Everything a human sets up once —
+ runners, repositories, personas, capabilities, groups — moved to Settings, which
+ is where it can have the width a markdown persona actually needs.
+ -->
  <aside v-if="view === 'workspace'" class="agent-sidebar">
+ <RunLauncher
+:repositories="agentSnapshot.repositories"
+:personas="agentSnapshot.personas"
+:disabled="!snapshot.activeThread"
+ @start="startRun"
+ @open-settings="settingsOpen = true"
+ />
+
+ <SidebarSection
+ title="Watching"
+:summary="watchedSummary"
+:empty="!agentSnapshot.activeRun"
+ empty-text="no run selected"
+ storage-key="watching"
+:default-open="true"
+ >
  <ActiveRunsPanel
 :runs="agentSnapshot.activeRuns"
 :watched-run-id="agentSnapshot.activeRun?.id ?? null"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
  />
+ <DiffView
+:run="agentSnapshot.activeRun"
+:diff="agentSnapshot.diff"
+ @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
+ @keep="(agentRunId) => agent.keepRun(agentRunId)"
+ @discard="(agentRunId) => agent.discardRun(agentRunId)"
+ @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
+ @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
+ @load-raw="(agentRunId, done) => agent.getRawTranscript(agentRunId).then(done)"
+ />
+ </SidebarSection>
+
+ <SidebarSection
+ title="Swarm"
+:summary="swarmSummary"
+:empty="boardCardCount === 0"
+ empty-text="no swarm"
+:attention="blockerCount > 0"
+ storage-key="swarm"
+ >
  <SwarmBoardPanel
 :board="agentSnapshot.swarmBoard"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
@@ -299,77 +405,85 @@ onBeforeUnmount( => {
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
- <!--
- Workspace-wide, unlike everything above it: the board and the tree are scoped to
- the watched run's tree, and the question is about all of them.
- -->
- <CostDashboardPanel
-:summary="agentSnapshot.costSummary"
-:window-hours="costWindowHours"
- @refresh=" => agent.refreshCostSummary(costWindowHours)"
- @window="(hours) => setCostWindow(hours)"
- />
+ </SidebarSection>
+
+ <SidebarSection
+ title="Notes"
+:summary="agentSnapshot.treeNotes.length ? `${agentSnapshot.treeNotes.length}`: null"
+:empty="!agentSnapshot.activeRun"
+ empty-text="no tree"
+ storage-key="notes"
+ >
  <WorkerNotesPanel
 :notes="agentSnapshot.treeNotes"
 :agent-run-id="agentSnapshot.activeRun?.id ?? null"
  @write="(input) => agentSnapshot.activeRun && agent.writeNote({ agentRunId: agentSnapshot.activeRun.id,...input })"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
+ </SidebarSection>
+
+ <SidebarSection
+ title="Merge queue"
+:summary="mergeSummary"
+:empty="agentSnapshot.mergeQueue.length === 0"
+ empty-text="empty"
+:attention="failedMergeCount > 0"
+ storage-key="merge-queue"
+ >
  <MergeQueuePanel
 :entries="agentSnapshot.mergeQueue"
  @cancel="(entryId) => agent.cancelMerge(entryId)"
  @refresh=" => agent.refreshMergeQueue"
  />
- <RunnerPanel
-:runners="agentSnapshot.runners"
-:last-pairing="agentSnapshot.lastPairing"
- @create-pairing-token="(name) => agent.createPairingToken(name)"
+ </SidebarSection>
+
+ <!--
+ Workspace-wide, unlike everything above it: the board and the tree are scoped to
+ the watched run's tree, and the question is about all of them.
+ -->
+ <SidebarSection
+ title="Spend"
+:summary="spendSummary"
+:empty="agentSnapshot.costSummary === null"
+ empty-text="nothing spent"
+ storage-key="spend"
+ >
+ <CostDashboardPanel
+:summary="agentSnapshot.costSummary"
+:window-hours="costWindowHours"
+ @refresh=" => agent.refreshCostSummary(costWindowHours)"
+ @window="(hours) => setCostWindow(hours)"
  />
- <RepositoryPanel
-:repositories="agentSnapshot.repositories"
+ </SidebarSection>
+ </aside>
+
+ <SettingsOverlay
+ v-if="settingsOpen"
 :runners="agentSnapshot.runners"
+:repositories="agentSnapshot.repositories"
+:personas="agentSnapshot.personas"
+:persona-groups="agentSnapshot.personaGroups"
+:capabilities="agentSnapshot.capabilities"
+:capability-attachments="agentSnapshot.capabilityAttachments"
+:last-pairing="agentSnapshot.lastPairing"
+ @close="settingsOpen = false"
+ @create-pairing-token="(name) => agent.createPairingToken(name)"
  @bind="(input) => agent.bindRepository(input)"
- @create="(input) => agent.createRepository(input)"
+ @create-repository="(input) => agent.createRepository(input)"
  @list="(input, done) => agent.listDirectory(input).then(done)"
  @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
  @set-install-command="(repositoryId, command) => agent.setInstallCommand(repositoryId, command)"
  @warm-cache="(repositoryId, done) => void agent.warmCache(repositoryId).then(done)"
- />
- <PersonaForm
-:repositories="agentSnapshot.repositories"
-:personas="agentSnapshot.personas"
-:disabled="!snapshot.activeThread"
- @start="startRun"
  @create-persona="(markdownSource) => agent.createPersona(markdownSource)"
  @update-persona="(input) => agent.updatePersona(input)"
- />
- <CapabilityPanel
-:capabilities="agentSnapshot.capabilities"
-:attachments="agentSnapshot.capabilityAttachments"
-:personas="agentSnapshot.personas"
  @register="(input) => agent.registerCapability(input)"
  @remove="(capabilityId) => agent.removeCapability(capabilityId)"
  @attach="(input) => agent.attachCapability(input)"
  @detach="(input) => agent.detachCapability(input)"
+ @create-group="(input) => agent.createPersonaGroup(input)"
+ @update-group="(input) => agent.updatePersonaGroup(input)"
+ @delete-group="(id) => agent.deletePersonaGroup(id)"
  />
- <PersonaGroupPanel
-:personas="agentSnapshot.personas"
-:groups="agentSnapshot.personaGroups"
- @create="(input) => agent.createPersonaGroup(input)"
- @update="(input) => agent.updatePersonaGroup(input)"
- @delete="(id) => agent.deletePersonaGroup(id)"
- />
- <DiffView
-:run="agentSnapshot.activeRun"
-:diff="agentSnapshot.diff"
- @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
- @keep="(agentRunId) => agent.keepRun(agentRunId)"
- @discard="(agentRunId) => agent.discardRun(agentRunId)"
- @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
- @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
- @load-raw="(agentRunId, done) => agent.getRawTranscript(agentRunId).then(done)"
- />
- </aside>
  </div>
 </template>
 
