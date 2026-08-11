@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AgentPersona, PersonaGroup } from '@loom/api-contract'
 import { ref } from 'vue'
+import ConfirmButton from './ConfirmButton.vue'
 
 const props = defineProps<{
   personas: AgentPersona[]
@@ -51,7 +52,12 @@ const submitNewGroup = () => {
       <li v-for="group in props.groups" :key="group.id" class="group">
         <div class="group-header">
           <strong>{{ group.name }}</strong>
-          <button type="button" class="delete" @click="emit('delete', group.id)">Delete</button>
+          <ConfirmButton
+            variant="link"
+            label="Delete"
+            confirm-label="Delete group"
+            @confirm="emit('delete', group.id)"
+          />
         </div>
         <div class="chips">
           <button

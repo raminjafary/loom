@@ -2,6 +2,7 @@
 import type { AgentRun } from '@loom/api-contract'
 import { parseUnifiedDiff } from '@loom/client-core'
 import { computed, ref, watch } from 'vue'
+import ConfirmButton from './ConfirmButton.vue'
 import DiffFileView from './DiffFileView.vue'
 
 const props = defineProps<{
@@ -171,9 +172,12 @@ const canDecideDisposition = =>
 
  <footer v-if="canDecideDisposition" class="review-foot">
  <button type="button" @click="emit('keep', props.run.id)">Keep branch</button>
- <button type="button" class="danger" @click="emit('discard', props.run.id)">
- Discard branch
- </button>
+ <!-- Irreversible: this deletes the branch and the clone the work is in. -->
+ <ConfirmButton
+ label="Discard branch"
+ confirm-label="Delete this work permanently"
+ @confirm="emit('discard', props.run.id)"
+ />
  <!--
  Queues; it does not merge. The queue rebases in order and may reach this
  branch behind others, so a label promising a merge

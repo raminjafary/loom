@@ -184,14 +184,9 @@ const harnessSummary = (persona: AgentPersona): string => {
 }
 
 textarea {
- padding: 0.5rem 0.6rem;
- border: 1px solid var(--border);
- border-radius: 0.4rem;
- background: var(--bg);
- color: var(--text);
  font-family: ui-monospace, monospace;
  font-size: 0.8rem;
- resize: vertical;
+ line-height: 1.55;
 }
 
 .buttons {

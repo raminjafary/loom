@@ -96,18 +96,16 @@ const onEnter = () => {
   flex: 1;
 }
 
+/* Base sizing and states come from styles.css; this is what the composer alone
+   needs — it grows, it has a ceiling, and it sits on the surface rather than the
+   page so the send row reads as one control. */
 textarea {
-  width: 100%;
-  resize: vertical;
-  min-height: 2.5rem;
+  min-height: 2.6rem;
   max-height: 12rem;
   padding: 0.6rem 0.7rem;
-  border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  box-sizing: border-box;
+  font-size: 0.92rem;
 }
 
 .mentions {

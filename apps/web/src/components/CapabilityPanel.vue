@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AgentPersona, Capability, PersonaCapability } from '@loom/api-contract'
 import { computed, ref } from 'vue'
+import ConfirmButton from './ConfirmButton.vue'
 
 /**
  * The capability registry — MCP servers and skills, attached per
@@ -98,7 +99,12 @@ const doAttach = (capabilityId: string) => {
  <div class="head">
  <span class="name">{{ capability.name }}</span>
  <span class="kind">{{ capability.kind }}</span>
- <button type="button" class="link danger" @click="emit('remove', capability.id)">remove</button>
+ <ConfirmButton
+ variant="link"
+ label="remove"
+ confirm-label="remove, detaching from every persona"
+ @confirm="emit('remove', capability.id)"
+ />
  </div>
  <p v-if="capability.description" class="desc">{{ capability.description }}</p>
  <p v-if="capability.kind === 'mcp'" class="meta">
@@ -117,13 +123,12 @@ const doAttach = (capabilityId: string) => {
  <span class="scope">
  {{ attachment.allowedTools.length > 0 ? attachment.allowedTools.join(', '): 'all tools' }}
  </span>
- <button
- type="button"
- class="link"
- @click="emit('detach', { personaId: attachment.personaId, capabilityId: capability.id })"
- >
- detach
- </button>
+ <ConfirmButton
+ variant="link"
+ label="detach"
+ confirm-label="detach"
+ @confirm="emit('detach', { personaId: attachment.personaId, capabilityId: capability.id })"
+ />
  </li>
  </ul>
 

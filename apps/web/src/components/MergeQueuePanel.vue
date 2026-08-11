@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { MergeQueueEntry } from '@loom/api-contract'
+import ConfirmButton from './ConfirmButton.vue'
 
 /**
  * The serialized merge queue. Renders the order, because the
@@ -39,14 +40,13 @@ const detailOf = (entry: MergeQueueEntry): string | null => {
  <div class="line">
  <span class="branch">{{ entry.branchName }}</span>
  <span class="status">{{ entry.status }}</span>
- <button
+ <ConfirmButton
  v-if="canCancel(entry)"
- type="button"
- class="cancel"
- @click="emit('cancel', entry.id)"
- >
- Cancel
- </button>
+ variant="link"
+ label="Cancel"
+ confirm-label="Remove from queue"
+ @confirm="emit('cancel', entry.id)"
+ />
  </div>
  <p v-if="detailOf(entry)" class="detail">{{ detailOf(entry) }}</p>
  <!-- Plain text, never v-html: this carries git output. -->

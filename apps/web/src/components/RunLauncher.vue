@@ -171,13 +171,7 @@ const harnessSummary = (persona: AgentPersona): string => {
 }
 
 select {
- padding: 0.35rem 0.5rem;
- border: 1px solid var(--border);
- border-radius: 0.375rem;
- background: var(--bg);
- color: var(--text);
- font: inherit;
- font-size: 0.85rem;
+ font-size: 0.82rem;
 }
 
 .styles {

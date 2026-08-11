@@ -47,6 +47,18 @@ const startRun = (input: {
 
 const settingsOpen = ref(false)
 
+const CONNECTION_LABEL: Record<string, string> = {
+ open: 'Live',
+ connecting: 'Connecting',
+ closed: 'Offline',
+}
+
+const CONNECTION_TITLE: Record<string, string> = {
+ open: 'Connected — messages and run updates arrive as they happen.',
+ connecting: 'Reconnecting to the realtime gateway…',
+ closed: 'Not connected. Nothing new will appear until this reconnects.',
+}
+
 /**
  * Each collapsed section still answers its own question.
  *
@@ -246,8 +258,18 @@ onBeforeUnmount( => {
  <h2 v-else>Inbox</h2>
 
  <div class="topbar-actions">
- <span v-if="view === 'workspace'" class="conn":class="snapshot.connection">
- {{ snapshot.connection }}
+ <!--
+ "open" is what a WebSocket calls itself, not what a human wants to know.
+ The question behind this pill is "am I seeing things as they happen".
+ -->
+ <span
+ v-if="view === 'workspace'"
+ class="conn"
+:class="snapshot.connection"
+:title="CONNECTION_TITLE[snapshot.connection]"
+ >
+ <span class="conn-dot" aria-hidden="true"></span>
+ {{ CONNECTION_LABEL[snapshot.connection] }}
  </span>
  <NotificationToggle
 :config="agentSnapshot.notificationConfig"
@@ -262,8 +284,9 @@ onBeforeUnmount( => {
  <button
  v-if="view === 'workspace'"
  type="button"
- class="inbox-toggle"
+ class="inbox-toggle settings-toggle"
  aria-label="Settings"
+ title="Settings — runners, repositories, personas, capabilities"
  @click="settingsOpen = true"
  >
  ⚙
@@ -521,28 +544,56 @@ onBeforeUnmount( => {
 }
 
 .conn {
- font-size: 0.7rem;
- text-transform: uppercase;
- letter-spacing: 0.06em;
- padding: 0.2rem 0.45rem;
+ display: inline-flex;
+ align-items: center;
+ gap: 0.35rem;
+ font-size: 0.72rem;
+ padding: 0.2rem 0.55rem;
  border-radius: 999px;
  border: 1px solid var(--border);
  color: var(--text-faint);
 }
 
+.conn-dot {
+ width: 0.4rem;
+ height: 0.4rem;
+ border-radius: 50%;
+ background: currentcolor;
+}
+
 .conn.open {
  color: var(--ok);
- border-color: color-mix(in oklab, var(--ok) 40%, transparent);
+ border-color: color-mix(in oklab, var(--ok) 35%, transparent);
+ background: color-mix(in oklab, var(--ok) 10%, transparent);
 }
 
 .conn.connecting {
  color: var(--warn);
- border-color: color-mix(in oklab, var(--warn) 40%, transparent);
+ border-color: color-mix(in oklab, var(--warn) 35%, transparent);
+}
+
+/* Only this one earns a pulse: it is the state where what you are looking at is
+ quietly going stale. */
+.conn.connecting.conn-dot {
+ animation: pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+ 50% {
+ opacity: 0.25;
+ }
+}
+
+@media (prefers-reduced-motion: reduce) {
+.conn.connecting.conn-dot {
+ animation: none;
+ }
 }
 
 .conn.closed {
  color: var(--danger);
  border-color: color-mix(in oklab, var(--danger) 40%, transparent);
+ background: color-mix(in oklab, var(--danger) 10%, transparent);
 }
 
 .topbar-actions {
@@ -563,6 +614,12 @@ onBeforeUnmount( => {
  font: inherit;
  font-size: 0.8rem;
  cursor: pointer;
+}
+
+.settings-toggle {
+ padding: 0.24rem 0.5rem;
+ font-size: 1.05rem;
+ line-height: 1;
 }
 
 .inbox-toggle.badge {

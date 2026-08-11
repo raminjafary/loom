@@ -59,3 +59,83 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/*
+ * One control style, defined once.
+ *
+ * Every panel had been restyling its own inputs, so the same select was four
+ * different heights depending on which card it sat in, and none of them showed a
+ * hover or a disabled state. These are the base; a component still overrides where
+ * it genuinely differs.
+ */
+input[type='text'],
+input[type='search'],
+input[type='number'],
+input[type='url'],
+input:not([type]),
+select,
+textarea {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+textarea {
+  resize: vertical;
+}
+
+select {
+  /* The native arrow is inconsistent across platforms and invisible on dark. */
+  appearance: none;
+  padding-right: 1.6rem;
+  background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position:
+    calc(100% - 0.85rem) 55%,
+    calc(100% - 0.55rem) 55%;
+  background-size:
+    0.3rem 0.3rem,
+    0.3rem 0.3rem;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* A select's own options are drawn by the OS, which does not inherit the page's
+   palette — without this, a dark-theme dropdown opens white. */
+option {
+  background: var(--bg);
+  color: var(--text);
+}
