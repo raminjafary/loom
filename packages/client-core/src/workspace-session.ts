@@ -1,6 +1,11 @@
 import type { Actor, Channel, Message, ServerEvent, Thread } from '@loom/api-contract'
 import type { LoomApi } from './api.js'
-import { connectRealtime, type ConnectionState, type RealtimeConnection } from './realtime.js'
+import {
+ connectRealtime,
+ type ConnectionState,
+ type RealtimeConnection,
+ type RealtimeOptions,
+} from './realtime.js'
 
 /**
  * All non-rendering client logic. A view layer — Vue, React, a
@@ -22,6 +27,16 @@ export interface WorkspaceSnapshot {
  readonly activeChannelId: string | null
  readonly activeThread: Thread | null
  readonly messages: Message[]
+ /**
+ * Whether older messages exist behind the ones loaded.
+ *
+ * A thread's first page is the newest 50, and an agent run alone can post several
+ * hundred events — so for any run worth reading about, the beginning of the
+ * conversation is off the top and there was previously no way back to it. The
+ * contract has always been paginated; this is the client finally saying so.
+ */
+ readonly hasMoreHistory: boolean
+ readonly loadingHistory: boolean
  readonly connection: ConnectionState
  readonly loading: boolean
  readonly error: string | null
@@ -30,10 +45,27 @@ export interface WorkspaceSnapshot {
 export interface WorkspaceSession {
  snapshot: WorkspaceSnapshot
  onChange(listener: (snapshot: WorkspaceSnapshot) => void): => void
+ /**
+ * Every realtime frame, as it arrives. Distinct from `onChange`, which reports
+ * this session's own state: a frame is a fact about the *workspace*, and the agent
+ * session needs it to know its structured state is stale.
+ */
+ onServerEvent(listener: (event: ServerEvent) => void): => void
  init: Promise<void>
  selectChannel(channelId: string): Promise<void>
  createChannel(name: string): Promise<void>
  send(text: string): Promise<void>
+ /**
+ * Prepends the next older page. A no-op when a page is already in flight or the
+ * beginning has been reached, so a scroll handler can call it freely.
+ */
+ loadOlderMessages: Promise<void>
+ /**
+ * Replays what a dropped socket missed. Called by the realtime layer on
+ * resubscribe, and exposed because it is the path that decides whether a
+ * reconnect leaves a hole in the thread.
+ */
+ refreshAfterReconnect: Promise<void>
  dispose: void
 }
 
@@ -43,6 +75,8 @@ const errorMessage = (error: unknown): string =>
 export const createWorkspaceSession = (options: {
  api: LoomApi
  wsUrl: string
+ /** Test seam, forwarded to `connectRealtime`; production passes nothing. */
+ socketFactory?: RealtimeOptions['socketFactory']
 }): WorkspaceSession => {
  let state: WorkspaceSnapshot = {
  currentActor: null,
@@ -50,13 +84,18 @@ export const createWorkspaceSession = (options: {
  activeChannelId: null,
  activeThread: null,
  messages: [],
+ hasMoreHistory: false,
+ loadingHistory: false,
  connection: 'connecting',
  loading: false,
  error: null,
  }
 
  const listeners = new Set<(snapshot: WorkspaceSnapshot) => void>
+ const eventListeners = new Set<(event: ServerEvent) => void>
  let realtime: RealtimeConnection | null = null
+ /** Opaque cursor for the next *older* page; null once the beginning is reached. */
+ let historyCursor: string | null = null
 
  const patch = (next: Partial<WorkspaceSnapshot>) => {
  state = {...state,...next }
@@ -68,10 +107,15 @@ export const createWorkspaceSession = (options: {
  * insertion is deduplicated by id and kept in ascending order rather than
  * assuming arrival order is correct.
  */
- const mergeMessage = (incoming: Message) => {
- if (incoming.threadId !== state.activeThread?.id) return
- if (state.messages.some((m) => m.id === incoming.id)) return
- const next = [...state.messages, incoming].sort((a, b) =>
+ const mergeMessages = (incoming: readonly Message[]) => {
+ const threadId = state.activeThread?.id
+ if (threadId === undefined) return
+ const known = new Set(state.messages.map((m) => m.id))
+ // One patch for the whole batch: a reconnect can replay hundreds of events, and
+ // notifying every listener per message would re-render the thread once per event.
+ const fresh = incoming.filter((m) => m.threadId === threadId && !known.has(m.id))
+ if (fresh.length === 0) return
+ const next = [...state.messages,...fresh].sort((a, b) =>
  a.createdAt.getTime === b.createdAt.getTime
  ? a.id.localeCompare(b.id)
 : a.createdAt.getTime - b.createdAt.getTime,
@@ -79,7 +123,10 @@ export const createWorkspaceSession = (options: {
  patch({ messages: next })
  }
 
+ const mergeMessage = (incoming: Message) => mergeMessages([incoming])
+
  const handleEvent = (event: ServerEvent) => {
+ for (const listener of eventListeners) listener(event)
  switch (event.type) {
  case 'message.created':
  mergeMessage(event.message)
@@ -98,15 +145,55 @@ export const createWorkspaceSession = (options: {
  }
  }
 
+ const PAGE_SIZE = 50
+
  const loadMessages = async (threadId: string) => {
- const page = await options.api.message.list({ threadId, limit: 50 })
+ const page = await options.api.message.list({ threadId, limit: PAGE_SIZE })
+ historyCursor = page.nextCursor
  // Server returns newest-first; the view renders oldest-first.
- patch({ messages: [...page.messages].reverse })
+ patch({ messages: [...page.messages].reverse, hasMoreHistory: page.nextCursor !== null })
  }
 
+ /**
+ * Catches up after a dropped socket.
+ *
+ * Refetching the newest page was the old answer, and it was wrong twice over: it
+ * threw away every older page the reader had already pulled in, and a run that
+ * posted more than a page's worth while the socket was down left a hole in the
+ * middle that nothing would ever fill. `message.backfill` asks the only question
+ * worth asking — what happened after the last message I hold — and existed unused
+ * for exactly this.
+ */
  const refreshActive = async => {
- if (!state.activeThread) return
- await loadMessages(state.activeThread.id)
+ const thread = state.activeThread
+ if (!thread) return
+ const newest = state.messages[state.messages.length - 1]
+ if (!newest) {
+ await loadMessages(thread.id)
+ return
+ }
+
+ let after = newest.id
+ try {
+ // Bounded: a socket down long enough to miss several pages must still converge,
+ // and the server caps each call at 100.
+ for (let page = 0; page < 20; page += 1) {
+ const missed = await options.api.message.backfill({
+ threadId: thread.id,
+ afterMessageId: after,
+ limit: 100,
+ })
+ mergeMessages(missed)
+ const last = missed[missed.length - 1]
+ if (missed.length < 100 || !last) return
+ after = last.id
+ }
+ } catch {
+ // The anchor is unknown to the server (a thread switched under us, a message
+ // that never committed). Falling back to the newest page loses history a
+ // reader had paged in, which is worth it against showing nothing new at all.
+ await loadMessages(thread.id)
+ }
  }
 
  return {
@@ -115,6 +202,11 @@ export const createWorkspaceSession = (options: {
  onChange(listener) {
  listeners.add(listener)
  return => listeners.delete(listener)
+ },
+
+ onServerEvent(listener) {
+ eventListeners.add(listener)
+ return => eventListeners.delete(listener)
  },
 
  async init {
@@ -130,10 +222,11 @@ export const createWorkspaceSession = (options: {
  workspaceId: me.workspaceId,
  onEvent: handleEvent,
  onState: (connection) => patch({ connection }),
- // A dropped socket means missed frames; refetch rather than assume.
+ // A dropped socket means missed frames; replay rather than assume.
  onResubscribe: => {
  void refreshActive
  },
+...(options.socketFactory ? { socketFactory: options.socketFactory }: {}),
  })
 
  const first = channels[0]
@@ -146,7 +239,14 @@ export const createWorkspaceSession = (options: {
  },
 
  async selectChannel(channelId) {
- patch({ loading: true, error: null, activeChannelId: channelId, messages: [] })
+ historyCursor = null
+ patch({
+ loading: true,
+ error: null,
+ activeChannelId: channelId,
+ messages: [],
+ hasMoreHistory: false,
+ })
  try {
  const thread = await options.api.channel.rootThread({ channelId })
  patch({ activeThread: thread })
@@ -190,10 +290,39 @@ export const createWorkspaceSession = (options: {
  }
  },
 
+ refreshAfterReconnect: refreshActive,
+
+ async loadOlderMessages {
+ const thread = state.activeThread
+ const cursor = historyCursor
+ if (!thread || cursor === null || state.loadingHistory) return
+ patch({ loadingHistory: true })
+ try {
+ const page = await options.api.message.list({
+ threadId: thread.id,
+ limit: PAGE_SIZE,
+ cursor,
+ })
+ historyCursor = page.nextCursor
+ // Prepended rather than merged: this page is strictly older than everything
+ // held, and re-sorting a thousand-message thread on every "load earlier" is
+ // work with no result to show for it.
+ patch({
+ messages: [...[...page.messages].reverse,...state.messages],
+ hasMoreHistory: page.nextCursor !== null,
+ })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ } finally {
+ patch({ loadingHistory: false })
+ }
+ },
+
  dispose {
  realtime?.close
  realtime = null
  listeners.clear
+ eventListeners.clear
  },
  }
 }

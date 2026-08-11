@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import type { Actor, Message } from '@loom/api-contract'
+import {
+ buildThreadRows,
+ continuesPrevious,
+ parseMarkdown,
+ type Block,
+ type ThreadRow,
+ type ToolRow,
+} from '@loom/client-core'
 import { computed, nextTick, ref, watch } from 'vue'
+import MarkdownText from './MarkdownText.vue'
 
 const props = defineProps<{
  messages: Message[]
@@ -8,30 +17,79 @@ const props = defineProps<{
  personaNameByRunId?: Record<string, string>
  /** Who this client is, so its own messages read as "You" rather than as an opaque id. */
  currentActor?: Actor | null
+ hasMoreHistory?: boolean
+ loadingHistory?: boolean
+}>
+
+const emit = defineEmits<{
+ (e: 'load-earlier'): void
+ /** Authors this thread shows that the client cannot yet name. */
+ (e: 'unknown-authors', agentRunIds: string[]): void
 }>
 
 const scroller = ref<HTMLElement | null>(null)
+const atBottom = ref(true)
+/** Messages that arrived while the reader was somewhere else in the thread. */
+const unseenBelow = ref(0)
 
-/**
- * Only auto-scroll when the reader is already at the bottom — yanking the
- * viewport while someone is reading history is worse than a missed message.
- */
-const stickToBottom = => {
+const BOTTOM_SLACK_PX = 80
+
+const measureBottom = => {
  const el = scroller.value
  if (!el) return true
- return el.scrollHeight - el.scrollTop - el.clientHeight < 80
+ return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_SLACK_PX
 }
+
+const scrollToBottom = => {
+ const el = scroller.value
+ if (!el) return
+ el.scrollTop = el.scrollHeight
+ atBottom.value = true
+ unseenBelow.value = 0
+}
+
+const onScroll = => {
+ atBottom.value = measureBottom
+ if (atBottom.value) unseenBelow.value = 0
+}
+
+/**
+ * Two things happen when the message list grows, and they are opposites.
+ *
+ * Appended at the bottom: follow, but only for a reader who was already there —
+ * yanking the viewport out from under someone reading history is worse than a
+ * missed message, and the count on the jump button is how they learn there is
+ * something to come back to.
+ *
+ * Prepended at the top ("load earlier"): hold the reader's place. The browser
+ * keeps `scrollTop` while the content above it grows, which silently scrolls the
+ * page — so the height the page grew by has to be added back.
+ */
+let firstMessageId: string | null = null
 
 watch(
  => props.messages.length,
- async (_next, previous) => {
- const shouldScroll = previous === 0 || stickToBottom
+ async (next, previous) => {
+ const el = scroller.value
+ const grewAtTop = next > previous && props.messages[0]?.id !== firstMessageId
+ const heightBefore = el?.scrollHeight ?? 0
+ const wasAtBottom = previous === 0 || measureBottom
+ firstMessageId = props.messages[0]?.id ?? null
+
  await nextTick
- if (shouldScroll && scroller.value) {
- scroller.value.scrollTop = scroller.value.scrollHeight
+ if (!scroller.value) return
+
+ if (grewAtTop) {
+ scroller.value.scrollTop += scroller.value.scrollHeight - heightBefore
+ } else if (wasAtBottom) {
+ scrollToBottom
+ } else {
+ unseenBelow.value += next - previous
  }
  },
 )
+
+const loadEarlier = => emit('load-earlier')
 
 /**
  * A human-readable author.
@@ -60,103 +118,221 @@ const initial = (actor: Actor): string => authorLabel(actor).slice(0, 1).toUpper
 const time = (value: Date): string =>
  value.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
+const rows = computed( => {
+ const built = buildThreadRows(props.messages)
+ return built.map((row, index) => ({
+ row,
+ grouped: continuesPrevious(row, built[index - 1]),
+ }))
+})
+
 /**
- * The server flattens every AgentEvent to plain text —
- * these prefixes (→/✓/✗, "Run completed"/"Run failed"/"Approval needed")
- * are that text's own stable shape, not a parsing hack layered on top of it.
- * Classifying them client-side is what turns a flat activity log back into
- * something scannable, without inventing a second wire format.
+ * A thread outlives the runs in it, so history is full of authors this client has
+ * no name for — and an opaque run id is the least useful thing a byline can say.
+ * Asking is cheap and idempotent; the session dedupes and bounds it.
  */
-type MessageKind = 'tool-call' | 'tool-ok' | 'tool-error' | 'run-ok' | 'run-error' | 'approval' | 'text'
+watch(
+ => props.messages,
+ (messages) => {
+ const unnamed = new Set<string>
+ for (const message of messages) {
+ if (message.author.kind !== 'agent_run') continue
+ if (props.personaNameByRunId?.[message.author.agentRunId] === undefined) {
+ unnamed.add(message.author.agentRunId)
+ }
+ }
+ if (unnamed.size > 0) emit('unknown-authors', [...unnamed])
+ },
+ { immediate: true },
+)
 
-interface Classified {
- kind: MessageKind
- toolName: string | null
- detail: string
+/**
+ * Disclosure is per row and remembered by message id, so a result that scrolls away
+ * and comes back is still open — and so a rebuild of the row list (every incoming
+ * message rebuilds it) does not silently close what someone is reading.
+ */
+const disclosure = ref<Record<string, boolean>>({})
+const showingAll = ref<Set<string>>(new Set)
+
+/**
+ * A failure nobody clicked is a failure nobody read, so an errored call opens
+ * itself — but that is only the default, which a reader can close like any other.
+ */
+const open = (row: ToolRow): boolean => disclosure.value[row.id] ?? row.status === 'error'
+
+const toggle = (row: ToolRow) => {
+ disclosure.value = {...disclosure.value, [row.id]: !open(row) }
 }
 
-const classify = (message: Message): Classified => {
- const text = message.body.text
-
- if (message.author.kind === 'agent_run') {
- const call = /^→ (\S+):?\s?([\s\S]*)$/.exec(text)
- if (call) return { kind: 'tool-call', toolName: call[1] ?? null, detail: call[2] ?? '' }
- const ok = /^✓ ?([\s\S]*)$/.exec(text)
- if (ok) return { kind: 'tool-ok', toolName: null, detail: ok[1] ?? '' }
- const err = /^✗ ?([\s\S]*)$/.exec(text)
- if (err) return { kind: 'tool-error', toolName: null, detail: err[1] ?? '' }
- }
-
- if (message.author.kind === 'system') {
- if (text.startsWith('Run completed')) return { kind: 'run-ok', toolName: null, detail: text }
- if (text.startsWith('Run failed')) return { kind: 'run-error', toolName: null, detail: text }
- if (text.startsWith('Approval needed')) return { kind: 'approval', toolName: null, detail: text }
- }
-
- return { kind: 'text', toolName: null, detail: text }
+const showAll = (row: ToolRow) => {
+ showingAll.value = new Set(showingAll.value).add(row.id)
 }
 
-const BADGE: Record<MessageKind, string> = {
- 'tool-call': '→',
- 'tool-ok': '✓',
- 'tool-error': '✗',
+const resultText = (row: ToolRow): string => {
+ if (row.result === null) return ''
+ if (showingAll.value.has(row.id) || !row.resultPreview?.truncated) return row.result
+ return row.resultPreview.visible
+}
+
+/**
+ * Parsed once per message rather than once per render: every incoming message
+ * rebuilds the row list, and re-parsing the markdown of a thread's whole history
+ * on each of those is work with no change to show for it.
+ */
+const markdownCache = new Map<string, Block[]>
+
+const blocksFor = (id: string, text: string): Block[] => {
+ const cached = markdownCache.get(id)
+ if (cached) return cached
+ if (markdownCache.size > 2_000) markdownCache.clear
+ const parsed = parseMarkdown(text)
+ markdownCache.set(id, parsed)
+ return parsed
+}
+
+const STATUS_GLYPH: Record<ToolRow['status'], string> = { pending: '·', ok: '✓', error: '✗' }
+
+const PLAIN_BADGE: Record<string, string> = {
  'run-ok': '✓',
  'run-error': '✗',
  approval: '⏸',
- text: '',
+ system: '·',
 }
 
-const rows = computed( => props.messages.map((message) => ({ message, classified: classify(message) })))
+const isTool = (row: ThreadRow): row is ToolRow => row.kind === 'tool'
 </script>
 
 <template>
- <div ref="scroller" class="messages">
+ <div class="thread">
+ <div ref="scroller" class="messages" @scroll.passive="onScroll">
  <p v-if="props.messages.length === 0" class="empty">Nothing here yet. Say something.</p>
 
+ <div v-if="props.hasMoreHistory" class="earlier">
+ <button type="button":disabled="props.loadingHistory" @click="loadEarlier">
+ {{ props.loadingHistory ? 'Loading…': 'Load earlier messages' }}
+ </button>
+ </div>
+
  <article
- v-for="{ message, classified } in rows"
-:key="message.id"
+ v-for="{ row, grouped } in rows"
+:key="row.id"
+ v-memo="[
+ row.kind,
+ isTool(row) ? row.status: '',
+ isTool(row) ? row.result: '',
+ isTool(row) && open(row),
+ isTool(row) && showingAll.has(row.id),
+ grouped,
+ ]"
  class="row"
-:class="classified.kind"
+:class="[row.kind, { grouped }]"
  >
- <div class="avatar":class="{ agent: message.author.kind === 'agent_run' }">
- {{ initial(message.author) }}
+ <div v-if="grouped" class="gutter" aria-hidden="true"></div>
+ <div v-else class="avatar":class="{ agent: row.author.kind === 'agent_run' }">
+ {{ initial(row.author) }}
  </div>
 
  <div class="content">
- <header>
- <span class="author">{{ authorLabel(message.author) }}</span>
- <span class="time">{{ time(message.createdAt) }}</span>
+ <header v-if="!grouped">
+ <span class="author">{{ authorLabel(row.author) }}</span>
+ <span class="time">{{ time(row.createdAt) }}</span>
  </header>
 
- <div v-if="classified.kind === 'text'" class="bubble">
- <!-- Model output is untrusted: text interpolation only, never v-html. -->
- <p class="body">{{ message.body.text }}</p>
+ <!-- A tool call and the result it produced, as one line until asked otherwise. -->
+ <template v-if="isTool(row)">
+ <button
+ type="button"
+ class="tool-line"
+:class="row.status"
+:aria-expanded="open(row)"
+ @click="toggle(row)"
+ >
+ <span class="glyph">{{ STATUS_GLYPH[row.status] }}</span>
+ <span class="tool-label">{{ row.tool.label }}</span>
+ <span class="target">{{ row.target }}</span>
+ <span v-if="row.status === 'pending'" class="meta running">running…</span>
+ <span v-else-if="row.resultPreview?.truncated" class="meta">
+ {{ row.resultPreview.hiddenLines + 1 }} lines
+ </span>
+ <span class="chevron":class="{ open: open(row) }">›</span>
+ </button>
+
+ <div v-if="open(row)" class="tool-body">
+ <p v-if="row.targetFull && row.targetFull !== row.target" class="argument">
+ {{ row.targetFull }}
+ </p>
+ <pre v-if="row.result !== null" class="result">{{ resultText(row) }}</pre>
+ <button
+ v-if="row.resultPreview?.truncated && !showingAll.has(row.id)"
+ type="button"
+ class="more"
+ @click="showAll(row)"
+ >
+ Show all {{ row.resultPreview.hiddenLines + 1 }} lines
+ </button>
+ <p class="tool-id">{{ row.tool.toolName }}</p>
+ </div>
+ </template>
+
+ <!-- Markdown as tokens, rendered to real elements — never v-html. -->
+ <div v-else-if="row.kind === 'text'" class="bubble">
+ <MarkdownText:blocks="blocksFor(row.id, row.text)" />
  </div>
 
  <div v-else class="event">
- <span class="badge">{{ BADGE[classified.kind] }}</span>
- <span v-if="classified.toolName" class="tool-name">{{ classified.toolName }}</span>
- <p class="detail">{{ classified.detail }}</p>
+ <span class="badge">{{ PLAIN_BADGE[row.kind] ?? '' }}</span>
+ <p class="detail">{{ row.text }}</p>
  </div>
  </div>
  </article>
  </div>
+
+ <button v-if="!atBottom" type="button" class="jump" @click="scrollToBottom">
+ <span v-if="unseenBelow > 0" class="count">{{ unseenBelow }}</span>
+ {{ unseenBelow > 0 ? 'new': 'Jump to latest' }} ↓
+ </button>
+ </div>
 </template>
 
 <style scoped>
+.thread {
+ position: relative;
+ flex: 1;
+ min-height: 0;
+ display: flex;
+ flex-direction: column;
+}
+
 .messages {
  flex: 1;
  overflow-y: auto;
+ overflow-anchor: none;
  padding: 1rem 1.25rem;
  display: flex;
  flex-direction: column;
- gap: 0.6rem;
+ gap: 0.35rem;
 }
 
 .empty {
  margin: auto;
  color: var(--text-faint);
+}
+
+.earlier {
+ display: flex;
+ justify-content: center;
+ padding-bottom: 0.5rem;
+}
+
+.earlier button {
+ padding: 0.25rem 0.7rem;
+ border: 1px solid var(--border);
+ border-radius: 999px;
+ background: var(--surface);
+ color: var(--text-muted);
+ font: inherit;
+ font-size: 0.78rem;
+ cursor: pointer;
 }
 
 .row {
@@ -165,9 +341,17 @@ const rows = computed( => props.messages.map((message) => ({ message, classified
  align-items: flex-start;
 }
 
-.avatar {
+.row.grouped {
+ margin-top: -0.2rem;
+}
+
+.avatar,
+.gutter {
  flex-shrink: 0;
  width: 1.75rem;
+}
+
+.avatar {
  height: 1.75rem;
  border-radius: 50%;
  display: flex;
@@ -206,23 +390,139 @@ header {
  font-size: 0.72rem;
 }
 
-.bubble.body {
- margin: 0;
- white-space: pre-wrap;
+.bubble {
  overflow-wrap: anywhere;
- line-height: 1.5;
 }
 
-/* Activity events (tool calls/results, run status, approvals) get a tinted,
- left-accented card — visually distinct from plain conversation so the
- feed reads as "log + chat", not one undifferentiated wall of text. */
-.event {
- display: grid;
- grid-template-columns: auto auto 1fr;
+/* One tool call, one line. The whole line is the control, so there is no
+ separate affordance to find before a result can be opened. */
+.tool-line {
+ display: flex;
  align-items: baseline;
- column-gap: 0.4rem;
- row-gap: 0.15rem;
+ gap: 0.45rem;
+ width: 100%;
+ padding: 0.2rem 0.5rem;
+ border: 0;
+ border-left: 2px solid var(--border);
+ border-radius: 0.3rem;
+ background: none;
+ color: var(--text-muted);
+ font: inherit;
+ font-size: 0.82rem;
+ text-align: left;
+ cursor: pointer;
+}
+
+.tool-line:hover {
+ background: var(--surface-hover);
+}
+
+.tool-line.glyph {
+ font-weight: 700;
+ color: var(--text-faint);
+}
+
+.tool-line.ok.glyph {
+ color: var(--ok);
+}
+
+.tool-line.error {
+ border-left-color: var(--danger);
+}
+
+.tool-line.error.glyph {
+ color: var(--danger);
+}
+
+.tool-line.pending {
+ border-left-color: var(--accent);
+}
+
+.tool-label {
+ font-weight: 600;
+ color: var(--text);
+ white-space: nowrap;
+}
+
+.target {
+ font-family: ui-monospace, monospace;
+ font-size: 0.78rem;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+ flex: 1 1 auto;
+ min-width: 0;
+}
+
+.meta {
+ font-size: 0.72rem;
+ color: var(--text-faint);
+ white-space: nowrap;
+}
+
+.meta.running {
+ color: var(--accent);
+}
+
+.chevron {
+ color: var(--text-faint);
+ transition: transform 120ms ease;
+}
+
+.chevron.open {
+ transform: rotate(90deg);
+}
+
+.tool-body {
+ margin: 0.15rem 0 0.35rem 0.5rem;
  padding: 0.4rem 0.6rem;
+ border-left: 2px solid var(--border);
+ border-radius: 0 0.3rem 0.3rem 0;
+ background: var(--surface);
+}
+
+.argument,
+.result {
+ margin: 0 0 0.35rem;
+ font-family: ui-monospace, monospace;
+ font-size: 0.78rem;
+ line-height: 1.45;
+ color: var(--text-muted);
+ white-space: pre-wrap;
+ overflow-wrap: anywhere;
+}
+
+.result {
+ /* A result a reader chose to open still must not own the viewport. */
+ max-height: 24rem;
+ overflow: auto;
+}
+
+.more {
+ padding: 0.1rem 0.45rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text-muted);
+ font: inherit;
+ font-size: 0.72rem;
+ cursor: pointer;
+}
+
+.tool-id {
+ margin: 0.35rem 0 0;
+ font-family: ui-monospace, monospace;
+ font-size: 0.68rem;
+ color: var(--text-faint);
+}
+
+/* Run status and approvals: still a card, because these are the lines a reader
+ is scanning for. */
+.event {
+ display: flex;
+ align-items: baseline;
+ gap: 0.4rem;
+ padding: 0.35rem 0.6rem;
  border-radius: 0.5rem;
  border-left: 3px solid var(--border);
  background: var(--surface);
@@ -233,48 +533,24 @@ header {
  font-weight: 700;
 }
 
-.tool-name {
- font-family: ui-monospace, monospace;
- font-weight: 600;
- padding: 0.05rem 0.4rem;
- border-radius: 0.3rem;
- background: var(--surface-hover);
-}
-
 .detail {
- grid-column: 1 / -1;
  margin: 0;
- font-family: ui-monospace, monospace;
- font-size: 0.8rem;
- color: var(--text-muted);
- white-space: pre-wrap;
  overflow-wrap: anywhere;
- line-height: 1.45;
 }
 
-.tool-call.event,
-.tool-call.badge {
- border-left-color: var(--accent);
- color: var(--accent);
-}
-
-.tool-ok.event,
 .run-ok.event {
  border-left-color: var(--ok);
 }
 
-.tool-ok.badge,
 .run-ok.badge {
  color: var(--ok);
 }
 
-.tool-error.event,
 .run-error.event {
  border-left-color: var(--danger);
  background: color-mix(in oklab, var(--danger) 8%, var(--surface));
 }
 
-.tool-error.badge,
 .run-error.badge {
  color: var(--danger);
 }
@@ -286,5 +562,31 @@ header {
 
 .approval.badge {
  color: var(--warn);
+}
+
+.jump {
+ position: absolute;
+ right: 1.25rem;
+ bottom: 0.75rem;
+ display: flex;
+ align-items: center;
+ gap: 0.35rem;
+ padding: 0.3rem 0.7rem;
+ border: 1px solid var(--border);
+ border-radius: 999px;
+ background: var(--bg);
+ color: var(--text-muted);
+ font: inherit;
+ font-size: 0.78rem;
+ box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+ cursor: pointer;
+}
+
+.jump.count {
+ padding: 0.05rem 0.4rem;
+ border-radius: 999px;
+ background: var(--accent);
+ color: var(--accent-contrast);
+ font-weight: 600;
 }
 </style>

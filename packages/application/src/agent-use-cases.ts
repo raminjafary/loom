@@ -1,9 +1,11 @@
 import {
  BUILTIN_PERSONAS,
+ DEFAULT_RESPONSE_STYLE,
  ForbiddenError,
  NotFoundError,
  ValidationError,
  agentRunActor,
+ applyResponseStyle,
  attenuateChildPersona,
  buildNotification,
  describeMergeFailure,
@@ -44,6 +46,7 @@ import {
  type PersonaSpec,
  type PlatformNoteKind,
  type Repository,
+ type ResponseStyle,
  type RepositoryId,
  type Runner,
  type RunnerId,
@@ -725,6 +728,15 @@ export const startAgentRun = async (
  personaId: AgentPersonaId
  /** What a human asked for via `@mention`; absent for the sidebar-picker path. */
  task?: string
+ /**
+ * How much prose this run should produce.
+ *
+ * Snapshotted into the persona spec at start like everything else here, so a run
+ * already in flight keeps the style it was launched with. Human-initiated runs
+ * only: a delegated child inherits its parent's, which is what keeps one swarm
+ * speaking in one voice.
+ */
+ responseStyle?: ResponseStyle
  /** Set when one run spawns another. */
  parentRunId?: AgentRunId
  relation?: AgentRunRelation
@@ -795,9 +807,18 @@ export const startAgentRun = async (
  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
  if (!persona) throw new NotFoundError('AgentPersona')
 
+ // A child inherits the style its parent was launched with, so one swarm speaks in
+ // one voice; only a human's start actually chooses one.
+ const responseStyle: ResponseStyle =
+ input.responseStyle ?? parent?.persona.responseStyle ?? DEFAULT_RESPONSE_STYLE
+
  const personaSpec: PersonaSpec = {
  name: persona.name,
- systemPrompt: parsePersonaMarkdown(persona.markdownSource).systemPrompt,
+ systemPrompt: applyResponseStyle(
+ parsePersonaMarkdown(persona.markdownSource).systemPrompt,
+ responseStyle,
+),
+ responseStyle,
  model: persona.model,
  tools: persona.tools,
  autoApprove: persona.harnessAutoApprove,

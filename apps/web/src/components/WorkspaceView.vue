@@ -31,10 +31,10 @@ const agentSnapshot = computed( => agent.snapshot)
 const activeChannel = computed(
  => snapshot.value.channels.find((c) => c.id === snapshot.value.activeChannelId) ?? null,
 )
-const personaNameByRunId = computed( => {
- const run = agentSnapshot.value.activeRun
- return run ? { [run.id]: run.persona.name }: {}
-})
+// Built and accumulated by the session: this used to be "whichever single run is
+// being watched", which meant every other author in the thread — siblings, and every
+// run that finished before the page opened — rendered as a raw run id.
+const personaNameByRunId = computed( => agentSnapshot.value.personaNameByRunId)
 
 const startRun = (input: { repositoryId: string; personaId: string }) => {
  const threadId = snapshot.value.activeThread?.id
@@ -139,7 +139,18 @@ const setCostWindow = (hours: number | null) => {
  void agent.refreshCostSummary(hours)
 }
 
+/**
+ * The two sessions, joined.
+ *
+ * Chat state and run state are deliberately separate sessions, but they are not
+ * independent facts: every run transition posts a thread message, so a frame on the
+ * chat socket is the earliest possible signal that run state is stale. This is what
+ * replaced chasing it with a 1.5s interval.
+ */
+let unsubscribeEvents: ( => void) | null = null
+
 onMounted( => {
+ unsubscribeEvents = store.onServerEvent( => agent.noteRealtimeActivity)
  void store.start
  void agent.start
  // Fetched once on mount and on demand, never on the run poll: workspace spend changes
@@ -153,6 +164,7 @@ onMounted( => {
 })
 
 onBeforeUnmount( => {
+ unsubscribeEvents?.
  window.removeEventListener('focus', onFocus)
  document.removeEventListener('visibilitychange', onFocus)
  navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
@@ -223,6 +235,10 @@ onBeforeUnmount( => {
 :messages="snapshot.messages"
 :persona-name-by-run-id="personaNameByRunId"
 :current-actor="snapshot.currentActor"
+:has-more-history="snapshot.hasMoreHistory"
+:loading-history="snapshot.loadingHistory"
+ @load-earlier="store.loadOlderMessages"
+ @unknown-authors="(ids) => agent.resolvePersonaNames(ids)"
  />
 
  <ApprovalCard

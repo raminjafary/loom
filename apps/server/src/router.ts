@@ -543,6 +543,7 @@ export const router = os.router({
  repositoryId: asRepositoryId(input.repositoryId),
  personaId: asAgentPersonaId(input.personaId),
 ...(input.task === undefined ? {}: { task: input.task }),
+...(input.responseStyle === undefined ? {}: { responseStyle: input.responseStyle }),
  }),
 ),
 ),

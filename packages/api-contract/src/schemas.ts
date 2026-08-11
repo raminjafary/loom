@@ -46,6 +46,16 @@ export const ThreadSchema = z.object({
  createdAt: z.date,
 })
 
+/**
+ * How much prose a run should produce.
+ *
+ * Duplicated from `@loom/domain`'s `RESPONSE_STYLES` rather than imported: this
+ * package deliberately depends on nothing, so the wire contract can be published
+ * without dragging the domain along. The two are kept honest by a test in
+ * apps/server, which is the first place both are in scope.
+ */
+export const ResponseStyleSchema = z.enum(['default', 'concise', 'explanatory', 'caveman'])
+
 export const MessagePageSchema = z.object({
  messages: z.array(MessageSchema),
  nextCursor: z.string.nullable,
@@ -406,6 +416,7 @@ export type Message = z.infer<typeof MessageSchema>
 export type Channel = z.infer<typeof ChannelSchema>
 export type Thread = z.infer<typeof ThreadSchema>
 export type MessagePage = z.infer<typeof MessagePageSchema>
+export type ResponseStyle = z.infer<typeof ResponseStyleSchema>
 export type ServerEvent = z.infer<typeof ServerEventSchema>
 export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>

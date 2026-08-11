@@ -11,6 +11,7 @@ import {
  ChannelSchema,
  MergeQueueEntrySchema,
  MessagePageSchema,
+ ResponseStyleSchema,
  MessageSchema,
  NotificationConfigSchema,
  NotificationTargetSchema,
@@ -327,6 +328,12 @@ export const contract = {
  personaId: z.string,
  /** What a human asked for via `@mention`; absent for the sidebar picker. */
  task: z.string.min(1).max(4_000).optional,
+ /**
+ * How much prose this run should produce.
+ * Per run rather than per persona: the same persona is wanted terse on the fifth
+ * run of the afternoon and explanatory when someone is reading along.
+ */
+ responseStyle: ResponseStyleSchema.optional,
  }),
 )
 .output(AgentRunSchema),

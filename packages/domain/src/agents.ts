@@ -1,4 +1,5 @@
 import type { CapabilitySpec } from './capabilities.js'
+import type { ResponseStyle } from './response-styles.js'
 import type {
  AgentPersonaId,
  AgentRunId,
@@ -120,6 +121,16 @@ export interface PersonaSpec {
  * Only meaningful on a planner; enforced at authoring time.
  */
  readonly delegates?: string[]
+ /**
+ * The response style this run was launched with.
+ *
+ * Recorded on the snapshot rather than only folded into `systemPrompt` for two
+ * reasons: a UI has to be able to say which style a finished run used, and a
+ * delegated child has to be able to inherit its parent's so one swarm speaks in
+ * one voice. Optional for the same reason `capabilities` is — runs that predate
+ * it have stored persona JSON without it.
+ */
+ readonly responseStyle?: ResponseStyle
 }
 
 /**

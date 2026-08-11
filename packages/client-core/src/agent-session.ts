@@ -10,6 +10,7 @@ import type {
  NotificationConfig,
  PersonaGroup,
  Repository,
+ ResponseStyle,
  RunControl,
  Runner,
  SwarmBoard,
@@ -24,15 +25,27 @@ import type { PushRegistration } from './push.js'
  * mixing them would force every chat-only view to also carry run/approval
  * concerns.
  *
- * There is no realtime frame for agent-run/approval state yet (`ServerEvent`
- * only carries message/channel/thread — see workspace-session.ts). Rather
- * than extend that contract now, this session polls the real objects once it
- * knows a run exists; the chat message stream already tells a viewer that
- * *something* happened, this just hydrates the structured state behind it.
+ * There is no realtime frame for agent-run/approval state (`ServerEvent` only
+ * carries message/channel/thread — see workspace-session.ts), and rather than
+ * extend that contract this session re-reads the real objects. What *drives* that
+ * re-read is the socket, not a clock: every run transition already posts a thread
+ * message, so a frame arriving is the earliest signal the structured state behind
+ * it is stale. See `noteRealtimeActivity`; the interval underneath is a safety net
+ * for what posts no message at all.
  */
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
-const POLL_INTERVAL_MS = 1500
+/**
+ * The safety net behind `noteRealtimeActivity`, not the primary mechanism.
+ *
+ * It was 1.5s, because it was the only thing keeping run state current. Now that a
+ * gateway frame drives the refresh, this only has to cover what produces no thread
+ * message at all — a queue advancing on the server's own sweep, a run reaped for
+ * inactivity — and covering that ten times a minute is enough.
+ */
+const POLL_INTERVAL_MS = 10_000
+/** Long enough to coalesce a burst of tool events, short enough to feel immediate. */
+const NUDGE_DEBOUNCE_MS = 150
 
 export interface AgentSnapshot {
  readonly runners: Runner[]
@@ -81,6 +94,16 @@ export interface AgentSnapshot {
  * model tier is worth it is asking about all of them.
  */
  readonly costSummary: CostSummary | null
+ /**
+ * Run id → persona name, for every run this client has heard of.
+ *
+ * The thread needs it and cannot derive it: a message's author is an
+ * `agent_run` actor carrying an opaque id, and a thread outlives the runs in it.
+ * Keyed by run and never evicted, because a run's persona name is fixed once the
+ * run exists — so a finished run keeps its name after it leaves every list.
+ * `resolvePersonaNames` fills the gaps for runs that predate this session.
+ */
+ readonly personaNameByRunId: Record<string, string>
  readonly lastPairing: { runnerId: string; rawToken: string } | null
  readonly diff: string | null
  // Inbox — runs needing a human decision, workspace-wide.
@@ -163,6 +186,8 @@ export interface AgentSession {
  repositoryId: string
  personaId: string
  task?: string
+ /** How much prose this run should produce. */
+ responseStyle?: ResponseStyle
  }): Promise<void>
  /**
  * Switches which of several concurrent runs this client is watching. Does not stop or change anything server-side — it is purely which
@@ -232,6 +257,25 @@ export interface AgentSession {
  pauseAllRuns: Promise<void>
  /** Lifts the pause. Never restarts what the pause cancelled. */
  resumeAllRuns: Promise<void>
+ /**
+ * Tells this session that something happened in the workspace *now* — called with
+ * every realtime frame the workspace session receives.
+ *
+ * Run state has no realtime frame of its own, but every transition worth showing
+ * already posts a thread message, and those are fanned out immediately. This is how
+ * the socket drives the refresh that an interval used to chase. Safe to call as
+ * often as frames arrive: it coalesces, and does nothing when no run is watched.
+ */
+ noteRealtimeActivity: void
+ /**
+ * Fills in persona names for runs this session never saw — the ones whose messages
+ * are in the thread's history but which finished before the page was opened.
+ *
+ * Called by the view with the author ids it is about to render. Deduplicated,
+ * bounded per call, and it never asks twice about a run the server would not
+ * resolve, so a thread scrolled far back does not become a burst of requests.
+ */
+ resolvePersonaNames(agentRunIds: readonly string[]): Promise<void>
  dispose: void
 }
 
@@ -252,6 +296,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  mergeQueue: [],
  swarmBoard: null,
  costSummary: null,
+ personaNameByRunId: {},
  treeNotes: [],
  lastPairing: null,
  diff: null,
@@ -266,11 +311,38 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
 
  const listeners = new Set<(snapshot: AgentSnapshot) => void>
  let pollTimer: ReturnType<typeof setInterval> | null = null
+ let nudgeTimer: ReturnType<typeof setTimeout> | null = null
 
  const patch = (next: Partial<AgentSnapshot>) => {
  state = {...state,...next }
  for (const listener of listeners) listener(state)
  }
+
+ /**
+ * Learns run → persona name from whatever was just fetched.
+ *
+ * Every read that returns a run passes through here, so the thread can name an
+ * author without a second round-trip. Accumulating rather than replacing: a run
+ * that finishes leaves `activeRuns`, and its messages stay in the thread.
+ */
+ const rememberPersonaNames = (
+ entries: ReadonlyArray<{ id: string; name: string } | null | undefined>,
+) => {
+ let changed = false
+ const next = {...state.personaNameByRunId }
+ for (const entry of entries) {
+ if (!entry || next[entry.id] === entry.name) continue
+ next[entry.id] = entry.name
+ changed = true
+ }
+ if (changed) patch({ personaNameByRunId: next })
+ }
+
+ const fromRuns = (runs: readonly AgentRun[]) =>
+ runs.map((run) => ({ id: run.id, name: run.persona.name }))
+
+ /** Run ids already asked about, so a run the server cannot resolve is asked about once. */
+ const resolvedRunIds = new Set<string>
 
  /**
  * The Inbox and the merge queue are read together, deliberately: they are the
@@ -286,6 +358,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.mergeQueue.list,
  ])
  patch({ needsAttention, mergeQueue })
+ rememberPersonaNames(fromRuns(needsAttention))
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -304,6 +377,11 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.workerNote.listByTree({ agentRunId }),
  ])
  patch({ swarmBoard, treeNotes })
+ // The board is the best source there is for a *tree*: one card per run,
+ // each already carrying the persona that ran it.
+ rememberPersonaNames(
+ (swarmBoard?.cards ?? []).map((card) => ({ id: card.runId, name: card.personaName })),
+)
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -330,6 +408,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.approval.listPending({ agentRunId }),
  ])
  patch({ inspectedRun: run, inspectedApprovals })
+ rememberPersonaNames([{ id: run.id, name: run.persona.name }])
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -342,34 +421,68 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  }
  }
 
- const pollActiveRun = (agentRunId: string) => {
- stopPolling
- pollTimer = setInterval( => {
- void (async => {
+ /**
+ * One pass over the watched run's structured state. Both the socket nudge and the
+ * safety-net timer go through here, so the two can never disagree about what a
+ * refresh consists of.
+ */
+ const syncWatchedRun = async (agentRunId: string): Promise<void> => {
  try {
  const [run, pendingApprovals, activeRuns] = await Promise.all([
  options.api.agentRun.get({ agentRunId }),
  options.api.approval.listPending({ agentRunId }),
- // On the same tick rather than its own timer: a swarm's membership
- // changes exactly when its runs do, and a second interval would just
- // be a second thing to get out of step.
+ // Together rather than on their own timers: a swarm's membership changes
+ // exactly when its runs do, and a second schedule would just be a second
+ // thing to get out of step.
  options.api.agentRun.listActive,
  ])
  patch({ activeRun: run, pendingApprovals, activeRuns })
- // On the same tick as the run itself, for the reason `listActive` is: a
- // sibling writing a note is the tree changing, and a second timer would
- // only be a second thing to fall out of step.
+ rememberPersonaNames([{ id: run.id, name: run.persona.name },...fromRuns(activeRuns)])
+ // For the reason `listActive` is here: a sibling writing a note is the tree
+ // changing, and a separate schedule would only be another thing to drift.
  await fetchBoard(agentRunId)
- // Keeps polling while *others* are still running, so a sibling finishing
- // still updates the list — stopping on the watched run alone would freeze
- // the swarm view at whatever it looked like when this one ended.
+ // Keeps watching while *others* are still running, so a sibling finishing still
+ // updates the list — stopping on the watched run alone would freeze the swarm
+ // view at whatever it looked like when this one ended.
  if (TERMINAL_STATUSES.has(run.status) && activeRuns.length === 0) stopPolling
  } catch (error) {
  patch({ error: errorMessage(error) })
  stopPolling
  }
- })
+ }
+
+ const pollActiveRun = (agentRunId: string) => {
+ stopPolling
+ pollTimer = setInterval( => {
+ void syncWatchedRun(agentRunId)
  }, POLL_INTERVAL_MS)
+ }
+
+ /**
+ * The socket, not the clock.
+ *
+ * Structured run state — status, approvals, the board — has no realtime frame of
+ * its own, and it used to be chased with a 1.5s interval. It does not need one:
+ * every transition worth reacting to already posts a thread message, and those are
+ * fanned out over the gateway the moment they happen. So a frame arriving *is* the
+ * signal, and the interval behind it drops to a slow safety net.
+ *
+ * Coalesced, because a busy run posts several events in a burst and one refresh
+ * answers all of them. Trailing rather than leading: the last event in a burst is
+ * the one whose state we want.
+ */
+ const noteRealtimeActivity = : void => {
+ const watched = state.activeRun
+ if (!watched) return
+ // Only while there is something to be current *about*. Without this, every
+ // ordinary chat message in a workspace with no runs would cost five requests.
+ const busy = !TERMINAL_STATUSES.has(watched.status) || state.activeRuns.length > 0
+ if (!busy || nudgeTimer !== null) return
+ nudgeTimer = setTimeout( => {
+ nudgeTimer = null
+ const current = state.activeRun
+ if (current) void syncWatchedRun(current.id)
+ }, NUDGE_DEBOUNCE_MS)
  }
 
  /**
@@ -414,6 +527,10 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  capabilities,
  capabilityAttachments,
  })
+ rememberPersonaNames([
+...fromRuns(activeRuns),
+ activeRun ? { id: activeRun.id, name: activeRun.persona.name }: null,
+ ])
  // Resume watching whatever run is already active — otherwise a page reload during
  // a run leaves no path back to its approval card.
  if (activeRun && !TERMINAL_STATUSES.has(activeRun.status)) {
@@ -614,6 +731,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  // Diff cleared: it belongs to whichever run it was loaded for, and showing
  // one run's diff under another's name is worse than showing none.
  patch({ activeRun: run, pendingApprovals, diff: null })
+ rememberPersonaNames([{ id: run.id, name: run.persona.name }])
  // Fetched here as well as on the poll tick, because a finished run has no
  // poll — and its tree's ledger is exactly what a human reviewing it wants.
  await fetchBoard(agentRunId)
@@ -826,9 +944,38 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
 
  refreshInbox: fetchInbox,
  inspectRun: fetchInspected,
+ noteRealtimeActivity,
+
+ async resolvePersonaNames(agentRunIds) {
+ const unknown = [...new Set(agentRunIds)].filter(
+ (id) => state.personaNameByRunId[id] === undefined && !resolvedRunIds.has(id),
+)
+ if (unknown.length === 0) return
+ // Bounded per call: a thread scrolled far enough back can name a great many
+ // runs, and a page of history must not become a burst of requests.
+ const batch = unknown.slice(0, 20)
+ for (const id of batch) resolvedRunIds.add(id)
+ const resolved = await Promise.all(
+ batch.map(async (agentRunId) => {
+ try {
+ const run = await options.api.agentRun.get({ agentRunId })
+ return { id: run.id, name: run.persona.name }
+ } catch {
+ // A run this client cannot read is not an error worth a banner; the
+ // thread falls back to the short id, which is what it did before.
+ return null
+ }
+ }),
+)
+ rememberPersonaNames(resolved)
+ },
 
  dispose {
  stopPolling
+ if (nudgeTimer !== null) {
+ clearTimeout(nudgeTimer)
+ nudgeTimer = null
+ }
  listeners.clear
  },
  }

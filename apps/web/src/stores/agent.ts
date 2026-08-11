@@ -85,6 +85,9 @@ export const useAgentStore = defineStore('agent', () => {
     getRawTranscript: (agentRunId: string) => session.getRawTranscript(agentRunId),
     refreshInbox: () => session.refreshInbox(),
     inspectRun: (agentRunId: string) => session.inspectRun(agentRunId),
+    noteRealtimeActivity: () => session.noteRealtimeActivity(),
+    resolvePersonaNames: (agentRunIds: readonly string[]) =>
+      session.resolvePersonaNames(agentRunIds),
     dispose: () => session.dispose(),
   }
 })
