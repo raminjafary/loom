@@ -11,6 +11,7 @@ import {
  type WireAgentEvent,
  type WirePersonaSpec,
 } from '@loom/runner-protocol'
+import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
 import { runAgent } from './claude-agent-adapter.js'
 import {
@@ -37,9 +38,11 @@ import {
  pushRunBranch,
 } from './run-workspace.js'
 import {
+ checkImageFreshness,
  runAgentInSandbox,
  sandboxConfigFromEnv,
  sandboxEnabled,
+ staleSandboxImageAcknowledged,
  unsandboxedAcknowledged,
 } from './sandbox.js'
 
@@ -104,6 +107,21 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const useSandbox = sandboxEnabled
  const egress = egressConfigFromEnv
  const USAGE_POLL_MS = Number(process.env.LOOM_USAGE_POLL_MS ?? 5_000)
+
+ /**
+ * Whether the sandbox image was built from the sources this Runner is running
+ *. Memoized: neither the image nor this process's own files change
+ * while it lives, and the check costs a container spawn.
+ *
+ * `agent-host.ts` sits beside this file, so the entry is resolved relative to this
+ * module rather than to a cwd the Runner does not control.
+ */
+ const AGENT_HOST_ENTRY = fileURLToPath(new URL('./agent-host.ts', import.meta.url))
+ let freshnessPromise: ReturnType<typeof checkImageFreshness> | null = null
+ const imageFreshness = (config: typeof sandbox) => {
+ freshnessPromise ??= checkImageFreshness(config, AGENT_HOST_ENTRY)
+ return freshnessPromise
+ }
 
  let socket: WebSocket | null = null
  let closed = false
@@ -451,6 +469,24 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  flushPlan
  return
+ }
+
+ // Before the lease, so a refusal never leaves one issued. Memoized across runs —
+ // the answer cannot change while this process lives, and it costs a container spawn.
+ const freshness = await imageFreshness(sandbox)
+ if (!freshness.ok) {
+ if (!staleSandboxImageAcknowledged) {
+ sendAgentEvent(input.runId, {
+ kind: 'run_failed',
+ message:
+ `Refusing to run: ${freshness.reason} An out-of-date image does not fail — ` +
+ 'it runs older agent-side code, so the model is quietly never offered whatever ' +
+ 'the newer sources added, and the run completes looking entirely normal. Set ' +
+ 'LOOM_ALLOW_STALE_SANDBOX_IMAGE=1 if you are pinning an image deliberately.',
+ })
+ return
+ }
+ log(`WARNING: ${freshness.reason} (LOOM_ALLOW_STALE_SANDBOX_IMAGE=1 is set)`)
  }
 
  // Refreshed immediately before the run rather than only on a timer: the token

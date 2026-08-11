@@ -52,7 +52,27 @@ COPY apps/runner/src/agent-host.ts src/
 COPY apps/runner/src/sandbox-protocol.ts src/
 COPY apps/runner/src/claude-agent-adapter.ts src/
 COPY apps/runner/src/path-check.ts src/
+# The in-process MCP channels the adapter registers, and the capability mapping it
+# reads. All three are agent-side by construction: a note is data, a plan is a
+# proposal the server decides on, and capabilities.ts only maps an already-attached
+# registry entry onto SDK options. Absent from this list until now, which is why no
+# sandboxed run could call write_note, read_notes or submit_plan — see
+# src/sandbox-closure.ts.
+COPY apps/runner/src/notes-tool.ts src/
+COPY apps/runner/src/planner-tool.ts src/
+COPY apps/runner/src/capabilities.ts src/
 COPY tsconfig.base.json./
+
+# Fail the build if a source copied above imports one that was not — same principle as
+# the native-CLI assertion, for the same reason: the alternative is a container that
+# starts and then behaves as if a tool simply does not exist.
+#
+# The same run writes the closure's content digest into the image. sandbox.ts compares
+# it against the host's sources before the first sandboxed run, so an image built before
+# a source changed is a refused run with a reason rather than a run that silently
+# executes older code. That is not hypothetical — see sandbox-closure.ts.
+COPY apps/runner/src/sandbox-closure.ts src/
+RUN /app/node_modules/.bin/tsx src/sandbox-closure.ts src/agent-host.ts --emit /app/closure-digest
 
 # The uid apps/runner/src/sandbox.ts pins with `--user 1000:1000`. `node` is
 # already uid 1000 in this image; naming it numerically keeps the two in sync

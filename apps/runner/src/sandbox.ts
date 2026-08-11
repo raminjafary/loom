@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { sandboxCredentialsFile } from './host-claude-auth.js'
+import { IMAGE_DIGEST_PATH, closureDigest } from './sandbox-closure.js'
 import { SandboxEventSchema, decodeFrameLine, encodeFrame } from './sandbox-protocol.js'
 
 const execFileAsync = promisify(execFile)
@@ -119,6 +120,74 @@ export const sandboxEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
  */
 export const unsandboxedAcknowledged = (env: NodeJS.ProcessEnv = process.env): boolean =>
  env.LOOM_ALLOW_UNSANDBOXED === 'i-understand-the-agent-gets-my-privileges'
+
+/**
+ * Refuse to start a run whose image was built from different sources than the Runner
+ * is running.
+ *
+ * The image is built by hand and is easy to forget, and forgetting is not a loud
+ * failure: the container starts, the run completes, work is committed, cost is metered
+ * — and the agent silently lacks whatever the newer sources added. That is not a
+ * hypothetical. `notes-tool.ts`, `planner-tool.ts` and `capabilities.ts` were missing
+ * from every sandboxed run for four days; a model told to call `write_note` and offered
+ * no such tool wrote a markdown file into the clone instead, which is precisely where
+ * The worker-notes design says notes must never go. The whole test suite was green throughout,
+ * because the suite exercises the host's copy of code the container did not have.
+ *
+ * Refusing rather than warning, for the same reason `unsandboxedAcknowledged` exists: a
+ * warning in a Runner log is indistinguishable from the silence it replaces. The escape
+ * hatch is an env var, so an operator deliberately pinning an image can still do so and
+ * has said out loud that they meant to.
+ */
+export const staleSandboxImageAcknowledged = (
+ env: NodeJS.ProcessEnv = process.env,
+): boolean => env.LOOM_ALLOW_STALE_SANDBOX_IMAGE === '1'
+
+export type ImageFreshness =
+ | { readonly ok: true; readonly digest: string }
+ | { readonly ok: false; readonly reason: string }
+
+/**
+ * Compares the digest baked into the image against the host's agent-side sources.
+ *
+ * `hostEntry` is the path to `agent-host.ts` in the Runner's own tree; both sides run
+ * the identical walk in sandbox-closure.ts, so a mismatch means the file *contents*
+ * differ, not merely their location.
+ *
+ * An image with no digest file is treated as stale rather than as fine: it was built
+ * before this check existed, which is exactly the population the check is about.
+ */
+export const checkImageFreshness = async (
+ config: SandboxConfig,
+ hostEntry: string,
+): Promise<ImageFreshness> => {
+ let imageDigest: string
+ try {
+ const { stdout } = await execFileAsync(config.runtime, [
+ 'run', '--rm', '--entrypoint', 'cat', config.image, IMAGE_DIGEST_PATH,
+ ])
+ imageDigest = stdout.trim
+ } catch {
+ return {
+ ok: false,
+ reason:
+ `the image ${config.image} carries no source digest, so it predates this check. ` +
+ 'Rebuild it: docker build -f apps/runner/Dockerfile.sandbox -t loom-agent-sandbox:latest.',
+ }
+ }
+
+ const hostDigest = closureDigest(hostEntry)
+ if (imageDigest !== hostDigest) {
+ return {
+ ok: false,
+ reason:
+ `the image ${config.image} was built from different agent sources than this Runner ` +
+ `is running (image ${imageDigest.slice(0, 12)}, sources ${hostDigest.slice(0, 12)}). ` +
+ 'Rebuild it: docker build -f apps/runner/Dockerfile.sandbox -t loom-agent-sandbox:latest.',
+ }
+ }
+ return { ok: true, digest: hostDigest }
+}
 
 /**
  * Container name, which doubles as its DNS name on the sandbox network — that is how

@@ -1,8 +1,13 @@
+import { readFileSync } from 'node:fs'
+import { basename } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { closureDigest, walkClosure } from './sandbox-closure.js'
 import {
  buildSandboxArgs,
  sandboxConfigFromEnv,
  sandboxEnabled,
+ staleSandboxImageAcknowledged,
  unsandboxedAcknowledged,
 } from './sandbox.js'
 
@@ -128,5 +133,53 @@ describe('sandbox configuration', => {
  // Only an explicit 0 opts out, so a typo cannot silently unsandbox a Runner.
  expect(sandboxEnabled({ LOOM_SANDBOX_ENABLED: 'false' } as NodeJS.ProcessEnv)).toBe(true)
  expect(sandboxEnabled({ LOOM_SANDBOX_ENABLED: '0' } as NodeJS.ProcessEnv)).toBe(false)
+ })
+
+ it('requires a deliberate acknowledgement to run a stale image', => {
+ // A stale image is a *silent* failure: the run completes and the agent is simply
+ // never offered whatever the newer sources added. Four days of sandboxed runs had
+ // no worker-notes tools this way. Default must be refuse, not warn.
+ expect(staleSandboxImageAcknowledged({} as NodeJS.ProcessEnv)).toBe(false)
+ expect(
+ staleSandboxImageAcknowledged({ LOOM_ALLOW_STALE_SANDBOX_IMAGE: 'true' } as NodeJS.ProcessEnv),
+).toBe(false)
+ expect(
+ staleSandboxImageAcknowledged({ LOOM_ALLOW_STALE_SANDBOX_IMAGE: '1' } as NodeJS.ProcessEnv),
+).toBe(true)
+ })
+})
+
+/**
+ * The image must contain the code the Runner thinks it is running.
+ *
+ * Both halves of this were live-found, not designed: the COPY list in
+ * Dockerfile.sandbox silently omitted three agent-side modules, and the image itself
+ * silently predated them. Neither failed anything.
+ */
+describe("the agent host's source closure", => {
+ const entry = fileURLToPath(new URL('./agent-host.ts', import.meta.url))
+
+ it('is fully present in the source tree', => {
+ expect(walkClosure(entry).missing).toEqual([])
+ })
+
+ it('names every file Dockerfile.sandbox must copy into the image', => {
+ // The point of asserting the set rather than just "no missing imports": adding an
+ // import to an agent-side module is exactly the change that must not pass review
+ // without the Dockerfile changing too.
+ const dockerfile = readFileSync(
+ fileURLToPath(new URL('../Dockerfile.sandbox', import.meta.url)),
+ 'utf8',
+)
+ for (const file of walkClosure(entry).files) {
+ expect(dockerfile).toContain(`apps/runner/src/${basename(file)}`)
+ }
+ })
+
+ it('hashes to something stable and content-dependent', => {
+ // The digest is compared across a host tree and a container filesystem, so it must
+ // depend on contents and not on where the files live.
+ expect(closureDigest(entry)).toMatch(/^[0-9a-f]{64}$/)
+ expect(closureDigest(entry)).toBe(closureDigest(entry))
  })
 })
