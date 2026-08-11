@@ -229,6 +229,20 @@ export interface AgentRunRepositoryPort {
  }): Promise<AgentRun>
  /** Children of one run — the tree view's per-parent lookup. */
  listByParent(workspaceId: WorkspaceId, parentRunId: AgentRunId): Promise<AgentRun[]>
+ /**
+ * Every run at or below `rootRunId`, in creation order — the whole tree, not one
+ * generation of it.
+ *
+ * Separate from `listByParent` because the two answer different questions and the
+ * difference is invisible until a tree is three levels deep: the board built itself
+ * from `[root,...listByParent(root)]` and was correct only while a Planner's
+ * children were all leaves. A sub-planner's workers would simply not appear —
+ * no error, a board that quietly omits the runs doing the work.
+ *
+ * Depth-bounded in the adapter rather than trusted to terminate: a cycle from a bad
+ * backfill must degrade the answer, not spin the query.
+ */
+ listTree(workspaceId: WorkspaceId, rootRunId: AgentRunId): Promise<AgentRun[]>
  findById(workspaceId: WorkspaceId, id: AgentRunId): Promise<AgentRun | null>
  updateStatus(
  workspaceId: WorkspaceId,

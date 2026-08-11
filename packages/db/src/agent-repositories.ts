@@ -498,6 +498,45 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  return rows.map((row) => toAgentRun(row as AgentRunRow))
  },
 
+ /**
+ * One recursive CTE rather than a walk in the use case: a tree read happens on
+ * every board fetch and every ledger build, and N round-trips per generation is
+ * exactly the per-card cost the discipline refuses.
+ *
+ * `depth < 32` bounds it the same way `resolveDelegationDepth` does — far past any
+ * configured `MAX_DELEGATION_DEPTH`, so reaching it means the data has a cycle
+ * rather than the tree being legitimately deep, and the query returns a truncated
+ * answer instead of never returning one. `workspace_id` is matched at every hop,
+ * not only at the root: a tree is not a tenancy boundary, and inheriting the root's
+ * workspace would make a mis-parented row a cross-tenant read.
+ */
+ async listTree(workspaceId, rootRunId) {
+ // The CTE returns ids only, and the rows come back through the same typed select
+ // every other read here uses. Selecting `*` from the recursive term would hand
+ // `toAgentRun` snake_case columns it does not accept, and re-mapping twenty of
+ // them by hand is a silent-drift risk every time a column is added.
+ const idRows = await db.execute<{ id: string }>(sql`
+ with recursive tree as (
+ select id, 0 as depth from agent_run
+ where workspace_id = ${workspaceId} and id = ${rootRunId}
+ union all
+ select child.id, tree.depth + 1 from agent_run child
+ join tree on child.parent_run_id = tree.id
+ where child.workspace_id = ${workspaceId} and tree.depth < 32
+)
+ select id from tree
+ `)
+ const ids = [...(idRows as unknown as Array<{ id: string }>)].map((row) => row.id)
+ if (ids.length === 0) return []
+
+ const rows = await db
+.select
+.from(agentRun)
+.where(and(eq(agentRun.workspaceId, workspaceId), inArray(agentRun.id, ids)))
+.orderBy(agentRun.createdAt)
+ return rows.map((row) => toAgentRun(row as AgentRunRow))
+ },
+
  async countByRepository(workspaceId, repositoryId) {
  const [row] = await db
 .select({

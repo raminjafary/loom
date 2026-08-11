@@ -236,12 +236,99 @@ export const listTreeNotes = async (
  * fetch, and to append the mechanical summary of whatever the cap dropped so that
  * elided notes are accounted for rather than merely counted.
  */
+/**
+ * Which runs' notes a given run may be shown: its ancestors, itself, its own
+ * descendants, and its immediate siblings — but **not a sibling's subtree**.
+ *
+ * **This is a context-economy rule before it is a confidentiality one.** A ledger
+ * keyed by tree root was right while a tree was one Planner and its workers: "a swarm
+ * shares context while two unrelated goals do not pollute each other" holds when the
+ * swarm *is* one area. Once a second Planner node exists, one tree stops meaning one
+ * area, and a worker under sub-planner A receives everything B's workers wrote —
+ * refilling its context with exactly the material that makes a long-running single
+ * agent drift. A swarm beats one agent because a worker spends its whole context on
+ * one narrow piece of work; a tree-wide ledger spends it on the other subtrees.
+ *
+ * Each clause earns its place, and dropping any one of them breaks something
+ * measured:
+ *
+ * - **Siblings**, because the parallel-branch measurement measured coordination between peers as the thing that
+ * prevents conflicts — the "hands a later run the ledger its siblings
+ * already wrote" is the flat fan-out, and it must keep working exactly as it did.
+ * In a flat tree this rule admits everything, so Phase 2 behaviour is unchanged.
+ * - **Ancestors**, because a decision or a path claim made above has to reach
+ * everyone below it, or two subtrees implement the same concept differently.
+ * Authority and context flow the same direction — down.
+ * - **Descendants**, because a Planner that cannot read its own workers' findings and
+ * blockers cannot aggregate or re-plan.
+ * - **Not a sibling's subtree**, which is the whole cut: sub-planners A and B see each
+ * other as peers and coordinate, while A's workers never see inside B. Siblings
+ * coordinate through their common parent, which is what a parent is for.
+ *
+ * A human's note has `agentRunId: null` — it is about the tree, not any one run — and
+ * is always in scope. A person addressing a swarm is addressing all of it.
+ */
+export const inScopeRunIds = (
+ /** Only `id` and `parentRunId` are read — the rest of `AgentRun` is irrelevant to shape. */
+ tree: readonly Pick<AgentRun, 'id' | 'parentRunId'>[],
+ run: Pick<AgentRun, 'id'>,
+): Set<AgentRunId> => {
+ const byId = new Map(tree.map((entry) => [entry.id, entry]))
+ const scope = new Set<AgentRunId>([run.id])
+
+ const self = byId.get(run.id)
+ for (let current = self; current?.parentRunId;) {
+ const parent = byId.get(current.parentRunId)
+ // A cycle from a bad backfill stops here rather than looping: a run already in
+ // scope is never re-entered.
+ if (!parent || scope.has(parent.id)) break
+ scope.add(parent.id)
+ current = parent
+ }
+
+ // Immediate siblings only — their descendants stay out, which is the cut.
+ if (self?.parentRunId) {
+ for (const entry of tree) {
+ if (entry.parentRunId === self.parentRunId) scope.add(entry.id)
+ }
+ }
+
+ /**
+ * Descendants, by repeatedly admitting any run whose parent is already a
+ * descendant-or-self. Seeded from `run` alone rather than from `scope`, because
+ * `scope` already holds ancestors and siblings — growing from it would pull in a
+ * sibling's whole subtree and every other branch of the tree with it.
+ */
+ const below = new Set<AgentRunId>([run.id])
+ for (let pass = 0; pass < tree.length; pass += 1) {
+ let grew = false
+ for (const entry of tree) {
+ if (below.has(entry.id) || !entry.parentRunId) continue
+ if (below.has(entry.parentRunId)) {
+ below.add(entry.id)
+ scope.add(entry.id)
+ grew = true
+ }
+ }
+ if (!grew) break
+ }
+
+ return scope
+}
+
 export const buildContextLedger = async (
  deps: NoteDeps,
  input: { workspaceId: WorkspaceId; run: AgentRun; treeRunId?: AgentRunId },
 ): Promise<string> => {
  const treeRunId = input.treeRunId ?? (await resolveTreeRunId(deps, input.run))
- const all = await deps.workerNotes.listByTree(input.workspaceId, treeRunId)
+ const everything = await deps.workerNotes.listByTree(input.workspaceId, treeRunId)
+ if (everything.length === 0) return ''
+
+ const tree = await deps.agentRuns.listTree(input.workspaceId, treeRunId)
+ const scope = inScopeRunIds(tree, input.run)
+ const all = everything.filter(
+ (note) => note.agentRunId === null || scope.has(note.agentRunId),
+)
  if (all.length === 0) return ''
 
  const { selected, elided } = selectNotesForContext(all)
@@ -364,10 +451,21 @@ export const getSwarmBoard = async (
  if (!root) throw new NotFoundError('AgentRun')
 
  const notes = await deps.workerNotes.listByTree(input.workspaceId, treeRunId)
- const children = await deps.agentRuns.listByParent(input.workspaceId, treeRunId)
- // The root is a card too: a Planner's own status is what a human reads first, and
- // a board that showed only workers would go blank while the Planner was thinking.
- const runs = [root,...children]
+ /**
+ * The whole tree, at any depth. The root is a card too — a Planner's own status is
+ * what a human reads first, and a board that showed only workers would go blank
+ * while the Planner was thinking — and `listTree` includes it.
+ *
+ * This was `[root,...listByParent(root)]`, which is the same list only while every
+ * one of the root's children is a leaf. A sub-planner's workers were simply absent:
+ * no error, a board omitting the runs actually doing the work, and `pathCollisions`
+ * blind to every collision involving one of them.
+ *
+ * The human's view stays tree-wide on purpose. Scoping belongs to what a *model*
+ * is handed (see `buildContextLedger`) — a person supervising a swarm needs to see
+ * across the subtrees precisely because the agents cannot.
+ */
+ const runs = await deps.agentRuns.listTree(input.workspaceId, treeRunId)
 
  /**
  * The live fields, in one statement for the whole tree — the section's cost

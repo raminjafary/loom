@@ -139,9 +139,12 @@ export interface RunLimits {
  */
 const MAX_DELEGATION_WALK = 32
 
-const resolveDelegationDepth = async (deps: AgentDeps, parent: AgentRun): Promise<number> => {
- let depth = 1
- let current = parent
+const resolveDelegationDepth = async (deps: AgentDeps, run: AgentRun): Promise<number> => {
+ // 0 for a run a human started. The caller adds 1 for the child being placed, so
+ // seeding this at 1 made every tree read one level deeper than it was and the
+ // effective ceiling one lower than the configured one.
+ let depth = 0
+ let current = run
  while (depth < MAX_DELEGATION_WALK) {
  if (!current.parentRunId) return depth
  const next = await deps.agentRuns.findById(current.workspaceId, current.parentRunId)
@@ -951,7 +954,9 @@ export const startAgentRun = async (
  // children at `ownDepth + 1`, so a grandchild is possible only with a hop to
  // spare. Offering a sub-planner without one names a persona whose every
  // subtask the depth check would then refuse.
- deps.limits.maxDelegationDepth - ((parent ? await resolveDelegationDepth(deps, parent): 0) + 1),
+ deps.limits.maxDelegationDepth -
+ (parent ? (await resolveDelegationDepth(deps, parent)) + 1: 0) -
+ 1,
 )
 : null
 

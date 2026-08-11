@@ -99,8 +99,19 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  'Break the goal into the smallest number of subtasks that can each be done independently on their own ' +
  'branch, and submit them with the submit_plan tool in one call. Name a persona for each subtask from ' +
  'the ones registered in this workspace. Two subtasks that edit the same file will conflict when their ' +
- 'branches merge, so prefer splitting by file or by area rather than by phase. Submit exactly one plan, ' +
- 'then stop.',
+ 'branches merge, so prefer splitting by file or by area rather than by phase. ' +
+ /**
+ * The split-brain rule. Two planners handed "design the config format" will
+ * each design one, and both answers arrive as finished branches — the most
+ * expensive way to discover a disagreement. A design decision costs one
+ * paragraph here and a rewrite anywhere downstream, so it is made once, at the
+ * only node that can see both subtasks.
+ */
+ 'Make the design decisions yourself rather than delegating them: decide the shared shapes, names and ' +
+ 'formats that more than one subtask depends on, state them in the subtask text, and record each one ' +
+ 'with the write_note tool as a "decision". A subtask that has to invent a shared convention will invent ' +
+ 'a different one than its sibling. ' +
+ 'Submit exactly one plan, then stop.',
  }),
  define({
  name: 'product-manager',
