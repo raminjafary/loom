@@ -381,6 +381,8 @@ export interface SwarmBoardCard {
  */
  readonly parentRunId: AgentRunId | null
  readonly personaName: string
+ /** Whether this run decomposes rather than acts. */
+ readonly planner: boolean
  readonly title: string
  readonly status: string
  readonly relation: string | null
@@ -498,6 +500,7 @@ export const getSwarmBoard = async (
  runId: entry.id,
  parentRunId: entry.parentRunId,
  personaName: entry.persona.name,
+ planner: entry.persona.planner === true,
  title: own.find((note) => note.kind === 'run_started')?.title ?? entry.persona.name,
  status: entry.status,
  relation: entry.relation,

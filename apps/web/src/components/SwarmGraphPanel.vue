@@ -196,7 +196,11 @@ const collisionCount = computed(
  v-for="node in graph.nodes"
 :key="node.card.runId"
  class="node"
-:class="[node.activity.kind, { blocked: node.card.blockerCount > 0 }]"
+:class="[
+ node.activity.kind,
+ node.role,
+ { blocked: node.card.blockerCount > 0 },
+ ]"
 :transform="`translate(${left(node)} ${top(node)})`"
  role="button"
  tabindex="0"
@@ -204,6 +208,14 @@ const collisionCount = computed(
  @keydown.enter="emit('watch', node.card.runId)"
  >
  <rect:width="NODE_W":height="NODE_H" rx="10" class="box" />
+ <!--
+ A planner reads as a different kind of thing, not a differently
+ coloured one: with sub-planners, half the middle
+ nodes of a tree decompose and half write code, and every one of them
+ is an ordinary delegation child. The rail is on the leading edge so
+ it survives the node being clipped at the canvas boundary.
+ -->
+ <rect v-if="node.role === 'planner'":height="NODE_H" width="4" rx="2" class="rail" />
  <!--
  Every string below is interpolated as SVG text, never markup: a title
  comes from a run's task and is model-adjacent.
@@ -478,6 +490,25 @@ header button:disabled {
 
 .node:hover.box {
  stroke: var(--accent);
+}
+
+/*
+ Deliberately not a colour: colour on this canvas already means activity (working,
+ quiet, blocked), and a second meaning on the same channel would make both unreadable.
+ A planner is a different shape of thing, so it gets a shape.
+*/
+.node.planner.box {
+ stroke-dasharray: none;
+ stroke-width: 1.5;
+}
+
+.node.planner.rail {
+ fill: var(--muted);
+}
+
+.node.planner:hover.rail,
+.node.planner.working.rail {
+ fill: var(--accent);
 }
 
 .node.working.box {

@@ -4,6 +4,7 @@ import { buildRunTree, costByRelation, totalCostUsd, type RunTreeCard } from './
 const card = (over: Partial<RunTreeCard> & { runId: string }): RunTreeCard => ({
  parentRunId: null,
  personaName: 'swe',
+ planner: false,
  title: over.runId,
  status: 'completed',
  relation: null,

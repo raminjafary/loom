@@ -14,6 +14,7 @@ const card = (over: Partial<BoardCard>): BoardCard =>
  runId: 'r1',
  parentRunId: null,
  personaName: 'swe',
+ planner: false,
  title: 'do the thing',
  status: 'running',
  relation: null,

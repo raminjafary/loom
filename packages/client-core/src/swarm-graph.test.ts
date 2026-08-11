@@ -7,6 +7,7 @@ const card = (over: Partial<BoardCard> & { runId: string }): BoardCard =>
  ({
  parentRunId: null,
  personaName: 'swe',
+ planner: false,
  title: over.runId,
  status: 'running',
  relation: null,
@@ -31,6 +32,42 @@ const board = (
  cards: BoardCard[],
  pathCollisions: SwarmBoard['pathCollisions'] = [],
 ): SwarmBoard => ({ treeRunId: cards[0]?.runId ?? 'root', cards, pathCollisions }) as SwarmBoard
+
+describe('buildSwarmGraph roles', => {
+ /**
+ * Depth used to answer "is this a planner" — layer 0 planned, everything below
+ * worked. A three-level tree has planners on two layers, and every one of them is
+ * an ordinary `delegation` child, so neither depth nor relation separates them.
+ */
+ it('marks a sub-planner as a planner even though it is a delegation child', => {
+ const graph = buildSwarmGraph({
+ treeRunId: 'root',
+ cards: [
+ card({ runId: 'root', planner: true }),
+ card({ runId: 'area', parentRunId: 'root', relation: 'delegation', planner: true }),
+ card({ runId: 'unit', parentRunId: 'area', relation: 'delegation' }),
+ ],
+ pathCollisions: [],
+ })
+ const roleOf = (id: string) => graph.nodes.find((node) => node.card.runId === id)?.role
+ expect(roleOf('root')).toBe('planner')
+ expect(roleOf('area')).toBe('planner')
+ expect(roleOf('unit')).toBe('worker')
+ // The distinction the role carries is exactly the one the edge does not.
+ expect(graph.edges.filter((edge) => edge.kind === 'delegation')).toHaveLength(2)
+ })
+
+ it('treats a card with no planner flag as a worker', => {
+ // Runs predating the field have stored persona JSON without it; a missing flag
+ // must read as "not a planner" rather than as unknown.
+ const graph = buildSwarmGraph({
+ treeRunId: 'root',
+ cards: [card({ runId: 'root' })],
+ pathCollisions: [],
+ })
+ expect(graph.nodes[0]?.role).toBe('worker')
+ })
+})
 
 describe('buildSwarmGraph', => {
  it('layers a planner and its workers', => {

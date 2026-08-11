@@ -31,6 +31,16 @@ export interface SwarmGraphNode {
  readonly depth: number
  /** Position within its layer, left to right. */
  readonly order: number
+ /**
+ * What this node *is*, as opposed to what it is to its parent.
+ *
+ * Depth used to answer this — layer 0 planned, everything below worked — and with
+ * sub-planners it does not: a three-level tree has planners on two layers and every
+ * one of them is an ordinary `delegation` child, so neither `depth` nor `relation`
+ * separates them. Drawn the same, a corporation reads as a wide fan-out with extra
+ * rows, which is the one thing the graph exists to make legible.
+ */
+ readonly role: 'planner' | 'worker'
 }
 
 export interface SwarmGraphEdge {
@@ -103,7 +113,13 @@ export const buildSwarmGraph = (board: SwarmBoard | null, now: Date = new Date):
 .map(({ card, depth }) => {
  const order = perLayer.get(depth) ?? 0
  perLayer.set(depth, order + 1)
- return { card, activity: describeCardActivity(card, now), depth, order }
+ return {
+ card,
+ activity: describeCardActivity(card, now),
+ depth,
+ order,
+ role: card.planner ? ('planner' as const): ('worker' as const),
+ }
  })
 
  const edges: SwarmGraphEdge[] = []

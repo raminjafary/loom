@@ -217,6 +217,15 @@ export const SwarmBoardCardSchema = z.object({
  /** Null for the tree's root — what makes the board renderable as a tree. */
  parentRunId: z.string.nullable,
  personaName: z.string,
+ /**
+ * Whether this card decomposes rather than acts.
+ *
+ * `relation` says what a node is to its *parent*; this says what it is in itself, and
+ * with sub-planners the two stop coinciding — every node in a three-level tree is a
+ * `delegation` child, and half of them are planners. Without it the graph draws a
+ * middle node identically whether it decomposes or writes code.
+ */
+ planner: z.boolean,
  title: z.string,
  status: z.string,
  relation: z.string.nullable,
