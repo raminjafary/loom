@@ -197,6 +197,7 @@ describe('contract completeness', => {
  'runner',
  'repository',
  'mergeQueue',
+ 'workerNote',
  'persona',
  'capability',
  'personaGroup',
@@ -216,6 +217,10 @@ describe('contract completeness', => {
  'setVerifyCommand',
  ])
  expect(Object.keys(contract.mergeQueue)).toEqual(['list', 'enqueue', 'cancel'])
+ // No agent-authored write here, deliberately: `authorKind` is a provenance fact,
+ // and a client that could set it could launder its own text into the trusted
+ // section of every later worker's prompt.
+ expect(Object.keys(contract.workerNote)).toEqual(['listByTree', 'write', 'board'])
  expect(Object.keys(contract.persona)).toEqual(['list', 'get', 'create', 'update'])
  expect(Object.keys(contract.personaGroup)).toEqual(['list', 'create', 'update', 'delete'])
  expect(Object.keys(contract.agentRun)).toEqual([

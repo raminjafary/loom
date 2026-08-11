@@ -65,6 +65,8 @@ export const useAgentStore = defineStore('agent', () => {
     enqueueMerge: (agentRunId: string) => session.enqueueMerge(agentRunId),
     cancelMerge: (entryId: string) => session.cancelMerge(entryId),
     refreshMergeQueue: () => session.refreshMergeQueue(),
+    refreshBoard: (agentRunId: string) => session.refreshBoard(agentRunId),
+    writeNote: (input: Parameters<typeof session.writeNote>[0]) => session.writeNote(input),
     setVerifyCommand: (repositoryId: string, verifyCommand: string | null) =>
       session.setVerifyCommand(repositoryId, verifyCommand),
     registerNotificationTarget: (registration: PushRegistration) =>

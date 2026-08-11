@@ -2,6 +2,7 @@ import { classifyToolEffect, isRiskyTool } from '@loom/domain'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
+import { createNotesTool } from './notes-tool.js'
 import { createPlannerTool } from './planner-tool.js'
 import { resolveWithinRoot } from './path-check.js'
 import {
@@ -44,6 +45,29 @@ const emitEvent = async (event: SandboxEvent): Promise<void> => {
 
 const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>
 
+/**
+ * Note writes and note reads awaiting the host's answer.
+ *
+ * Keyed by a request id this process mints, exactly like `pendingPermissions`: both
+ * are an in-process SDK callback that has to round-trip out of the container and
+ * back. The two maps are separate because their payloads are, and because a note
+ * failing must never be able to resolve a permission gate.
+ */
+const pendingNotes = new Map<
+ string,
+ (result: { ok: boolean; reason?: string | undefined }) => void
+>
+const pendingNoteReads = new Map<
+ string,
+ (result: { ok: boolean; ledger?: string | undefined; error?: string | undefined }) => void
+>
+
+let requestCounter = 0
+const nextRequestId = : string => {
+ requestCounter += 1
+ return `${process.pid}-${requestCounter}`
+}
+
 const main = async : Promise<void> => {
  // Logged, not silent. An agent host that produces no output at all is
  // indistinguishable from one that never started, which cost real debugging time.
@@ -73,6 +97,24 @@ const main = async : Promise<void> => {
  return
  }
 
+ if (parsed.data.t === 'note_result') {
+ const resolveNote = pendingNotes.get(parsed.data.requestId)
+ if (resolveNote) {
+ pendingNotes.delete(parsed.data.requestId)
+ resolveNote({ ok: parsed.data.ok,...(parsed.data.reason === undefined ? {}: { reason: parsed.data.reason }) })
+ }
+ return
+ }
+
+ if (parsed.data.t === 'notes_result') {
+ const resolveRead = pendingNoteReads.get(parsed.data.requestId)
+ if (resolveRead) {
+ pendingNoteReads.delete(parsed.data.requestId)
+ resolveRead(parsed.data)
+ }
+ return
+ }
+
  const resolvePermission = pendingPermissions.get(parsed.data.toolUseId)
  if (resolvePermission) {
  pendingPermissions.delete(parsed.data.toolUseId)
@@ -93,10 +135,45 @@ const main = async : Promise<void> => {
  // it lives here and its result crosses the stdio boundary like everything else.
  const plannerTool = persona.planner ? createPlannerTool: null
 
+ /**
+ * The notes channel. Both halves round-trip to the host,
+ * because the ledger is workspace-side state and this process is inside a sandbox
+ * with no network and no database — which is also the reason the notes a worker
+ * reads cannot be tampered with from in here.
+ */
+ const notesTool = createNotesTool({
+ writeNote: (note) => {
+ const requestId = nextRequestId
+ // Emitted immediately, not queued for the end of the run: see the `note`
+ // frame's comment in sandbox-protocol.ts.
+ emit({ t: 'note', requestId, note })
+ return new Promise((resolve) => {
+ pendingNotes.set(requestId, (result) =>
+ resolve(result.ok ? { ok: true }: { ok: false, reason: result.reason ?? 'the platform refused it' }),
+)
+ })
+ },
+ readNotes: => {
+ const requestId = nextRequestId
+ emit({ t: 'notes_request', requestId })
+ return new Promise((resolve) => {
+ pendingNoteReads.set(requestId, (result) =>
+ resolve(
+ result.ok
+ ? { ok: true, ledger: result.ledger ?? '' }
+: { ok: false, error: result.error ?? 'the platform could not read them' },
+),
+)
+ })
+ },
+ })
+
  await runAgent({
  persona,
  cwd: command.cwd,
 ...(command.task === undefined ? {}: { task: command.task }),
+...(command.contextLedger === undefined ? {}: { contextLedger: command.contextLedger }),
+ notesTool,
 ...(command.resumeSessionId === undefined ? {}: { resumeSessionId: command.resumeSessionId }),
  isRiskyTool,
  // Resolved inside the container, against the mount point — which is where

@@ -8,12 +8,13 @@ import {
 } from '@anthropic-ai/claude-agent-sdk'
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
+import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { PLANNER_SERVER_NAME, PLANNER_TOOL_NAME } from './planner-tool.js'
 
 /**
  * `AgentExecutionPort` implementation for the Claude Agent SDK —
  * imported as a library, not shelled out to as a subprocess, per the
- * corrected design in the architecture/the driven side.
+ * corrected design in the architecture/the driven side — driven side.
  *
  * Branding note: must be called "Claude Agent" in any user-facing text,
  * never "Claude Code" — a license condition of the SDK, not a style choice.
@@ -134,6 +135,21 @@ export interface RunAgentOptions {
  */
  readonly plannerTool?: McpSdkServerConfigWithInstance
  /**
+ * The worker-notes server — `write_note` and `read_notes`.
+ * Present for every run that has a ledger to share, which is every run the
+ * platform starts; absent only where no note channel exists (a bare adapter test).
+ */
+ readonly notesTool?: McpSdkServerConfigWithInstance
+ /**
+ * The tree's ledger, rendered and fenced by the *server*.
+ *
+ * Appended to the prompt rather than to the persona's system prompt: the persona is
+ * the operator's instruction source and must stay authoritative, and mixing
+ * agent-authored text into it would make one compromised worker's note read as
+ * part of every later worker's own instructions.
+ */
+ readonly contextLedger?: string
+ /**
  * Aborts the SDK's agent loop mid-flight. Owned by
  * the caller so a `cancel_run` frame arriving on the socket can reach a run
  * that is already streaming.
@@ -206,7 +222,10 @@ export const settingSourcesFromEnv = (
  * call expression.
  */
 export const buildQueryOptions = (
- options: Pick<RunAgentOptions, 'persona' | 'cwd' | 'resumeSessionId' | 'plannerTool'>,
+ options: Pick<
+ RunAgentOptions,
+ 'persona' | 'cwd' | 'resumeSessionId' | 'plannerTool' | 'notesTool'
+ >,
  settingSources: SettingSourceName[] = settingSourcesFromEnv,
 ) => {
  const capabilities = options.persona.capabilities ?? []
@@ -215,10 +234,39 @@ export const buildQueryOptions = (
  // MCP server so the decomposition schema is enforced by the tool call, not by
  // parsing prose after the fact.
  if (options.plannerTool) mcpServers[PLANNER_SERVER_NAME] = options.plannerTool
+ // The shared-context channel, in-process for the same reason.
+ if (options.notesTool) mcpServers[NOTES_SERVER_NAME] = options.notesTool
  const skills = capabilities
 .filter((capability) => capability.kind === 'skill')
 .map((capability) => capability.name)
  const scopedMcpTools = allowedMcpToolNames(capabilities)
+
+ /**
+ * The platform's own in-process tools, which must be added to the agent's tool
+ * list explicitly.
+ *
+ * **This is load-bearing and was found only by a live run.** The SDK documents
+ * `AgentDefinition.tools` as "Array of allowed tool names. If omitted, inherits all
+ * tools from parent" — so a persona declaring `tools: [Read, Edit]` gets an
+ * *exhaustive* allowlist, and an MCP tool absent from it is never offered to the
+ * model. Registering the server is not enough.
+ *
+ * The consequence for a Planner is worse than for notes, and is why this comment is
+ * long: a Planner declares `tools: []`, which as an exhaustive allowlist means it
+ * could not call `submit_plan` either — the one thing a Planner exists to do. No
+ * test caught it because the integration tests inject a `plan_submitted` frame
+ * directly, which is the right way to test the *server*, and exactly the wrong way
+ * to notice that the model was never offered the tool.
+ *
+ * Note what this does *not* do: it does not widen what a persona may do in any
+ * sense the attenuation cares about. These two tools are the platform's own
+ * channels — submitting a plan has no effect the server does not then decide for
+ * itself, and a note is data. Neither reads or writes the filesystem.
+ */
+ const platformTools = [
+...(options.plannerTool ? [PLANNER_TOOL_NAME]: []),
+...(options.notesTool ? NOTES_TOOL_NAMES: []),
+ ]
 
  return {
  cwd: options.cwd,
@@ -227,7 +275,7 @@ export const buildQueryOptions = (
  [options.persona.name]: {
  description: options.persona.name,
  prompt: options.persona.systemPrompt,
- tools: options.persona.tools,
+ tools: [...options.persona.tools,...platformTools],
  model: options.persona.model,
  },
  },
@@ -255,13 +303,34 @@ export const buildQueryOptions = (
 ...(skills.length > 0 ? { skills }: {}),
  // Only when an attachment narrowed scope: an empty list would mean "no tools",
  // the opposite of the "everything this server offers" default.
- // A Planner's tool must survive the scope narrowing above, or a Planner that
- // also holds a scoped MCP capability would lose the only thing it can do.
-...(scopedMcpTools
- ? { allowedTools: options.plannerTool ? [...scopedMcpTools, PLANNER_TOOL_NAME]: scopedMcpTools }
-: {}),
+ // The platform's own in-process tools must survive that narrowing, or a persona
+ // that also holds a scoped MCP capability would lose the delegation channel (a
+ // Planner's only ability) or the notes channel as a side effect of
+ // scoping something unrelated.
+...(scopedMcpTools ? { allowedTools: [...scopedMcpTools,...platformTools] }: {}),
 ...(options.resumeSessionId ? { resume: options.resumeSessionId }: {}),
  }
+}
+
+/**
+ * The run's opening prompt, with the tree's shared context after the task rather
+ * than before it.
+ *
+ * The order is deliberate and is the reason this is a named function with a test.
+ * The task is what the operator asked for; the ledger contains text other *models*
+ * wrote. Putting the ledger first would frame the task as something arriving inside
+ * a context an attacker already established — the same reason
+ * `renderNotesForPrompt` puts its "this is data" warning before the fenced content
+ * and not after.
+ */
+export const buildPrompt = (
+ options: Pick<RunAgentOptions, 'persona' | 'task' | 'contextLedger'>,
+): string => {
+ const opening = options.task
+ ? `You are ${options.persona.name}. ${options.task}`
+: `You are ${options.persona.name}. Begin working now.`
+ const ledger = options.contextLedger?.trim
+ return ledger ? `${opening}\n\n${ledger}`: opening
 }
 
 export const runAgent = async (options: RunAgentOptions): Promise<void> => {
@@ -310,9 +379,7 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  return result
  }
 
- const prompt = options.task
- ? `You are ${options.persona.name}. ${options.task}`
-: `You are ${options.persona.name}. Begin working now.`
+ const prompt = buildPrompt(options)
 
  const stream = query({
  prompt,

@@ -51,7 +51,26 @@ export interface SandboxOptions {
  /** Verbatim provider-stream line, forwarded under the same backpressure. */
  readonly onRawMessage?: (line: string) => void | Promise<void>
  /** A Planner's decomposition, submitted inside the container. */
- readonly onPlan?: (subtasks: { title: string; task: string; personaName: string }[]) => void
+ readonly onPlan?: (
+ subtasks: { title: string; task: string; personaName: string; paths?: string[] }[],
+) => void
+ /**
+ * One note the agent wrote, relayed as it is written. The
+ * verdict travels back into the tool result, so a refused note is something the
+ * model can see and correct.
+ */
+ readonly onNote?: (note: {
+ kind: string
+ title: string
+ body: string
+ paths?: string[] | undefined
+ }) => Promise<{ ok: true } | { ok: false; reason: string }>
+ /** The agent asking for its tree's ledger mid-run. */
+ readonly onNotesRequest?: => Promise<
+ { ok: true; ledger: string } | { ok: false; error: string }
+ >
+ /** The tree's ledger at start, rendered and fenced server-side. */
+ readonly contextLedger?: string
  readonly onSessionId?: (sessionId: string) => void
  readonly onPermissionRequest: (
  toolUseId: string,
@@ -299,6 +318,7 @@ export const runAgentInSandbox = async (
  t: 'start',
  persona: options.persona,
 ...(options.task === undefined ? {}: { task: options.task }),
+...(options.contextLedger === undefined ? {}: { contextLedger: options.contextLedger }),
  cwd: WORK_DIR,
 ...(options.resumeSessionId === undefined ? {}: { resumeSessionId: options.resumeSessionId }),
  })
@@ -382,6 +402,38 @@ export const runAgentInSandbox = async (
  return
  case 'plan':
  options.onPlan?.(frame.subtasks)
+ return
+ case 'note':
+ // Not through `forwardEvent`'s queue: a note is not part of the event
+ // sequence, so serializing it behind the transcript would make a worker's
+ // note wait on a backlog it has nothing to do with — and the whole point of
+ // The incremental write is that a note lands promptly.
+ void (async => {
+ const result = (await options.onNote?.(frame.note)) ?? {
+ ok: false,
+ reason: 'this run has no notes channel',
+ }
+ send({
+ t: 'note_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? {}: { reason: result.reason }),
+ })
+ })
+ return
+ case 'notes_request':
+ void (async => {
+ const result = (await options.onNotesRequest?.) ?? {
+ ok: false,
+ error: 'this run has no notes channel',
+ }
+ send({
+ t: 'notes_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? { ledger: result.ledger }: { error: result.error }),
+ })
+ })
  return
  case 'permission_request':
  void options

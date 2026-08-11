@@ -25,6 +25,7 @@ import {
  repositoryRepository,
  runnerRepository,
  threadRepository,
+ workerNoteRepository,
  workspaceRunControlRepository,
 } from '@loom/db'
 import { RPCHandler } from '@orpc/server/node'
@@ -96,6 +97,7 @@ export const buildApp = async (
  agentRunEvents: agentRunEventRepository(db),
  approvals: approvalRepository(db),
  mergeQueue: mergeQueueRepository(db),
+ workerNotes: workerNoteRepository(db),
  capabilities: capabilityRepository(db),
  personas: personaRepository(db),
  personaGroups: personaGroupRepository(db),

@@ -7,6 +7,8 @@ import {
  attenuateChildPersona,
  buildNotification,
  describeMergeFailure,
+ describePathOverlaps,
+ detectPathOverlaps,
  isHuman,
  isMergeQueueEntryTerminal,
  isRiskyTool,
@@ -40,6 +42,7 @@ import {
  type PersonaGroup,
  type PersonaGroupId,
  type PersonaSpec,
+ type PlatformNoteKind,
  type Repository,
  type RepositoryId,
  type Runner,
@@ -64,9 +67,15 @@ import type {
 } from './agent-ports.js'
 import type { BlobStoragePort } from './ports.js'
 import type { NotificationDeps } from './notification-use-cases.js'
+import {
+ buildContextLedger,
+ recordPlatformNote,
+ resolveTreeRunId,
+ type NoteDeps,
+} from './note-use-cases.js'
 import type { Deps } from './use-cases.js'
 
-export interface AgentDeps extends Deps, NotificationDeps {
+export interface AgentDeps extends Deps, NotificationDeps, NoteDeps {
  readonly runners: RunnerRepositoryPort
  readonly repositories: RepositoryRepositoryPort
  readonly agentRuns: AgentRunRepositoryPort
@@ -705,6 +714,12 @@ export const startAgentRun = async (
  /** Set when one run spawns another. */
  parentRunId?: AgentRunId
  relation?: AgentRunRelation
+ /**
+ * Repository-relative paths this run owns, from the Planner's decomposition
+ *. Recorded onto the run's own `run_started` note, which is
+ * what the board reads a card's claim from.
+ */
+ ownedPaths?: readonly string[]
  },
 ): Promise<AgentRun> => {
  const parent = input.parentRunId
@@ -798,6 +813,28 @@ export const startAgentRun = async (
  metadata: { repositoryId: repository.id, personaId: persona.id, model: personaSpec.model },
  })
 
+ /**
+ * The shared context this run starts with. Assembled here
+ * rather than on the Runner because the ledger is workspace-side state and the
+ * Runner is deliberately not a database client.
+ *
+ * A first run in a fresh tree gets `''` and the prompt is unchanged — which is
+ * also why this is not a hard failure path: a run whose ledger could not be read
+ * is worse off than one with context, but it is not broken, and refusing to start
+ * would make a swarm's throughput depend on a read that has nothing to do with
+ * the work.
+ */
+ let contextLedger = ''
+ try {
+ contextLedger = await buildContextLedger(deps, {
+ workspaceId: input.workspaceId,
+ run,
+...(parent ? { treeRunId: await resolveTreeRunId(deps, parent) }: {}),
+ })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+
  try {
  await deps.dispatch.startRun({
  runnerId: repository.runnerId,
@@ -806,6 +843,7 @@ export const startAgentRun = async (
  cwd: repository.absolutePath,
  defaultBranch: repository.defaultBranch,
 ...(input.task === undefined ? {}: { task: input.task }),
+...(contextLedger === '' ? {}: { contextLedger }),
  })
  } catch (error) {
  const errorMessage = error instanceof Error ? error.message: String(error)
@@ -833,7 +871,63 @@ export const startAgentRun = async (
  return failed
  }
 
- return deps.agentRuns.updateStatus(input.workspaceId, run.id, { status: 'running' })
+ const running = await deps.agentRuns.updateStatus(input.workspaceId, run.id, {
+ status: 'running',
+ })
+
+ // A platform fact, written only once the run is actually running — a note saying a
+ // worker started, for a run that failed to dispatch, is the ledger telling every
+ // sibling something untrue.
+ await recordRunPlatformNote(deps, running, {
+ kind: 'run_started',
+ title: input.task ? truncateForNote(input.task): running.persona.name,
+ body: `${running.persona.name} started${input.task ? '': ' with no explicit task'}.`,
+ // The paths *this* run owns, which is what the board's per-card claim is read
+ // from — see getSwarmBoard. The Planner's `path_ownership` notes carry the same
+ // paths but are keyed to the Planner, because they are written before any child
+ // exists.
+...(input.ownedPaths && input.ownedPaths.length > 0 ? { paths: input.ownedPaths }: {}),
+ })
+
+ return running
+}
+
+/** The structural facts of a finished run, as the ledger records them. */
+const describeRunOutcomeForNote = (run: AgentRun): string =>
+ [
+ run.branchName ? `Branch ${run.branchName}.`: 'No branch was produced.',
+ run.totalCostUsd === null ? '': `Cost $${run.totalCostUsd.toFixed(4)}.`,
+ ]
+.filter((part) => part !== '')
+.join(' ')
+
+/** Note titles are read in lists; a whole task description would push everything else off the row. */
+const NOTE_TITLE_BUDGET = 120
+
+const truncateForNote = (text: string): string => {
+ const oneLine = text.replace(/\s+/g, ' ').trim
+ return oneLine.length <= NOTE_TITLE_BUDGET ? oneLine: `${oneLine.slice(0, NOTE_TITLE_BUDGET - 1)}…`
+}
+
+/**
+ * `recordPlatformNote` with this layer's failure policy applied: a ledger write must
+ * never be able to fail a run.
+ *
+ * The same reasoning as `notifyRun` swallowing, and for a sharper reason: notes exist
+ * to make runs *cheaper*, so letting one hold up a run — or worse, fail a completed
+ * one after its work is committed — would trade the thing that matters for the thing
+ * that helps.
+ */
+const recordRunPlatformNote = async (
+ deps: AgentDeps,
+ run: AgentRun,
+ note: { kind: PlatformNoteKind; title: string; body: string; paths?: readonly string[] },
+): Promise<void> => {
+ try {
+ await recordPlatformNote(deps, { run,...note })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
 }
 
 /**
@@ -849,11 +943,25 @@ export const recordRunWorkspace = async (
  clonePath: string
  branchName: string
  },
-): Promise<AgentRun> =>
- deps.agentRuns.recordWorkspace(input.workspaceId, input.agentRunId, {
+): Promise<AgentRun> => {
+ const run = await deps.agentRuns.recordWorkspace(input.workspaceId, input.agentRunId, {
  clonePath: input.clonePath,
  branchName: input.branchName,
  })
+
+ // The worker-notes design names the branch as one of the structural facts the platform knows
+ // first-hand. It is also the one a sibling most needs: a worker told which branch
+ // another worker is on can ask what is on it, instead of rediscovering the same
+ // change. The clone path is deliberately *not* recorded — it is a host path on the
+ // Runner, and it would be meaningless to anything reading the ledger.
+ await recordRunPlatformNote(deps, run, {
+ kind: 'branch_ready',
+ title: `Branch ${input.branchName}`,
+ body: `${run.persona.name} is working on branch ${input.branchName}.`,
+ })
+
+ return run
+}
 
 /**
  * Acts on a Planner's decomposition, called by
@@ -878,7 +986,12 @@ export const applySubmittedPlan = async (
  input: {
  workspaceId: WorkspaceId
  agentRunId: AgentRunId
- subtasks: readonly { title: string; task: string; personaName: string }[]
+ subtasks: readonly {
+ title: string
+ task: string
+ personaName: string
+ paths?: readonly string[] | undefined
+ }[]
  },
 ): Promise<{ started: AgentRunId[]; refused: string[] }> => {
  const planner = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
@@ -893,6 +1006,38 @@ export const applySubmittedPlan = async (
  const personas = await deps.personas.listByWorkspace(input.workspaceId)
  const started: AgentRunId[] = []
  const refused: string[] = []
+
+ /**
+ * Path ownership, recorded *before* the first child starts.
+ *
+ * The ordering is the whole value. Written here, every child's ledger already
+ * carries every sibling's claim when it starts; written as each child starts,
+ * subtask 1 would begin knowing nothing about subtasks 2..N — which is precisely
+ * the case the riskiest assumption says causes the conflicts, since the first worker is the one with
+ * the most freedom to wander.
+ */
+ const overlaps = detectPathOverlaps(verdict.decomposition.subtasks)
+ const overlapWarning = describePathOverlaps(overlaps)
+ for (const subtask of verdict.decomposition.subtasks) {
+ if (subtask.paths.length === 0) continue
+ await recordRunPlatformNote(deps, planner, {
+ kind: 'path_ownership',
+ title: subtask.title,
+ body: `Assigned to ${subtask.personaName}. Owns: ${subtask.paths.join(', ')}. Avoid editing these paths unless your own task names them.`,
+ paths: subtask.paths,
+ })
+ }
+ if (overlapWarning) {
+ // Into the thread as well as the ledger: this is a fact about the *plan*, and the
+ // human who reads the plan is the one who can still change it.
+ await postRunSystemMessage(deps, planner, overlapWarning)
+ await recordRunPlatformNote(deps, planner, {
+ kind: 'path_ownership',
+ title: `${overlaps.length} path overlap(s) in this plan`,
+ body: overlapWarning,
+ paths: [...new Set(overlaps.flatMap((overlap) => overlap.paths))],
+ })
+ }
 
  for (const subtask of verdict.decomposition.subtasks) {
  const persona = personas.find((candidate) => candidate.name === subtask.personaName)
@@ -911,9 +1056,17 @@ export const applySubmittedPlan = async (
  threadId: planner.threadId,
  repositoryId: planner.repositoryId,
  personaId: persona.id,
- task: subtask.task,
+ // The paths this subtask owns are appended to the *task*, not left only in
+ // the ledger. The ledger carries every sibling's claim, so a worker reading
+ // it alone cannot tell which claim is its own — and the task is the one
+ // channel a worker is meant to treat as authoritative.
+ task:
+ subtask.paths.length === 0
+ ? subtask.task
+: `${subtask.task}\n\nYou own these paths for this task: ${subtask.paths.join(', ')}. Other workers own the rest; prefer leaving their paths alone and reporting what you need from them.`,
  parentRunId: planner.id,
  relation: 'delegation',
+ ownedPaths: subtask.paths,
  })
  started.push(child.id)
  } catch (error) {
@@ -1532,6 +1685,14 @@ const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<v
  // The branch goes back to its owning run: its disposition stays unset, so
  // the human can fix and re-queue, push, or discard it.
  await postRunSystemMessage(deps, run, describeMergeFailure(reason, entry.branchName, detail))
+ // A conflict is exactly what the ledger exists to prevent recurring: a
+ // sibling that reads "this branch conflicted over these paths" has the one fact
+ // that stops it walking into the same collision.
+ await recordRunPlatformNote(deps, run, {
+ kind: 'merge_result',
+ title: `${entry.branchName} did not merge (${reason})`,
+ body: describeMergeFailure(reason, entry.branchName, detail),
+ })
  await notifyRun(deps, run, 'merge_failed', {
  detail: describeMergeFailure(reason, entry.branchName, null),
  })
@@ -1595,6 +1756,14 @@ const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<v
 )
  await notifyRun(deps, run, 'merge_succeeded', {
  detail: `Merged into ${repository.defaultBranch} (${verification}).`,
+ })
+ // What a later sibling needs in order to know the target moved under it: the queue
+ // rebases entry N+1 onto the result of entry N, so "this landed" is what makes the
+ // next worker's own base comprehensible.
+ await recordRunPlatformNote(deps, run, {
+ kind: 'merge_result',
+ title: `${entry.branchName} merged into ${repository.defaultBranch}`,
+ body: `Merged as ${result.commitSha.slice(0, 8)} (${verification}). Later branches rebase onto this.`,
  })
 }
 
@@ -1870,6 +2039,14 @@ export const recordAgentEvent = async (
  // name and the metered cost are what make this notification actionable, and
  // `run` predates the transition that finalizes them.
  await notifyRun(deps, completed, 'run_finished')
+ // Recorded from the updated run for the same reason the notification is: the
+ // branch and the metered cost are the facts worth keeping, and both are
+ // finalized by the transition above.
+ await recordRunPlatformNote(deps, completed, {
+ kind: 'run_finished',
+ title: `${completed.persona.name} completed`,
+ body: describeRunOutcomeForNote(completed),
+ })
  await aggregateForParent(deps, completed)
  } else if (input.event.kind === 'run_failed') {
  const failed = await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
@@ -1878,6 +2055,15 @@ export const recordAgentEvent = async (
  completedAt: new Date,
  })
  await notifyRun(deps, failed, 'run_failed', { detail: input.event.message })
+ // A failure is worth *more* to a sibling than a success: it is the one fact that
+ // stops the next worker spending the same tokens discovering the same wall. The
+ // message is the platform's record of what the run reported, not the model's own
+ // prose about it, which is why it belongs in the trusted section.
+ await recordRunPlatformNote(deps, failed, {
+ kind: 'run_finished',
+ title: `${failed.persona.name} failed`,
+ body: `${describeRunOutcomeForNote(failed)} Reported: ${truncateForNote(input.event.message)}`,
+ })
  await aggregateForParent(deps, failed)
  }
 }

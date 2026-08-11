@@ -134,6 +134,65 @@ export const DirectoryListingSchema = z.object({
  * `position` crosses the wire as a string: it is a Postgres bigserial, and JSON
  * numbers cannot carry one faithfully. Clients only ever compare and display it.
  */
+/**
+ * One entry in a tree's worker-notes ledger.
+ *
+ * `authorKind` is on the wire because the UI is *required* to render agent-authored
+ * prose as distinct from platform-recorded fact — the worker-notes design makes that a
+ * requirement, not a style preference, since a note by worker A read by worker B (or
+ * trusted by a human) is a persistence layer for prompt injection. A client that
+ * cannot tell them apart cannot meet it.
+ */
+export const WorkerNoteSchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ treeRunId: z.string,
+ /** Null for a human's note, which is about the tree rather than any one run. */
+ agentRunId: z.string.nullable,
+ authorKind: z.enum(['platform', 'human', 'agent_run']),
+ kind: z.enum([
+ 'run_started',
+ 'branch_ready',
+ 'run_finished',
+ 'merge_result',
+ 'path_ownership',
+ 'summary',
+ 'finding',
+ 'decision',
+ 'blocker',
+ ]),
+ title: z.string,
+ body: z.string,
+ paths: z.array(z.string),
+ createdAt: z.date,
+})
+
+/** One card on the kanban — a *run*, since the board and the ledger are one object. */
+export const SwarmBoardCardSchema = z.object({
+ runId: z.string,
+ personaName: z.string,
+ title: z.string,
+ status: z.string,
+ relation: z.string.nullable,
+ branchName: z.string.nullable,
+ branchDisposition: z.string.nullable,
+ totalCostUsd: z.number.nullable,
+ ownedPaths: z.array(z.string),
+ noteCount: z.number.int,
+ /** Agent- or human-authored, so untrusted text — render it as such. */
+ latestNoteTitle: z.string.nullable,
+ blockerCount: z.number.int,
+})
+
+export const SwarmBoardSchema = z.object({
+ treeRunId: z.string,
+ cards: z.array(SwarmBoardCardSchema),
+ /** Pairs of cards whose owned paths collide — the merge conflicts to expect. */
+ pathCollisions: z.array(
+ z.object({ titles: z.tuple([z.string, z.string]), paths: z.array(z.string) }),
+),
+})
+
 export const MergeQueueEntrySchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -293,6 +352,9 @@ export type ServerEvent = z.infer<typeof ServerEventSchema>
 export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
 export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
+export type WorkerNote = z.infer<typeof WorkerNoteSchema>
+export type SwarmBoardCard = z.infer<typeof SwarmBoardCardSchema>
+export type SwarmBoard = z.infer<typeof SwarmBoardSchema>
 export type Capability = z.infer<typeof CapabilitySchema>
 export type PersonaCapability = z.infer<typeof PersonaCapabilitySchema>
 export type DirectoryEntry = z.infer<typeof DirectoryEntrySchema>

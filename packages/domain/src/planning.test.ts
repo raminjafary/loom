@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { asAgentRunId } from './ids.js'
 import {
  MAX_SUBTASKS,
+ MAX_SUBTASK_PATHS,
+ describePathOverlaps,
+ detectPathOverlaps,
  parseDecomposition,
+ pathsOverlap,
  summarizeChildOutcomes,
  type ChildOutcome,
+ type PlanSubtask,
 } from './planning.js'
 
 /**
@@ -79,6 +84,136 @@ describe('parseDecomposition', => {
  expect(verdict.ok).toBe(false)
  if (verdict.ok) return
  expect(verdict.reason).toContain('Add docs')
+ })
+})
+
+/**
+ * The worker-notes design: "Path ownership belongs in the decomposition. A Planner
+ * declaring which paths each subtask owns lets the platform warn about overlap
+ * *before* tokens are spent, and lets the merge queue predict a conflict instead of
+ * discovering it. This is the cheapest available attack on the assumption."
+ */
+describe('subtask path ownership', => {
+ it('normalizes claimed paths and drops duplicates', => {
+ const verdict = parseDecomposition({
+ subtasks: [subtask({ paths: ['./src/', 'src', ' packages/db '] })],
+ })
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks[0]?.paths).toEqual(['src', 'packages/db'])
+ })
+
+ /** Empty means unscoped, not "owns nothing" — a Planner omitting paths is not an error. */
+ it('treats a plan with no paths as unscoped rather than invalid', => {
+ const verdict = parseDecomposition({ subtasks: [subtask] })
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks[0]?.paths).toEqual([])
+ })
+
+ /**
+ * Not a security boundary — the write boundary is the path check inside the
+ * clone. What is refused here is a claim that cannot be true of a
+ * repository-relative path, because the platform renders these claims to siblings
+ * as fact.
+ */
+ it('refuses claims that cannot be repository-relative', => {
+ const cases: [unknown, RegExp][] = [
+ [{ subtasks: [subtask({ paths: ['/etc/passwd'] })] }, /absolute path/],
+ [{ subtasks: [subtask({ paths: ['../../elsewhere'] })] }, /outside the repository/],
+ [{ subtasks: [subtask({ paths: ['C:\\Windows'] })] }, /absolute path/],
+ [{ subtasks: [subtask({ paths: 'src' })] }, /non-array/],
+ [{ subtasks: [subtask({ paths: [''] })] }, /non-empty string/],
+ [
+ { subtasks: [subtask({ paths: Array.from({ length: MAX_SUBTASK_PATHS + 1 }, (_, i) => `f${i}`) })] },
+ /more than 50 paths/,
+ ],
+ ]
+ for (const [value, pattern] of cases) {
+ const verdict = parseDecomposition(value)
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) continue
+ expect(verdict.reason).toMatch(pattern)
+ }
+ })
+
+ it('names the offending subtask in a path rejection, like every other rejection', => {
+ const verdict = parseDecomposition({
+ subtasks: [subtask, subtask({ title: 'Add tests', paths: ['/abs'] })],
+ })
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('Subtask 1')
+ expect(verdict.reason).toContain('Add tests')
+ })
+})
+
+describe('detectPathOverlaps', => {
+ const claim = (title: string, paths: string[]): PlanSubtask => ({
+ title,
+ task: 'do the thing',
+ personaName: 'swe',
+ paths,
+ })
+
+ it('finds the same path claimed twice', => {
+ const overlaps = detectPathOverlaps([
+ claim('A', ['apps/server/src/router.ts']),
+ claim('B', ['apps/server/src/router.ts']),
+ ])
+ expect(overlaps).toHaveLength(1)
+ expect(overlaps[0]?.paths).toEqual(['apps/server/src/router.ts'])
+ })
+
+ /**
+ * The overlap a string-equality check misses, and the one that actually happens:
+ * one worker claims a directory, another claims a file inside it, and neither
+ * claim mentions the other.
+ */
+ it('finds a directory claim containing another subtask’s file claim', => {
+ const overlaps = detectPathOverlaps([
+ claim('A', ['packages/db']),
+ claim('B', ['packages/db/src/schema.ts']),
+ ])
+ expect(overlaps).toHaveLength(1)
+ expect(overlaps[0]?.paths).toEqual(['packages/db', 'packages/db/src/schema.ts'])
+ })
+
+ it('does not treat a shared name prefix as a shared directory', => {
+ expect(pathsOverlap('packages/db', 'packages/dbx')).toBe(false)
+ expect(detectPathOverlaps([claim('A', ['packages/db']), claim('B', ['packages/dbx'])])).toEqual([])
+ })
+
+ it('reports nothing when subtasks are disjoint or unscoped', => {
+ expect(detectPathOverlaps([claim('A', ['apps/web']), claim('B', ['apps/server'])])).toEqual([])
+ expect(detectPathOverlaps([claim('A', []), claim('B', [])])).toEqual([])
+ })
+
+ it('reports every colliding pair, not just the first', => {
+ const overlaps = detectPathOverlaps([
+ claim('A', ['src/a.ts']),
+ claim('B', ['src/a.ts']),
+ claim('C', ['src/a.ts']),
+ ])
+ expect(overlaps.map((o) => [o.firstTitle, o.secondTitle])).toEqual([
+ ['A', 'B'],
+ ['A', 'C'],
+ ['B', 'C'],
+ ])
+ })
+
+ /** A warning, not a refusal — see detectPathOverlaps' comment for why. */
+ it('describes overlaps as something that will still run', => {
+ const text = describePathOverlaps(
+ detectPathOverlaps([claim('A', ['src/a.ts']), claim('B', ['src/a.ts'])]),
+)
+ expect(text).toContain('"A" and "B"')
+ expect(text).toContain('src/a.ts')
+ expect(text).toContain('They will still run')
+ })
+
+ it('describes nothing when there is nothing to warn about', => {
+ expect(describePathOverlaps([])).toBeNull
  })
 })
 

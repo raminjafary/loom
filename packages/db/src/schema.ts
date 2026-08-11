@@ -342,7 +342,7 @@ export const agentPersona = pgTable(
  *
  * Skills store their `content` here rather than on any run's disk, because with
  * `settingSources: []` a skill in the clone is content the agent can write — see
- * packages/domain/src/capabilities.ts for why that settles the roadmap vs the capability registry.
+ * packages/domain/src/capabilities.ts for why that settles the roadmap vs the capability registry — capability attachment.
  */
 export const capability = pgTable(
  'capability',
@@ -401,7 +401,7 @@ export const personaCapability = pgTable(
 /**
  * Organizational persona grouping — a jsonb array of member
  * persona ids, same convention as `agentPersona.tools`. No join table: there
- * is no per-attachment metadata, unlike `persona_capability` (the capability registry, Phase 2).
+ * is no per-attachment metadata, unlike `persona_capability`.
  */
 export const personaGroup = pgTable(
  'persona_group',
@@ -518,6 +518,60 @@ export const notificationTarget = pgTable(
  (t) => [
  index('notification_target_workspace_idx').on(t.workspaceId),
  uniqueIndex('notification_target_endpoint_idx').on(t.workspaceId, t.endpoint),
+ ],
+)
+
+/**
+ * The worker-notes ledger — the shared context a swarm's runs
+ * read, and the same data the Phase 2 kanban is a board rendering of.
+ *
+ * **Not in the repository, and that is the design.** the worker-notes design: "If each run wrote
+ * notes into its own clone, every note would become part of every diff and pass
+ * through the merge queue — so note-writing would itself manufacture the conflicts
+ * this is meant to reduce." Hence a table here, workspace-side.
+ *
+ * `treeRunId` is the key everything reads by: a Planner run, or a parentless run
+ * being its own root. Denormalized onto the row rather than resolved by walking
+ * `parent_run_id` at read time, because assembling a starting run's context must be
+ * one indexed lookup, and because a swarm's siblings are all one hop from the root
+ * anyway.
+ *
+ * `agentRunId` is nullable and set-null rather than cascade: a note is meant to
+ * outlive the ephemeral run that wrote it, and a human's note is about the tree
+ * rather than any one run.
+ *
+ * `seq` exists for the reason `message.seq` and `merge_queue_entry.position` do —
+ * a swarm's workers write notes in the same millisecond, so `created_at` cannot
+ * order them, and the render order of a ledger is what a worker reads as recency.
+ */
+export const workerNote = pgTable(
+ 'worker_note',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ seq: bigserial('seq', { mode: 'bigint' }).notNull,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ treeRunId: uuid('tree_run_id')
+.notNull
+.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+ agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ // 'platform' | 'human' | 'agent_run'. The only distinction that carries security
+ // weight is agent_run versus the other two — see renderNotesForPrompt.
+ authorKind: text('author_kind').notNull,
+ kind: text('kind').notNull,
+ title: text('title').notNull,
+ body: text('body').notNull,
+ paths: jsonb('paths').$type<string[]>.notNull.default([]),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ index('worker_note_tree_idx').on(t.workspaceId, t.treeRunId, t.seq),
+ // Backs the per-run write cap, which is what stops a looping agent turning the
+ // ledger into a denial of service against every sibling's context window.
+ index('worker_note_run_idx').on(t.workspaceId, t.agentRunId),
  ],
 )
 

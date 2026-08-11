@@ -54,6 +54,26 @@ export const PlanSubtaskSchema = z.object({
  title: z.string,
  task: z.string,
  personaName: z.string,
+ /**
+ * Repository-relative paths this subtask owns. Optional on the wire: a Runner
+ * resumed from a state file written before this field existed has none, and
+ * refusing to parse that would turn an upgrade into a lost run.
+ */
+ paths: z.array(z.string).optional,
+})
+
+/**
+ * One note a run wrote to the shared ledger.
+ *
+ * The `kind` is validated again in the domain rather than constrained to an enum
+ * here, for the same reason `plan_submitted` is re-validated: the Runner relays, it
+ * does not decide. What arrives here is a model's output.
+ */
+export const WorkerNoteInputSchema = z.object({
+ kind: z.string,
+ title: z.string,
+ body: z.string,
+ paths: z.array(z.string).optional,
 })
 
 export const AgentEventSchema = z.discriminatedUnion('kind', [
@@ -170,6 +190,37 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  runId: z.string,
  subtasks: z.array(PlanSubtaskSchema),
  }),
+ /**
+ * One note a run wrote to its tree's ledger, sent **as it is
+ * written** rather than collected for the end of the run.
+ *
+ * That is the requirement, not an implementation detail: "A run that is killed,
+ * reaped, budget-capped or crashed never reaches a stop handler. This codebase has
+ * already paid for that lesson twice." Contrast `plan_submitted`, which is
+ * deliberately sent once at the end — a plan is only actionable whole, whereas a
+ * note is worth exactly what it is worth the moment it exists.
+ *
+ * `requestId` carries the tool call, so the server's verdict (accepted, or refused
+ * with a reason the model can act on) can be relayed back into the tool result.
+ */
+ z.object({
+ type: z.literal('note_written'),
+ runId: z.string,
+ requestId: z.string,
+ note: WorkerNoteInputSchema,
+ }),
+ /**
+ * A run asking for its tree's ledger mid-flight.
+ *
+ * Needed in addition to the ledger carried in `start_run`, because siblings write
+ * while this run is working — and "two workers independently deciding to touch the
+ * same file" is a thing that happens *during* the runs, not before them.
+ */
+ z.object({
+ type: z.literal('notes_requested'),
+ runId: z.string,
+ requestId: z.string,
+ }),
  z.object({
  type: z.literal('raw_transcript_chunk'),
  runId: z.string,
@@ -277,6 +328,16 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  defaultBranch: z.string,
  /** What a human asked for via `@mention`; absent for the sidebar picker. */
  task: z.string.optional,
+ /**
+ * The tree's worker-notes ledger, already rendered and
+ * already fenced by the server. Absent for the first run in a tree.
+ *
+ * Pre-rendered rather than structured: the untrusted-block framing in
+ * `renderNotesForPrompt` is the mitigation for notes being a persistence layer
+ * for prompt injection, and a second formatter on the Runner would be a second
+ * place to get it wrong.
+ */
+ contextLedger: z.string.optional,
  }),
  z.object({
  type: z.literal('permission_response'),
@@ -335,6 +396,29 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  runId: z.string,
  verifyCommand: z.string.nullable,
  }),
+ /**
+ * The server's verdict on a note a run wrote. `ok: false`
+ * carries a reason written *for the model* — a malformed or over-cap note becomes a
+ * tool result it can act on, rather than a silent drop it will repeat.
+ */
+ z.object({
+ type: z.literal('note_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ reason: z.string.optional,
+ }),
+ /**
+ * A tree's ledger, rendered, in answer to `notes_requested`. `ledger` is empty when
+ * the tree has nothing in it — the Runner then tells the model so explicitly, since
+ * an empty tool result reads as a failure.
+ */
+ z.object({
+ type: z.literal('notes_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ ledger: z.string.optional,
+ error: z.string.optional,
+ }),
 ])
 
 export type RunnerFrame = z.infer<typeof RunnerFrameSchema>
@@ -343,3 +427,4 @@ export type WireAgentEvent = z.infer<typeof AgentEventSchema>
 export type WirePersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type WireCapabilitySpec = z.infer<typeof CapabilitySpecSchema>
 export type WirePlanSubtask = z.infer<typeof PlanSubtaskSchema>
+export type WireWorkerNoteInput = z.infer<typeof WorkerNoteInputSchema>

@@ -16,6 +16,7 @@ export type AgentPersonaId = Brand<string, 'AgentPersonaId'>
 export type PersonaGroupId = Brand<string, 'PersonaGroupId'>
 export type MergeQueueEntryId = Brand<string, 'MergeQueueEntryId'>
 export type CapabilityId = Brand<string, 'CapabilityId'>
+export type WorkerNoteId = Brand<string, 'WorkerNoteId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -31,3 +32,4 @@ export const asAgentPersonaId = (v: string): AgentPersonaId => v as AgentPersona
 export const asPersonaGroupId = (v: string): PersonaGroupId => v as PersonaGroupId
 export const asMergeQueueEntryId = (v: string): MergeQueueEntryId => v as MergeQueueEntryId
 export const asCapabilityId = (v: string): CapabilityId => v as CapabilityId
+export const asWorkerNoteId = (v: string): WorkerNoteId => v as WorkerNoteId

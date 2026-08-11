@@ -16,6 +16,8 @@ import PersonaForm from './PersonaForm.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
 import RepositoryPanel from './RepositoryPanel.vue'
 import RunnerPanel from './RunnerPanel.vue'
+import SwarmBoardPanel from './SwarmBoardPanel.vue'
+import WorkerNotesPanel from './WorkerNotesPanel.vue'
 import { useAgentStore } from '../stores/agent'
 import { useWorkspaceStore } from '../stores/workspace'
 
@@ -221,6 +223,17 @@ onBeforeUnmount( => {
 :runs="agentSnapshot.activeRuns"
 :watched-run-id="agentSnapshot.activeRun?.id ?? null"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
+ />
+ <SwarmBoardPanel
+:board="agentSnapshot.swarmBoard"
+ @watch="(agentRunId) => agent.watchRun(agentRunId)"
+ @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
+ />
+ <WorkerNotesPanel
+:notes="agentSnapshot.treeNotes"
+:agent-run-id="agentSnapshot.activeRun?.id ?? null"
+ @write="(input) => agentSnapshot.activeRun && agent.writeNote({ agentRunId: agentSnapshot.activeRun.id,...input })"
+ @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
  <MergeQueuePanel
 :entries="agentSnapshot.mergeQueue"

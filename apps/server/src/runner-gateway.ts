@@ -1,8 +1,10 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
 import {
  applySubmittedPlan,
+ readContextLedger,
  reconcileRunnerRuns,
  recordAgentEvent,
+ recordAgentNote,
  recordRunCost,
  recordRawTranscriptChunk,
  recordRunHeartbeat,
@@ -197,7 +199,7 @@ export const createRunnerGateway = (
  })
  },
 
- async startRun({ runnerId, runId, persona, cwd, defaultBranch, task }) {
+ async startRun({ runnerId, runId, persona, cwd, defaultBranch, task, contextLedger }) {
  send(runnerId, {
  type: 'start_run',
  runId,
@@ -205,6 +207,7 @@ export const createRunnerGateway = (
  cwd,
  defaultBranch,
 ...(task === undefined ? {}: { task }),
+...(contextLedger === undefined ? {}: { contextLedger }),
  })
  },
 
@@ -327,7 +330,19 @@ export const createRunnerGateway = (
 
  const deps: AgentDeps = {...baseDeps, dispatch }
 
- const handleFrame = async (workspaceId: WorkspaceId, raw: string): Promise<void> => {
+ /**
+ * `from` is the Runner the frame arrived on. Needed because two frame kinds
+ * (`note_written`, `notes_requested`) are *requests* the Runner is waiting on a
+ * reply to, unlike every other Runner→server frame, which either reports something
+ * or answers a request the server made. Taken from the connection rather than from
+ * the frame's own run for the obvious reason: a frame must not be able to nominate
+ * which Runner the answer is sent to.
+ */
+ const handleFrame = async (
+ workspaceId: WorkspaceId,
+ from: RunnerId,
+ raw: string,
+): Promise<void> => {
  let parsed: unknown
  try {
  parsed = JSON.parse(raw)
@@ -486,6 +501,59 @@ export const createRunnerGateway = (
  })
  return
 
+ /**
+ * One note a run wrote. Answered either way, and that is
+ * load-bearing: the Runner is holding the agent's tool call open on this
+ * reply, so a silent drop would stall the run that wrote the note.
+ *
+ * `recordAgentNote` returns a refusal rather than throwing it, so a malformed
+ * or over-cap note becomes a tool result the model can act on. A genuine
+ * fault (the run is gone) still throws, and is caught here rather than
+ * escaping into the socket handler — for the same reason.
+ */
+ case 'note_written': {
+ try {
+ const result = await recordAgentNote(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ note: frame.note,
+ })
+ send(from, {
+ type: 'note_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? {}: { reason: result.reason }),
+ })
+ } catch (error) {
+ send(from, {
+ type: 'note_result',
+ requestId: frame.requestId,
+ ok: false,
+ reason: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
+ /** A run asking for its tree's ledger mid-flight. */
+ case 'notes_requested': {
+ try {
+ const ledger = await readContextLedger(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ })
+ send(from, { type: 'notes_result', requestId: frame.requestId, ok: true, ledger })
+ } catch (error) {
+ send(from, {
+ type: 'notes_result',
+ requestId: frame.requestId,
+ ok: false,
+ error: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
  case 'raw_transcript_chunk':
  await recordRawTranscriptChunk(deps, {
  workspaceId,
@@ -580,7 +648,7 @@ export const createRunnerGateway = (
 
  const conn = connections.get(runnerId)
  if (!conn) return
- await handleFrame(conn.workspaceId, text)
+ await handleFrame(conn.workspaceId, runnerId, text)
  })
  })
 

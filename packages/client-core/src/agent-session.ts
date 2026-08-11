@@ -11,6 +11,8 @@ import type {
  Repository,
  RunControl,
  Runner,
+ SwarmBoard,
+ WorkerNote,
 } from '@loom/api-contract'
 import type { LoomApi } from './api.js'
 import type { PushRegistration } from './push.js'
@@ -56,6 +58,19 @@ export interface AgentSnapshot {
  * show a stale one exactly while it is doing the interesting thing.
  */
  readonly mergeQueue: MergeQueueEntry[]
+ /**
+ * The watched run's tree: its worker-notes ledger and the board rendering of it
+ *.
+ *
+ * Keyed to whichever run this client is watching rather than workspace-wide,
+ * because a ledger belongs to a *tree*: two unrelated goals have two ledgers, and
+ * merging them on screen would show a human context that does not apply.
+ *
+ * Null until a run is being watched. `treeNotes` carries `authorKind`, which a view
+ * is required to honour — agent-authored prose must be rendered as untrusted.
+ */
+ readonly swarmBoard: SwarmBoard | null
+ readonly treeNotes: WorkerNote[]
  readonly lastPairing: { runnerId: string; rawToken: string } | null
  readonly diff: string | null
  // Inbox — runs needing a human decision, workspace-wide.
@@ -136,6 +151,28 @@ export interface AgentSession {
  enqueueMerge(agentRunId: string): Promise<void>
  cancelMerge(entryId: string): Promise<void>
  refreshMergeQueue: Promise<void>
+ /**
+ * Re-reads the watched run's tree ledger and board.
+ *
+ * Exposed as its own action as well as being polled, because a human writing a note
+ * expects to see it, and the poll only runs while something in the tree is still
+ * executing.
+ */
+ refreshBoard(agentRunId: string): Promise<void>
+ /**
+ * Adds a human's note to a tree — authoritative, and rendered to workers outside
+ * the untrusted fence. There is deliberately no client path to
+ * write an *agent-authored* note: `authorKind` is a provenance fact, and a client
+ * able to set it could launder its own text into every later worker's trusted
+ * context.
+ */
+ writeNote(input: {
+ agentRunId: string
+ kind: 'finding' | 'decision' | 'blocker'
+ title: string
+ body: string
+ paths?: string[]
+ }): Promise<void>
  /** What the merge queue runs before merging into this repository; null merges unverified. */
  setVerifyCommand(repositoryId: string, verifyCommand: string | null): Promise<void>
  /**
@@ -176,6 +213,8 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  activeRuns: [],
  pendingApprovals: [],
  mergeQueue: [],
+ swarmBoard: null,
+ treeNotes: [],
  lastPairing: null,
  diff: null,
  needsAttention: [],
@@ -214,6 +253,24 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  }
  }
 
+ /**
+ * The watched tree's ledger and board. Both in one call for
+ * the reason the worker-notes design gives for them being one object: fetched apart, a board and
+ * a note list could disagree about what a swarm is doing, which is exactly the
+ * second source of truth the design refuses.
+ */
+ const fetchBoard = async (agentRunId: string): Promise<void> => {
+ try {
+ const [swarmBoard, treeNotes] = await Promise.all([
+ options.api.workerNote.board({ agentRunId }),
+ options.api.workerNote.listByTree({ agentRunId }),
+ ])
+ patch({ swarmBoard, treeNotes })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ }
+
  const fetchInspected = async (agentRunId: string): Promise<void> => {
  try {
  const [run, inspectedApprovals] = await Promise.all([
@@ -247,6 +304,10 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.agentRun.listActive,
  ])
  patch({ activeRun: run, pendingApprovals, activeRuns })
+ // On the same tick as the run itself, for the reason `listActive` is: a
+ // sibling writing a note is the tree changing, and a second timer would
+ // only be a second thing to fall out of step.
+ await fetchBoard(agentRunId)
  // Keeps polling while *others* are still running, so a sibling finishing
  // still updates the list — stopping on the watched run alone would freeze
  // the swarm view at whatever it looked like when this one ended.
@@ -312,6 +373,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  if (activeRun && !TERMINAL_STATUSES.has(activeRun.status)) {
  const pendingApprovals = await options.api.approval.listPending({ agentRunId: activeRun.id })
  patch({ activeRun, pendingApprovals })
+ await fetchBoard(activeRun.id)
  pollActiveRun(activeRun.id)
  }
  await fetchInbox
@@ -468,6 +530,9 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  // Diff cleared: it belongs to whichever run it was loaded for, and showing
  // one run's diff under another's name is worse than showing none.
  patch({ activeRun: run, pendingApprovals, diff: null })
+ // Fetched here as well as on the poll tick, because a finished run has no
+ // poll — and its tree's ledger is exactly what a human reviewing it wants.
+ await fetchBoard(agentRunId)
  if (!TERMINAL_STATUSES.has(run.status)) pollActiveRun(agentRunId)
  } catch (error) {
  patch({ error: errorMessage(error) })
@@ -555,6 +620,23 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  await options.api.mergeQueue.cancel({ entryId })
  patch({ mergeQueue: await options.api.mergeQueue.list })
  await fetchInbox
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async refreshBoard(agentRunId) {
+ await fetchBoard(agentRunId)
+ },
+
+ async writeNote(input) {
+ patch({ error: null })
+ try {
+ await options.api.workerNote.write(input)
+ // Re-read rather than appending the returned note locally: the ledger's order
+ // is the server's `seq`, and a client that spliced its own note in would show
+ // it in a position the next poll then moves.
+ await fetchBoard(input.agentRunId)
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

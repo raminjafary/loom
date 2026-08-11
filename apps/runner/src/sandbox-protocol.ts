@@ -26,6 +26,8 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  t: z.literal('start'),
  persona: PersonaSpecSchema,
  task: z.string.optional,
+ /** The tree's ledger, rendered and fenced server-side. */
+ contextLedger: z.string.optional,
  /** Where the run's clone is mounted inside the container, not the host path. */
  cwd: z.string,
  /** Resume an SDK session after a Runner restart. */
@@ -35,6 +37,21 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  t: z.literal('permission'),
  toolUseId: z.string,
  decision: z.enum(['allow', 'deny']),
+ }),
+ /** The server's verdict on a note the agent wrote. */
+ z.object({
+ t: z.literal('note_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ reason: z.string.optional,
+ }),
+ /** The tree's ledger, in answer to the agent's `notes_request`. */
+ z.object({
+ t: z.literal('notes_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ ledger: z.string.optional,
+ error: z.string.optional,
  }),
 ])
 
@@ -72,6 +89,25 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  toolName: z.string,
  input: z.record(z.string, z.unknown),
  }),
+ /**
+ * One note the agent wrote, crossing out as it is written.
+ *
+ * Unlike `plan`, which is emitted once after `runAgent` returns, this is emitted
+ * mid-run — a note collected for the end would be lost by exactly the runs whose
+ * context is most worth keeping: killed, reaped, budget-capped, crashed.
+ */
+ z.object({
+ t: z.literal('note'),
+ requestId: z.string,
+ note: z.object({
+ kind: z.string,
+ title: z.string,
+ body: z.string,
+ paths: z.array(z.string).optional,
+ }),
+ }),
+ /** The agent asking for its tree's ledger mid-run, answered by `notes_result`. */
+ z.object({ t: z.literal('notes_request'), requestId: z.string }),
  /**
  * The SDK's session id, emitted as soon as it is known. The Runner persists it
  * so a run can be resumed rather than restarted after a Runner crash.

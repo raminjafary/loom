@@ -134,6 +134,13 @@
       "when": 1786400390913,
       "tag": "0018_lucky_gunslinger",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786401568370,
+      "tag": "0019_aberrant_scarecrow",
+      "breakpoints": true
     }
   ]
 }

@@ -7,7 +7,7 @@
  * coming back up (what its children reported). Prose in, prose out is the failure
  * mode; a subtask that cannot be validated is refused rather than guessed at.
  *
- * **A documented deviation from the nested-orchestration boundary.** the nested-orchestration boundary says to "build on the SDK's
+ * **A documented deviation from the nested-orchestration boundary — nested orchestration.** the nested-orchestration boundary says to "build on the SDK's
  * `Workflow`/`SendMessage` rather than a hand-rolled scheduler". In the SDK
  * version this repository pins, those names are *settings flags* for Claude
  * Code's own interactive features — the Workflow tool and Remote Control peer
@@ -29,12 +29,24 @@ import type { AgentRunId } from './ids.js'
  */
 export const MAX_SUBTASKS = 8
 
+/** How many paths one subtask may claim. Generous — a subtask is a slice of a repository, not a file. */
+export const MAX_SUBTASK_PATHS = 50
+
 export interface PlanSubtask {
  readonly title: string
  /** What the child run is actually told to do. */
  readonly task: string
  /** Which registered persona should do it, by name. */
  readonly personaName: string
+ /**
+ * Repository-relative paths (files or directory prefixes) this subtask owns —
+ * The "path ownership belongs in the decomposition".
+ *
+ * Optional, and empty means "unscoped", not "owns nothing": a Planner that names
+ * no paths gets the behaviour that existed before this field, rather than having
+ * its plan refused for omitting something the model may not know yet.
+ */
+ readonly paths: readonly string[]
 }
 
 export interface Decomposition {
@@ -50,6 +62,125 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const nonEmptyString = (value: unknown, max: number): value is string =>
  typeof value === 'string' && value.trim.length > 0 && value.length <= max
+
+/**
+ * Normalizes and checks one subtask's claimed paths.
+ *
+ * **Not a security boundary, and it must not be mistaken for one.** The write
+ * boundary is the path-scoped check inside the run's clone; these paths come
+ * from a *model*, and a boundary a model sets for itself is not a boundary. What
+ * this rejects is claims that cannot be true of a repository-relative path, because
+ * a claim like `/etc` or `../../elsewhere` rendered to a sibling as "worker A owns
+ * this" is misinformation the platform would be vouching for.
+ */
+const parseSubtaskPaths = (
+ value: unknown,
+ index: number,
+ title: unknown,
+): { ok: true; paths: string[] } | { ok: false; reason: string } => {
+ const where = `Subtask ${index} ("${String(title)}")`
+ if (value === undefined || value === null) return { ok: true, paths: [] }
+ if (!Array.isArray(value)) return { ok: false, reason: `${where} has a non-array \`paths\`` }
+ if (value.length > MAX_SUBTASK_PATHS) {
+ return { ok: false, reason: `${where} claims more than ${MAX_SUBTASK_PATHS} paths` }
+ }
+
+ const paths: string[] = []
+ for (const entry of value) {
+ if (typeof entry !== 'string' || entry.trim.length === 0) {
+ return { ok: false, reason: `${where} has a path that is not a non-empty string` }
+ }
+ const path = normalizeOwnedPath(entry)
+ if (path.startsWith('/') || /^[A-Za-z]:/.test(path)) {
+ return { ok: false, reason: `${where} claims an absolute path ("${entry}") — paths are repository-relative` }
+ }
+ if (path.split('/').includes('..')) {
+ return { ok: false, reason: `${where} claims a path outside the repository ("${entry}")` }
+ }
+ if (!paths.includes(path)) paths.push(path)
+ }
+ return { ok: true, paths }
+}
+
+/** Strips `./` and trailing slashes so `src/`, `./src` and `src` are one claim. */
+export const normalizeOwnedPath = (path: string): string =>
+ path
+.trim
+.replace(/^\.\/+/, '')
+.replace(/\/+$/, '')
+
+/**
+ * Whether two claimed paths refer to overlapping work — either the same path, or one
+ * a directory prefix of the other.
+ *
+ * Prefix-aware because the interesting overlap is exactly the one a string equality
+ * check misses: worker A claiming `packages/db` and worker B claiming
+ * `packages/db/src/schema.ts` are going to conflict, and neither claim mentions the
+ * other. Compared segment-wise so `packages/db` does not "contain" `packages/dbx`.
+ */
+export const pathsOverlap = (a: string, b: string): boolean => {
+ if (a === b) return true
+ const [shorter, longer] = a.length <= b.length ? [a, b]: [b, a]
+ return longer.startsWith(`${shorter}/`)
+}
+
+/** One pair of subtasks that claimed overlapping paths, with the paths that collided. */
+export interface PathOverlap {
+ readonly firstTitle: string
+ readonly secondTitle: string
+ readonly paths: string[]
+}
+
+/**
+ * Finds pairs of subtasks whose claimed paths collide — the "cheapest
+ * available attack on the assumption": "the main cause of merge conflict is two
+ * workers independently deciding to touch the same file", so let the platform say so
+ * *before* tokens are spent rather than let the merge queue discover it after.
+ *
+ * **A warning, not a refusal**, and deliberately: two subtasks that share a file are
+ * often legitimate (a shared export barrel, a migration list), the Planner is a
+ * model and so its path claims are guesses, and a refusal would throw away a whole
+ * plan over one guess. The merge queue is still the thing that catches a real
+ * conflict.
+ */
+export const detectPathOverlaps = (subtasks: readonly PlanSubtask[]): PathOverlap[] => {
+ const overlaps: PathOverlap[] = []
+ for (let i = 0; i < subtasks.length; i += 1) {
+ for (let j = i + 1; j < subtasks.length; j += 1) {
+ const first = subtasks[i]
+ const second = subtasks[j]
+ if (!first || !second) continue
+ const collided = first.paths.filter((path) =>
+ second.paths.some((other) => pathsOverlap(path, other)),
+)
+ // Reported from the *second* claim's side too, so a prefix collision names both
+ // sides' wording rather than only the shorter one.
+ const collidedBack = second.paths.filter((path) =>
+ first.paths.some((other) => pathsOverlap(path, other)),
+)
+ const paths = [...new Set([...collided,...collidedBack])].sort
+ if (paths.length > 0) {
+ overlaps.push({ firstTitle: first.title, secondTitle: second.title, paths })
+ }
+ }
+ }
+ return overlaps
+}
+
+/** The warning a human and the Planner both see. Plural-aware, because it is read a lot. */
+export const describePathOverlaps = (overlaps: readonly PathOverlap[]): string | null => {
+ if (overlaps.length === 0) return null
+ return [
+ overlaps.length === 1
+ ? 'Two subtasks in this plan claim overlapping paths, which is the usual cause of a merge conflict:'
+: `${overlaps.length} pairs of subtasks in this plan claim overlapping paths, which is the usual cause of a merge conflict:`,
+...overlaps.map(
+ (overlap) =>
+ `• "${overlap.firstTitle}" and "${overlap.secondTitle}" both claim ${overlap.paths.join(', ')}`,
+),
+ 'They will still run — the merge queue serializes them — but expect the second to rebase onto the first.',
+ ].join('\n')
+}
 
 /**
  * Validates a decomposition a Planner submitted.
@@ -80,10 +211,15 @@ export const parseDecomposition = (value: unknown): DecompositionVerdict => {
  if (!nonEmptyString(entry.personaName, 100)) {
  return { ok: false, reason: `Subtask ${index} ("${String(entry.title)}") needs a personaName` }
  }
+
+ const pathsVerdict = parseSubtaskPaths(entry.paths, index, entry.title)
+ if (!pathsVerdict.ok) return pathsVerdict
+
  subtasks.push({
  title: entry.title.trim,
  task: entry.task.trim,
  personaName: entry.personaName.trim,
+ paths: pathsVerdict.paths,
  })
  }
 

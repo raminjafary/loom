@@ -12,7 +12,10 @@ import {
  asRunnerId,
  asThreadId,
  asUserId,
+ asWorkerNoteId,
  asWorkspaceId,
+ AUTHORED_NOTE_KINDS,
+ PLATFORM_NOTE_KINDS,
  type Actor,
  type AgentPersona,
  type AgentRun,
@@ -30,6 +33,7 @@ import {
  type MergeQueueEntryStatus,
  type Message,
  type MessageBody,
+ type NoteAuthorKind,
  type NotificationTarget,
  type NotificationTransport,
  type PersonaCapability,
@@ -38,6 +42,8 @@ import {
  type Repository,
  type Runner,
  type Thread,
+ type WorkerNote,
+ type WorkerNoteKind,
 } from '@loom/domain'
 
 /**
@@ -539,6 +545,44 @@ export const toNotificationTarget = (row: NotificationTargetRow): NotificationTa
 : {},
  createdAt: row.createdAt,
 })
+
+export interface WorkerNoteRow {
+ id: string
+ workspaceId: string
+ treeRunId: string
+ agentRunId: string | null
+ authorKind: string
+ kind: string
+ title: string
+ body: string
+ paths: unknown
+ createdAt: Date
+}
+
+const NOTE_AUTHOR_KINDS: readonly NoteAuthorKind[] = ['platform', 'human', 'agent_run']
+
+const NOTE_KINDS: readonly WorkerNoteKind[] = [...PLATFORM_NOTE_KINDS,...AUTHORED_NOTE_KINDS]
+
+export const toWorkerNote = (row: WorkerNoteRow): WorkerNote => {
+ const authorKind = NOTE_AUTHOR_KINDS.find((candidate) => candidate === row.authorKind)
+ if (!authorKind) throw new Error(`unknown worker_note.author_kind: ${row.authorKind}`)
+
+ const kind = NOTE_KINDS.find((candidate) => candidate === row.kind)
+ if (!kind) throw new Error(`unknown worker_note.kind: ${row.kind}`)
+
+ return {
+ id: asWorkerNoteId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ treeRunId: asAgentRunId(row.treeRunId),
+ agentRunId: row.agentRunId === null ? null: asAgentRunId(row.agentRunId),
+ authorKind,
+ kind,
+ title: row.title,
+ body: row.body,
+ paths: Array.isArray(row.paths) ? (row.paths as string[]): [],
+ createdAt: row.createdAt,
+ }
+}
 
 /** Cursors are opaque to callers; internally they are the `seq` watermark. */
 export const encodeCursor = (seq: bigint): string =>

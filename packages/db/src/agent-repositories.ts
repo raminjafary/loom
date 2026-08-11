@@ -9,11 +9,12 @@ import type {
  PersonaRepositoryPort,
  RepositoryRepositoryPort,
  RunnerRepositoryPort,
+ WorkerNoteRepositoryPort,
  WorkspaceRunControlRepositoryPort,
 } from '@loom/application'
 import { NotFoundError, asRunnerId } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
-import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
+import { and, count, desc, eq, inArray, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
  toAgentPersona,
@@ -26,6 +27,7 @@ import {
  toPersonaGroup,
  toRepository,
  toRunner,
+ toWorkerNote,
  type AgentPersonaRow,
  type AgentRunRow,
  type ApprovalRequestRow,
@@ -36,6 +38,7 @@ import {
  type PersonaGroupRow,
  type RepositoryRow,
  type RunnerRow,
+ type WorkerNoteRow,
 } from './mappers.js'
 import {
  agentPersona,
@@ -49,6 +52,7 @@ import {
  personaGroup,
  repository,
  runner,
+ workerNote,
  workspace,
 } from './schema.js'
 
@@ -226,6 +230,52 @@ export const mergeQueueRepository = (db: Database): MergeQueueRepositoryPort => 
 )
 .returning
  return row ? toMergeQueueEntry(row as MergeQueueEntryRow): null
+ },
+})
+
+/**
+ * The worker-notes ledger. Append-only by construction — there
+ * is no update or delete method to call, for the reason the port states.
+ */
+export const workerNoteRepository = (db: Database): WorkerNoteRepositoryPort => ({
+ async append(input) {
+ const [row] = await db
+.insert(workerNote)
+.values({
+ workspaceId: input.workspaceId,
+ treeRunId: input.treeRunId,
+ agentRunId: input.agentRunId,
+ authorKind: input.authorKind,
+ kind: input.kind,
+ title: input.title,
+ body: input.body,
+ paths: input.paths,
+ })
+.returning
+ if (!row) throw new Error('worker_note insert returned no row')
+ return toWorkerNote(row as WorkerNoteRow)
+ },
+
+ /**
+ * Ordered by `seq`, not `created_at`. A swarm's workers write notes in the same
+ * millisecond, and the order a ledger renders in is what a reader takes as
+ * recency — the same reason `message.seq` exists.
+ */
+ async listByTree(workspaceId, treeRunId) {
+ const rows = await db
+.select
+.from(workerNote)
+.where(and(eq(workerNote.workspaceId, workspaceId), eq(workerNote.treeRunId, treeRunId)))
+.orderBy(workerNote.seq)
+ return rows.map((row) => toWorkerNote(row as WorkerNoteRow))
+ },
+
+ async countByRun(workspaceId, agentRunId) {
+ const [row] = await db
+.select({ total: count })
+.from(workerNote)
+.where(and(eq(workerNote.workspaceId, workspaceId), eq(workerNote.agentRunId, agentRunId)))
+ return Number(row?.total ?? 0)
  },
 })
 
@@ -778,7 +828,7 @@ export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort
  },
 })
 
-// --- Runner pairing (infra-only concern: not behind a port, see the replaceability contract
+// --- Runner pairing (infra-only concern: not behind a port, see the replaceability contract — replaceability
 // note in agent-ports.ts — Node's crypto is a language builtin, not swappable
 // vendor infra, so it doesn't need one). ---
 

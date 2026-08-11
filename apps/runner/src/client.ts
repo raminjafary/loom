@@ -27,6 +27,7 @@ import { mergeRunBranch } from './merge.js'
 import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
+import { createNotesTool } from './notes-tool.js'
 import { createSendQueue } from './send-queue.js'
 import {
  commitRunWork,
@@ -52,6 +53,32 @@ export interface RunnerClientOptions {
 export const connectRunner = (options: RunnerClientOptions): { close: => void } => {
  const log = options.log ?? ((message: string) => process.stdout.write(`${message}\n`))
  const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>
+ /**
+ * Note writes and reads awaiting the server's answer, keyed by
+ * a request id this Runner mints.
+ *
+ * Unlike `pendingPermissions`, these are given a **timeout**. An approval may
+ * legitimately wait as long as a human takes; a note is answered by the server
+ * within a round-trip, so an unanswered one means the socket dropped — and a note
+ * tool that never returns would hang the agent loop that called it, turning a
+ * bookkeeping failure into a stalled run. That inversion is the thing to avoid:
+ * notes exist to make runs cheaper.
+ */
+ const pendingNotes = new Map<
+ string,
+ (result: { ok: boolean; reason?: string | undefined }) => void
+ >
+ const pendingNoteReads = new Map<
+ string,
+ (result: { ok: boolean; ledger?: string | undefined; error?: string | undefined }) => void
+ >
+ const NOTE_TIMEOUT_MS = Number(process.env.LOOM_NOTE_TIMEOUT_MS ?? 30_000)
+
+ let noteRequestCounter = 0
+ const nextNoteRequestId = : string => {
+ noteRequestCounter += 1
+ return `note-${Date.now}-${noteRequestCounter}`
+ }
  // Per-run clone state, needed to answer a later get_diff request — keyed by
  // runId since a Runner may have several runs in flight concurrently.
  const runWorkspaces = new Map<
@@ -277,6 +304,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  homePath: string
  abort: AbortController
  resumeSessionId?: string
+ /** The tree's ledger, rendered server-side. */
+ contextLedger?: string
  }): Promise<void> => {
  // Async, and awaited by whoever produces events (the SDK loop in-process, the
  // container's stdout reader when sandboxed) — that await is the backpressure.
@@ -309,15 +338,73 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  }
 
+ /**
+ * The notes channel's two halves. Both go to the server,
+ * because the ledger is workspace-side state — the first decision, so
+ * that notes never enter a diff and never reach the merge queue.
+ *
+ * A timeout resolves as a refusal rather than rejecting: the model gets a tool
+ * result saying the note was not recorded, which is true and actionable, whereas
+ * a rejection surfaces as an opaque tool error.
+ */
+ const onNote = (note: {
+ kind: string
+ title: string
+ body: string
+ paths?: string[] | undefined
+ }): Promise<{ ok: true } | { ok: false; reason: string }> => {
+ const requestId = nextNoteRequestId
+ send({ type: 'note_written', runId: input.runId, requestId, note })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingNotes.delete(requestId)
+ resolve({ ok: false, reason: 'the platform did not answer in time — it was not saved' })
+ }, NOTE_TIMEOUT_MS)
+ pendingNotes.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok
+ ? { ok: true }
+: { ok: false, reason: result.reason ?? 'the platform refused it' },
+)
+ })
+ })
+ }
+
+ const onNotesRequest = : Promise<
+ { ok: true; ledger: string } | { ok: false; error: string }
+ > => {
+ const requestId = nextNoteRequestId
+ send({ type: 'notes_requested', runId: input.runId, requestId })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingNoteReads.delete(requestId)
+ resolve({ ok: false, error: 'the platform did not answer in time' })
+ }, NOTE_TIMEOUT_MS)
+ pendingNoteReads.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok
+ ? { ok: true, ledger: result.ledger ?? '' }
+: { ok: false, error: result.error ?? 'the platform could not read them' },
+)
+ })
+ })
+ }
+
  // Skills are written into the run's HOME before the SDK starts, so the
  // registry — not the clone — is where a run's skills come from. HOME is
  // run-scoped and destroyed with the run, so nothing outlives it.
  // A Planner gets exactly one channel it can act through; everything else it
  // might want happens because the server decided to, not because it asked.
  const plannerTool = input.persona.planner ? createPlannerTool: null
+ // The notes channel is given to every run, planner included: a note is not a
+ // capability, so it does not weaken `tools: []` (see notes-tool.ts).
+ const notesTool = createNotesTool({ writeNote: onNote, readNotes: onNotesRequest })
  // Sandboxed, the tool lives inside the container and its result arrives as a
  // frame; unsandboxed, it is the in-process handle above. One holder either way.
- let sandboxPlan: { title: string; task: string; personaName: string }[] | null = null
+ let sandboxPlan: { title: string; task: string; personaName: string; paths?: string[] }[] | null =
+ null
  const flushPlan = => {
  const subtasks = sandboxPlan ?? plannerTool?.taken
  if (!subtasks || subtasks.length === 0) return
@@ -349,7 +436,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  persona: input.persona,
  cwd: input.clonePath,
 ...(plannerTool ? { plannerTool: plannerTool.server }: {}),
+ notesTool,
 ...(input.task === undefined ? {}: { task: input.task }),
+...(input.contextLedger === undefined ? {}: { contextLedger: input.contextLedger }),
 ...(input.resumeSessionId === undefined ? {}: { resumeSessionId: input.resumeSessionId }),
  abortController: input.abort,
  isRiskyTool,
@@ -383,6 +472,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  runId: input.runId,
  persona: input.persona,
 ...(input.task === undefined ? {}: { task: input.task }),
+...(input.contextLedger === undefined ? {}: { contextLedger: input.contextLedger }),
  clonePath: input.clonePath,
  homePath: input.homePath,
  egressToken,
@@ -392,6 +482,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onEvent,
  onRawMessage,
 ...(input.persona.planner ? { onPlan: (subtasks) => (sandboxPlan = subtasks) }: {}),
+ onNote,
+ onNotesRequest,
  onSessionId,
  onPermissionRequest,
  log,
@@ -568,6 +660,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  runId,
  persona: frame.persona,
 ...(frame.task === undefined ? {}: { task: frame.task }),
+ // Deliberately not persisted into RunState: the ledger is a snapshot
+ // of other runs' notes, and a resumed run should read the ledger as
+ // it is *now* (via read_notes), not replay a stale copy of it.
+...(frame.contextLedger === undefined ? {}: { contextLedger: frame.contextLedger }),
  clonePath,
  homePath,
  abort,
@@ -697,6 +793,24 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  if (resolve) {
  pendingPermissions.delete(frame.toolUseId)
  resolve(frame.decision)
+ }
+ return
+ }
+
+ case 'note_result': {
+ const resolve = pendingNotes.get(frame.requestId)
+ if (resolve) {
+ pendingNotes.delete(frame.requestId)
+ resolve(frame)
+ }
+ return
+ }
+
+ case 'notes_result': {
+ const resolve = pendingNoteReads.get(frame.requestId)
+ if (resolve) {
+ pendingNoteReads.delete(frame.requestId)
+ resolve(frame)
  }
  return
  }

@@ -17,6 +17,7 @@ import type {
  MergeQueueEntry,
  MergeQueueEntryId,
  MergeQueueEntryStatus,
+ NoteAuthorKind,
  PersonaCapability,
  PersonaGroup,
  PersonaGroupId,
@@ -27,6 +28,8 @@ import type {
  RunnerId,
  ThreadId,
  UserId,
+ WorkerNote,
+ WorkerNoteKind,
  WorkspaceId,
  WorkspaceRunControl,
 } from '@loom/domain'
@@ -122,6 +125,38 @@ export interface MergeQueueRepositoryPort {
  verified?: boolean
  },
 ): Promise<MergeQueueEntry | null>
+}
+
+/**
+ * The worker-notes ledger's persistence.
+ *
+ * Its own port rather than methods on `AgentRunRepositoryPort`: a note belongs to a
+ * *tree*, not to a run — that is the whole point of it, since a run's own context
+ * dies with the run's clone — and the kanban reads the same rows.
+ *
+ * There is no update and no delete. A note is a record of what a run believed at a
+ * moment, and an editable ledger would let a later run rewrite what an earlier one
+ * reported — the same append-only reasoning as `audit_event`.
+ */
+export interface WorkerNoteRepositoryPort {
+ append(input: {
+ workspaceId: WorkspaceId
+ treeRunId: AgentRunId
+ agentRunId: AgentRunId | null
+ authorKind: NoteAuthorKind
+ kind: WorkerNoteKind
+ title: string
+ body: string
+ paths: string[]
+ }): Promise<WorkerNote>
+ /** One tree's ledger in write order — what a starting run's context and the board are built from. */
+ listByTree(workspaceId: WorkspaceId, treeRunId: AgentRunId): Promise<WorkerNote[]>
+ /**
+ * How many notes one run has written. Backs the per-run cap
+ * (`MAX_NOTES_PER_RUN`), which is what stops a looping agent turning the ledger
+ * into a denial of service against every sibling's context window.
+ */
+ countByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<number>
 }
 
 export interface AgentRunRepositoryPort {
@@ -417,6 +452,15 @@ export interface RunDispatchPort {
  defaultBranch: string
  /** What a human asked for via `@mention`; absent for the sidebar-picker path. */
  task?: string
+ /**
+ * The tree's worker-notes ledger, already rendered and already fenced — absent for the first run in a tree, which has no shared context
+ * to be given.
+ *
+ * Rendered server-side rather than sent as structured notes for the Runner to
+ * format: the untrusted-fencing in `renderNotesForPrompt` *is* the mitigation,
+ * and a second formatter on the Runner would be a second place to get it wrong.
+ */
+ contextLedger?: string
  }): Promise<void>
  /**
  * Aborts a run mid-flight. Fire-and-forget and

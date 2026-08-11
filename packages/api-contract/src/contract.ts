@@ -19,7 +19,9 @@ import {
  RepositorySchema,
  RunControlSchema,
  RunnerSchema,
+ SwarmBoardSchema,
  ThreadSchema,
+ WorkerNoteSchema,
 } from './schemas.js'
 
 /**
@@ -164,6 +166,43 @@ export const contract = {
  cancel: oc.input(z.object({ entryId: z.string })).output(MergeQueueEntrySchema),
  },
 
+ /**
+ * The worker-notes ledger and the kanban — one
+ * namespace, because they are one object: "building them separately would produce
+ * two sources of truth for what a swarm is doing."
+ *
+ * There is deliberately no way for a client to write an *agent-authored* note. The
+ * `authorKind` on a note is a fact about provenance, and a client that could set it
+ * would be able to launder its own text into the trusted section of every later
+ * worker's prompt. Agents write through their own tool, over the Runner socket.
+ */
+ workerNote: {
+ /** One tree's whole ledger, oldest first. Any run in the tree resolves to the same ledger. */
+ listByTree: oc
+.input(z.object({ agentRunId: z.string }))
+.output(z.array(WorkerNoteSchema)),
+
+ /**
+ * A human's note on a tree — authoritative, and rendered to workers outside the
+ * untrusted fence. How a person steers a swarm mid-flight without editing a
+ * persona or restarting anything.
+ */
+ write: oc
+.input(
+ z.object({
+ agentRunId: z.string,
+ kind: z.enum(['finding', 'decision', 'blocker']),
+ title: z.string.min(1).max(200),
+ body: z.string.min(1).max(4_000),
+ paths: z.array(z.string.max(500)).max(50).optional,
+ }),
+)
+.output(WorkerNoteSchema),
+
+ /** The board: a card per run in the tree, plus the path collisions to expect. */
+ board: oc.input(z.object({ agentRunId: z.string })).output(SwarmBoardSchema),
+ },
+
  /** Phase 1 subset — markdown+frontmatter, read/CRUD only. */
  persona: {
  list: oc.output(z.array(AgentPersonaSchema)),
@@ -286,7 +325,7 @@ export const contract = {
  * The raw transcript tier's "expand raw" fetch — the
  * verbatim provider stream, redacted at write.
  *
- * Explicitly on demand and never folded into a list or a subscription: the event-tiering design
+ * Explicitly on demand and never folded into a list or a subscription: the event-tiering design — event persistence tiering
  * says a late-joining client backfills from the structured tier and fetches
  * this only when asked, which is what keeps the run-tree payload light.
  */
