@@ -1595,6 +1595,42 @@ Decompose and delegate.`
  socket.close
  })
 
+ /**
+ * The Planner's own prompt tells it to name "a persona registered in this
+ * workspace" and nothing ever told it which those were, so it guessed — and a
+ * guessed name is a subtask that never runs, reported after the plan is paid for.
+ * The roster is filtered by the same attenuation that gates the child start, so
+ * what it offers is exactly what will be accepted.
+ */
+ it('tells the planner which personas it may delegate to, and omits the ones it may not', async => {
+ const { socket, runnerId } = await pairFakeRunner('planner-roster')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'planner-roster' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ await client.persona.create({
+ markdownSource: `---\nname: roster-inside\ndescription: Within the envelope.\nmodel: test-model\ntools: [Read]\n---\n\nwork`,
+ })
+ await client.persona.create({
+ markdownSource: `---\nname: roster-outside\ndescription: Holds a shell the planner may not hand down.\nmodel: test-model\ntools: [Bash]\n---\n\nwork`,
+ })
+
+ const { frame } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+ const systemPrompt = (frame.persona as { systemPrompt: string }).systemPrompt
+
+ expect(systemPrompt).toContain('roster-inside')
+ expect(systemPrompt).toContain('Within the envelope.')
+ // The whole point. A name the gate will refuse must not appear in front of the
+ // model, because a listed name reads as permission.
+ expect(systemPrompt).not.toContain('roster-outside')
+ // The persona row itself is untouched — this is a fact about one run, and
+ // The snapshot is what children are attenuated against.
+ expect((await client.persona.get({ personaId: planner.id })).markdownSource).not.toContain(
+ 'roster-inside',
+)
+
+ socket.close
+ })
+
  it('turns a submitted plan into child runs linked to the planner', async => {
  const { socket, runnerId } = await pairFakeRunner('planner-plan')
  const repo = await bindViaFakeRunner(socket, runnerId)
@@ -1664,6 +1700,110 @@ Decompose and delegate.`
 
  const page = await client.message.list({ threadId: created.rootThread.id })
  expect(page.messages.some((m) => m.body.text.includes('Escalate'))).toBe(true)
+
+ socket.close
+ })
+
+ /**
+ * A sub-planner is a legitimate delegation target — the attenuation proves its
+ * envelope can only narrow — but nothing in attenuation bounds how *long* a chain
+ * gets, and each hop is a frontier-model run whose only output is more runs. Depth
+ * is the limit that does, and `startAgentRun` is where it belongs: the one door
+ * every child comes through, beside the pause and the concurrency limit.
+ */
+ it('refuses a delegation deeper than the workspace allows', async => {
+ const { socket, runnerId } = await pairFakeRunner('planner-depth')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'planner-depth' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ await client.persona.create({
+ markdownSource: `---\nname: depth-sub\ndescription: A sub-planner.\nmodel: test-model\ntools: []\nharness:\n planner: true\n delegates: [Read]\n---\n\nDecompose further.`,
+ })
+ await client.persona.create({
+ markdownSource: `---\nname: depth-worker\ndescription: Within the envelope.\nmodel: test-model\ntools: [Read]\n---\n\nwork`,
+ })
+
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [{ title: 'Area', task: 'Decompose it.', personaName: 'depth-sub' }],
+ }),
+)
+
+ let children = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 40 && children.length < 1; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+ // Level 1 is allowed: MAX_DELEGATION_DEPTH defaults to 2.
+ expect(children).toHaveLength(1)
+ const sub = children[0]!
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: sub.id,
+ subtasks: [{ title: 'Unit', task: 'Do it.', personaName: 'depth-worker' }],
+ }),
+)
+
+ let refusal: string | undefined
+ for (let i = 0; i < 40 && !refusal; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ refusal = page.messages.find((m) => m.body.text?.includes('Unit:'))?.body.text
+ }
+
+ // Level 2 is the configured maximum, so the grandchild is refused — and the
+ // refusal names depth rather than reading as an attenuation or persona error.
+ expect(refusal).toMatch(/deep/i)
+ expect(await client.agentRun.listChildren({ agentRunId: sub.id })).toEqual([])
+
+ socket.close
+ })
+
+ /**
+ * Refusals are per-subtask by design, so a hole in the *middle* of a plan is the
+ * ordinary case. The summary used to list the first `started.length` subtasks by
+ * position, which named a refused subtask as started and never mentioned the one
+ * that actually ran behind it.
+ */
+ it('names the subtasks that actually started when one in the middle is refused', async => {
+ const { socket, runnerId } = await pairFakeRunner('planner-partial')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'planner-partial' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ await client.persona.create({
+ markdownSource: `---\nname: partial-worker\ndescription: Within the envelope.\nmodel: test-model\ntools: [Read]\n---\n\nwork`,
+ })
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'First', task: 'Do it.', personaName: 'partial-worker' },
+ { title: 'Middle', task: 'Do it.', personaName: 'nobody-at-all' },
+ { title: 'Last', task: 'Do it.', personaName: 'partial-worker' },
+ ],
+ }),
+)
+
+ let summary: string | undefined
+ for (let i = 0; i < 40 && !summary; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ summary = page.messages.find((m) => m.body.text?.includes('Plan accepted'))?.body.text
+ }
+
+ expect(summary).toContain('2 subtask(s) started')
+ expect(summary).toContain('• First → partial-worker')
+ expect(summary).toContain('• Last → partial-worker')
+ expect(summary).not.toContain('• Middle')
+ expect(summary).toContain('✗ Middle: no persona named "nobody-at-all"')
 
  socket.close
  })

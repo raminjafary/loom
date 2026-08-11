@@ -9,6 +9,7 @@ import {
  attenuateChildPersona,
  buildNotification,
  describeMergeFailure,
+ describeDelegationRoster,
  describePathOverlaps,
  detectPathOverlaps,
  isHuman,
@@ -111,6 +112,46 @@ export interface RunLimits {
  * Phase 1's hard limit of one is just this set to 1.
  */
  readonly maxConcurrentRunsPerWorkspace: number
+ /**
+ * How many delegation hops may separate a run from the root of its tree — 1 is
+ * Phase 2's flat fan-out (a Planner and its workers), 3 lets a root orchestrator
+ * delegate to sub-planners that delegate to workers.
+ *
+ * A depth bound is what makes a Planner a legitimate delegation target at all.
+ * The attenuation already proves a sub-planner cannot *widen* what it was given —
+ * authority only narrows down the chain — but narrowing says nothing about how
+ * long the chain gets, and each hop is a real run spending real money. The
+ * concurrency limit bounds width; this bounds depth.
+ */
+ readonly maxDelegationDepth: number
+}
+
+/**
+ * How many delegation hops separate `run` from the root of its tree — 0 for a run a
+ * human started.
+ *
+ * Bounded by `MAX_DELEGATION_WALK` rather than `while (true)` for the same reason
+ * `resolveTreeRunId` is: a cycle introduced by a bad backfill should degrade the
+ * answer, not hang the request that starts a run. The bound is deliberately larger
+ * than any sane `maxDelegationDepth`, so hitting it means the data is wrong rather
+ * than the tree being legitimately deep — and it returns the count it reached, which
+ * is by then far past any configured limit and refuses the child either way.
+ */
+const MAX_DELEGATION_WALK = 32
+
+const resolveDelegationDepth = async (deps: AgentDeps, parent: AgentRun): Promise<number> => {
+ let depth = 1
+ let current = parent
+ while (depth < MAX_DELEGATION_WALK) {
+ if (!current.parentRunId) return depth
+ const next = await deps.agentRuns.findById(current.workspaceId, current.parentRunId)
+ // A cascaded-away ancestor makes the readable chain the whole chain, matching
+ // `resolveTreeRunId`'s choice so the two never disagree about the same tree.
+ if (!next) return depth
+ current = next
+ depth += 1
+ }
+ return depth
 }
 
 /** Administrative action, human-only, same reasoning as createChannel. */
@@ -804,6 +845,28 @@ export const startAgentRun = async (
  throw new ValidationError('Agent runs are paused for this workspace — resume them first')
  }
 
+ /**
+ * Delegation depth.
+ *
+ * The attenuation proves authority only *narrows* down a chain — a sub-planner's
+ * envelope is bounded by the one that granted it. That makes a deep tree safe and
+ * says nothing about whether it is affordable: every hop is a run, and a Planner
+ * that may delegate to a Planner can otherwise recurse until the budget or the
+ * concurrency limit stops it, which is a stop condition measured in dollars.
+ *
+ * Checked here rather than only where plans are applied, because `startAgentRun`
+ * is the one door every child comes through — the same reason the pause and the
+ * concurrency limit live here.
+ */
+ if (parent && input.relation !== 'reconcile') {
+ const depth = await resolveDelegationDepth(deps, parent)
+ if (depth + 1 > deps.limits.maxDelegationDepth) {
+ throw new ValidationError(
+ `Delegation is ${deps.limits.maxDelegationDepth} level(s) deep at most in this workspace, and this child would be level ${depth + 1}`,
+)
+ }
+ }
+
  // Concurrency limit. Phase 1 allowed exactly one
  // active run workspace-wide; a swarm is N workers on one goal, so the limit is
  // now a number rather than a special case. It is still a *limit*: unbounded
@@ -840,7 +903,7 @@ export const startAgentRun = async (
 )
  }
 
- const personaSpec: PersonaSpec = {
+ const baseSpec: PersonaSpec = {
  name: persona.name,
  systemPrompt: applyResponseStyle(
  parsePersonaMarkdown(persona.markdownSource).systemPrompt,
@@ -858,6 +921,43 @@ export const startAgentRun = async (
  delegates: persona.harnessDelegates,
  capabilities: await resolveCapabilities(deps, input.workspaceId, input.personaId),
  }
+
+ /**
+ * A Planner is told who it may delegate to, filtered by the gate that will judge
+ * the plan.
+ *
+ * Built from `baseSpec` rather than the stored row: the cap and model a human may
+ * have overridden for *this* run are what its children will actually be measured
+ * against, so a $1 override must not be handed a roster computed against $5.
+ *
+ * One extra query, and only for a Planner — `applySubmittedPlan` already lists the
+ * same personas when the plan comes back, so this is the same read moved to where
+ * it can still change the outcome.
+ */
+ const roster = baseSpec.planner
+ ? describeDelegationRoster(
+ baseSpec,
+ (await deps.personas.listByWorkspace(input.workspaceId)).map((candidate) => ({
+ name: candidate.name,
+ description: candidate.description,
+ model: candidate.model,
+ tools: candidate.tools,
+ autoApprove: candidate.harnessAutoApprove,
+ budgetCapUsd: candidate.harnessBudgetCapUsd,
+ planner: candidate.harnessPlanner,
+ delegates: candidate.harnessDelegates,
+ })),
+ // Hops left *below this run's children*: this run sits at `ownDepth`, its
+ // children at `ownDepth + 1`, so a grandchild is possible only with a hop to
+ // spare. Offering a sub-planner without one names a persona whose every
+ // subtask the depth check would then refuse.
+ deps.limits.maxDelegationDepth - ((parent ? await resolveDelegationDepth(deps, parent): 0) + 1),
+)
+: null
+
+ const personaSpec: PersonaSpec = roster
+ ? {...baseSpec, systemPrompt: `${baseSpec.systemPrompt}${roster}` }
+: baseSpec
 
  // Capability attenuation. Checked against the parent's *snapshot*,
  // not its stored persona: the snapshot is what the parent is actually running
@@ -1102,6 +1202,7 @@ export const applySubmittedPlan = async (
 
  const personas = await deps.personas.listByWorkspace(input.workspaceId)
  const started: AgentRunId[] = []
+ const startedLines: string[] = []
  const refused: string[] = []
 
  /**
@@ -1166,16 +1267,23 @@ export const applySubmittedPlan = async (
  ownedPaths: subtask.paths,
  })
  started.push(child.id)
+ startedLines.push(`• ${subtask.title} → ${subtask.personaName}`)
  } catch (error) {
  refused.push(`${subtask.title}: ${error instanceof Error ? error.message: String(error)}`)
  }
  }
 
+ /**
+ * The lines name the subtasks that actually started. They were previously the
+ * *first* `started.length` subtasks by position, which is the same list only when
+ * every refusal happens to fall at the end: a plan of A, B, C whose B is refused
+ * reported A and B as started and never mentioned C, while listing B again under
+ * the refusals. Refusals are per-subtask by design, so a hole in the middle is the
+ * ordinary case rather than the edge one.
+ */
  const summary = [
  `Plan accepted: ${started.length} subtask(s) started.`,
-...verdict.decomposition.subtasks
-.filter((_, index) => index < started.length)
-.map((subtask) => `• ${subtask.title} → ${subtask.personaName}`),
+...startedLines,
 ...refused.map((reason) => `✗ ${reason}`),
  ].join('\n')
  await postRunSystemMessage(deps, planner, summary)

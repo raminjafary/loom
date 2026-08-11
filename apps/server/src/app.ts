@@ -105,7 +105,10 @@ export const buildApp = async (
  blobs: fileBlobStorage(config.BLOB_STORAGE_ROOT),
  notifications,
  notificationTargets,
- limits: { maxConcurrentRunsPerWorkspace: config.MAX_CONCURRENT_RUNS_PER_WORKSPACE },
+ limits: {
+ maxConcurrentRunsPerWorkspace: config.MAX_CONCURRENT_RUNS_PER_WORKSPACE,
+ maxDelegationDepth: config.MAX_DELEGATION_DEPTH,
+ },
  }
 
  // The Runner gateway produces `dispatch` — see runner-gateway.ts for why

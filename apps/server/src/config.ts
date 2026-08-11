@@ -35,6 +35,13 @@ const EnvSchema = z.object({
  // multiplies spend and the human attention the riskiest assumption is about, so it should be raised
  // knowingly rather than defaulted high.
  MAX_CONCURRENT_RUNS_PER_WORKSPACE: z.coerce.number.int.positive.default(3),
+ // How many delegation hops may separate a run from the root of its tree. 1 is the flat fan-out Phase 2 shipped: a Planner and its
+ // workers, nothing below them. The default of 2 admits exactly one layer of
+ // sub-planners — a root that delegates areas, sub-planners that decompose them,
+ // workers that do the units — and stops there. Depth is the axis that multiplies
+ // cost fastest, because each hop is a frontier-model run whose only output is more
+ // runs; raising it should be a decision, like the concurrency limit beside it.
+ MAX_DELEGATION_DEPTH: z.coerce.number.int.positive.default(2),
  // How long an entry may sit `merging` before the queue gives up on it. This is the merge queue's equivalent of the dead-run reaper, and
  // it exists for a specific failure: a server that dies mid-merge leaves a
  // `merging` row that the unique partial index makes unclaimable, so that
