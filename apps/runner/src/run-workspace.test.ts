@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { finishReconcile, prepareReconcileWorkspace, prepareRunWorkspace } from './run-workspace.js'
+import {
+  finishReconcile,
+  prepareReconcileWorkspace,
+  prepareRunWorkspace,
+  updateBranchFrom,
+} from './run-workspace.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -121,6 +126,37 @@ describe('finishReconcile', () => {
 
     const status = (await git(workspace.clonePath, ['status', '--porcelain=v2', '--branch'])).stdout
     expect(status).not.toContain('rebase')
+  })
+
+  it('writes the reconciled branch back into a clone that has it checked out', async () => {
+    /**
+     * The regression that reached a live run: `prepareRunWorkspace` leaves the run's
+     * branch checked out, and git refuses to fetch into a checked-out branch. The
+     * reconciler resolved its conflict correctly and the result was discarded here,
+     * reported to the human as "the reconciler did not resolve it".
+     *
+     * The merge queue merges out of the *parent's* clone, so if this does not land the
+     * queue re-merges the untouched branch and conflicts again forever.
+     */
+    const { source, clonePath, branchName } = await buildConflict()
+    const workspace = await prepareReconcileWorkspace(clonePath, source, 'main', branchName, 'recon-7')
+    await writeFile(
+      join(workspace.clonePath, 'list.md'),
+      '# List\n\n- base entry\n- from the sibling\n- from the worker\n',
+    )
+    const finished = await finishReconcile(workspace.clonePath)
+    expect(finished.ok).toBe(true)
+
+    expect((await git(clonePath, ['symbolic-ref', '--short', 'HEAD'])).stdout.trim()).toBe(branchName)
+    await updateBranchFrom(clonePath, workspace.clonePath, branchName)
+
+    // The ref moved *and* the working tree with it — a moved ref over a stale tree
+    // would make the next `git status` in that clone report phantom changes.
+    if (finished.ok) {
+      expect((await git(clonePath, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(finished.commitSha)
+    }
+    expect((await git(clonePath, ['status', '--porcelain'])).stdout.trim()).toBe('')
+    expect(await readFile(join(clonePath, 'list.md'), 'utf8')).toContain('from the sibling')
   })
 
   it('refuses a resolution that staged markers rather than removing them', async () => {

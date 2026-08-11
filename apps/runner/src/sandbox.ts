@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { execFile } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
@@ -90,6 +91,12 @@ export interface SandboxConfig {
  readonly cpus: string
  readonly pidsLimit: string
  readonly wallClockMs: number
+ /**
+ * Host directory shared across runs as a package-manager cache,
+ * or null to give every run an empty one. **Null is the default** — see
+ * `DEP_CACHE_DIR` for why this is a security trade and not a tuning knob.
+ */
+ readonly depCacheRoot: string | null
 }
 
 export const sandboxConfigFromEnv = (env: NodeJS.ProcessEnv = process.env): SandboxConfig => ({
@@ -101,6 +108,11 @@ export const sandboxConfigFromEnv = (env: NodeJS.ProcessEnv = process.env): Sand
  cpus: env.LOOM_SANDBOX_CPUS ?? '2',
  pidsLimit: env.LOOM_SANDBOX_PIDS ?? '512',
  wallClockMs: Number(env.LOOM_SANDBOX_WALL_CLOCK_MS ?? 3_600_000),
+ // Opt-in, and only then does a path exist at all. See DEP_CACHE_DIR.
+ depCacheRoot:
+ env.LOOM_DEP_CACHE_ENABLED === '1'
+ ? (env.LOOM_DEP_CACHE_ROOT ?? join(tmpdir, 'loom-dep-cache'))
+: null,
 })
 
 export const sandboxEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
@@ -212,6 +224,48 @@ const WORK_DIR = '/work'
 const HOME_DIR = '/home/agent'
 
 /**
+ * Where the shared package-manager cache is mounted.
+ *
+ * **Why this exists.** repository binding: "a fresh clone plus `npm install`/build is minutes and
+ * gigabytes each — a real throughput ceiling for swarms", and the risk register lists it as required
+ * before swarms are useful. Today a run's HOME is created per run, so every worker in a
+ * swarm re-downloads the same dependency tree through the egress proxy from an empty
+ * cache. N workers on one repository pay that N times.
+ *
+ * **Why it is off by default.** A cache shared between sandboxes is a channel between
+ * them, and the security model treats everything a run produces as untrusted. The concrete attack is
+ * not tarball substitution — npm, yarn and Go all verify content hashes against a
+ * lockfile, so a swapped tarball fails integrity. It is *metadata*: npm's cacache also
+ * stores registry HTTP responses keyed by URL, so a malicious run can plant a response
+ * advertising a version whose integrity hash it also controls, and a later run
+ * resolving that package **without a lockfile pin** installs it. One compromised run
+ * then reaches every subsequent run on that Runner.
+ *
+ * That is a real supply-chain vector, so it is an operator's decision
+ * (`LOOM_DEP_CACHE_ENABLED=1`), not a default, and the safer design is written down
+ * rather than assumed: a platform-warmed cache that each run receives a *copy* of
+ * (reflink/clonefile makes that near-free) has the same speedup with no write path
+ * between runs. That is the version to build if this is ever wanted on by default.
+ *
+ * **What is deliberately not pointed here.** `CARGO_HOME` — it holds `config.toml`, not
+ * just a cache, and `[build] rustc-wrapper` in a shared one is direct code execution in
+ * a sibling run. A cache directory is only safe to share when it *is* a cache.
+ */
+const DEP_CACHE_DIR = '/deps'
+
+/**
+ * Package managers pointed at the shared cache. Each of these names a cache and
+ * nothing else — no config, no credentials, no hooks.
+ */
+export const depCacheEnv = : Record<string, string> => ({
+ npm_config_cache: `${DEP_CACHE_DIR}/npm`,
+ npm_config_store_dir: `${DEP_CACHE_DIR}/pnpm`,
+ YARN_CACHE_FOLDER: `${DEP_CACHE_DIR}/yarn`,
+ PIP_CACHE_DIR: `${DEP_CACHE_DIR}/pip`,
+ GOMODCACHE: `${DEP_CACHE_DIR}/go`,
+})
+
+/**
  * Every flag the sandbox spec asks for, in one place so the spec is auditable against the code
  * rather than scattered through a spawn call.
  */
@@ -257,6 +311,9 @@ export const buildSandboxArgs = (
  `${options.clonePath}:${WORK_DIR}:rw`,
  '-v',
  `${options.homePath}:${HOME_DIR}:rw`,
+ // A third mount only when an operator opted in, and the one mount here that is not
+ // run-scoped — see DEP_CACHE_DIR for what that costs and why it is off by default.
+...(config.depCacheRoot ? ['-v', `${config.depCacheRoot}:${DEP_CACHE_DIR}:rw`]: []),
  '-w',
  WORK_DIR,
 
@@ -308,6 +365,18 @@ export const runAgentInSandbox = async (
  // The lease, in the only place the CLI will carry it intact. Written into the run's
  // own HOME, which is a host-backed directory destroyed with the run — so the file
  // never outlives the run and never contains anything real.
+ /**
+ * Created host-side, before the container starts. Docker would otherwise create the
+ * bind-mount source itself, owned by root, which the non-root agent cannot write —
+ * so the cache would silently stay empty and every run would pay full price while
+ * appearing to be configured. 0777 for the same reason the run's HOME is: the
+ * container runs as uid 1000, which is not the Runner's uid on Linux.
+ */
+ if (config.depCacheRoot) {
+ await mkdir(config.depCacheRoot, { recursive: true })
+ await chmod(config.depCacheRoot, 0o777)
+ }
+
  await mkdir(join(options.homePath, '.claude'), { recursive: true })
  await writeFile(
  join(options.homePath, '.claude', '.credentials.json'),
@@ -340,6 +409,9 @@ export const runAgentInSandbox = async (
  // forward-proxy path instead of the shim.
  NO_PROXY: `localhost,127.0.0.1,${proxyHost(options.egressDataUrl)}`,
  HOME: HOME_DIR,
+ // Only when the mount exists. Pointing a package manager at a path that is not
+ // mounted would make it fail to write its cache rather than fall back.
+...(config.depCacheRoot ? depCacheEnv: {}),
  },
  })
 

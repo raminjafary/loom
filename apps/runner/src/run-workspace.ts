@@ -200,13 +200,43 @@ export const updateBranchFrom = async (
  sourceClonePath: string,
  branchName: string,
 ): Promise<void> => {
- await execFileAsync('git', [
+ const git = (args: string[]) =>
+ execFileAsync('git', [
  '-C', destinationClonePath,
  '-c', 'core.hooksPath=/dev/null',
  '-c', 'core.fsmonitor=false',
- 'fetch', '--quiet', '--force', sourceClonePath,
- `refs/heads/${branchName}:refs/heads/${branchName}`,
+...args,
  ])
+
+ /**
+ * The run's own branch is *checked out* in its clone — `prepareRunWorkspace` does
+ * `checkout -b` — and git refuses to fetch directly into a checked-out branch:
+ * "refusing to fetch into branch... checked out at...". Found by the first live
+ * end-to-end reconcile, which resolved its conflict correctly and then threw the
+ * result away here.
+ *
+ * So: land it on a temporary ref, then move the branch and its working tree together
+ * with `reset --hard`. Safe because the owning run is terminal by the time anything
+ * reconciles its branch, and `commitRunWork` has already committed whatever it left —
+ * there is no uncommitted work in that tree for the reset to discard.
+ */
+ const TEMP_REF = 'refs/loom/reconciled'
+ await git(['fetch', '--quiet', '--force', sourceClonePath, `refs/heads/${branchName}:${TEMP_REF}`])
+
+ let checkedOut: string | null
+ try {
+ const { stdout } = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])
+ checkedOut = stdout.trim
+ } catch {
+ checkedOut = null // detached HEAD
+ }
+
+ if (checkedOut === branchName) {
+ await git(['reset', '--hard', '--quiet', TEMP_REF])
+ } else {
+ await git(['update-ref', `refs/heads/${branchName}`, TEMP_REF])
+ }
+ await git(['update-ref', '-d', TEMP_REF]).catch( => {})
 }
 
 /**
