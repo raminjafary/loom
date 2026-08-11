@@ -40,6 +40,7 @@ const define = (spec: {
  budgetCapUsd?: number
  planner?: boolean
  delegates?: string[]
+ autoApprove?: boolean
 }): BuiltinPersona => {
  const persona = {
  name: spec.name,
@@ -48,7 +49,7 @@ const define = (spec: {
  tools: spec.tools,
  harnessEffort: null,
  harnessMaxTurns: null,
- harnessAutoApprove: false,
+ harnessAutoApprove: spec.autoApprove ?? false,
  harnessPlanner: spec.planner ?? false,
  harnessDelegates: spec.delegates ?? [],
  harnessBudgetCapUsd: spec.budgetCapUsd ?? DEFAULT_BUDGET_CAP_USD,
@@ -174,6 +175,23 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  'Resolves merge conflicts between sibling branches, or refuses when the conflict encodes a real disagreement.',
  model: 'claude-sonnet-5',
  tools: ['Read', 'Edit', 'Grep', 'Glob'],
+ /**
+ * The only built-in that auto-approves, and it has to.
+ *
+ * A reconciler is started by the merge queue, not by a human, and its entire
+ * purpose is to take the human off the merge path. Gating its `Edit` calls on a
+ * human decision makes it strictly worse than the conflict it replaces: the run
+ * sits in `awaiting_approval` while nobody is watching a run they did not start,
+ * and the approval SLA eventually auto-denies it. That is not hypothetical —
+ * without this, the first live end-to-end run stalled exactly there.
+ *
+ * What makes it acceptable rather than merely necessary: it holds no Bash, its
+ * writes are path-scoped to its own clone, and that clone is a copy — the
+ * branch a human may still want to review by hand is untouched. Nothing it
+ * produces reaches the default branch without going back through the merge queue's
+ * rebase and verification.
+ */
+ autoApprove: true,
  systemPrompt:
  'You are a Reconciler. Files in this working tree contain git conflict markers ' +
  '(<<<<<<<, =======, >>>>>>>) from rebasing one worker\'s branch onto work that landed before it. ' +

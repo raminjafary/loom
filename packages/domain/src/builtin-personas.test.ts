@@ -65,6 +65,15 @@ describe('BUILTIN_PERSONAS', => {
  expect(reconciler?.tools).not.toContain('Bash')
  })
 
+ it('auto-approves only the reconciler, which nobody is watching', => {
+ // Started by the merge queue rather than a human, so an approval gate leaves it in
+ // `awaiting_approval` until the SLA auto-denies — found by a live run stalling
+ // there. Every other built-in is @mentioned by someone who is present.
+ for (const persona of BUILTIN_PERSONAS) {
+ expect(persona.harnessAutoApprove).toBe(persona.name === 'reconciler')
+ }
+ })
+
  it('tells the reconciler that refusing is a correct outcome', => {
  // The parallel-branch measurement measured the population as mechanical, but the tail is conflicts that
  // encode a real disagreement. An agent that always resolves would silently drop

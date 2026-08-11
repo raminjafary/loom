@@ -210,17 +210,21 @@ const main = async => {
  const personas = await client.persona.list
  const reconciler = personas.find((p: any) => p.name === 'reconciler')
  if (!reconciler) throw new Error('the reconciler built-in is not seeded')
- // Only the harness block is changed, and only to make the run unattended: the tools,
- // the model and — the part that is actually under measurement — the system prompt are
- // the shipped ones. Edit is path-scoped to the clone regardless.
- const unattended = reconciler.markdownSource.replace(
- 'harness:\n budgetCapUsd: 5',
- 'harness:\n autoApprove: true\n budgetCapUsd: 1',
+ /**
+ * The persona is used exactly as it ships — no patching.
+ *
+ * This script used to set `autoApprove: true` here to make the runs unattended, and
+ * that patch hid a real bug for a whole session: the built-in did *not* auto-approve,
+ * so every reconciler started by the merge queue stalled in `awaiting_approval` until
+ * the SLA denied it. The check passed 12/12 while the shipped path could not work at
+ * all. A harness that edits the thing it is measuring measures the harness.
+ */
+ if (!reconciler.harnessAutoApprove) {
+ throw new Error(
+ 'the reconciler built-in no longer auto-approves — a queue-started run will stall on ' +
+ 'its first Edit, because nobody is watching a run they did not start',
 )
- if (unattended === reconciler.markdownSource) {
- throw new Error('the reconciler harness block changed shape — patch this script, do not skip it')
  }
- await client.persona.update({ personaId: reconciler.id, markdownSource: unattended })
 
  const awaitRun = async (runId: string): Promise<any> => {
  for (let i = 0; i < 120; i += 1) {
