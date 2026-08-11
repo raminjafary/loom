@@ -3,7 +3,9 @@ import { asAgentRunId } from './ids.js'
 import {
  MAX_SUBTASKS,
  MAX_SUBTASK_PATHS,
+ describeCrossPlanOverlaps,
  describePathOverlaps,
+ detectClaimsAgainstExisting,
  detectPathOverlaps,
  parseDecomposition,
  pathsOverlap,
@@ -214,6 +216,68 @@ describe('detectPathOverlaps', => {
 
  it('describes nothing when there is nothing to warn about', => {
  expect(describePathOverlaps([])).toBeNull
+ })
+})
+
+/**
+ * The collisions a multi-planner tree produces that no single plan can see. Two
+ * sub-planners decomposing different areas that share a file are each internally
+ * consistent, so the "warn *before* tokens are spent" is exactly what the
+ * within-plan check loses — the tree-wide board only notices once both sides have
+ * spent a branch getting there.
+ */
+describe('detectClaimsAgainstExisting', => {
+ const claim = (title: string, paths: string[]): PlanSubtask => ({
+ title,
+ task: 'do the thing',
+ personaName: 'swe',
+ paths,
+ })
+
+ it('finds a new subtask colliding with a claim from another plan', => {
+ const overlaps = detectClaimsAgainstExisting(
+ [claim('B area work', ['packages/db/src/schema.ts'])],
+ [{ title: 'A area work', paths: ['packages/db'] }],
+)
+ expect(overlaps).toHaveLength(1)
+ expect(overlaps[0]?.firstTitle).toBe('B area work')
+ expect(overlaps[0]?.secondTitle).toBe('A area work')
+ expect(overlaps[0]?.paths).toEqual(['packages/db', 'packages/db/src/schema.ts'])
+ })
+
+ it('never reports existing claims against each other', => {
+ // They were checked when they were made. Re-reporting them buries the new
+ // collision — the only one the reader can still act on — in old news.
+ expect(
+ detectClaimsAgainstExisting(
+ [claim('New', ['apps/web'])],
+ [
+ { title: 'Old A', paths: ['packages/db'] },
+ { title: 'Old B', paths: ['packages/db'] },
+ ],
+),
+).toEqual([])
+ })
+
+ it('reports nothing when there are no prior claims at all', => {
+ // The first plan in a tree, which is every plan in a flat Phase 2 swarm.
+ expect(detectClaimsAgainstExisting([claim('A', ['src/a.ts'])], [])).toEqual([])
+ })
+
+ it('tells the reader the earlier claim stands, since only one plan is still theirs', => {
+ const text = describeCrossPlanOverlaps(
+ detectClaimsAgainstExisting(
+ [claim('Mine', ['src/a.ts'])],
+ [{ title: 'Theirs', paths: ['src/a.ts'] }],
+),
+)
+ expect(text).toContain('"Mine" collides with "Theirs"')
+ expect(text).toContain('already claimed')
+ expect(text).toContain('The earlier claim stands')
+ })
+
+ it('describes nothing when there is nothing to warn about', => {
+ expect(describeCrossPlanOverlaps([])).toBeNull
  })
 })
 

@@ -2159,6 +2159,88 @@ Decompose and delegate.`
  })
 
  /**
+ * The collision no single plan can see. Two sub-planners decompose different areas
+ * that happen to share a file; each plan is internally consistent, so the
+ * within-plan check finds nothing and the "warn *before* tokens are spent"
+ * is lost — the tree-wide board only notices once both sides have spent a branch.
+ */
+ it('warns when a plan claims paths another plan in the tree already claimed', async => {
+ const { socket, runnerId } = await pairFakeRunner('notes-crossplan')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'notes-crossplan' })
+ const root = await client.persona.create({ markdownSource: NOTES_PLANNER_MARKDOWN })
+ await client.persona.create({
+ markdownSource: `---\nname: cross-sub\ndescription: A sub-planner.\nmodel: test-model\ntools: []\nharness:\n planner: true\n delegates: [Read]\n---\n\nDecompose further.`,
+ })
+
+ const { run } = await startRunVia(socket, created.rootThread.id, repo.id, root.id)
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Area A', task: 'Do A.', personaName: 'cross-sub', paths: ['packages/db'] },
+ { title: 'Area B', task: 'Do B.', personaName: 'cross-sub', paths: ['apps/web'] },
+ ],
+ }),
+)
+ let subs = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 40 && subs.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ subs = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+ expect(subs).toHaveLength(2)
+ const [areaA, areaB] = subs as [(typeof subs)[number], (typeof subs)[number]]
+
+ // A claims a file. Its own plan is internally consistent.
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: areaA.id,
+ subtasks: [
+ {
+ title: 'Schema work',
+ task: 'Do it.',
+ personaName: 'fake-worker',
+ paths: ['packages/db/src/schema.ts'],
+ },
+ ],
+ }),
+)
+ let seededA = false
+ for (let i = 0; i < 40 && !seededA; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ seededA = (await client.workerNote.listByTree({ agentRunId: run.id })).some(
+ (note) => note.kind === 'path_ownership' && note.title === 'Schema work',
+)
+ }
+ expect(seededA).toBe(true)
+
+ // B, decomposing a different area, claims the directory above it.
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: areaB.id,
+ subtasks: [
+ { title: 'Migration work', task: 'Do it.', personaName: 'fake-worker', paths: ['packages/db'] },
+ ],
+ }),
+)
+
+ let warning: string | undefined
+ for (let i = 0; i < 40 && !warning; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ warning = page.messages.find((m) => m.body.text?.includes('already claimed'))?.body.text
+ }
+
+ expect(warning).toContain('"Migration work" collides with "Schema work"')
+ expect(warning).toContain('The earlier claim stands')
+
+ socket.close
+ })
+
+ /**
  * The board is the human's view and stays tree-wide on purpose — a person
  * supervising a swarm needs to see across the subtrees precisely because the agents
  * cannot. It was built from `[root,...listByParent(root)]`, which silently omitted

@@ -167,6 +167,69 @@ export const detectPathOverlaps = (subtasks: readonly PlanSubtask[]): PathOverla
  return overlaps
 }
 
+/** A path claim already on the record — one prior subtask's title and the paths it owns. */
+export interface PathClaim {
+ readonly title: string
+ readonly paths: readonly string[]
+}
+
+/**
+ * The same collision check, across plans rather than within one.
+ *
+ * `detectPathOverlaps` compares a plan's subtasks against each other, which is the
+ * whole story while a tree has one Planner in it. With a second planner node the
+ * expensive collisions are precisely the ones it cannot see: sub-planner A and
+ * sub-planner B decomposing different areas that turn out to share a file. Neither
+ * plan is internally inconsistent, and the stated value — warning "*before*
+ * tokens are spent" — is exactly what is lost, because the tree-wide board only
+ * notices once both sides have branches.
+ *
+ * Existing claims are not compared against each other: they were checked when they
+ * were made, and re-reporting them would bury the new collision in old news.
+ */
+export const detectClaimsAgainstExisting = (
+ subtasks: readonly PlanSubtask[],
+ existing: readonly PathClaim[],
+): PathOverlap[] => {
+ const overlaps: PathOverlap[] = []
+ for (const subtask of subtasks) {
+ for (const claim of existing) {
+ const collided = subtask.paths.filter((path) =>
+ claim.paths.some((other) => pathsOverlap(path, other)),
+)
+ const collidedBack = claim.paths.filter((path) =>
+ subtask.paths.some((other) => pathsOverlap(path, other)),
+)
+ const paths = [...new Set([...collided,...collidedBack])].sort
+ if (paths.length > 0) {
+ overlaps.push({ firstTitle: subtask.title, secondTitle: claim.title, paths })
+ }
+ }
+ }
+ return overlaps
+}
+
+/**
+ * The cross-plan warning. Worded differently from `describePathOverlaps` on purpose:
+ * the reader can still change one of these plans but not the other, and the advice
+ * that follows from that is different — coordinate with the run that got there
+ * first, rather than re-split your own subtasks.
+ */
+export const describeCrossPlanOverlaps = (overlaps: readonly PathOverlap[]): string | null => {
+ if (overlaps.length === 0) return null
+ return [
+ overlaps.length === 1
+ ? 'A subtask in this plan claims a path another plan in this tree already claimed:'
+: `${overlaps.length} subtasks in this plan claim paths other plans in this tree already claimed:`,
+...overlaps.map(
+ (overlap) =>
+ `• "${overlap.firstTitle}" collides with "${overlap.secondTitle}" on ${overlap.paths.join(', ')}`,
+),
+ 'The earlier claim stands. These will still run and the merge queue serializes them, ' +
+ 'but the work here should be scoped around the other claim rather than duplicating it.',
+ ].join('\n')
+}
+
 /** The warning a human and the Planner both see. Plural-aware, because it is read a lot. */
 export const describePathOverlaps = (overlaps: readonly PathOverlap[]): string | null => {
  if (overlaps.length === 0) return null

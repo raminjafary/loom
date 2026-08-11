@@ -9,8 +9,10 @@ import {
  attenuateChildPersona,
  buildNotification,
  describeMergeFailure,
+ describeCrossPlanOverlaps,
  describeDelegationRoster,
  describePathOverlaps,
+ detectClaimsAgainstExisting,
  detectPathOverlaps,
  isHuman,
  isPricedModel,
@@ -1221,6 +1223,25 @@ export const applySubmittedPlan = async (
  */
  const overlaps = detectPathOverlaps(verdict.decomposition.subtasks)
  const overlapWarning = describePathOverlaps(overlaps)
+
+ /**
+ * The same check across plans. Read *before* this plan
+ * writes its own `path_ownership` notes below, so what comes back is other plans'
+ * claims and this one never collides with itself.
+ *
+ * The own-run filter is belt and braces for a Planner that submits twice: its
+ * prompt says to submit exactly one plan, and a second submission re-claiming its
+ * own paths should not read as a conflict with another area.
+ */
+ const priorClaims = (
+ await deps.workerNotes.listByTree(input.workspaceId, await resolveTreeRunId(deps, planner))
+)
+.filter((note) => note.kind === 'path_ownership' && note.agentRunId !== planner.id)
+.map((note) => ({ title: note.title, paths: note.paths }))
+ const crossWarning = describeCrossPlanOverlaps(
+ detectClaimsAgainstExisting(verdict.decomposition.subtasks, priorClaims),
+)
+
  for (const subtask of verdict.decomposition.subtasks) {
  if (subtask.paths.length === 0) continue
  await recordRunPlatformNote(deps, planner, {
@@ -1240,6 +1261,16 @@ export const applySubmittedPlan = async (
  body: overlapWarning,
  paths: [...new Set(overlaps.flatMap((overlap) => overlap.paths))],
  })
+ }
+ if (crossWarning) {
+ /**
+ * Posted to the thread but deliberately *not* written as another
+ * `path_ownership` note. That kind is what `detectClaimsAgainstExisting` reads,
+ * so recording the warning as one would make the next plan in this tree collide
+ * with the warning itself — each plan generating a fresh false collision for the
+ * one after it.
+ */
+ await postRunSystemMessage(deps, planner, crossWarning)
  }
 
  for (const subtask of verdict.decomposition.subtasks) {
