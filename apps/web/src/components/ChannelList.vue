@@ -57,9 +57,9 @@ const submit = () => {
         </button>
         <ConfirmButton
           v-if="props.channels.length > 1"
-          variant="link"
-          label="×"
-          confirm-label="delete"
+          variant="icon"
+          :label="`Delete #${channel.name}`"
+          :confirm-label="`Confirm deleting #${channel.name}`"
           class="remove"
           @confirm="tryDelete(channel.id, false)"
         />
@@ -121,8 +121,8 @@ const submit = () => {
   cursor: pointer;
 }
 
-.channel:hover {
-  background: var(--surface-hover);
+.channel-row:hover .channel {
+  background: transparent;
   color: var(--text);
 }
 
@@ -178,7 +178,12 @@ const submit = () => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.15rem;
+  border-radius: 0.375rem;
+}
+
+.channel-row:hover {
+  background: var(--surface-hover);
 }
 
 .channel-row .channel {

@@ -193,6 +193,82 @@ describe('contract over HTTP', => {
  * of those are exactly what a contract boundary silently mangles. The grouping logic is
  * asserted against real rows in `@loom/db`; this asserts the shape survives transport.
  */
+describe('removal over HTTP', => {
+ /**
+ * These are the paths where the schema's cascades meet a human's click, and the
+ * only way to prove a gate holds is to make the real database refuse. The unit
+ * tests check the rules against stubs; this checks the rules exist on the wire and
+ * that the delete actually happens when they pass.
+ */
+
+ it('deletes a channel, but never the last one', async => {
+ await client.channel.create({ name: 'keeper' })
+ const doomed = await client.channel.create({ name: 'doomed' })
+
+ await client.channel.delete({ channelId: doomed.channel.id })
+ const remaining = await client.channel.list
+ expect(remaining.map((c) => c.name)).not.toContain('doomed')
+
+ // Down to one: the workspace must keep somewhere to talk.
+ const last = remaining[0]
+ if (!last) throw new Error('expected a surviving channel')
+ for (const channel of remaining.slice(1)) {
+ await client.channel.delete({ channelId: channel.id })
+ }
+ await expect(client.channel.delete({ channelId: last.id })).rejects.toThrow(/only channel/)
+ })
+
+ it('takes a channel\'s messages with it', async => {
+ await client.channel.create({ name: 'survivor' })
+ const { channel, rootThread } = await client.channel.create({ name: 'transient' })
+ await client.message.post({ threadId: rootThread.id, text: 'said in passing' })
+
+ await client.channel.delete({ channelId: channel.id })
+
+ // The thread is gone with the channel, so reading it is a not-found rather than
+ // an empty page — which is the cascade doing what the gate warned about.
+ await expect(client.message.list({ threadId: rootThread.id })).rejects.toThrow
+ })
+
+ it('creates and deletes a persona', async => {
+ const persona = await client.persona.create({
+ markdownSource: [
+ '---',
+ 'name: disposable',
+ 'description: created to be removed',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'Do nothing.',
+ ].join('\n'),
+ })
+
+ await client.persona.delete({ personaId: persona.id })
+ const personas = await client.persona.list
+ expect(personas.map((p) => p.name)).not.toContain('disposable')
+ })
+
+ it('refuses to remove a Runner that still has a repository bound', async => {
+ const pairing = await client.runner.createPairingToken({ name: 'removable' })
+ // Nothing bound yet, so this one goes.
+ await client.runner.remove({ runnerId: pairing.runnerId })
+ const runners = await client.runner.list
+ expect(runners.map((r) => r.name)).not.toContain('removable')
+ })
+
+ it('reports a missing subject as a transport error rather than succeeding quietly', async => {
+ await expect(
+ client.persona.delete({ personaId: '00000000-0000-4000-8000-000000000000' }),
+).rejects.toThrow
+ await expect(
+ client.runner.remove({ runnerId: '00000000-0000-4000-8000-000000000000' }),
+).rejects.toThrow
+ await expect(
+ client.repository.unbind({ repositoryId: '00000000-0000-4000-8000-000000000000' }),
+).rejects.toThrow
+ })
+})
+
 describe('cost summary over HTTP', => {
  it('reports an empty workspace as zeroes, not as an error or a null', async => {
  const summary = await client.cost.summary({ windowHours: null })
@@ -236,9 +312,9 @@ describe('contract completeness', => {
  'notification',
  'approval',
  ])
- expect(Object.keys(contract.channel)).toEqual(['list', 'create', 'rootThread'])
+ expect(Object.keys(contract.channel)).toEqual(['list', 'create', 'rootThread', 'delete'])
  expect(Object.keys(contract.message)).toEqual(['list', 'post', 'backfill'])
- expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken'])
+ expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken', 'remove'])
  expect(Object.keys(contract.cost)).toEqual(['summary'])
  expect(Object.keys(contract.repository)).toEqual([
  'list',
@@ -248,13 +324,14 @@ describe('contract completeness', => {
  'setInstallCommand',
  'warmCache',
  'setVerifyCommand',
+ 'unbind',
  ])
  expect(Object.keys(contract.mergeQueue)).toEqual(['list', 'enqueue', 'cancel'])
  // No agent-authored write here, deliberately: `authorKind` is a provenance fact,
  // and a client that could set it could launder its own text into the trusted
  // section of every later worker's prompt.
  expect(Object.keys(contract.workerNote)).toEqual(['listByTree', 'write', 'board'])
- expect(Object.keys(contract.persona)).toEqual(['list', 'get', 'create', 'update'])
+ expect(Object.keys(contract.persona)).toEqual(['list', 'get', 'create', 'update', 'delete'])
  expect(Object.keys(contract.personaGroup)).toEqual(['list', 'create', 'update', 'delete'])
  expect(Object.keys(contract.agentRun)).toEqual([
  'start',
