@@ -1618,6 +1618,92 @@ export const setRepositoryVerifyCommand = async (
 }
 
 /**
+ * Sets what warms this repository's dependency cache.
+ *
+ * Human-only for the same reason `setVerifyCommand` is: this string is executed, and
+ * the entire safety argument for sharing a warmed cache with runs is that no model
+ * output ever influenced what went into it. An agent able to set it would be able to
+ * write to every later run's dependency tree.
+ */
+export const setRepositoryInstallCommand = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ repositoryId: RepositoryId
+ installCommand: string | null
+ },
+): Promise<Repository> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError("Only a human may change a repository's install command")
+ }
+ const repository = await deps.repositories.findById(input.workspaceId, input.repositoryId)
+ if (!repository) throw new NotFoundError('Repository')
+
+ const normalized = input.installCommand?.trim
+ const updated = await deps.repositories.setInstallCommand(
+ input.workspaceId,
+ input.repositoryId,
+ normalized && normalized.length > 0 ? normalized: null,
+)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'repository.install_command_set',
+ subjectType: 'repository',
+ subjectId: repository.id,
+ metadata: { configured: updated.installCommand !== null },
+ })
+
+ return updated
+}
+
+/**
+ * Warms a repository's dependency cache.
+ *
+ * Human-only and synchronous-ish: this is an operator maintenance action, not something
+ * a run does to itself. That is not ceremony — the cache runs inherit is safe *because*
+ * only an operator-authored command ever wrote to it, so an agent able to trigger a
+ * warm with a command it influenced would collapse the whole argument.
+ */
+export const warmRepositoryCache = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; repositoryId: RepositoryId },
+): Promise<{ ok: boolean; detail: string | null }> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError("Only a human may warm a repository's dependency cache")
+ }
+ const repository = await deps.repositories.findById(input.workspaceId, input.repositoryId)
+ if (!repository) throw new NotFoundError('Repository')
+ if (!repository.installCommand) {
+ throw new ValidationError('This repository has no install command configured')
+ }
+
+ const runner = await deps.runners.findById(input.workspaceId, repository.runnerId)
+ if (!runner) throw new NotFoundError('Runner')
+ if (!runner.connected) throw new ValidationError('Runner is not currently connected')
+
+ const result = await deps.dispatch.warmCache({
+ runnerId: repository.runnerId,
+ repositoryPath: repository.absolutePath,
+ defaultBranch: repository.defaultBranch,
+ installCommand: repository.installCommand,
+ })
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'repository.cache_warmed',
+ subjectType: 'repository',
+ subjectId: repository.id,
+ metadata: { ok: result.ok },
+ })
+
+ return { ok: result.ok, detail: result.ok ? null: result.detail }
+}
+
+/**
  * Queues a finished run's branch for merge into its repository's default branch
  *.
  *

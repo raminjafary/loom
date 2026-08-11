@@ -46,7 +46,9 @@ import {
  pushAgentRun,
  registerNotificationTarget,
  resumeAllRuns,
+ setRepositoryInstallCommand,
  setRepositoryVerifyCommand,
+ warmRepositoryCache,
  startAgentRun,
  unregisterNotificationTarget,
  updatePersona,
@@ -259,6 +261,27 @@ export const router = os.router({
  parentPath: input.parentPath,
  name: input.name,
  displayName: input.displayName,
+ }),
+),
+),
+
+ setInstallCommand: os.repository.setInstallCommand.handler(({ context, input }) =>
+ guard( =>
+ setRepositoryInstallCommand(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ repositoryId: asRepositoryId(input.repositoryId),
+ installCommand: input.installCommand,
+ }),
+),
+),
+
+ warmCache: os.repository.warmCache.handler(({ context, input }) =>
+ guard( =>
+ warmRepositoryCache(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ repositoryId: asRepositoryId(input.repositoryId),
  }),
 ),
 ),

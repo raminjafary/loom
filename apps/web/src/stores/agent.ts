@@ -69,6 +69,9 @@ export const useAgentStore = defineStore('agent', () => {
     writeNote: (input: Parameters<typeof session.writeNote>[0]) => session.writeNote(input),
     setVerifyCommand: (repositoryId: string, verifyCommand: string | null) =>
       session.setVerifyCommand(repositoryId, verifyCommand),
+    setInstallCommand: (repositoryId: string, installCommand: string | null) =>
+      session.setInstallCommand(repositoryId, installCommand),
+    warmCache: (repositoryId: string) => session.warmCache(repositoryId),
     registerNotificationTarget: (registration: PushRegistration) =>
       session.registerNotificationTarget(registration),
     unregisterNotificationTarget: (endpoint: string) =>

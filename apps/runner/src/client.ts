@@ -14,6 +14,7 @@ import {
 import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
 import { runAgent } from './claude-agent-adapter.js'
+import { depCacheEnv, depCacheFromEnv, warmDepCache } from './dep-cache.js'
 import {
  drainUsage,
  egressConfigFromEnv,
@@ -110,6 +111,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const useSandbox = sandboxEnabled
  const egress = egressConfigFromEnv
  const USAGE_POLL_MS = Number(process.env.LOOM_USAGE_POLL_MS ?? 5_000)
+ // Bounded above the server's own warm timeout so the Runner is not the one that
+ // gives up first and leaves a container running.
+ const WARM_TIMEOUT_MS = Number(process.env.LOOM_WARM_TIMEOUT_MS ?? 1_500_000)
 
  /**
  * Whether the sandbox image was built from the sources this Runner is running
@@ -985,6 +989,66 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  * `runner_error` the human can act on rather than as a merge that quietly
  * never happened.
  */
+ case 'warm_cache': {
+ // Nothing to warm into if the operator has not enabled a cache — reported
+ // rather than silently succeeding, since "warmed" would then be a lie.
+ const cache = depCacheFromEnv
+ if (!cache) {
+ send({
+ type: 'warm_cache_result',
+ requestId: frame.requestId,
+ ok: false,
+ detail: 'this Runner has no dependency cache enabled (LOOM_DEP_CACHE_ENABLED=1)',
+ })
+ return
+ }
+ log(`warming the dependency cache for ${frame.repositoryPath}`)
+ // A throwaway clone, not the bound repository: the install runs in a
+ // container with this path mounted, and the operator's own working tree is
+ // not somewhere to do that even read-only.
+ void prepareRunWorkspace(frame.repositoryPath, `warm-${frame.requestId}`)
+.then(async (workspace) => {
+ try {
+ return await warmDepCache({
+ runtime: sandbox.runtime,
+ image: sandbox.image,
+ network: sandbox.network,
+ cacheRoot: cache.root,
+ clonePath: workspace.clonePath,
+ command: frame.installCommand,
+ env: egress
+ ? {
+ HTTP_PROXY: egress.dataUrl,
+ HTTPS_PROXY: egress.dataUrl,
+...depCacheEnv,
+ }
+: depCacheEnv,
+ timeoutMs: WARM_TIMEOUT_MS,
+ })
+ } finally {
+ await discardRunWorkspace(workspace.clonePath).catch( => {})
+ }
+ })
+.then((result) => {
+ log(`warm ${result.ok ? 'succeeded': 'failed'} for ${frame.repositoryPath}`)
+ send({
+ type: 'warm_cache_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? {}: { detail: result.detail }),
+ })
+ })
+.catch((error: unknown) =>
+ send({
+ type: 'warm_cache_result',
+ requestId: frame.requestId,
+ ok: false,
+ detail: error instanceof Error ? error.message: String(error),
+ }),
+)
+ return
+ }
+
  case 'merge_run': {
  const workspace = runWorkspaces.get(frame.runId)
  if (!workspace) {

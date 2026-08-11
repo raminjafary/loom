@@ -1,0 +1,1 @@
+ALTER TABLE "repository" ADD COLUMN "install_command" text;

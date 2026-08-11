@@ -3,9 +3,9 @@ import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { closureDigest, walkClosure } from './sandbox-closure.js'
+import { depCacheEnv, depCacheFromEnv } from './dep-cache.js'
 import {
  buildSandboxArgs,
- depCacheEnv,
  sandboxConfigFromEnv,
  sandboxEnabled,
  staleSandboxImageAcknowledged,
@@ -137,37 +137,52 @@ describe('sandbox configuration', => {
  })
 
  /**
- * The shared dependency cache. A cache shared between sandboxes
- * is a channel between them, so the default and the opt-in are both asserted.
+ * The dependency cache. `copy` vs `shared` is a security
+ * boundary, so the default, the opt-in, and the typo case are all asserted.
  */
- it('shares no dependency cache unless an operator opts in', => {
- expect(sandboxConfigFromEnv({} as NodeJS.ProcessEnv).depCacheRoot).toBeNull
- // A path alone must not enable it — otherwise a leftover export silently opens a
- // write channel between runs.
+ it('gives runs no dependency cache unless an operator opts in', => {
+ expect(depCacheFromEnv({} as NodeJS.ProcessEnv)).toBeNull
+ // A path alone must not enable it — otherwise a leftover export configures a cache
+ // nobody asked for.
+ expect(depCacheFromEnv({ LOOM_DEP_CACHE_ROOT: '/tmp/c' } as NodeJS.ProcessEnv)).toBeNull
  expect(
- sandboxConfigFromEnv({ LOOM_DEP_CACHE_ROOT: '/tmp/c' } as NodeJS.ProcessEnv).depCacheRoot,
-).toBeNull
- expect(
- sandboxConfigFromEnv({
+ depCacheFromEnv({
  LOOM_DEP_CACHE_ENABLED: '1',
  LOOM_DEP_CACHE_ROOT: '/tmp/c',
- } as NodeJS.ProcessEnv).depCacheRoot,
-).toBe('/tmp/c')
+ } as NodeJS.ProcessEnv),
+).toEqual({ root: '/tmp/c', mode: 'copy' })
  })
 
- it('mounts the dependency cache only when configured, and never over a run-scoped path', => {
+ it('defaults to copy, and only an exact "shared" opts out of it', => {
+ // The unsound mode has to be spelled correctly to be reached: a typo must fall to
+ // the safe mode, never out of it.
+ const mode = (value: string) =>
+ depCacheFromEnv({
+ LOOM_DEP_CACHE_ENABLED: '1',
+ LOOM_DEP_CACHE_MODE: value,
+ } as NodeJS.ProcessEnv)?.mode
+ expect(mode('shared')).toBe('shared')
+ expect(mode('Shared')).toBe('copy')
+ expect(mode('share')).toBe('copy')
+ expect(mode('')).toBe('copy')
+ })
+
+ it('mounts the dependency cache only when one is prepared, never over a run-scoped path', => {
  // Default: still exactly the two run-scoped mounts the sandbox spec allows.
  expect(args.filter((a) => a === '-v')).toHaveLength(2)
 
- const cached = buildSandboxArgs(
- {...config, depCacheRoot: '/host/dep-cache' },
- { runId: 'run-1', clonePath: '/scratch/clone', homePath: '/scratch/home', env: {} },
-).join(' ')
- expect(cached).toContain('/host/dep-cache:/deps:rw')
- // Mounting it at the clone or HOME would put shared, cross-run writable state
- // inside a path the run is entitled to treat as its own.
- expect(cached).not.toContain('/host/dep-cache:/work')
- expect(cached).not.toContain('/host/dep-cache:/home/agent')
+ const cached = buildSandboxArgs(config, {
+ runId: 'run-1',
+ clonePath: '/scratch/clone',
+ homePath: '/scratch/home',
+ env: {},
+ depCachePath: '/scratch/loom-deps-run-1',
+ }).join(' ')
+ expect(cached).toContain('/scratch/loom-deps-run-1:/deps:rw')
+ // Mounting it at the clone or HOME would put the cache inside a path the run is
+ // entitled to treat as its own.
+ expect(cached).not.toContain('/scratch/loom-deps-run-1:/work')
+ expect(cached).not.toContain('/scratch/loom-deps-run-1:/home/agent')
  })
 
  it('points package managers only at caches, never at a config or credential home', => {

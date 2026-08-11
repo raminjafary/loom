@@ -65,6 +65,12 @@ export interface RepositoryRepositoryPort {
  id: RepositoryId,
  verifyCommand: string | null,
 ): Promise<Repository>
+ /** What warms this repository's dependency cache. */
+ setInstallCommand(
+ workspaceId: WorkspaceId,
+ id: RepositoryId,
+ installCommand: string | null,
+): Promise<Repository>
 }
 
 /**
@@ -443,6 +449,17 @@ export interface RunDispatchPort {
  parentPath: string
  name: string
  }): Promise<{ ok: true; path: string; defaultBranch: string } | { ok: false; error: string }>
+ /**
+ * Runs a repository's install command in a sandbox to fill the shared dependency
+ * cache. Operator-triggered; no agent is involved, which is what makes
+ * the resulting cache safe for runs to inherit.
+ */
+ warmCache(input: {
+ runnerId: RunnerId
+ repositoryPath: string
+ defaultBranch: string
+ installCommand: string
+ }): Promise<{ ok: true } | { ok: false; detail: string }>
  /** Fire-and-forget: instructs the connected Runner to start executing. Throws if not connected. */
  startRun(input: {
  runnerId: RunnerId

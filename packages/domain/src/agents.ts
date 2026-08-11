@@ -44,6 +44,12 @@ export interface Repository {
  * for why this executes in the sandbox rather than on the Runner host.
  */
  readonly verifyCommand: string | null
+ /**
+ * What the platform runs to warm this repository's dependency cache.
+ * Operator-authored, run with no agent in the loop — which is the whole reason a
+ * warmed cache can be shared with runs at all.
+ */
+ readonly installCommand: string | null
  readonly createdAt: Date
 }
 

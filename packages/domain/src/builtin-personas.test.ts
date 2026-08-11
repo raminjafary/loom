@@ -74,6 +74,15 @@ describe('BUILTIN_PERSONAS', => {
  }
  })
 
+ it('tells the reconciler it is queue-started, not @mentioned', => {
+ // It is seeded like every other built-in, so it appears in the persona picker even
+ // with LOOM_RECONCILER_ENABLED off. Started by hand it gets an ordinary run on a
+ // fresh branch with no conflict markers anywhere — `reconcile` is not reachable
+ // from the contract, deliberately. Cheaper to say so than to special-case the UI.
+ const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
+ expect(reconciler?.systemPrompt).toMatch(/not meant to be invoked by hand/i)
+ })
+
  it('tells the reconciler that refusing is a correct outcome', => {
  // The parallel-branch measurement measured the population as mechanical, but the tail is conflicts that
  // encode a real disagreement. An agent that always resolves would silently drop

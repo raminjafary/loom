@@ -214,6 +214,8 @@ describe('contract completeness', => {
  'bindExisting',
  'listDirectory',
  'createNew',
+ 'setInstallCommand',
+ 'warmCache',
  'setVerifyCommand',
  ])
  expect(Object.keys(contract.mergeQueue)).toEqual(['list', 'enqueue', 'cancel'])

@@ -121,6 +121,16 @@ export const repositoryRepository = (db: Database): RepositoryRepositoryPort => 
  if (!row) throw new NotFoundError('Repository')
  return toRepository(row as RepositoryRow)
  },
+
+ async setInstallCommand(workspaceId, id, installCommand) {
+ const [row] = await db
+.update(repository)
+.set({ installCommand })
+.where(and(eq(repository.workspaceId, workspaceId), eq(repository.id, id)))
+.returning
+ if (!row) throw new NotFoundError('Repository')
+ return toRepository(row as RepositoryRow)
+ },
 })
 
 export const mergeQueueRepository = (db: Database): MergeQueueRepositoryPort => ({

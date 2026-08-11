@@ -137,6 +137,10 @@ export const repository = pgTable(
  // sandbox: the command is the operator's, but the code it runs is the
  // agent's.
  verifyCommand: text('verify_command'),
+ // What the platform runs to warm this repository's dependency cache.
+ // Operator-authored and run with no agent involved — that is what makes the warmed
+ // cache safe to hand to runs, since nothing a model produced ever wrote to it.
+ installCommand: text('install_command'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  },
  (t) => [index('repository_workspace_idx').on(t.workspaceId)],

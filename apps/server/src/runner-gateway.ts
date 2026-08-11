@@ -71,6 +71,11 @@ interface PendingPush {
  reject(error: Error): void
 }
 
+interface PendingWarm {
+ resolve(result: { ok: true } | { ok: false; detail: string }): void
+ reject(error: Error): void
+}
+
 interface PendingMerge {
  resolve(
  result:
@@ -87,6 +92,13 @@ interface PendingMerge {
  * block its repository's queue until the sweep's stuck check notices.
  */
 const MERGE_TIMEOUT_MS = Number(process.env.LOOM_MERGE_TIMEOUT_MS ?? 900_000)
+/**
+ * Warming installs a whole dependency tree over the network, which on a cold cache is
+ * the slowest thing this system does — repository binding calls it "minutes and gigabytes". Bounded
+ * well above a merge's timeout for that reason, and bounded at all so a Runner that
+ * dies mid-install does not leave the caller waiting forever.
+ */
+const WARM_TIMEOUT_MS = Number(process.env.LOOM_WARM_TIMEOUT_MS ?? 1_800_000)
 
 /**
  * Runner-facing WS endpoint: corrected placement, lives on
@@ -115,6 +127,7 @@ export const createRunnerGateway = (
  const pendingDiscards = new Map<string, PendingDiscard>
  const pendingPushes = new Map<string, PendingPush>
  const pendingMerges = new Map<string, PendingMerge>
+ const pendingWarms = new Map<string, PendingWarm>
 
  const send = (runnerId: RunnerId, frame: ServerFrame): void => {
  const conn = connections.get(runnerId)
@@ -302,6 +315,36 @@ export const createRunnerGateway = (
  })
  },
 
+ async warmCache({ runnerId, repositoryPath, defaultBranch, installCommand }) {
+ if (!connections.has(runnerId)) {
+ return { ok: false, detail: 'Runner is not currently connected' }
+ }
+ const requestId = randomUUID
+ return new Promise<{ ok: true } | { ok: false; detail: string }>((resolve, reject) => {
+ const timer = setTimeout( => {
+ pendingWarms.delete(requestId)
+ reject(new Error('Runner did not respond to warm_cache in time'))
+ }, WARM_TIMEOUT_MS)
+ pendingWarms.set(requestId, {
+ resolve: (r) => {
+ clearTimeout(timer)
+ resolve(r)
+ },
+ reject: (e) => {
+ clearTimeout(timer)
+ reject(e)
+ },
+ })
+ send(runnerId, {
+ type: 'warm_cache',
+ requestId,
+ repositoryPath,
+ defaultBranch,
+ installCommand,
+ })
+ })
+ },
+
  async mergeRun({ runnerId, runId, verifyCommand }) {
  if (!connections.has(runnerId)) {
  return { ok: false, reason: 'runner_error', detail: 'Runner is not currently connected' }
@@ -467,6 +510,16 @@ export const createRunnerGateway = (
 ...(frame.warning === undefined ? {}: { warning: frame.warning }),
  }
 : { ok: false, error: frame.error ?? 'Runner failed to push the run' },
+)
+ return
+ }
+
+ case 'warm_cache_result': {
+ const pending = pendingWarms.get(frame.requestId)
+ if (!pending) return
+ pendingWarms.delete(frame.requestId)
+ pending.resolve(
+ frame.ok ? { ok: true }: { ok: false, detail: frame.detail ?? 'the warm step failed' },
 )
  return
  }

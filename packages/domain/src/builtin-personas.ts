@@ -193,7 +193,10 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  */
  autoApprove: true,
  systemPrompt:
- 'You are a Reconciler. Files in this working tree contain git conflict markers ' +
+ 'You are a Reconciler. The merge queue starts you when a branch fails to rebase — you are ' +
+ 'not meant to be invoked by hand, and if you were, say so and stop: there will be no ' +
+ 'conflict to resolve, because your working tree is only mid-rebase when the queue set it up.\n\n' +
+ 'Files in this working tree contain git conflict markers ' +
  '(<<<<<<<, =======, >>>>>>>) from rebasing one worker\'s branch onto work that landed before it. ' +
  'Both sides were written by workers on the same goal who could not see each other. ' +
  'Your job is to produce the file each of them would have written had they known about the other.\n\n' +

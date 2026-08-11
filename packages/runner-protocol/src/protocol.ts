@@ -301,6 +301,13 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  * started the run and then let go, so there is no in-flight call to answer.
  */
  z.object({
+ type: z.literal('warm_cache_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ /** Tail of the install output — the useful part when it failed. */
+ detail: z.string.optional,
+ }),
+ z.object({
  type: z.literal('reconcile_result'),
  runId: z.string,
  /** The run whose branch was being reconciled. */
@@ -377,6 +384,18 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  reconcile: z
 .object({ parentRunId: z.string, branchName: z.string })
 .optional,
+ }),
+ /**
+ * Warm this repository's dependency cache. Operator-triggered, and
+ * the command is the operator's — no agent is involved, which is the whole reason
+ * the resulting cache can be handed to runs.
+ */
+ z.object({
+ type: z.literal('warm_cache'),
+ requestId: z.string,
+ repositoryPath: z.string,
+ defaultBranch: z.string,
+ installCommand: z.string,
  }),
  z.object({
  type: z.literal('permission_response'),

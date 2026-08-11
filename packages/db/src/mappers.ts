@@ -194,6 +194,7 @@ export interface RepositoryRow {
  absolutePath: string
  defaultBranch: string
  verifyCommand: string | null
+ installCommand: string | null
  createdAt: Date
 }
 
@@ -205,6 +206,7 @@ export const toRepository = (row: RepositoryRow): Repository => ({
  absolutePath: row.absolutePath,
  defaultBranch: row.defaultBranch,
  verifyCommand: row.verifyCommand,
+ installCommand: row.installCommand,
  createdAt: row.createdAt,
 })
 

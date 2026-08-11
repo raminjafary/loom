@@ -139,6 +139,25 @@ export const contract = {
  *. Null or empty merges unverified — and says so on the
  * entry, rather than reporting an unverified merge as a verified one.
  */
+ /**
+ * What the platform runs to warm this repository's dependency cache.
+ * Operator-authored and executed with no agent in the loop — that is precisely what
+ * makes the resulting cache safe to hand to runs.
+ */
+ setInstallCommand: oc
+.input(
+ z.object({
+ repositoryId: z.string,
+ installCommand: z.string.max(2_000).nullable,
+ }),
+)
+.output(RepositorySchema),
+
+ /** Runs the install command to fill the shared cache. */
+ warmCache: oc
+.input(z.object({ repositoryId: z.string }))
+.output(z.object({ ok: z.boolean, detail: z.string.nullable })),
+
  setVerifyCommand: oc
 .input(
  z.object({

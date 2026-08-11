@@ -175,6 +175,10 @@ export interface AgentSession {
  }): Promise<void>
  /** What the merge queue runs before merging into this repository; null merges unverified. */
  setVerifyCommand(repositoryId: string, verifyCommand: string | null): Promise<void>
+ /** What warms this repository's dependency cache. */
+ setInstallCommand(repositoryId: string, installCommand: string | null): Promise<void>
+ /** Runs it. Resolves with the failure detail when the install did not succeed. */
+ warmCache(repositoryId: string): Promise<{ ok: boolean; detail: string | null }>
  /**
  * The raw transcript tier's "expand raw". Returns rather than
  * patching the snapshot: it is a large, explicitly-requested artifact, and
@@ -654,6 +658,27 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  await options.api.repository.setVerifyCommand({ repositoryId, verifyCommand })
+ patch({ repositories: await options.api.repository.list })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async warmCache(repositoryId) {
+ patch({ error: null })
+ try {
+ return await options.api.repository.warmCache({ repositoryId })
+ } catch (error) {
+ const message = errorMessage(error)
+ patch({ error: message })
+ return { ok: false, detail: message }
+ }
+ },
+
+ async setInstallCommand(repositoryId, installCommand) {
+ patch({ error: null })
+ try {
+ await options.api.repository.setInstallCommand({ repositoryId, installCommand })
  patch({ repositories: await options.api.repository.list })
  } catch (error) {
  patch({ error: errorMessage(error) })
