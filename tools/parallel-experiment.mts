@@ -291,7 +291,18 @@ const main = async => {
  console.log('')
  if (RECONCILE) console.log(`reconcilers run ${reconciled}`)
  console.log('')
- console.log(`>> BRANCHES NEEDING HANDS: ${conflicted.length + verifyFailed.length + otherFailed.length}`)
+ /**
+ * Counted per **run**, not per queue entry.
+ *
+ * A reconciled branch has two entries — the one that conflicted and the one that
+ * merged after the agent fixed it — so counting failed entries reports a branch as
+ * "needing hands" when no human touched it. That is the exact number the decision
+ * rule turns on, and it was over-reporting by one on the first successful end-to-end
+ * reconcile.
+ */
+ const mergedRunIds = new Set(merged.map((e: any) => e.agentRunId))
+ const needingHands = runs.filter((run: any) => !mergedRunIds.has(run.id))
+ console.log(`>> BRANCHES NEEDING HANDS: ${needingHands.length}`)
  console.log(' This is the number the riskiest assumption is about. The queue handled everything else')
  console.log(' without a human. Time these by hand — that is the part no script can.')
  for (const entry of entries) {
