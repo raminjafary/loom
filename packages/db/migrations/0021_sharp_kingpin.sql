@@ -1,0 +1,1 @@
+ALTER TABLE "message" ADD COLUMN "tool_use_id" text;

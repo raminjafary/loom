@@ -482,6 +482,11 @@ export const message = pgTable(
  actorAgentRunId: uuid('actor_agent_run_id'),
  bodyKind: text('body_kind').notNull,
  bodyText: text('body_text').notNull,
+ // The SDK's correlation id for a tool call and its result, so a reader can pair
+ // them without guessing. Nullable and unindexed on purpose: it is null for every
+ // other kind of message, and the only consumer holds one loaded page in memory
+ // and joins on it there — a column, not a lookup key.
+ toolUseId: text('tool_use_id'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  editedAt: timestamp('edited_at', { withTimezone: true }),
  },

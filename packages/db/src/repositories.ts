@@ -139,6 +139,7 @@ export const messageRepository = (db: Database): MessageRepositoryPort => ({
         ...fromActor(input.author),
         bodyKind: input.body.kind,
         bodyText: input.body.text,
+        toolUseId: input.toolUseId ?? null,
       })
       .returning()
     if (!row) throw new Error('message insert returned no row')

@@ -54,6 +54,16 @@ export interface Message {
   readonly threadId: ThreadId
   readonly author: Actor
   readonly body: MessageBody
+  /**
+   * Correlates a tool call with the result it produced, for the two message kinds
+   * that come from one (`→ …` and `✓`/`✗`); null for everything else.
+   *
+   * Carried rather than inferred because a model issues tool calls in parallel and
+   * their results return in completion order, so neither position nor authorship
+   * identifies the pair — the id the harness already assigned is the only thing that
+   * does.
+   */
+  readonly toolUseId: string | null
   readonly createdAt: Date
   readonly editedAt: Date | null
 }

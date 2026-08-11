@@ -1,4 +1,4 @@
-import { type Contract } from '@loom/api-contract'
+import { ServerEventSchema, type Contract } from '@loom/api-contract'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
 import { buildApp, devAuth, loadConfig, type App } from '@loom/server'
 import { createORPCClient } from '@orpc/client'
@@ -118,6 +118,39 @@ describe('realtime fan-out', () => {
     const message = received.message as { id: string; body: { text: string } }
     expect(message.id).toBe(posted.id)
     expect(message.body.text).toBe('over the wire')
+
+    socket.close()
+  })
+
+  /**
+   * The assertion this file was missing, and the reason the thread was not realtime
+   * for as long as it had a socket.
+   *
+   * Every test above reads the delivered frame as raw JSON, which proves the transport
+   * and nothing about whether a client can *use* what arrives. A browser does not read
+   * raw JSON: `connectRealtime` runs `ServerEventSchema.safeParse` and — correctly, so
+   * that control frames are ignored — silently discards anything that fails. So a
+   * frame whose timestamps became strings in `JSON.stringify` was delivered, validated
+   * against a schema demanding `Date`, rejected, and dropped without a sound, while
+   * the connection indicator kept saying "Live".
+   *
+   * Validating with the contract here is what makes that a test failure rather than a
+   * thing a human notices weeks later by watching a run produce nothing.
+   */
+  it('delivers frames the contract schema accepts, not merely well-formed JSON', async () => {
+    const socket = await subscribedSocket()
+    const { rootThread } = await client.channel.create({ name: 'contract-shaped' })
+
+    const frame = nextFrame(socket, (v) => (v as { type?: string }).type === 'message.created')
+    await client.message.post({ threadId: rootThread.id, text: 'must survive the socket' })
+
+    const parsed = ServerEventSchema.safeParse(await frame)
+    expect(parsed.success, parsed.error?.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')).toBe(true)
+    if (parsed.success && parsed.data.type === 'message.created') {
+      // Revived, not merely accepted — every consumer treats these as Dates.
+      expect(parsed.data.message.createdAt).toBeInstanceOf(Date)
+      expect(parsed.data.message.body.text).toBe('must survive the socket')
+    }
 
     socket.close()
   })

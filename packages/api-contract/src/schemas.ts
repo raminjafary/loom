@@ -7,6 +7,22 @@ import { z } from 'zod'
  * exist later without a second contract.
  */
 
+/**
+ * A timestamp that survives both transports.
+ *
+ * The RPC path hands a client real `Date` objects — oRPC serializes them and revives
+ * them for us. The realtime path does not: `apps/server/src/events.ts` publishes a
+ * frame with `JSON.stringify`, the gateway forwards the bytes verbatim, and every
+ * `Date` arrives as an ISO string. A plain `z.date` rejects that, and because
+ * `connectRealtime` deliberately ignores frames the contract does not recognise, the
+ * rejection is silent: the socket stays "Live" and nothing it delivers is ever seen.
+ *
+ * That is not hypothetical — it is how the thread came to look realtime while being
+ * driven entirely by the 10s safety-net poll. Anything reachable from
+ * `ServerEventSchema` must therefore accept the string form as well as the object.
+ */
+const wireDate = z.coerce.date
+
 export const ActorSchema = z.discriminatedUnion('kind', [
  z.object({ kind: z.literal('user'), userId: z.string }),
  z.object({ kind: z.literal('agent_run'), agentRunId: z.string }),
@@ -24,8 +40,16 @@ export const MessageSchema = z.object({
  threadId: z.string,
  author: ActorSchema,
  body: MessageBodySchema,
- createdAt: z.date,
- editedAt: z.date.nullable,
+ /**
+ * The SDK's own correlation id for a tool call and the result it produced, carried
+ * so a client never has to guess which result belongs to which call. A model issues
+ * tool calls in parallel and their results come back in whatever order they finish,
+ * so position and authorship are both wrong answers. Null for everything that is
+ * not one of those two events, and for history written before it was recorded.
+ */
+ toolUseId: z.string.nullable,
+ createdAt: wireDate,
+ editedAt: wireDate.nullable,
 })
 
 export const ChannelSchema = z.object({
@@ -34,7 +58,7 @@ export const ChannelSchema = z.object({
  name: z.string,
  topic: z.string.nullable,
  isPrivate: z.boolean,
- createdAt: z.date,
+ createdAt: wireDate,
 })
 
 export const ThreadSchema = z.object({
@@ -43,7 +67,7 @@ export const ThreadSchema = z.object({
  channelId: z.string,
  parentMessageId: z.string.nullable,
  isRoot: z.boolean,
- createdAt: z.date,
+ createdAt: wireDate,
 })
 
 /**

@@ -8,7 +8,7 @@ import {
  type ThreadRow,
  type ToolRow,
 } from '@loom/client-core'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import MarkdownText from './MarkdownText.vue'
 
 const props = defineProps<{
@@ -64,8 +64,16 @@ const onScroll = => {
  * Prepended at the top ("load earlier"): hold the reader's place. The browser
  * keeps `scrollTop` while the content above it grows, which silently scrolls the
  * page — so the height the page grew by has to be added back.
+ *
+ * The trigger is the message count and the *count* is rows, which is not
+ * pedantry: a result merges into the row its call already occupies, so during a
+ * burst of parallel calls a message-based tally reads "28 new" where fourteen
+ * lines appeared. Watching rows alone would not do either — a result that
+ * arrives for an existing row changes no length at all, and a reader sitting at
+ * the bottom still needs to be carried down as that row grows a body.
  */
 let firstMessageId: string | null = null
+let lastRowCount = 0
 
 watch(
  => props.messages.length,
@@ -76,6 +84,10 @@ watch(
  const wasAtBottom = previous === 0 || measureBottom
  firstMessageId = props.messages[0]?.id ?? null
 
+ const rowsBefore = lastRowCount
+ const rowsNow = rows.value.length
+ lastRowCount = rowsNow
+
  await nextTick
  if (!scroller.value) return
 
@@ -84,7 +96,7 @@ watch(
  } else if (wasAtBottom) {
  scrollToBottom
  } else {
- unseenBelow.value += next - previous
+ unseenBelow.value += Math.max(rowsNow - rowsBefore, 0)
  }
  },
 )
@@ -124,6 +136,11 @@ const rows = computed( => {
  row,
  grouped: continuesPrevious(row, built[index - 1]),
  }))
+})
+
+// A thread mounted with messages already loaded has rows nobody arrived late for.
+onMounted( => {
+ lastRowCount = rows.value.length
 })
 
 /**

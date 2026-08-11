@@ -2405,6 +2405,12 @@ export const recordAgentEvent = async (
  threadId: run.threadId,
  author,
  body: { kind: author.kind === 'system' ? 'system': 'text', text: eventToMessageText(input.event) },
+ // Carried through to the thread so a reader pairs a call with its own result
+ // rather than with whichever one happened to finish first (see `Message`).
+ toolUseId:
+ input.event.kind === 'tool_call' || input.event.kind === 'tool_result'
+ ? input.event.toolUseId
+: null,
  })
 
  await deps.events.publish({

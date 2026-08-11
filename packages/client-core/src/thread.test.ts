@@ -17,14 +17,22 @@ const SYSTEM: Actor = { kind: 'system' }
 const USER: Actor = { kind: 'user', userId: 'user-1' }
 
 let seq = 0
+/** A message from before `toolUseId` was recorded, which is what most history is. */
 const message = (author: Actor, text: string, atMs = ++seq * 1000): Message => ({
  id: `m${seq}`,
  workspaceId: 'w',
  threadId: 't',
  author,
  body: { kind: author.kind === 'system' ? 'system': 'text', text },
+ toolUseId: null,
  createdAt: new Date(atMs),
  editedAt: null,
+})
+
+/** A message as the platform writes it now: correlated to the call it belongs to. */
+const correlated = (author: Actor, text: string, toolUseId: string): Message => ({
+...message(author, text),
+ toolUseId,
 })
 
 describe('shortenBranchNames', => {
@@ -156,10 +164,96 @@ describe('buildThreadRows', => {
  expect(row.result).toBeNull
  })
 
- it('keeps a result whose call is not in the loaded page rather than dropping it', => {
- const rows = buildThreadRows([message(RUN_A, '✓ orphaned result')])
+ /**
+ * An orphan is shown, and shown clamped. Routed to a plain row it rendered as a
+ * paragraph — no preview, and newlines collapsed to spaces by the browser — so a
+ * single orphaned `Read` dumped hundreds of characters of file content into the
+ * conversation. That was observed live, on eleven rows at once.
+ */
+ it('keeps a result whose call is not in the loaded page, clamped like any other', => {
+ const body = Array.from({ length: 30 }, (_, i) => `orphan line ${i}`).join('\n')
+ const rows = buildThreadRows([message(RUN_A, `✓ ${body}`)])
+
  expect(rows).toHaveLength(1)
- expect(rows[0]!.kind).not.toBe('tool')
+ const row = rows[0] as ToolRow
+ expect(row.kind).toBe('tool')
+ expect(row.status).toBe('ok')
+ expect(row.resultPreview?.truncated).toBe(true)
+ expect(row.result).toContain('orphan line 29')
+ // No call to name, and it must not pretend otherwise.
+ expect(row.target).toBe('')
+ })
+
+ describe('pairing on the harness correlation id', => {
+ /**
+ * The live case that broke the old heuristic: one turn issuing fourteen reads,
+ * whose results return in completion order. Reduced to four here; the failure is
+ * identical at any width above one.
+ */
+ it('pairs a parallel burst whose results come back out of order', => {
+ const rows = buildThreadRows([
+ correlated(RUN_A, '→ Read: /work/src/mod01.js', 'tu_01'),
+ correlated(RUN_A, '→ Read: /work/src/mod02.js', 'tu_02'),
+ correlated(RUN_A, '→ Read: /work/src/mod03.js', 'tu_03'),
+ correlated(RUN_A, '→ Read: /work/src/mod04.js', 'tu_04'),
+ correlated(RUN_A, '✓ step04', 'tu_04'),
+ correlated(RUN_A, '✓ step01', 'tu_01'),
+ correlated(RUN_A, '✓ step03', 'tu_03'),
+ correlated(RUN_A, '✓ step02', 'tu_02'),
+ ])
+
+ expect(rows).toHaveLength(4)
+ for (const [index, row] of (rows as ToolRow[]).entries) {
+ const n = String(index + 1).padStart(2, '0')
+ expect(row.target).toBe(`/work/src/mod${n}.js`)
+ // Each call carries its own output — the assertion the old pairing failed.
+ expect(row.result).toBe(`step${n}`)
+ expect(row.status).toBe('ok')
+ }
+ })
+
+ /**
+ * A model narrating between issuing a call and its result is ordinary, and used to
+ * strand the call on "running…" for the life of the thread.
+ */
+ it('pairs across prose spoken between the call and its result', => {
+ const rows = buildThreadRows([
+ correlated(RUN_A, '→ Bash: pnpm test', 'tu_9'),
+ message(RUN_A, 'Running the suite now.'),
+ correlated(RUN_A, '✓ 526 passed', 'tu_9'),
+ ])
+
+ expect(rows).toHaveLength(2)
+ const tool = rows.find((row) => row.kind === 'tool') as ToolRow
+ expect(tool.status).toBe('ok')
+ expect(tool.result).toBe('526 passed')
+ })
+
+ it('keeps two runs\' identical calls apart, since ids are unique and targets are not', => {
+ const rows = buildThreadRows([
+ correlated(RUN_A, '→ Read: shared.ts', 'tu_a'),
+ correlated(RUN_B, '→ Read: shared.ts', 'tu_b'),
+ correlated(RUN_B, '✓ B saw this', 'tu_b'),
+ correlated(RUN_A, '✓ A saw this', 'tu_a'),
+ ])
+
+ expect(rows).toHaveLength(2)
+ const [a, b] = rows as ToolRow[]
+ expect(a!.result).toBe('A saw this')
+ expect(b!.result).toBe('B saw this')
+ })
+
+ it('orphans a result whose call is off the page instead of stealing another call\'s', => {
+ const rows = buildThreadRows([
+ correlated(RUN_A, '→ Read: visible.ts', 'tu_here'),
+ correlated(RUN_A, '✓ from a call above the page', 'tu_elsewhere'),
+ ])
+
+ expect(rows).toHaveLength(2)
+ const [call, orphan] = rows as ToolRow[]
+ expect(call!.status).toBe('pending')
+ expect(orphan!.tool.toolName).toBe('unpaired result')
+ })
  })
 
  it('does not attach a result to a call the author has already spoken past', => {

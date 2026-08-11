@@ -203,21 +203,34 @@ const actorKey = (actor: Actor): string => {
 /**
  * Pairs each tool call with the result it produced.
  *
- * Pairing is per-author rather than positional: several runs post into one thread
- * concurrently, so the message after a call is frequently a different
- * worker's. Within one `agent_run` the events are sequential and numbered, which is
- * what makes "the next result from this author" the right answer and not a guess.
+ * **On `toolUseId` when the message carries one.** An earlier version paired "the next
+ * result from this author", on the reasoning that one run's events are sequential. A
+ * live run disproved it in the first minute: the model issued fourteen `Read` calls in
+ * one turn and their results came back in completion order — `mod04`, `mod05`, `mod10`,
+ * `mod01` — so one call was labelled with a sibling's output, thirteen results were
+ * orphaned, and six calls sat on "running…" in a run that had already finished.
+ * Position and authorship are both wrong answers; the harness's own correlation id is
+ * the only right one, and `recordAgentEvent` now carries it through.
+ *
+ * The old heuristic stays as a fallback for messages written before that column
+ * existed, and is deliberately kept honest about its limits: it pairs only while a
+ * single call is outstanding, so an old parallel burst renders as orphans rather than
+ * as confident mislabelling.
  */
 export const buildThreadRows = (messages: readonly Message[]): ThreadRow[] => {
  const rows: ThreadRow[] = []
- const openToolRowIndexByAuthor = new Map<string, number>
+ /** Correlated calls, by the id the harness assigned them. */
+ const rowIndexByToolUseId = new Map<string, number>
+ /** Fallback for pre-`toolUseId` history: at most one outstanding call per author. */
+ const legacyRowIndexByAuthor = new Map<string, number>
 
  for (const message of messages) {
  const parsed = parseMessage(message)
  const author = actorKey(message.author)
 
  if (parsed.kind === 'tool-call') {
- openToolRowIndexByAuthor.set(author, rows.length)
+ if (message.toolUseId) rowIndexByToolUseId.set(message.toolUseId, rows.length)
+ else legacyRowIndexByAuthor.set(author, rows.length)
  rows.push({
  kind: 'tool',
  id: message.id,
@@ -235,7 +248,9 @@ export const buildThreadRows = (messages: readonly Message[]): ThreadRow[] => {
  }
 
  if (parsed.kind === 'tool-ok' || parsed.kind === 'tool-error') {
- const index = openToolRowIndexByAuthor.get(author)
+ const index = message.toolUseId
+ ? rowIndexByToolUseId.get(message.toolUseId)
+: legacyRowIndexByAuthor.get(author)
  const open = index === undefined ? null: rows[index]
  if (index !== undefined && open && open.kind === 'tool' && open.status === 'pending') {
  const body = shortenBranchNames(parsed.detail)
@@ -246,25 +261,40 @@ export const buildThreadRows = (messages: readonly Message[]): ThreadRow[] => {
  resultPreview: clampText(body),
  messageIds: [...open.messageIds, message.id],
  }
- openToolRowIndexByAuthor.delete(author)
+ if (message.toolUseId) rowIndexByToolUseId.delete(message.toolUseId)
+ else legacyRowIndexByAuthor.delete(author)
  continue
  }
- // A result with no call in view — the call scrolled off the loaded page, or
- // the pairing assumption broke. Show it rather than drop it.
+ // A result whose call is not in view — off the top of the loaded page, or old
+ // history from a parallel burst the fallback cannot pair. Shown, because
+ // dropping it would hide output, and shown *as a tool row*: routed to a plain
+ // row it rendered as a paragraph, which meant no clamp and newlines collapsed
+ // to spaces — one orphaned `Read` putting 782 characters of file content into
+ // the middle of the conversation, which is the whole complaint this module
+ // exists to answer.
+ const body = shortenBranchNames(parsed.detail)
  rows.push({
- kind: parsed.kind === 'tool-ok' ? 'system': 'run-error',
+ kind: 'tool',
  id: message.id,
  author: message.author,
  createdAt: message.createdAt,
- text: shortenBranchNames(parsed.detail),
+ status: parsed.kind === 'tool-ok' ? 'ok': 'error',
+ tool: { label: 'Result', toolName: 'unpaired result', inferred: true },
+ target: '',
+ targetFull: '',
+ result: body,
+ resultPreview: clampText(body),
  messageIds: [message.id],
  })
  continue
  }
 
- // Any other message from this author ends its open call's turn: a worker that
- // went on to say something is a worker whose call is no longer the live one.
- openToolRowIndexByAuthor.delete(author)
+ // Any other message from this author ends the turn of a call the *fallback* is
+ // tracking: without a correlation id, prose after a call means the next result is
+ // no longer safely attributable to it. A correlated call is untouched — a model
+ // narrating between issuing a call and its result is ordinary, and used to be
+ // enough on its own to strand the call on "running…" forever.
+ legacyRowIndexByAuthor.delete(author)
 
  rows.push({
  kind: parsed.kind,

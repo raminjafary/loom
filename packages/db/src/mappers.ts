@@ -131,6 +131,7 @@ export interface MessageRow extends ActorColumns {
  threadId: string
  bodyKind: string
  bodyText: string
+ toolUseId: string | null
  createdAt: Date
  editedAt: Date | null
 }
@@ -141,6 +142,7 @@ export const toMessage = (row: MessageRow): Message => ({
  threadId: asThreadId(row.threadId),
  author: toActor(row),
  body: toMessageBody(row.bodyKind, row.bodyText),
+ toolUseId: row.toolUseId,
  createdAt: row.createdAt,
  editedAt: row.editedAt,
 })

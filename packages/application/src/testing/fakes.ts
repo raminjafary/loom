@@ -129,6 +129,7 @@ export const fakeMessages = (s: FakeStore): MessageRepositoryPort => ({
  threadId: ThreadId
  author: Actor
  body: MessageBody
+ toolUseId?: string | null
  }) {
  const message: Message = {
  id: asMessageId(s.nextId('msg')),
@@ -136,6 +137,7 @@ export const fakeMessages = (s: FakeStore): MessageRepositoryPort => ({
  threadId: input.threadId,
  author: input.author,
  body: input.body,
+ toolUseId: input.toolUseId ?? null,
  createdAt: s.nextDate,
  editedAt: null,
  }

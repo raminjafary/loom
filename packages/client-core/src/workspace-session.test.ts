@@ -15,6 +15,7 @@ const message = (id: string, atMs: number): Message => ({
   threadId: 't1',
   author: { kind: 'user', userId: 'u1' },
   body: { kind: 'text', text: id },
+  toolUseId: null,
   createdAt: new Date(atMs),
   editedAt: null,
 })

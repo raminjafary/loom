@@ -89,6 +89,8 @@ export interface MessageRepositoryPort {
  threadId: ThreadId
  author: Actor
  body: MessageBody
+ /** Set only for a tool call or its result, to correlate the two (see `Message`). */
+ toolUseId?: string | null
  }): Promise<Message>
  /** Newest-first page. `cursor` is the opaque value from a prior page. */
  listByThread(input: {
