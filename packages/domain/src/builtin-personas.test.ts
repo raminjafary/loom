@@ -3,9 +3,9 @@ import { BUILTIN_PERSONAS } from './builtin-personas.js'
 import { parsePersonaMarkdown } from './persona-markdown.js'
 
 describe('BUILTIN_PERSONAS', => {
- it('has exactly eight roles with unique names', => {
- expect(BUILTIN_PERSONAS).toHaveLength(8)
- expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(8)
+ it('has exactly nine roles with unique names', => {
+ expect(BUILTIN_PERSONAS).toHaveLength(9)
+ expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(9)
  })
 
  /**
@@ -51,5 +51,25 @@ describe('BUILTIN_PERSONAS', => {
  it('security-reviewer is read-only', => {
  const reviewer = BUILTIN_PERSONAS.find((p) => p.name === 'security-reviewer')
  expect(reviewer?.tools).toEqual(['Read', 'Grep', 'Glob'])
+ })
+
+ /**
+ * The reconciler runs on the merge path, where a plausible-looking wrong answer is
+ * worse than a refusal. A shell is the specific danger: `git
+ * rebase --skip`, `checkout --theirs` and `reset` all make the conflict disappear by
+ * discarding a worker's work, and all of them look like success to the queue.
+ */
+ it('gives the reconciler no shell', => {
+ const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
+ expect(reconciler?.tools).toEqual(['Read', 'Edit', 'Grep', 'Glob'])
+ expect(reconciler?.tools).not.toContain('Bash')
+ })
+
+ it('tells the reconciler that refusing is a correct outcome', => {
+ // The parallel-branch measurement measured the population as mechanical, but the tail is conflicts that
+ // encode a real disagreement. An agent that always resolves would silently drop
+ // one side's intent on exactly those.
+ const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
+ expect(reconciler?.systemPrompt).toMatch(/refus/i)
  })
 })
