@@ -1174,7 +1174,12 @@ describe('runner-gateway: serialized merge queue', => {
 
  const withReconciler = async <T>(body: => Promise<T>): Promise<T> => {
  await ensureReconcilerPersona
- process.env.LOOM_RECONCILER_ENABLED = '1'
+ return body
+ }
+
+ /** The off switch, which is now the thing that needs an explicit value. */
+ const withoutReconciler = async <T>(body: => Promise<T>): Promise<T> => {
+ process.env.LOOM_RECONCILER_ENABLED = '0'
  try {
  return await body
  } finally {
@@ -1182,9 +1187,10 @@ describe('runner-gateway: serialized merge queue', => {
  }
  }
 
- it('is off unless an operator turns it on', async => {
- // Default-off is the shipped posture: turning it on means accepting
- // agent-resolved merges into the default branch.
+ it('can be turned off, and then nothing is spawned', async => {
+ // On by default, but an operator who does not want agent-resolved
+ // merges must be able to say so and get exactly the old behaviour back.
+ await withoutReconciler(async => {
  const { socket, runnerId } = await pairFakeRunner('recon-off')
  const repo = await bindViaFakeRunner(socket, runnerId)
  const created = await client.channel.create({ name: 'recon-off' })
@@ -1197,6 +1203,7 @@ describe('runner-gateway: serialized merge queue', => {
 
  expect(await client.agentRun.listChildren({ agentRunId: run.id })).toEqual([])
  socket.close
+ })
  })
 
  it('starts a reconcile child only after the branch is back with its run', async => {

@@ -1788,17 +1788,33 @@ const RECONCILER_PERSONA_NAME = 'reconciler'
 
 /**
  * Whether an agent may attempt a conflicted branch before the human sees it
- *. Off by default, deliberately.
+ *. **On by default.**
  *
- * The sequencing is that the mechanical queue ships first and the agent goes *in
- * front of it*, with the queue catching what the agent gets wrong. The correctness
- * gate that sequencing demands has been run — `tools/reconciler-check.mts`, 12/12 over
- * three trials — but that is four scenarios on synthetic conflicts, not a population.
- * An operator turning this on is accepting agent-resolved merges into their default
- * branch, which is a decision worth making explicitly rather than by upgrading.
+ * The roadmap sequences this deliberately: the mechanical queue ships first and the agent goes
+ * *in front of it*, with the queue catching what the agent gets wrong. Both halves now
+ * exist, and the ordering here means the safety case does not rest on the agent being
+ * right — the entry has already failed and the branch is already back with its owner
+ * before a reconciler starts. A reconciler that refuses, crashes or never finishes
+ * leaves the human holding exactly what they would have been holding anyway, and
+ * anything it does produce is rebased and verified by the same mechanical path as every
+ * other branch.
+ *
+ * What tips it to on is the parallel-branch measurement: a third of parallel branches needed hands, every one of
+ * them an additive conflict requiring no judgement, at ~50 seconds of human attention
+ * each. That cost is the thing this removes, and leaving it off by default means the
+ * measured problem stays unsolved for anyone who does not read the docs.
+ *
+ * **The evidence is thinner than the default implies, and that is worth stating.** The
+ * correctness gate is four scenarios (12/12 over three trials), and the end-to-end path
+ * has been watched on exactly one live conflict — of the same additive shape as all the
+ * others, against a repository with no verification command configured. Configure
+ * `verifyCommand` and the queue's own tests become the check on the agent's work, which
+ * is the configuration this default assumes.
+ *
+ * `LOOM_RECONCILER_ENABLED=0` turns it off.
  */
 export const reconcilerEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
- env.LOOM_RECONCILER_ENABLED === '1'
+ env.LOOM_RECONCILER_ENABLED !== '0'
 
 /**
  * Starts a reconciler over a branch the queue could not rebase.
