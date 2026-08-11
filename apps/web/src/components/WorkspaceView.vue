@@ -219,7 +219,11 @@ onBeforeUnmount( => {
 
  <template v-if="view === 'workspace'">
 
- <MessageList:messages="snapshot.messages":persona-name-by-run-id="personaNameByRunId" />
+ <MessageList
+:messages="snapshot.messages"
+:persona-name-by-run-id="personaNameByRunId"
+:current-actor="snapshot.currentActor"
+ />
 
  <ApprovalCard
 :approvals="agentSnapshot.pendingApprovals"
@@ -312,6 +316,8 @@ onBeforeUnmount( => {
  @create="(input) => agent.createRepository(input)"
  @list="(input, done) => agent.listDirectory(input).then(done)"
  @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
+ @set-install-command="(repositoryId, command) => agent.setInstallCommand(repositoryId, command)"
+ @warm-cache="(repositoryId, done) => void agent.warmCache(repositoryId).then(done)"
  />
  <PersonaForm
 :repositories="agentSnapshot.repositories"
@@ -319,6 +325,7 @@ onBeforeUnmount( => {
 :disabled="!snapshot.activeThread"
  @start="startRun"
  @create-persona="(markdownSource) => agent.createPersona(markdownSource)"
+ @update-persona="(input) => agent.updatePersona(input)"
  />
  <CapabilityPanel
 :capabilities="agentSnapshot.capabilities"

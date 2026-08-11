@@ -132,6 +132,16 @@ export interface AgentSession {
  displayName: string
  }): Promise<void>
  createPersona(markdownSource: string): Promise<void>
+ /**
+ * Edits an existing persona, **including a built-in**.
+ *
+ * Built-ins are ordinary rows, not a protected class: `seedBuiltinPersonas` inserts
+ * one only when no persona of that name exists, so an edited built-in survives every
+ * later seed rather than being silently reverted. That is what makes editing them
+ * safe to offer — and editing them is the only way to change a shipped persona's
+ * harness settings, `autoApprove` above all, without forking it under a new name.
+ */
+ updatePersona(input: { personaId: string; markdownSource: string }): Promise<void>
  registerCapability(input: {
  kind: 'mcp' | 'skill'
  name: string
@@ -535,6 +545,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  try {
  await options.api.capability.detach(input)
  patch({ capabilityAttachments: await options.api.capability.listAttachments })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async updatePersona(input) {
+ patch({ error: null })
+ try {
+ await options.api.persona.update(input)
+ patch({ personas: await options.api.persona.list })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

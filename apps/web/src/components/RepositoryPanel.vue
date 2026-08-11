@@ -13,6 +13,8 @@ const emit = defineEmits<{
  create: [input: { runnerId: string; parentPath: string; name: string; displayName: string }]
  list: [input: { runnerId: string; path: string }, done: (listing: DirectoryListing) => void]
  'set-verify-command': [repositoryId: string, verifyCommand: string | null]
+ 'set-install-command': [repositoryId: string, installCommand: string | null]
+ 'warm-cache': [repositoryId: string, done: (result: { ok: boolean; detail: string | null }) => void]
 }>
 
 // The picker replaces typing an absolute path. The old form stays
@@ -43,6 +45,38 @@ const saveVerifyCommand = (repositoryId: string) => {
  editing.value = null
 }
 
+/**
+ * What warms this repository's dependency cache, and the reason it is
+ * next to the verification command rather than somewhere else: verification runs with
+ * `--network none`, so on any repository whose tests need an install step the verify
+ * command can only succeed against a warmed cache. Setting one without the other is the
+ * configuration that looks right and silently merges unverified.
+ */
+const editingInstall = ref<string | null>(null)
+const installDraft = ref('')
+const warming = ref<string | null>(null)
+const warmResult = ref<{ repositoryId: string; ok: boolean; detail: string | null } | null>(null)
+
+const startEditingInstall = (repo: Repository) => {
+ editingInstall.value = repo.id
+ installDraft.value = repo.installCommand ?? ''
+}
+
+const saveInstallCommand = (repositoryId: string) => {
+ const value = installDraft.value.trim
+ emit('set-install-command', repositoryId, value.length > 0 ? value: null)
+ editingInstall.value = null
+}
+
+const warm = (repositoryId: string) => {
+ warming.value = repositoryId
+ warmResult.value = null
+ emit('warm-cache', repositoryId, (result) => {
+ warming.value = null
+ warmResult.value = { repositoryId,...result }
+ })
+}
+
 const submit = => {
  if (!runnerId.value || !path.value.trim || !displayName.value.trim) return
  emit('bind', { runnerId: runnerId.value, path: path.value.trim, displayName: displayName.value.trim })
@@ -67,6 +101,39 @@ const submit = => {
  <button v-else type="button" class="link verify" @click="startEditing(repo)">
  {{ repo.verifyCommand ? `verify: ${repo.verifyCommand}`: 'merges unverified — set a command' }}
  </button>
+
+ <form
+ v-if="editingInstall === repo.id"
+ class="verify-form"
+ @submit.prevent="saveInstallCommand(repo.id)"
+ >
+ <input v-model="installDraft" placeholder="npm ci" aria-label="Install command" />
+ <button type="submit">Save</button>
+ <button type="button" class="link" @click="editingInstall = null">Cancel</button>
+ </form>
+ <button v-else type="button" class="link verify" @click="startEditingInstall(repo)">
+ {{ repo.installCommand ? `install: ${repo.installCommand}`: 'no install command — set one to warm the cache' }}
+ </button>
+
+ <!--
+ Warming needs the install command, so the button says so rather than failing
+ into a detail message a human has to read to learn what was missing.
+ -->
+ <button
+ type="button"
+ class="link warm"
+:disabled="!repo.installCommand || warming === repo.id"
+ @click="warm(repo.id)"
+ >
+ {{ warming === repo.id ? 'warming…': 'Warm dependency cache' }}
+ </button>
+ <p
+ v-if="warmResult && warmResult.repositoryId === repo.id"
+ class="warm-result"
+:class="{ bad: !warmResult.ok }"
+ >
+ {{ warmResult.ok ? 'Cache warmed.': `Warm failed: ${warmResult.detail ?? 'no detail'}` }}
+ </p>
  </li>
  <li v-if="props.repositories.length === 0" class="empty">No repositories bound yet</li>
  </ul>
@@ -173,6 +240,21 @@ h3 {
  text-overflow: ellipsis;
  direction: rtl;
  text-align: left;
+}
+
+.warm-result {
+ margin: 0.15rem 0 0;
+ font-size: 0.72rem;
+ color: var(--text-muted);
+}
+
+.warm-result.bad {
+ color: var(--danger, #c66);
+}
+
+.link:disabled {
+ opacity: 0.45;
+ cursor: not-allowed;
 }
 
 .empty {

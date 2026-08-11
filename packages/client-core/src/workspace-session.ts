@@ -1,4 +1,4 @@
-import type { Channel, Message, ServerEvent, Thread } from '@loom/api-contract'
+import type { Actor, Channel, Message, ServerEvent, Thread } from '@loom/api-contract'
 import type { LoomApi } from './api.js'
 import { connectRealtime, type ConnectionState, type RealtimeConnection } from './realtime.js'
 
@@ -9,6 +9,15 @@ import { connectRealtime, type ConnectionState, type RealtimeConnection } from '
  */
 
 export interface WorkspaceSnapshot {
+ /**
+ * Who this client is signed in as.
+ *
+ * Kept on the snapshot because the thread has to be able to tell *your* messages from
+ * someone else's: without it every message rendered its raw opaque user id as the
+ * author's name, which is unreadable and, worse, identical for every human in the
+ * workspace at a glance. Null until `init` resolves.
+ */
+ readonly currentActor: Actor | null
  readonly channels: Channel[]
  readonly activeChannelId: string | null
  readonly activeThread: Thread | null
@@ -36,6 +45,7 @@ export const createWorkspaceSession = (options: {
  wsUrl: string
 }): WorkspaceSession => {
  let state: WorkspaceSnapshot = {
+ currentActor: null,
  channels: [],
  activeChannelId: null,
  activeThread: null,
@@ -113,7 +123,7 @@ export const createWorkspaceSession = (options: {
  // Identity comes from the session, never from client config.
  const me = await options.api.session.me
  const channels = await options.api.channel.list
- patch({ channels })
+ patch({ currentActor: me.actor, channels })
 
  realtime = connectRealtime({
  wsUrl: options.wsUrl,

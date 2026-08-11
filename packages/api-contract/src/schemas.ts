@@ -81,6 +81,16 @@ export const RepositorySchema = z.object({
  defaultBranch: z.string,
  /** What the merge queue runs before merging; null merges unverified. */
  verifyCommand: z.string.nullable,
+ /**
+ * What warms this repository's dependency cache.
+ *
+ * On the wire because a client has to be able to *show* it: verification runs with
+ * `--network none`, so on any repository whose tests need an install step the verify
+ * command only works against a warmed cache. A UI that could set this but never read
+ * it back could not tell a human whether the thing their merge depends on was
+ * configured.
+ */
+ installCommand: z.string.nullable,
  createdAt: z.date,
 })
 

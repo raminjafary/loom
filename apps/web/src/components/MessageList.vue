@@ -6,6 +6,8 @@ const props = defineProps<{
  messages: Message[]
  /** Persona name for whichever agent run this client currently knows about (client-side only, not a full run history index). */
  personaNameByRunId?: Record<string, string>
+ /** Who this client is, so its own messages read as "You" rather than as an opaque id. */
+ currentActor?: Actor | null
 }>
 
 const scroller = ref<HTMLElement | null>(null)
@@ -31,10 +33,21 @@ watch(
  },
 )
 
+/**
+ * A human-readable author.
+ *
+ * A raw `userId` is what this rendered before, and in a single-operator workspace that
+ * meant every message you wrote was labelled with a 32-character opaque string — the one
+ * piece of information in the line that carried none. There is no user *directory* on
+ * the wire, so the honest options are "You" for yourself and a short id for anyone else,
+ * which is exactly what a workspace with one human needs and degrades sensibly for more.
+ */
 const authorLabel = (actor: Actor): string => {
  switch (actor.kind) {
  case 'user':
- return actor.userId
+ return props.currentActor?.kind === 'user' && props.currentActor.userId === actor.userId
+ ? 'You'
+: `user ${actor.userId.slice(0, 6)}`
  case 'agent_run':
  return props.personaNameByRunId?.[actor.agentRunId] ?? `agent ${actor.agentRunId.slice(0, 8)}`
  case 'system':
