@@ -1828,10 +1828,10 @@ const RECONCILER_PERSONA_NAME = 'reconciler'
  * the repository's tests and handed back**. That last one is the case the ordering
  * exists for, and it is the one that had never been observed.
  *
- * The remaining caveat is narrow and worth keeping: verification can only run what is
- * already in the clone (`--network none`, and `git clone` does not carry
- * `node_modules`), so on a project whose suite needs an install step the check under
- * this agent is whatever `verifyCommand` can do without one.
+ * That argument depends on `verifyCommand` being usable, which on a real project means
+ * the suite's dependencies being installable with the network closed — see the * dependency cache, which merge verification mounts for exactly this reason. Without a
+ * warmed cache, a repository whose tests need an install step still has no verification
+ * command that can succeed, and this agent's work merges unverified.
  *
  * `LOOM_RECONCILER_ENABLED=0` turns it off.
  */

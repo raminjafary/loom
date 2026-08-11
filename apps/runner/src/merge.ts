@@ -1,6 +1,7 @@
 import { planMergeVerification, type MergeFailureReason } from '@loom/domain'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import { DEP_CACHE_DIR, depCacheEnv, depCacheFromEnv, prepareDepCache } from './dep-cache.js'
 import { sandboxConfigFromEnv, sandboxEnabled, unsandboxedAcknowledged, type SandboxConfig } from './sandbox.js'
 
 const execFileAsync = promisify(execFile)
@@ -77,23 +78,34 @@ const tail = (text: string, lines = 12): string =>
 .slice(0, 4_000)
 
 /**
- * Runs the repository's verification command against the rebased tree.
+ * The container a verification command runs in.
  *
- * Sandboxed by default, and with tighter settings than a run gets: `--network none`
- * outright, because verification needs no model API and therefore no egress proxy —
- * the one reason the sandbox settles for an internal network instead. The
- * practical consequence is that verification runs what is already in the clone and
- * cannot install anything, which is the correct trade for executing a branch's own
- * test code.
+ * Tighter than a run gets: `--network none` outright, because verification needs no
+ * model API and therefore no egress proxy — the one reason the sandbox settles for
+ * an internal network instead.
+ *
+ * **The dependency cache is what makes that isolation affordable**. With
+ * no network and nothing but a `git clone` in the container, a verification command
+ * could only ever run what was already committed — which rules out every project whose
+ * test suite needs an install step, which is most of them. Measured, that made
+ * `verifyCommand` unusable on real repositories and quietly reduced the safety net to
+ * "merged unverified and said so". Mounting the warmed cache leaves the network closed
+ * and lets an offline install succeed, so the operator's command can be
+ * `npm ci --offline && npm test` rather than nothing.
+ *
+ * In the default `copy` mode this mount is a per-verification clone of the warmed cache,
+ * discarded afterwards — so code from the agent's branch cannot write anything a later
+ * run or verification will read. That matters more here than for a run: the command is
+ * the operator's, but everything it executes came off the branch under review.
  *
  * `--entrypoint` is overridden because the image's entrypoint is the agent host.
  */
-const verifyInSandbox = async (
+export const buildVerifyArgs = (
  config: SandboxConfig,
  clonePath: string,
  command: string,
-): Promise<{ ok: boolean; output: string }> => {
- const args = [
+ depCachePath: string | null,
+): string[] => [
  'run',
  '--rm',
  '--network',
@@ -107,6 +119,7 @@ const verifyInSandbox = async (
  '/tmp:rw,noexec,nosuid,size=1g',
  '-v',
  `${clonePath}:/work:rw`,
+...(depCachePath ? ['-v', `${depCachePath}:${DEP_CACHE_DIR}:rw`]: []),
  '-w',
  '/work',
  '--memory',
@@ -117,27 +130,50 @@ const verifyInSandbox = async (
  config.cpus,
  '--pids-limit',
  config.pidsLimit,
+...(depCachePath
+ ? Object.entries(depCacheEnv).flatMap(([key, value]) => ['-e', `${key}=${value}`])
+: []),
  '--entrypoint',
  'sh',
  config.image,
  '-c',
  command,
- ]
- return runToCompletion(config.runtime, args, undefined)
-}
+]
 
+const verifyInSandbox = async (
+ config: SandboxConfig,
+ clonePath: string,
+ command: string,
+ depCachePath: string | null,
+): Promise<{ ok: boolean; output: string }> =>
+ runToCompletion(config.runtime, buildVerifyArgs(config, clonePath, command, depCachePath), undefined)
+
+/**
+ * The unsandboxed path, behind the acknowledgement the roadmap requires.
+ *
+ * The cache is a host directory here rather than a mount, so the package managers are
+ * pointed at where it actually is. Still a per-verification copy in `copy` mode — the
+ * isolation is a property of the copy, not of the container.
+ */
 const verifyOnHost = async (
  clonePath: string,
  command: string,
-): Promise<{ ok: boolean; output: string }> => runToCompletion('sh', ['-c', command], clonePath)
+ depCachePath: string | null,
+): Promise<{ ok: boolean; output: string }> =>
+ runToCompletion('sh', ['-c', command], clonePath, depCachePath ? depCacheEnv(depCachePath): undefined)
 
 const runToCompletion = (
  file: string,
  args: readonly string[],
  cwd: string | undefined,
+ env?: Record<string, string>,
 ): Promise<{ ok: boolean; output: string }> =>
  new Promise((resolve) => {
- const child = spawn(file, [...args], {...(cwd === undefined ? {}: { cwd }), stdio: ['ignore', 'pipe', 'pipe'] })
+ const child = spawn(file, [...args], {
+...(cwd === undefined ? {}: { cwd }),
+...(env === undefined ? {}: { env: {...process.env,...env } }),
+ stdio: ['ignore', 'pipe', 'pipe'],
+ })
  let output = ''
  const capture = (chunk: Buffer) => {
  // Bounded: a runaway test suite must not be able to exhaust the Runner's
@@ -252,9 +288,26 @@ export const mergeRunBranch = async (input: MergeRunBranchInput): Promise<MergeO
  let note: string | undefined
  if (plan.kind === 'run') {
  log(`verifying ${branchName} at ${rebasedSha.slice(0, 8)}: ${plan.command}`)
- const result = plan.sandboxed
- ? await verifyInSandbox(sandboxConfigFromEnv, clonePath, plan.command)
-: await verifyOnHost(clonePath, plan.command)
+ /**
+ * Prepared per verification and released whatever happens, exactly as a run's is.
+ * The label is the branch rather than a run id because that is what this function
+ * is given, and it is what an operator finding a leftover directory would search
+ * for — sanitised because a branch name has slashes in it and this becomes a path.
+ */
+ const cacheConfig = depCacheFromEnv
+ const mount = cacheConfig
+ ? await prepareDepCache(cacheConfig, `verify-${branchName.replace(/[^a-zA-Z0-9]+/g, '-')}`)
+: null
+ let result: { ok: boolean; output: string }
+ try {
+ result = plan.sandboxed
+ ? await verifyInSandbox(sandboxConfigFromEnv, clonePath, plan.command, mount?.path ?? null)
+: await verifyOnHost(clonePath, plan.command, mount?.path ?? null)
+ } finally {
+ // A leaked copy is a whole dependency tree on disk per merge; in `shared` mode
+ // this is a no-op by design.
+ await mount?.release.catch( => {})
+ }
  if (!result.ok) {
  return { ok: false, reason: 'verification_failed', detail: tail(result.output) }
  }

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mergeRunBranch } from './merge.js'
+import { buildVerifyArgs, mergeRunBranch } from './merge.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -285,5 +285,99 @@ describe('mergeRunBranch', => {
  } finally {
  delete process.env.LOOM_SANDBOX_ENABLED
  }
+ })
+
+ /**
+ * The dependency cache under verification.
+ *
+ * `--network none` plus a bare `git clone` means a verification command can only run
+ * what was committed, which excludes every project whose suite needs an install step.
+ * The cache is what makes an offline install possible without opening the network,
+ * and it is the difference between `verifyCommand` working on a real repository and
+ * being a setting that only suits fixtures.
+ */
+ describe('with a dependency cache', => {
+ let cacheRoot: string
+
+ beforeEach(async => {
+ cacheRoot = await mkdtemp(join(root, 'dep-cache-'))
+ await writeFile(join(cacheRoot, 'warmed.txt'), 'from the warm step\n')
+ process.env.LOOM_DEP_CACHE_ENABLED = '1'
+ process.env.LOOM_DEP_CACHE_ROOT = cacheRoot
+ process.env.LOOM_SANDBOX_ENABLED = '0'
+ process.env.LOOM_ALLOW_UNSANDBOXED = 'i-understand-the-agent-gets-my-privileges'
+ })
+
+ afterEach( => {
+ delete process.env.LOOM_DEP_CACHE_ENABLED
+ delete process.env.LOOM_DEP_CACHE_ROOT
+ delete process.env.LOOM_DEP_CACHE_MODE
+ delete process.env.LOOM_SANDBOX_ENABLED
+ delete process.env.LOOM_ALLOW_UNSANDBOXED
+ })
+
+ it('gives the verification command the warmed cache', async => {
+ const clone = await makeRunClone('loom/run-k')
+ await commitFile(clone, 'feature.txt', 'one\n', 'add feature')
+
+ const result = await mergeRunBranch({
+ sourcePath: source,
+ clonePath: clone,
+ branchName: 'loom/run-k',
+ defaultBranch: 'main',
+ // What an offline `npm ci` needs: the cache env pointing somewhere real, with
+ // the warm step's contents in it.
+ verifyCommand: 'test -f "$(dirname "$npm_config_cache")/warmed.txt"',
+ })
+ expect(result.ok).toBe(true)
+ if (!result.ok) return
+ expect(result.verified).toBe(true)
+ })
+
+ /**
+ * The property that makes this safe to mount at all. Verification executes code
+ * from the branch under review, so anything it writes into its cache must die with
+ * it — otherwise the cache is a channel from an agent's branch into whatever runs
+ * next, which is exactly what `copy` mode exists to prevent.
+ */
+ it('discards what verification wrote into the cache, and never touches the warmed one', async => {
+ const clone = await makeRunClone('loom/run-l')
+ await commitFile(clone, 'feature.txt', 'one\n', 'add feature')
+
+ const result = await mergeRunBranch({
+ sourcePath: source,
+ clonePath: clone,
+ branchName: 'loom/run-l',
+ defaultBranch: 'main',
+ verifyCommand: 'echo planted > "$(dirname "$npm_config_cache")/planted.txt"',
+ })
+ expect(result.ok).toBe(true)
+
+ const survivors = await execFileAsync('ls', [cacheRoot]).then((r) => r.stdout)
+ expect(survivors).toContain('warmed.txt')
+ expect(survivors).not.toContain('planted.txt')
+ })
+
+ it('leaves the network closed and mounts the cache in the sandboxed path', => {
+ const config = {
+ runtime: 'docker',
+ image: 'loom-agent-sandbox:latest',
+ network: 'loom-net',
+ memory: '4g',
+ cpus: '2',
+ pidsLimit: '512',
+ } as Parameters<typeof buildVerifyArgs>[0]
+
+ const withCache = buildVerifyArgs(config, '/clone', 'npm test', '/host/deps')
+ expect(withCache.join(' ')).toContain('--network none')
+ expect(withCache).toContain('/host/deps:/deps:rw')
+ expect(withCache.join(' ')).toContain('npm_config_cache=/deps/npm')
+
+ // And nothing extra when no cache is configured — the mount is the opt-in, the
+ // isolation is not.
+ const without = buildVerifyArgs(config, '/clone', 'npm test', null)
+ expect(without.join(' ')).toContain('--network none')
+ expect(without.join(' ')).not.toContain('/deps')
+ })
  })
 })

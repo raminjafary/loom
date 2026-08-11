@@ -29,14 +29,16 @@
  * 3. `contradictory-value` two workers set one constant to two values. No resolution
  * keeps both, so a refusal is the only correct outcome.
  *
- * **Why a purpose-built repository rather than a real one.** A verification command can
- * only run what is already in the clone (the roadmap: `--network none`, and a `git clone` does
- * not carry `node_modules`), and a real project's suite does not test the lines two
- * workers happened to collide over. For verification to be a *check on the reconciler*
- * rather than a check that some unrelated suite still passes, the tests have to cover
- * the conflicted region. The fixture is small but it is real code with a real
- * dependency-free `node --test` suite, and the invariant it asserts — a registry has no
- * duplicate entries — is the one a naive union actually breaks.
+ * **Why a purpose-built repository rather than a real one.** A real project's suite does
+ * not test the lines two workers happened to collide over. For verification to be a
+ * *check on the reconciler* rather than a check that some unrelated suite still passes,
+ * the tests have to cover the conflicted region. The fixture is small but it is real
+ * code with a real dependency-free `node --test` suite, and the invariant it asserts —
+ * a registry has no duplicate entries — is the one a naive union actually breaks.
+ *
+ * That `verifyCommand` works on a real project *at all* is the separate question, and
+ * `tools/verify-deps-check.mts` is where it is answered: a clone of `expressjs/express`,
+ * its own suite, installed offline from the repository binding cache with the network closed.
  *
  * docker compose up -d
  * set -a &&../.env && set +a

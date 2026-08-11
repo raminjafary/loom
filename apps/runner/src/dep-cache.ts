@@ -219,11 +219,15 @@ export const DEP_CACHE_DIR = '/deps'
  * `config.toml`, not just downloaded artifacts, and `[build] rustc-wrapper` in a shared
  * one is direct code execution in whatever run reads it next. **A directory is only
  * safe to share when it *is* a cache.**
+ *
+ * `root` defaults to the in-container mount point. Merge verification can also run
+ * unsandboxed (with the acknowledgement the roadmap requires), and there the cache is a host
+ * directory — the paths have to name where the process will actually look.
  */
-export const depCacheEnv = : Record<string, string> => ({
- npm_config_cache: `${DEP_CACHE_DIR}/npm`,
- npm_config_store_dir: `${DEP_CACHE_DIR}/pnpm`,
- YARN_CACHE_FOLDER: `${DEP_CACHE_DIR}/yarn`,
- PIP_CACHE_DIR: `${DEP_CACHE_DIR}/pip`,
- GOMODCACHE: `${DEP_CACHE_DIR}/go`,
+export const depCacheEnv = (root: string = DEP_CACHE_DIR): Record<string, string> => ({
+ npm_config_cache: `${root}/npm`,
+ npm_config_store_dir: `${root}/pnpm`,
+ YARN_CACHE_FOLDER: `${root}/yarn`,
+ PIP_CACHE_DIR: `${root}/pip`,
+ GOMODCACHE: `${root}/go`,
 })
