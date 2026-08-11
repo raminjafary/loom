@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { closureDigest, walkClosure } from './sandbox-closure.js'
 import {
  buildSandboxArgs,
+ depCacheEnv,
  sandboxConfigFromEnv,
  sandboxEnabled,
  staleSandboxImageAcknowledged,
@@ -133,6 +134,51 @@ describe('sandbox configuration', => {
  // Only an explicit 0 opts out, so a typo cannot silently unsandbox a Runner.
  expect(sandboxEnabled({ LOOM_SANDBOX_ENABLED: 'false' } as NodeJS.ProcessEnv)).toBe(true)
  expect(sandboxEnabled({ LOOM_SANDBOX_ENABLED: '0' } as NodeJS.ProcessEnv)).toBe(false)
+ })
+
+ /**
+ * The shared dependency cache. A cache shared between sandboxes
+ * is a channel between them, so the default and the opt-in are both asserted.
+ */
+ it('shares no dependency cache unless an operator opts in', => {
+ expect(sandboxConfigFromEnv({} as NodeJS.ProcessEnv).depCacheRoot).toBeNull
+ // A path alone must not enable it — otherwise a leftover export silently opens a
+ // write channel between runs.
+ expect(
+ sandboxConfigFromEnv({ LOOM_DEP_CACHE_ROOT: '/tmp/c' } as NodeJS.ProcessEnv).depCacheRoot,
+).toBeNull
+ expect(
+ sandboxConfigFromEnv({
+ LOOM_DEP_CACHE_ENABLED: '1',
+ LOOM_DEP_CACHE_ROOT: '/tmp/c',
+ } as NodeJS.ProcessEnv).depCacheRoot,
+).toBe('/tmp/c')
+ })
+
+ it('mounts the dependency cache only when configured, and never over a run-scoped path', => {
+ // Default: still exactly the two run-scoped mounts the sandbox spec allows.
+ expect(args.filter((a) => a === '-v')).toHaveLength(2)
+
+ const cached = buildSandboxArgs(
+ {...config, depCacheRoot: '/host/dep-cache' },
+ { runId: 'run-1', clonePath: '/scratch/clone', homePath: '/scratch/home', env: {} },
+).join(' ')
+ expect(cached).toContain('/host/dep-cache:/deps:rw')
+ // Mounting it at the clone or HOME would put shared, cross-run writable state
+ // inside a path the run is entitled to treat as its own.
+ expect(cached).not.toContain('/host/dep-cache:/work')
+ expect(cached).not.toContain('/host/dep-cache:/home/agent')
+ })
+
+ it('points package managers only at caches, never at a config or credential home', => {
+ // CARGO_HOME is deliberately absent: it holds config.toml, and `[build]
+ // rustc-wrapper` in a shared one is code execution in a sibling run. A directory
+ // is only safe to share when it *is* a cache.
+ const env = depCacheEnv
+ expect(Object.values(env).every((path) => path.startsWith('/deps/'))).toBe(true)
+ expect(env).not.toHaveProperty('CARGO_HOME')
+ expect(env).not.toHaveProperty('HOME')
+ expect(env.npm_config_cache).toBe('/deps/npm')
  })
 
  it('requires a deliberate acknowledgement to run a stale image', => {
