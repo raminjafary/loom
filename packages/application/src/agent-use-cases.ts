@@ -12,6 +12,7 @@ import {
  describePathOverlaps,
  detectPathOverlaps,
  isHuman,
+ isPricedModel,
  isMergeQueueEntryTerminal,
  isRiskyTool,
  parseDecomposition,
@@ -737,6 +738,24 @@ export const startAgentRun = async (
  * speaking in one voice.
  */
  responseStyle?: ResponseStyle
+ /**
+ * Overrides the persona's model for this run only.
+ *
+ * Refused unless the price table knows it: the metering is what enforces a budget
+ * cap, so a model nobody can price is a run whose cap silently does not bite.
+ * Child runs still attenuate against the parent's tier — this widens nothing that
+ * `attenuateChildPersona` would otherwise have caught.
+ */
+ model?: string
+ /**
+ * Overrides the persona's spend ceiling for this run only.
+ *
+ * **Honoured only for a human-initiated run.** A cap is a ceiling an operator set,
+ * and an agent able to raise its own would be an agent able to spend past it —
+ * The attenuation makes the same distinction for tools and model tier. `undefined`
+ * keeps the persona's cap; explicit `null` is a human deliberately removing it.
+ */
+ budgetCapUsd?: number | null
  /** Set when one run spawns another. */
  parentRunId?: AgentRunId
  relation?: AgentRunRelation
@@ -812,6 +831,12 @@ export const startAgentRun = async (
  const responseStyle: ResponseStyle =
  input.responseStyle ?? parent?.persona.responseStyle ?? DEFAULT_RESPONSE_STYLE
 
+ if (input.model !== undefined && !isPricedModel(input.model)) {
+ throw new ValidationError(
+ `Unknown model "${input.model}" — spend on it could not be metered, so its budget cap could not be enforced`,
+)
+ }
+
  const personaSpec: PersonaSpec = {
  name: persona.name,
  systemPrompt: applyResponseStyle(
@@ -819,10 +844,13 @@ export const startAgentRun = async (
  responseStyle,
 ),
  responseStyle,
- model: persona.model,
+ model: input.model ?? persona.model,
+ budgetCapUsd:
+ input.budgetCapUsd !== undefined && isHuman(input.actor)
+ ? input.budgetCapUsd
+: persona.harnessBudgetCapUsd,
  tools: persona.tools,
  autoApprove: persona.harnessAutoApprove,
- budgetCapUsd: persona.harnessBudgetCapUsd,
  planner: persona.harnessPlanner,
  delegates: persona.harnessDelegates,
  capabilities: await resolveCapabilities(deps, input.workspaceId, input.personaId),

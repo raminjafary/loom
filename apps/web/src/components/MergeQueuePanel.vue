@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { MergeQueueEntry } from '@loom/api-contract'
+import { shortBranchName } from '@loom/client-core'
 import ConfirmButton from './ConfirmButton.vue'
 
 /**
@@ -38,7 +39,9 @@ const detailOf = (entry: MergeQueueEntry): string | null => {
  <ul v-else class="list">
  <li v-for="entry in props.entries":key="entry.id" class="row":class="entry.status">
  <div class="line">
- <span class="branch">{{ entry.branchName }}</span>
+ <span class="branch":title="entry.branchName">{{
+ shortBranchName(entry.branchName)
+ }}</span>
  <span class="status">{{ entry.status }}</span>
  <ConfirmButton
  v-if="canCancel(entry)"

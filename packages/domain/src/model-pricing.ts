@@ -121,3 +121,35 @@ export const parseUsage = (body: unknown): TokenUsage | null => {
  cacheWriteTokens: num(u.cache_creation_input_tokens),
  }
 }
+
+/**
+ * The models a human may pick for a run.
+ *
+ * The cost model names model choice as *the* cost swing factor — "Cursor's 8x swing came from
+ * worker model choice, so it must be visible, not buried in config" — and until now
+ * it was buried in config: the only way to run `swe` on Opus instead of Haiku was to
+ * edit the persona, which changed it for everyone and every future run.
+ *
+ * The list is exactly the models this table can price, and that is a rule rather than
+ * a coincidence: an unpriced model cannot be metered, and a run that cannot be metered
+ * cannot have its budget cap enforced. So an unknown id is refused at run
+ * start rather than discovered when the cap silently fails to bite.
+ */
+export interface SelectableModel {
+ readonly id: string
+ readonly label: string
+ /** Ascending capability, from `modelTierRank`. */
+ readonly tier: number
+ readonly inputPerMTok: number
+ readonly outputPerMTok: number
+}
+
+export const SELECTABLE_MODELS: readonly SelectableModel[] = [
+ { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', tier: 1, inputPerMTok: 1, outputPerMTok: 5 },
+ { id: 'claude-sonnet-5', label: 'Sonnet 5', tier: 2, inputPerMTok: 3, outputPerMTok: 15 },
+ { id: 'claude-opus-5', label: 'Opus 5', tier: 3, inputPerMTok: 5, outputPerMTok: 25 },
+ { id: 'claude-fable-5', label: 'Fable 5', tier: 4, inputPerMTok: 10, outputPerMTok: 50 },
+]
+
+/** Whether spend on this model can actually be metered, which is what makes it usable. */
+export const isPricedModel = (model: string): boolean => findModelPrice(model) !== null

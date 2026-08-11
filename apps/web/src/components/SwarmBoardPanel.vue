@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { SwarmBoard } from '@loom/api-contract'
+import { shortBranchName } from '@loom/client-core'
 
 /**
  * The kanban, which the worker-notes design insists is the same object as the
@@ -85,7 +86,9 @@ const money = (usd: number | null) => (usd === null ? null: `$${usd.toFixed(4)}`
  </span>
  <span v-if="money(card.totalCostUsd)" class="cost">{{ money(card.totalCostUsd) }}</span>
  </p>
- <p v-if="card.branchName" class="branch">{{ card.branchName }}</p>
+ <p v-if="card.branchName" class="branch":title="card.branchName">
+ {{ shortBranchName(card.branchName) }}
+ </p>
  <p v-if="card.ownedPaths.length > 0" class="paths">
  owns <code>{{ card.ownedPaths.join(', ') }}</code>
  </p>

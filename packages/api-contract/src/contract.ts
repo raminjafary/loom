@@ -334,6 +334,19 @@ export const contract = {
  * run of the afternoon and explanatory when someone is reading along.
  */
  responseStyle: ResponseStyleSchema.optional,
+ /**
+ * Overrides the persona's model for this run only.
+ * The cost model names model choice as the cost swing factor and requires it be visible
+ * rather than buried in config; the server refuses a model it cannot price,
+ * because an unmeterable run is one whose budget cap cannot be enforced.
+ */
+ model: z.string.min(1).max(100).optional,
+ /**
+ * Overrides the persona's spend ceiling for this run only.
+ * Null means uncapped, and is a deliberate human choice rather than an
+ * omission — omitting the field entirely keeps the persona's own cap.
+ */
+ budgetCapUsd: z.number.positive.max(1_000).nullable.optional,
  }),
 )
 .output(AgentRunSchema),

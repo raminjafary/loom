@@ -196,6 +196,10 @@ export interface AgentSession {
  task?: string
  /** How much prose this run should produce. */
  responseStyle?: ResponseStyle
+ /** Overrides the persona's model for this run only. */
+ model?: string
+ /** Overrides the persona's spend ceiling for this run only; null is uncapped. */
+ budgetCapUsd?: number | null
  }): Promise<void>
  /**
  * Switches which of several concurrent runs this client is watching. Does not stop or change anything server-side — it is purely which

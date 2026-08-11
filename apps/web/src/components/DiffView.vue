@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AgentRun } from '@loom/api-contract'
-import { parseUnifiedDiff } from '@loom/client-core'
+import { parseUnifiedDiff, shortBranchName } from '@loom/client-core'
 import { computed, ref, watch } from 'vue'
 import ConfirmButton from './ConfirmButton.vue'
 import DiffFileView from './DiffFileView.vue'
@@ -108,7 +108,7 @@ const canDecideDisposition = =>
  <button type="button":disabled="!canLoadDiff" @click="openReview">Review</button>
  </header>
 
- <p class="branch":title="props.run.branchName ?? ''">{{ props.run.branchName }}</p>
+ <p class="branch":title="props.run.branchName ?? ''">{{ shortBranchName(props.run.branchName) }}</p>
  <div v-if="parsed && parsed.files.length > 0" class="summary">
  <span>{{ parsed.files.length }} file<span v-if="parsed.files.length !== 1">s</span></span>
  <span class="adds">+{{ parsed.additions }}</span>
@@ -138,7 +138,9 @@ const canDecideDisposition = =>
  <header class="review-head">
  <div class="titles">
  <h2>Review changes</h2>
- <p class="branch-name">{{ props.run.branchName }}</p>
+ <p class="branch-name":title="props.run.branchName ?? ''">
+ {{ shortBranchName(props.run.branchName) }}
+ </p>
  </div>
  <div v-if="parsed && parsed.files.length > 0" class="stats">
  <span>{{ parsed.files.length }} file<span v-if="parsed.files.length !== 1">s</span></span>

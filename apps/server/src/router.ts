@@ -544,6 +544,8 @@ export const router = os.router({
  personaId: asAgentPersonaId(input.personaId),
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(input.responseStyle === undefined ? {}: { responseStyle: input.responseStyle }),
+...(input.model === undefined ? {}: { model: input.model }),
+...(input.budgetCapUsd === undefined ? {}: { budgetCapUsd: input.budgetCapUsd }),
  }),
 ),
 ),

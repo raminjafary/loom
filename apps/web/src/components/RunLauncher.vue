@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AgentPersona, Repository, ResponseStyle } from '@loom/api-contract'
+import { findSelectableModel, SELECTABLE_MODELS } from '@loom/client-core'
 import { computed, ref, watch } from 'vue'
 
 /**
@@ -18,7 +19,17 @@ const props = defineProps<{
 }>
 
 const emit = defineEmits<{
- start: [input: { repositoryId: string; personaId: string; responseStyle: ResponseStyle }]
+ start: [
+ input: {
+ repositoryId: string
+ personaId: string
+ responseStyle: ResponseStyle
+ /** Absent means "whatever the persona's own model is". */
+ model?: string
+ /** Absent keeps the persona's cap; null is a deliberate "uncapped". */
+ budgetCapUsd?: number | null
+ },
+ ]
  'open-settings': []
 }>
 
@@ -74,23 +85,77 @@ const canSubmit = computed(
  => !props.disabled && repositoryId.value !== '' && personaId.value !== '',
 )
 
+/**
+ * Empty means the persona's own model.
+ *
+ * A persona still carries a default; this overrides it for one run. The cost model names model
+ * choice as *the* cost swing factor and requires it be visible rather than buried in
+ * config — and editing the persona was the only way to change it, which changed it
+ * for everyone and for every run after.
+ */
+const model = ref('')
+
+// Reset on persona change: an override chosen against one agent's default is not a
+// choice about the next one.
+watch(personaId, => {
+ model.value = ''
+})
+
+const effectiveModel = computed( => model.value || selected.value?.model || '')
+
+const modelPrice = computed( => {
+ const match = findSelectableModel(effectiveModel.value)
+ return match ? `$${match.inputPerMTok}/$${match.outputPerMTok} per Mtok`: null
+})
+
+/**
+ * Empty means the persona's own cap. A cap only an operator could change by editing the persona is a cap
+ * nobody adjusts for the one expensive run that warrants it.
+ */
+const budgetCap = ref('')
+
+watch(personaId, => {
+ budgetCap.value = ''
+})
+
+const budgetCapUsd = computed<number | null | undefined>( => {
+ if (budgetCap.value === '') return undefined
+ if (budgetCap.value === 'none') return null
+ const parsed = Number.parseFloat(budgetCap.value)
+ return Number.isFinite(parsed) && parsed > 0 ? parsed: undefined
+})
+
+const capLabel = computed( => {
+ if (budgetCapUsd.value === null) return 'uncapped — this run can spend without limit'
+ if (typeof budgetCapUsd.value === 'number') return `stops at $${budgetCapUsd.value.toFixed(2)}`
+ const persona = selected.value
+ if (!persona) return ''
+ return persona.harnessBudgetCapUsd === null
+ ? 'uncapped — this agent has no limit set'
+: `stops at $${persona.harnessBudgetCapUsd.toFixed(2)}`
+})
+
 const submit = => {
  if (!canSubmit.value) return
  emit('start', {
  repositoryId: repositoryId.value,
  personaId: personaId.value,
  responseStyle: responseStyle.value,
+...(model.value === '' ? {}: { model: model.value }),
+...(budgetCapUsd.value === undefined ? {}: { budgetCapUsd: budgetCapUsd.value }),
  })
 }
 
+const startLabel = computed( => {
+ const persona = selected.value?.name
+ const repo = props.repositories.find((r) => r.id === repositoryId.value)?.displayName
+ return persona && repo ? `Start ${persona} on ${repo}`: 'Start run'
+})
+
 /** What the harness will do, read off the saved persona — not off an unsaved draft. */
 const harnessSummary = (persona: AgentPersona): string => {
- const parts = [
- persona.harnessAutoApprove ? 'auto-approves edits': 'asks before risky calls',
- persona.harnessBudgetCapUsd === null
- ? 'no budget cap'
-: `cap $${persona.harnessBudgetCapUsd.toFixed(2)}`,
- ]
+ // The cap is shown by `capLabel`, which knows about this run's override.
+ const parts = [persona.harnessAutoApprove ? 'auto-approves edits': 'asks before risky calls']
  if (persona.harnessPlanner) parts.push('planner')
  return parts.join(' · ')
 }
@@ -98,24 +163,65 @@ const harnessSummary = (persona: AgentPersona): string => {
 
 <template>
  <section class="launcher">
+ <header class="head">
+ <h3>Put an agent to work</h3>
+ <p class="what">
+ One agent, one repository, on its own branch. You review the diff before anything
+ merges.
+ </p>
+ </header>
+
  <form class="form" @submit.prevent="submit">
- <div class="row">
- <select v-model="personaId" aria-label="Persona" class="grow">
+ <label class="field">
+ <span>Agent</span>
+ <select v-model="personaId" aria-label="Agent">
  <option value="" disabled>Choose an agent…</option>
  <option v-for="persona in props.personas":key="persona.id":value="persona.id">
- {{ persona.name }}
+ {{ persona.name }} — {{ persona.description }}
  </option>
  </select>
- <select v-model="repositoryId" aria-label="Repository" class="grow">
- <option value="" disabled>Repository…</option>
+ </label>
+
+ <label class="field">
+ <span>Repository</span>
+ <select v-model="repositoryId" aria-label="Repository">
+ <option value="" disabled>Choose a repository…</option>
  <option v-for="repo in props.repositories":key="repo.id":value="repo.id">
  {{ repo.displayName }}
  </option>
  </select>
- </div>
+ </label>
+
+ <!-- the cost model: model choice is the cost swing factor, so it is on screen, not in config. -->
+ <label class="field">
+ <span>Model</span>
+ <select v-model="model" aria-label="Model":disabled="personaId === ''">
+ <option value="">
+ {{ selected ? `${selected.name}'s default — ${selected.model}`: 'Agent default' }}
+ </option>
+ <option v-for="entry in SELECTABLE_MODELS":key="entry.id":value="entry.id">
+ {{ entry.label }} — ${{ entry.inputPerMTok }}/${{ entry.outputPerMTok }} per Mtok
+ </option>
+ </select>
+ </label>
+
+ <!-- the security model: caps are enforced, not advisory — so they belong where a run is started. -->
+ <label class="field">
+ <span>Spend cap</span>
+ <select v-model="budgetCap" aria-label="Spend cap":disabled="personaId === ''">
+ <option value="">Agent default</option>
+ <option value="0.50">$0.50</option>
+ <option value="1.00">$1.00</option>
+ <option value="5.00">$5.00</option>
+ <option value="20.00">$20.00</option>
+ <option value="none">No cap</option>
+ </select>
+ </label>
 
  <!-- How much prose the run produces. Behaviour is the persona's; this is voice. -->
- <div class="row styles" role="radiogroup" aria-label="Response style">
+ <div class="field">
+ <span>Voice</span>
+ <div class="styles" role="radiogroup" aria-label="Response style">
  <button
  v-for="style in STYLES"
 :key="style.value"
@@ -124,18 +230,20 @@ const harnessSummary = (persona: AgentPersona): string => {
 :class="{ on: responseStyle === style.value }"
  role="radio"
 :aria-checked="responseStyle === style.value"
+:title="style.hint"
  @click="responseStyle = style.value"
  >
  {{ style.label }}
  </button>
  </div>
+ </div>
  <p class="hint">{{ styleHint }}</p>
 
- <button type="submit" class="go":disabled="!canSubmit">Start run</button>
+ <button type="submit" class="go":disabled="!canSubmit">{{ startLabel }}</button>
  </form>
 
  <p v-if="selected" class="harness">
- <strong>{{ selected.name }}</strong> · {{ selected.model }}<br />
+ {{ capLabel }}<span v-if="modelPrice"> · {{ modelPrice }}</span><br />
  {{ harnessSummary(selected) }}
  </p>
 
@@ -160,14 +268,33 @@ const harnessSummary = (persona: AgentPersona): string => {
  gap: 0.4rem;
 }
 
-.row {
- display: flex;
- gap: 0.35rem;
+.head {
+ margin-bottom: 0.6rem;
 }
 
-.grow {
- flex: 1 1 0;
- min-width: 0;
+h3 {
+ margin: 0;
+ font-size: 0.85rem;
+}
+
+.what {
+ margin: 0.15rem 0 0;
+ font-size: 0.72rem;
+ line-height: 1.4;
+ color: var(--text-faint);
+}
+
+.field {
+ display: flex;
+ flex-direction: column;
+ gap: 0.15rem;
+}
+
+.field > span {
+ font-size: 0.68rem;
+ text-transform: uppercase;
+ letter-spacing: 0.06em;
+ color: var(--text-faint);
 }
 
 select {
@@ -175,6 +302,7 @@ select {
 }
 
 .styles {
+ display: flex;
  gap: 0.25rem;
 }
 

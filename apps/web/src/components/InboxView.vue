@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AgentRun, ApprovalRequest } from '@loom/api-contract'
+import { shortBranchName } from '@loom/client-core'
 import ApprovalCard from './ApprovalCard.vue'
 import DiffView from './DiffView.vue'
 
@@ -39,7 +40,9 @@ const reasonFor = (run: AgentRun): string =>
         <strong>{{ run.persona.name }}</strong>
         <span class="status">{{ run.status }}</span>
         <span class="reason">{{ reasonFor(run) }}</span>
-        <span v-if="run.branchName" class="branch">{{ run.branchName }}</span>
+        <span v-if="run.branchName" class="branch" :title="run.branchName">{{
+          shortBranchName(run.branchName)
+        }}</span>
       </li>
     </ul>
 

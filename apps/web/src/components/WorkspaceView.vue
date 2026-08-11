@@ -39,6 +39,8 @@ const startRun = (input: {
  repositoryId: string
  personaId: string
  responseStyle: ResponseStyle
+ model?: string
+ budgetCapUsd?: number | null
 }) => {
  const threadId = snapshot.value.activeThread?.id
  if (!threadId) return
