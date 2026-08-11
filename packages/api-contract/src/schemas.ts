@@ -352,6 +352,20 @@ export const PersonaSpecSchema = z.object({
  tools: z.array(z.string),
  autoApprove: z.boolean,
  budgetCapUsd: z.number.nullable,
+ /**
+ * Whether this run decomposes rather than acts.
+ *
+ * Absent until now, which was harmless while a tree had exactly one planner at its
+ * root: `parentRunId === null` answered it. With sub-planners it does not — a client
+ * looking at a middle node cannot tell a planner from a worker, and `tools: []` is
+ * not a proxy either, since a persona may legitimately hold no tools without being
+ * one. The graph needs it to shape a node, and the board needs it to say what a
+ * quiet run is quiet *about*.
+ *
+ * Optional because runs that predate the field have stored persona JSON without it,
+ * and a missing flag must read as "not a planner" rather than failing the whole row.
+ */
+ planner: z.boolean.optional,
 })
 
 /** Phase 1 subset — read/CRUD only, no git-backed versioning yet. */
