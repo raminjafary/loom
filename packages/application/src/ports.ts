@@ -57,6 +57,13 @@ export interface ChannelRepositoryPort {
  listByWorkspace(workspaceId: WorkspaceId): Promise<Channel[]>
  findById(workspaceId: WorkspaceId, id: ChannelId): Promise<Channel | null>
  findByName(workspaceId: WorkspaceId, name: string): Promise<Channel | null>
+ /**
+ * Removes a channel. Cascades through its threads to their messages and to every
+ * run started in them — see `deleteChannel` for the gate that makes that a choice
+ * rather than a surprise.
+ */
+ delete(workspaceId: WorkspaceId, id: ChannelId): Promise<void>
+ countByWorkspace(workspaceId: WorkspaceId): Promise<number>
 }
 
 export interface ThreadRepositoryPort {

@@ -83,8 +83,11 @@ const expandable = computed( => !props.empty)
  overflow: hidden;
 }
 
+/* Dimmed, not hidden. Making an empty section borderless made it hard to find at
+ all — the answer to "where is the swarm panel" should be "there, and it says it
+ is empty", not a blank gap. */
 .section.empty {
- border-color: transparent;
+ border-style: dashed;
  background: none;
 }
 
@@ -138,7 +141,6 @@ const expandable = computed( => !props.empty)
 
 .section.empty.title {
  color: var(--text-faint);
- font-weight: 500;
 }
 
 .summary {

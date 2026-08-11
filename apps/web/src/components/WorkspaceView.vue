@@ -273,16 +273,32 @@ onBeforeUnmount( => {
  <span class="conn-dot" aria-hidden="true"></span>
  {{ CONNECTION_LABEL[snapshot.connection] }}
  </span>
+ <!--
+ Workspace-only. The Inbox is a place to decide on runs that have already
+ stopped, and a row of global switches over it is noise between a human and
+ the decision they came to make. The one exception is below: a *paused*
+ workspace is why the Inbox is not filling, so it still says so — as a
+ statement, not a control.
+ -->
  <NotificationToggle
+ v-if="view === 'workspace'"
 :config="agentSnapshot.notificationConfig"
  @subscribe="(registration) => agent.registerNotificationTarget(registration)"
  @unsubscribe="(endpoint) => agent.unregisterNotificationTarget(endpoint)"
  />
  <KillSwitch
+ v-if="view === 'workspace'"
 :control="agentSnapshot.runControl"
  @pause="agent.pauseAllRuns"
  @resume="agent.resumeAllRuns"
  />
+ <span
+ v-else-if="agentSnapshot.runControl?.paused"
+ class="paused-note"
+ title="New runs are blocked. Resume from the workspace."
+ >
+ Runs paused
+ </span>
  <button
  v-if="view === 'workspace'"
  type="button"
@@ -618,6 +634,15 @@ onBeforeUnmount( => {
  cursor: pointer;
 }
 
+.paused-note {
+ padding: 0.2rem 0.55rem;
+ border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent);
+ border-radius: 999px;
+ background: color-mix(in oklab, var(--warn) 10%, transparent);
+ color: var(--warn);
+ font-size: 0.72rem;
+}
+
 .settings-toggle {
  padding: 0.24rem 0.5rem;
  font-size: 1.05rem;
@@ -697,5 +722,18 @@ onBeforeUnmount( => {
  display: flex;
  flex-direction: column;
  gap: 0.5rem;
+}
+
+/*
+ * Without this the column does not scroll — it compresses.
+ *
+ * A flex item's automatic minimum size is its content, which is what normally forces
+ * a column to overflow and its scrollbar to appear. But an item with `overflow`
+ * other than `visible` has that minimum computed as zero instead, and every section
+ * here clips its own corners. So each one shrank to fit the viewport and cut its
+ * contents off mid-row, and the sidebar had nothing to scroll.
+ */
+.agent-sidebar > * {
+ flex-shrink: 0;
 }
 </style>

@@ -1,4 +1,5 @@
 import type {
+ ChannelId,
  AgentPersona,
  AgentPersonaId,
  AgentRun,
@@ -41,6 +42,14 @@ export interface RunnerRepositoryPort {
  workspaceId: WorkspaceId
  name: string
  }): Promise<{ runnerId: RunnerId; rawToken: string }>
+ /**
+ * Forgets a Runner and its pairing credential.
+ *
+ * Callers must have checked that nothing is bound to it — the schema cascades
+ * runner → repository → agent_run, so an unchecked delete here would take a
+ * workspace's run history and its recorded spend with it.
+ */
+ delete(workspaceId: WorkspaceId, id: RunnerId): Promise<void>
 }
 
 export interface RepositoryRepositoryPort {
@@ -53,6 +62,9 @@ export interface RepositoryRepositoryPort {
  }): Promise<Repository>
  findById(workspaceId: WorkspaceId, id: RepositoryId): Promise<Repository | null>
  listByWorkspace(workspaceId: WorkspaceId): Promise<Repository[]>
+ /** Unbinds a repository. Cascades to its runs — see `unbindRepository` for the gate. */
+ delete(workspaceId: WorkspaceId, id: RepositoryId): Promise<void>
+ countByRunner(workspaceId: WorkspaceId, runnerId: RunnerId): Promise<number>
  /**
  * What the merge queue runs before merging. Its own method
  * rather than a general `update`: it is the only mutable field a bound repository
@@ -234,6 +246,22 @@ export interface AgentRunRepositoryPort {
  id: AgentRunId,
  patch: { clonePath: string; branchName: string },
 ): Promise<AgentRun>
+ /**
+ * How many runs reference a repository, and how many of those are still live.
+ *
+ * Deletion asks both: cascading a repository away destroys its run history and the
+ * spend recorded against it, so the count is what turns a refusal into an
+ * explanation, and the live count is what makes the refusal unconditional.
+ */
+ countByRepository(
+ workspaceId: WorkspaceId,
+ repositoryId: RepositoryId,
+): Promise<{ total: number; active: number }>
+ /** The same question for a channel, whose threads own the runs started in them. */
+ countByChannel(
+ workspaceId: WorkspaceId,
+ channelId: ChannelId,
+): Promise<{ total: number; active: number }>
  /** Single-active-run guard: any non-terminal run in the workspace. */
  findActiveByWorkspace(workspaceId: WorkspaceId): Promise<AgentRun | null>
  /**
@@ -365,6 +393,11 @@ export interface PersonaRepositoryPort {
  }): Promise<AgentPersona>
  findById(workspaceId: WorkspaceId, id: AgentPersonaId): Promise<AgentPersona | null>
  listByWorkspace(workspaceId: WorkspaceId): Promise<AgentPersona[]>
+ /**
+ * Removes a persona. Safe for history: a run snapshots the whole `PersonaSpec` at
+ * start, so past runs keep their persona, their model and their cost.
+ */
+ delete(workspaceId: WorkspaceId, id: AgentPersonaId): Promise<void>
  update(
  workspaceId: WorkspaceId,
  id: AgentPersonaId,
