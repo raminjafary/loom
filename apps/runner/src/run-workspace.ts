@@ -49,6 +49,140 @@ export const prepareRunWorkspace = async (
  return { clonePath, branchName, homePath }
 }
 
+export interface ReconcileWorkspace extends RunWorkspace {
+ /** Repository-relative paths left with conflict markers, for the agent's task text. */
+ readonly conflictedPaths: string[]
+}
+
+/**
+ * A workspace for a reconciler run, left **deliberately mid-rebase**
+ * so the agent sees real conflict markers in real files.
+ *
+ * The source is the *conflicted run's own clone*, not the bound repository: the branch
+ * exists only there until it merges, which is the same constraint `getDiff`, `push` and
+ * the merge itself already live under (the Runner that ran the branch must still hold
+ * it). Cloning it rather than working in it is what keeps a reconciler that goes wrong
+ * from damaging the branch a human may still want to review by hand.
+ *
+ * The rebase is expected to conflict — that is the entire point — so a clean result is
+ * reported as zero conflicted paths rather than as an error. It can happen legitimately:
+ * the merge queue's target may have moved between the failed attempt and this run.
+ *
+ * Note what is *not* done here: no `rebase --abort`. `prepareRunWorkspace`'s clone is a
+ * fresh checkout, but this one is a paused rebase, and the paused state is the input to
+ * the agent's task. `finishReconcile` is the other half.
+ */
+export const prepareReconcileWorkspace = async (
+ parentClonePath: string,
+ sourcePath: string,
+ defaultBranch: string,
+ branchName: string,
+ runId: string,
+): Promise<ReconcileWorkspace> => {
+ const clonePath = await mkdtemp(join(scratchRoot, `loom-reconcile-${runId}-`))
+ const homePath = await mkdtemp(join(scratchRoot, `loom-home-${runId}-`))
+ await chmod(homePath, 0o777)
+
+ await execFileAsync('git', ['clone', '--quiet', parentClonePath, clonePath])
+ await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
+ await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
+ await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', branchName])
+
+ // The live tip of the merge target, from the bound repository rather than from the
+ // parent's clone — the parent cloned before earlier entries in the queue landed, so
+ // its copy of the default branch is exactly the stale thing being rebased away from.
+ await execFileAsync('git', ['-C', clonePath, 'fetch', '--quiet', sourcePath, defaultBranch])
+ const { stdout: tip } = await execFileAsync('git', ['-C', clonePath, 'rev-parse', 'FETCH_HEAD'])
+
+ let conflictedPaths: string[] = []
+ try {
+ await execFileAsync('git', ['-C', clonePath, 'rebase', tip.trim])
+ } catch {
+ const { stdout } = await execFileAsync('git', [
+ '-C', clonePath, 'diff', '--name-only', '--diff-filter=U',
+ ])
+ conflictedPaths = stdout.trim.split('\n').filter((line) => line.length > 0)
+ }
+
+ return { clonePath, branchName, homePath, conflictedPaths }
+}
+
+/**
+ * Completes the paused rebase after the reconciler has edited the tree.
+ *
+ * Refuses on any surviving conflict marker, and that refusal is the safety property
+ * this function exists for. `git rebase --continue` does not inspect content — it
+ * happily commits a file with `<<<<<<<` still in it, producing a branch that merges
+ * clean, may even pass a verification command that does not parse the file, and carries
+ * garbage into the default branch. The persona is told refusing is a correct outcome
+ * (see the `reconciler` built-in), so a tree with markers left in it is an *expected*
+ * path, not an exceptional one.
+ */
+export const finishReconcile = async (
+ clonePath: string,
+): Promise<{ ok: true; commitSha: string } | { ok: false; reason: string }> => {
+ const git = async (args: string[]): Promise<string> => {
+ const { stdout } = await execFileAsync(
+ 'git',
+ ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',...args],
+ { maxBuffer: 32 * 1024 * 1024 },
+)
+ return stdout.trim
+ }
+
+ const refuse = async (reason: string): Promise<{ ok: false; reason: string }> => {
+ await git(['rebase', '--abort']).catch( => {})
+ return { ok: false, reason }
+ }
+
+ /**
+ * Staged *first*, deliberately. The agent edits the working tree and never runs git,
+ * so until the resolution is staged git still considers the path unmerged — checking
+ * `--diff-filter=U` before this point reports every file as conflicted no matter how
+ * correctly the agent resolved it.
+ */
+ try {
+ await git(['add', '-A'])
+ } catch (error) {
+ return refuse(error instanceof Error ? error.message: String(error))
+ }
+
+ /**
+ * So the surviving check is on *content*, which is the one that matters anyway: a
+ * staged file with `<<<<<<<` still inside it looks perfectly resolved to git, and
+ * `rebase --continue` will commit it without ever reading it.
+ */
+ let marked = ''
+ try {
+ marked = await git(['grep', '-l', '-e', '^<<<<<<< ', '-e', '^>>>>>>> '])
+ } catch {
+ // `git grep -l` exits non-zero when nothing matches, which is the good case.
+ }
+ if (marked.length > 0) {
+ return refuse(
+ `conflict markers remain in ${marked.split('\n').join(', ')} — the reconciler did not resolve them`,
+)
+ }
+
+ try {
+ // An empty index means the resolution took the target's side wholesale, which git
+ // reports as "nothing to commit" and `--skip` would answer by dropping the branch's
+ // commit entirely. Refused rather than treated as success.
+ if ((await git(['diff', '--cached', '--name-only'])).length === 0) {
+ return refuse('resolution left nothing to commit — the branch would be dropped')
+ }
+ await execFileAsync(
+ 'git',
+ ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.editor=true', 'rebase', '--continue'],
+ { env: {...process.env, GIT_EDITOR: 'true' } },
+)
+ } catch (error) {
+ return refuse(error instanceof Error ? error.message: String(error))
+ }
+
+ return { ok: true, commitSha: await git(['rev-parse', 'HEAD']) }
+}
+
 /**
  * Commits whatever the agent left in the working tree, on the run's own branch.
  *
