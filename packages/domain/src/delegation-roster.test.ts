@@ -61,9 +61,23 @@ describe('selectDelegatablePersonas', => {
  expect(selectDelegatablePersonas(planner, [auto])).toEqual([])
  })
 
- it('drops the planner itself', => {
+ /**
+ * The shipped seed has exactly one planner persona, so "a sub-planner may not be
+ * the persona I am" would mean no sub-planner at all — the whole shape,
+ * unreachable out of the box. Recursion into itself is the ordinary decomposition;
+ * `remainingDepth` is what bounds it.
+ */
+ it('lets a planner delegate an area to another run of itself', => {
  const self = candidate({ name: 'planner', tools: [], planner: true })
- expect(selectDelegatablePersonas(planner, [self, candidate], 2).map((p) => p.name)).toEqual([
+ expect(selectDelegatablePersonas(planner, [self, candidate], 1).map((p) => p.name)).toEqual([
+ 'planner',
+ 'swe',
+ ])
+ })
+
+ it('stops offering itself once no hop remains, so recursion terminates', => {
+ const self = candidate({ name: 'planner', tools: [], planner: true })
+ expect(selectDelegatablePersonas(planner, [self, candidate], 0).map((p) => p.name)).toEqual([
  'swe',
  ])
  })

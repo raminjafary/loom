@@ -66,7 +66,19 @@ export const selectDelegatablePersonas = (
  remainingDepth = 0,
 ): DelegationCandidate[] =>
  candidates.filter((candidate) => {
- if (candidate.name === planner.name) return false
+ /**
+ * A Planner may delegate an area to *itself* — another run of the same persona,
+ * one level down. That is not a special case, it is the ordinary recursive
+ * decomposition, and excluding it made the shape unreachable with the
+ * shipped seed: there is exactly one built-in planner persona, so "no sub-planner
+ * may be the persona I am" means no sub-planner at all.
+ *
+ * Safe for the same two reasons any sub-planner is: its envelope equals this
+ * one's, so attenuation is satisfied and nothing widens, and `remainingDepth`
+ * bounds the recursion. Before the depth limit existed this exclusion was the
+ * only thing standing between a Planner and unbounded self-delegation, which is
+ * why it was written — the limit is the better answer and it now exists.
+ */
  if (candidate.planner && remainingDepth < 1) return false
  return attenuateChildPersona(planner, asChildSpec(candidate)).ok
  })
