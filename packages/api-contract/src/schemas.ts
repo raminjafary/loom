@@ -228,6 +228,29 @@ export const SwarmBoardCardSchema = z.object({
  /** Agent- or human-authored, so untrusted text — render it as such. */
  latestNoteTitle: z.string.nullable,
  blockerCount: z.number.int,
+
+ /**
+ * Live observability. Every field is projected from events the platform
+ * already persists, in the same read as the rest of the board — live swarm observability forbids a
+ * per-tick query, and these add none.
+ *
+ * These map onto the OpenTelemetry GenAI semantic conventions, which live swarm observability asks be
+ * adopted by name because it "costs nothing now and buys export later":
+ * `currentToolName` is `gen_ai.tool.name`, `currentToolTarget` is the call's primary
+ * argument, and a card is `gen_ai.agent.name` at `gen_ai.agent.id`. The names are
+ * kept in this shape on the wire because a UI payload reads better for it; the
+ * mapping is recorded here so an exporter does not have to guess it.
+ */
+ currentToolName: z.string.nullable,
+ currentToolTarget: z.string.nullable,
+ openCallCount: z.number.int,
+ /** A timestamp, never a duration — "idle for 4m" would be stale the moment it is cached. */
+ lastEventAt: wireDate.nullable,
+ /**
+ * From the run's frozen persona snapshot, so an edited cap cannot retroactively
+ * change what a finished run was allowed to spend. Null means uncapped.
+ */
+ budgetCapUsd: z.number.nullable,
 })
 
 export const SwarmBoardSchema = z.object({

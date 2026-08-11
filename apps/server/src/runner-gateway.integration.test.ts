@@ -2060,4 +2060,92 @@ Decompose and delegate.`
 
  socket.close
  })
+
+ /**
+ * The live fields, over real HTTP against real Postgres: what is this worker doing
+ * at this second. Every value is projected from the events the Runner just pushed —
+ * there is no new store and, per the cost discipline, no per-card query.
+ */
+ it('projects the call in flight onto the board, and forgets it when the result lands', async => {
+ const { socket, runnerId } = await pairFakeRunner('live-board')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'live-board' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startRun
+ const run = await runPromise
+
+ const emit = (seq: number, event: Record<string, unknown>) =>
+ socket.send(JSON.stringify({ type: 'agent_event', runId: run.id, seq, event }))
+
+ const cardFor = async (runId: string) => {
+ const board = await client.workerNote.board({ agentRunId: runId })
+ return board.cards.find((card) => card.runId === runId)
+ }
+
+ const settleUntil = async <T>(read: => Promise<T>, done: (value: T) => boolean) => {
+ let value = await read
+ for (let i = 0; i < 40 && !done(value); i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ value = await read
+ }
+ return value
+ }
+
+ // Three calls issued in one turn, which is what a real model does and what the
+ // per-position heuristics this projection avoids cannot survive.
+ emit(1, { kind: 'tool_call', toolUseId: 'tu_a', toolName: 'Read', input: { file_path: '/work/a.ts' } })
+ emit(2, { kind: 'tool_call', toolUseId: 'tu_b', toolName: 'Grep', input: { pattern: 'TODO' } })
+ emit(3, { kind: 'tool_call', toolUseId: 'tu_c', toolName: 'Bash', input: { command: 'pnpm test' } })
+
+ const busy = await settleUntil(
+ => cardFor(run.id),
+ (card) => (card?.openCallCount ?? 0) === 3,
+)
+ // The newest open call is what the card shows; the count is what stops a fan-out
+ // from reading as a single call.
+ expect(busy?.currentToolName).toBe('Bash')
+ expect(busy?.currentToolTarget).toBe('pnpm test')
+ expect(busy?.openCallCount).toBe(3)
+ expect(busy?.lastEventAt).toBeInstanceOf(Date)
+
+ // The *middle* call finishes first. Correlating on `toolUseId` is what makes the
+ // card keep showing Bash rather than crediting Grep's result to it.
+ emit(4, { kind: 'tool_result', toolUseId: 'tu_b', isError: false, summary: 'no matches' })
+ const stillBusy = await settleUntil(
+ => cardFor(run.id),
+ (card) => (card?.openCallCount ?? 0) === 2,
+)
+ expect(stillBusy?.currentToolName).toBe('Bash')
+
+ emit(5, { kind: 'tool_result', toolUseId: 'tu_c', isError: false, summary: '526 passed' })
+ const afterBash = await settleUntil(
+ => cardFor(run.id),
+ (card) => card?.currentToolName === 'Read',
+)
+ // With the newest call closed, the next-newest open one is the honest answer.
+ expect(afterBash?.currentToolName).toBe('Read')
+ expect(afterBash?.currentToolTarget).toBe('/work/a.ts')
+ expect(afterBash?.openCallCount).toBe(1)
+
+ // A run that ends mid-call must stop advertising it. Without this a reaped or
+ // budget-capped run would claim to be reading a file forever.
+ emit(6, { kind: 'run_completed', totalCostUsd: 0.02, result: 'done' })
+ const finished = await settleUntil(
+ => cardFor(run.id),
+ (card) => card?.status === 'completed',
+)
+ expect(finished?.currentToolName).toBeNull
+ expect(finished?.currentToolTarget).toBeNull
+ expect(finished?.openCallCount).toBe(0)
+ // The last event is still reported: when a run went quiet outlives the run itself.
+ expect(finished?.lastEventAt).toBeInstanceOf(Date)
+
+ socket.close
+ })
 })

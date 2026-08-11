@@ -462,6 +462,38 @@ export interface AgentRunEventRepositoryPort {
  * vanish.
  */
  highestSeq(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<number>
+ /**
+ * What each of these runs is doing right now, as a projection of events already persisted.
+ *
+ * Batched over the whole tree in one statement, because the cost discipline is
+ * explicit: "None of this may add a per-tick query. The board is already one fetch on
+ * a socket nudge." One query for N runs meets that; one per card would not.
+ */
+ liveActivity(
+ workspaceId: WorkspaceId,
+ agentRunIds: readonly AgentRunId[],
+): Promise<Map<string, RunLiveActivity>>
+}
+
+/**
+ * A run's observable present tense. Timestamps rather than durations: how long ago
+ * something happened is a rendering, and a payload that carried "4m idle" would be
+ * wrong the moment it was cached.
+ */
+export interface RunLiveActivity {
+ /**
+ * The call in flight: the newest `tool_call` whose `toolUseId` has no matching
+ * `tool_result`. Correlating on the id rather than on position matters here for the
+ * same reason it does in the thread — a model issues calls in parallel, and "the last
+ * call with no result after it" names the wrong one whenever more than one is open.
+ */
+ readonly currentToolName: string | null
+ /** The call's primary argument — the "which file is it in" answer. */
+ readonly currentToolTarget: string | null
+ /** How many calls are open at once, so a fan-out reads as one rather than as none. */
+ readonly openCallCount: number
+ /** Last event of any kind. Null for a run that has emitted nothing yet. */
+ readonly lastEventAt: Date | null
 }
 
 /**

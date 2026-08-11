@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import type { SwarmBoard } from '@loom/api-contract'
-import { shortBranchName } from '@loom/client-core'
+import {
+ activityLabel,
+ describeAge,
+ describeCardActivity,
+ shortBranchName,
+ type BoardCard,
+} from '@loom/client-core'
+import { computed, onUnmounted, ref } from 'vue'
 
 /**
  * The kanban, which the worker-notes design insists is the same object as the
@@ -35,12 +42,38 @@ const cardsIn = (statuses: readonly string[]) =>
  (props.board?.cards ?? []).filter((card) => statuses.includes(card.status))
 
 const money = (usd: number | null) => (usd === null ? null: `$${usd.toFixed(4)}`)
+
+/**
+ * The live fields are *ages*, and an age goes stale on its own — a card saying
+ * "quiet 30s" is wrong a minute later even though nothing arrived to re-render it. This
+ * clock is what makes silence visibly lengthen without asking the server anything, which
+ * matters because silence is exactly the state no event will ever announce.
+ */
+const tick = ref(new Date)
+const clock = setInterval( => (tick.value = new Date), 5_000)
+onUnmounted( => clearInterval(clock))
+
+const activityOf = (card: BoardCard) => describeCardActivity(card, tick.value)
+
+/** A cap is only worth drawing once it is close enough to bite. */
+const CAP_WARN_RATIO = 0.75
+
+const capPercent = (ratio: number) => `${Math.min(Math.round(ratio * 100), 100)}%`
+
+/**
+ * The one thing on this panel that is a *summary* rather than a card: how much of the
+ * swarm is actually moving. Without it a human counts running cards by eye.
+ */
+const workingCount = computed(
+ => (props.board?.cards ?? []).filter((card) => activityOf(card).kind === 'working').length,
+)
 </script>
 
 <template>
  <section class="panel">
  <header>
  <h3>Swarm board</h3>
+ <span v-if="workingCount > 0" class="live">{{ workingCount }} working</span>
  <button type="button" @click="emit('refresh')">Refresh</button>
  </header>
 
@@ -86,6 +119,42 @@ const money = (usd: number | null) => (usd === null ? null: `$${usd.toFixed(4)}`
  </span>
  <span v-if="money(card.totalCostUsd)" class="cost">{{ money(card.totalCostUsd) }}</span>
  </p>
+ <!--
+ What this worker is doing at this second. A tool name is the platform's own record of the call it
+ dispatched, not a model's account of itself, which is why this line sits
+ above the agent-note line and carries no "claimed" tag.
+ -->
+ <p v-if="activityOf(card).kind !== 'finished'" class="activity":class="activityOf(card).kind">
+ <span class="pulse" aria-hidden="true"></span>
+ <span class="verb">{{ activityLabel(activityOf(card)) }}</span>
+ <code v-if="activityOf(card).target" class="target">{{ activityOf(card).target }}</code>
+ <!--
+ Silence is the one state no event announces, so it is stated outright
+ rather than left as an absence — and stated as a duration, because how
+ long it has been is the whole of what the platform knows about it.
+ -->
+ <span v-if="activityOf(card).kind === 'quiet' && card.lastEventAt" class="since">
+ since {{ describeAge(card.lastEventAt, tick) }}
+ </span>
+ </p>
+
+ <!--
+ Cost against this run's own cap (the cost model — the cap is what stops the run, so
+ approaching it is the actionable fact). Drawn only near the ceiling: a
+ meter that is always present is a meter nobody reads.
+ -->
+ <p
+ v-if="(activityOf(card).capUsedRatio ?? 0) >= CAP_WARN_RATIO"
+ class="cap"
+:class="{ spent: (activityOf(card).capUsedRatio ?? 0) >= 1 }"
+ >
+ <span class="bar" aria-hidden="true">
+ <span class="fill":style="{ width: capPercent(activityOf(card).capUsedRatio ?? 0) }"></span>
+ </span>
+ {{ capPercent(activityOf(card).capUsedRatio ?? 0) }} of
+ {{ money(card.budgetCapUsd) }} cap
+ </p>
+
  <p v-if="card.branchName" class="branch":title="card.branchName">
  {{ shortBranchName(card.branchName) }}
  </p>
@@ -132,6 +201,117 @@ h3 {
  text-transform: uppercase;
  letter-spacing: 0.06em;
  color: var(--text-faint);
+}
+
+.live {
+ margin-left: auto;
+ padding: 0.05rem 0.4rem;
+ border-radius: 999px;
+ background: var(--accent-soft);
+ color: var(--accent);
+ font-size: 0.66rem;
+ font-weight: 600;
+}
+
+/* The activity line: monospaced target, so a path reads as a path. */
+.activity {
+ display: flex;
+ align-items: baseline;
+ gap: 0.3rem;
+ margin: 0.2rem 0 0;
+ font-size: 0.68rem;
+ color: var(--text-muted);
+ min-width: 0;
+}
+
+.activity.verb {
+ font-weight: 600;
+ white-space: nowrap;
+}
+
+.activity.target {
+ font-family: ui-monospace, monospace;
+ font-size: 0.66rem;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+ min-width: 0;
+}
+
+.activity.since {
+ white-space: nowrap;
+ color: var(--text-faint);
+}
+
+.activity.pulse {
+ flex-shrink: 0;
+ width: 0.4rem;
+ height: 0.4rem;
+ border-radius: 50%;
+ background: var(--text-faint);
+}
+
+.activity.working.pulse {
+ background: var(--accent);
+ /* A dot that breathes only while something is genuinely in flight. The product shape deprioritises
+ flow-pulse animation as a screenshot feature; one dot on the card that is actually
+ executing is the cheap version of the same information. */
+ animation: breathe 1.6s ease-in-out infinite;
+}
+
+.activity.working.verb {
+ color: var(--accent);
+}
+
+.activity.quiet.pulse {
+ background: var(--warn);
+}
+
+.activity.quiet {
+ color: var(--warn);
+}
+
+@keyframes breathe {
+ 0%,
+ 100% {
+ opacity: 1;
+ }
+ 50% {
+ opacity: 0.35;
+ }
+}
+
+@media (prefers-reduced-motion: reduce) {
+.activity.working.pulse {
+ animation: none;
+ }
+}
+
+.cap {
+ display: flex;
+ align-items: center;
+ gap: 0.35rem;
+ margin: 0.25rem 0 0;
+ font-size: 0.66rem;
+ color: var(--warn);
+}
+
+.cap.spent {
+ color: var(--danger);
+}
+
+.cap.bar {
+ flex: 0 0 3rem;
+ height: 0.25rem;
+ border-radius: 999px;
+ background: var(--surface-hover);
+ overflow: hidden;
+}
+
+.cap.fill {
+ display: block;
+ height: 100%;
+ background: currentColor;
 }
 
 header button {

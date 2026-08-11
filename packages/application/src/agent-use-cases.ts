@@ -17,6 +17,7 @@ import {
  isRiskyTool,
  parseDecomposition,
  parsePersonaMarkdown,
+ primaryToolArgument,
  selectNextMergeEntry,
  summarizeChildOutcomes,
  systemActor,
@@ -30,6 +31,7 @@ import {
  type AgentRunId,
  type AgentRunRelation,
  type AgentRunStatus,
+ TERMINAL_RUN_STATUSES,
  type ApprovalRequest,
  type ApprovalRequestId,
  type Capability,
@@ -1364,7 +1366,7 @@ export const getAgentRunDiff = async (
  return result.diff
 }
 
-const TERMINAL_RUN_STATUSES: readonly AgentRunStatus[] = ['completed', 'failed', 'cancelled']
+
 
 const requireDisposableRun = async (
  deps: AgentDeps,
@@ -2331,26 +2333,12 @@ export const expireStaleApprovals = async (
  }
 }
 
-// Tried in order; the first string field present is shown as the call's
-// headline target. Full args aren't hidden — they're what a risky call's
-// approval card renders verbatim — this is just what makes
-// the plain activity line scannable instead of a raw JSON dump.
-const PRIMARY_ARG_FIELDS = ['command', 'file_path', 'notebook_path', 'pattern', 'path', 'url', 'query']
-
-const primaryArg = (input: Readonly<Record<string, unknown>>): string | null => {
- for (const field of PRIMARY_ARG_FIELDS) {
- const value = input[field]
- if (typeof value === 'string') return value
- }
- return null
-}
-
 const eventToMessageText = (event: AgentEvent): string => {
  switch (event.kind) {
  case 'assistant_text':
  return event.text
  case 'tool_call': {
- const primary = primaryArg(event.input)
+ const primary = primaryToolArgument(event.input)
  return primary ? `→ ${event.toolName}: ${primary}`: `→ ${event.toolName} ${JSON.stringify(event.input)}`
  }
  case 'tool_result':

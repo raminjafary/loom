@@ -269,6 +269,16 @@ export type AgentEvent =
  }
  | { readonly kind: 'run_failed'; readonly message: string }
 
+/**
+ * A run in a terminal status will never emit another event, which is what makes it safe
+ * to stop attributing live activity to it. Here rather than in a use case because three
+ * layers ask the question and a fourth copy of the list would eventually disagree.
+ */
+export const TERMINAL_RUN_STATUSES: readonly AgentRunStatus[] = ['completed', 'failed', 'cancelled']
+
+export const isTerminalRunStatus = (status: string): boolean =>
+ (TERMINAL_RUN_STATUSES as readonly string[]).includes(status)
+
 export type ApprovalStatus = 'pending' | 'approved' | 'denied'
 
 /**
@@ -286,4 +296,37 @@ export interface ApprovalRequest {
  readonly status: ApprovalStatus
  readonly createdAt: Date
  readonly resolvedAt: Date | null
+}
+
+/**
+ * Tried in order; the first string field present is a call's headline argument.
+ *
+ * One definition, because two consumers need the same answer: the thread's activity
+ * line (`eventToMessageText`) and the board, which shows the call in flight and the
+ * file it is in. Two orderings would mean the board and the thread disagreed about what
+ * a worker was doing, which is the kind of small inconsistency that makes a human stop
+ * trusting both.
+ *
+ * Full arguments are never hidden by this — an approval card renders them verbatim
+ *. This is only what makes a one-line summary scannable.
+ */
+export const PRIMARY_ARG_FIELDS = [
+ 'command',
+ 'file_path',
+ 'notebook_path',
+ 'pattern',
+ 'path',
+ 'url',
+ 'query',
+] as const
+
+export const primaryToolArgument = (
+ input: Readonly<Record<string, unknown>> | null | undefined,
+): string | null => {
+ if (!input) return null
+ for (const field of PRIMARY_ARG_FIELDS) {
+ const value = input[field]
+ if (typeof value === 'string') return value
+ }
+ return null
 }

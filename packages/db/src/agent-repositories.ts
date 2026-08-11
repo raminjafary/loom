@@ -8,11 +8,12 @@ import type {
  PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
  RepositoryRepositoryPort,
+ RunLiveActivity,
  RunnerRepositoryPort,
  WorkerNoteRepositoryPort,
  WorkspaceRunControlRepositoryPort,
 } from '@loom/application'
-import { NotFoundError, asAgentRunId, asRunnerId, asThreadId } from '@loom/domain'
+import { NotFoundError, asAgentRunId, asRunnerId, asThreadId, primaryToolArgument } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
@@ -734,6 +735,85 @@ export const agentRunEventRepository = (db: Database): AgentRunEventRepositoryPo
 .orderBy(desc(agentRunEvent.seq))
 .limit(1)
  return row?.seq ?? 0
+ },
+
+ async liveActivity(workspaceId, agentRunIds) {
+ if (agentRunIds.length === 0) return new Map
+
+ /**
+ * One statement for the whole tree.
+ *
+ * A call is in flight when its `toolUseId` has no `tool_result` carrying the same
+ * id — the correlation the events have always contained, and the only definition
+ * that survives a model issuing calls in parallel. `distinct on` then takes the
+ * newest open call per run, which is what a card shows; `open_count` is what keeps
+ * a fourteen-way fan-out from reading as a single `Read`.
+ */
+ const rows = await db.execute<{
+ agent_run_id: string
+ last_event_at: Date | string | null
+ tool_name: string | null
+ input: Record<string, unknown> | null
+ open_count: number | string
+ }>(sql`
+ with scoped as (
+ select agent_run_id, seq, kind, payload, created_at
+ from agent_run_event
+ where workspace_id = ${workspaceId}
+ and ${inArray(agentRunEvent.agentRunId, [...agentRunIds])}
+),
+ open_calls as (
+ select c.agent_run_id, c.seq, c.payload
+ from scoped c
+ where c.kind = 'tool_call'
+ and not exists (
+ select 1 from scoped r
+ where r.kind = 'tool_result'
+ and r.agent_run_id = c.agent_run_id
+ and r.payload->>'toolUseId' = c.payload->>'toolUseId'
+)
+),
+ newest_open as (
+ select distinct on (agent_run_id)
+ agent_run_id,
+ payload->>'toolName' as tool_name,
+ payload->'input' as input
+ from open_calls
+ order by agent_run_id, seq desc
+),
+ open_counts as (
+ select agent_run_id, count(*) as open_count from open_calls group by agent_run_id
+),
+ last_seen as (
+ select agent_run_id, max(created_at) as last_event_at from scoped group by agent_run_id
+)
+ select
+ l.agent_run_id,
+ l.last_event_at,
+ n.tool_name,
+ n.input,
+ coalesce(o.open_count, 0) as open_count
+ from last_seen l
+ left join newest_open n on n.agent_run_id = l.agent_run_id
+ left join open_counts o on o.agent_run_id = l.agent_run_id
+ `)
+
+ const activity = new Map<string, RunLiveActivity>
+ for (const row of rows as unknown as Array<{
+ agent_run_id: string
+ last_event_at: Date | string | null
+ tool_name: string | null
+ input: Record<string, unknown> | null
+ open_count: number | string
+ }>) {
+ activity.set(row.agent_run_id, {
+ currentToolName: row.tool_name,
+ currentToolTarget: primaryToolArgument(row.input),
+ openCallCount: Number(row.open_count),
+ lastEventAt: row.last_event_at === null ? null: new Date(row.last_event_at),
+ })
+ }
+ return activity
  },
 })
 

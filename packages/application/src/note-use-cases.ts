@@ -4,6 +4,7 @@ import {
  NotFoundError,
  ValidationError,
  isHuman,
+ isTerminalRunStatus,
  parseNoteInput,
  pathsOverlap,
  renderNotesForPrompt,
@@ -18,6 +19,7 @@ import {
 } from '@loom/domain'
 import type {
  AgentRunCostRollup,
+ AgentRunEventRepositoryPort,
  AgentRunRepositoryPort,
  WorkerNoteRepositoryPort,
 } from './agent-ports.js'
@@ -36,6 +38,8 @@ import type {
 export interface NoteDeps {
  readonly workerNotes: WorkerNoteRepositoryPort
  readonly agentRuns: AgentRunRepositoryPort
+ /** Only the board reads these, for the live fields — see `getSwarmBoard`. */
+ readonly agentRunEvents: AgentRunEventRepositoryPort
 }
 
 /**
@@ -301,6 +305,37 @@ export interface SwarmBoardCard {
  /** The most recent agent- or human-authored note, for the card's subtitle. Untrusted text. */
  readonly latestNoteTitle: string | null
  readonly blockerCount: number
+
+ // --- Live observability. Projections of persisted events and of the
+ // run's own snapshot; nothing here asks the agent to cooperate, and nothing here
+ // costs a query per card. ---
+
+ /**
+ * The tool call in flight and its headline argument — the "which file is it in".
+ * Both null for a run that is thinking, finished, or has yet to call anything, which
+ * are different things and are told apart by `status` and `lastEventAt`.
+ */
+ readonly currentToolName: string | null
+ readonly currentToolTarget: string | null
+ /** Calls open at once, so a parallel fan-out does not read as a single call. */
+ readonly openCallCount: number
+ /**
+ * Last event of any kind. A *timestamp*, not a duration: live swarm observability asks for idle time, and
+ * how long ago something happened is a rendering — a payload carrying "4m idle" is
+ * wrong the moment anything caches it.
+ */
+ readonly lastEventAt: Date | null
+ /**
+ * The cap this run is spending against, from its own frozen `PersonaSpec` snapshot
+ * rather than from the persona as configured now — otherwise an edited cap would
+ * retroactively rewrite what a finished run was allowed. Null means uncapped.
+ *
+ * Live swarm observability also asks for tokens against the model's context window. That is **not
+ * derivable from anything persisted**: the event-tiering design makes token deltas stream-only and
+ * models no usage on `AgentEvent`, so the honest options were to omit it or to invent
+ * it. Cost against cap is the half of "context pressure" the platform actually knows.
+ */
+ readonly budgetCapUsd: number | null
 }
 
 export interface SwarmBoard {
@@ -327,7 +362,18 @@ export const getSwarmBoard = async (
  // a board that showed only workers would go blank while the Planner was thinking.
  const runs = [root,...children]
 
+ /**
+ * The live fields, in one statement for the whole tree — the section's cost
+ * discipline is that the board stays one fetch on a socket nudge, so this is a third
+ * query in the same read and never a query per card.
+ */
+ const activity = await deps.agentRunEvents.liveActivity(
+ input.workspaceId,
+ runs.map((entry) => entry.id),
+)
+
  const cards = runs.map((entry) => {
+ const live = activity.get(entry.id)
  const own = notes.filter((note) => note.agentRunId === entry.id)
  const authored = own.filter((note) => note.authorKind !== 'platform')
  /**
@@ -357,6 +403,14 @@ export const getSwarmBoard = async (
  noteCount: own.length,
  latestNoteTitle: authored.at(-1)?.title ?? null,
  blockerCount: authored.filter((note) => note.kind === 'blocker').length,
+ // A terminal run has nothing in flight. Without this a run that died mid-call —
+ // reaped, cancelled, out of budget — would keep advertising that call forever,
+ // which is the same lie the thread told before pairing was fixed.
+ currentToolName: isTerminalRunStatus(entry.status) ? null: live?.currentToolName ?? null,
+ currentToolTarget: isTerminalRunStatus(entry.status) ? null: live?.currentToolTarget ?? null,
+ openCallCount: isTerminalRunStatus(entry.status) ? 0: live?.openCallCount ?? 0,
+ lastEventAt: live?.lastEventAt ?? null,
+ budgetCapUsd: entry.persona.budgetCapUsd,
  }
  })
 
