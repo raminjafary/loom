@@ -97,6 +97,22 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // start_run arrives (covers a hang during workspace prep too), cleared once
  // the run reaches a terminal outcome.
  const heartbeats = new Map<string, ReturnType<typeof setInterval>>
+
+ /**
+ * Latest context-window sample per run. Held here rather than sent on
+ * arrival so it rides the heartbeat that is already going out — one frame, not two,
+ * and a sample that is superseded before the next beat is simply overwritten.
+ */
+ const contextUsage = new Map<string, { totalTokens: number; maxTokens: number }>
+
+ const heartbeatFor = (runId: string) => {
+ const usage = contextUsage.get(runId)
+ return {
+ type: 'heartbeat' as const,
+ runId,
+...(usage ? { contextTokens: usage.totalTokens, contextMaxTokens: usage.maxTokens }: {}),
+ }
+ }
  // Per-run abort handles — registered before the
  // clone starts so a cancel arriving during workspace prep is not ignored.
  const aborts = new Map<string, AbortController>
@@ -531,6 +547,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onRawMessage,
  onSessionId,
  onPermissionRequest,
+ onContextUsage: (usage) => contextUsage.set(input.runId, usage),
  })
  flushPlan
  return
@@ -587,6 +604,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onNotesRequest,
  onSessionId,
  onPermissionRequest,
+ onContextUsage: (usage) => contextUsage.set(input.runId, usage),
  log,
  })
  // Sent after the loop, not from inside the tool handler: a plan submitted by
@@ -721,7 +739,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 
  heartbeats.set(
  runId,
- setInterval( => send({ type: 'heartbeat', runId }), HEARTBEAT_INTERVAL_MS),
+ setInterval( => send(heartbeatFor(runId)), HEARTBEAT_INTERVAL_MS),
 )
 
  const abort = new AbortController
@@ -817,6 +835,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  heartbeats.delete(runId)
  }
  aborts.delete(runId)
+ contextUsage.delete(runId)
  // State is cleared only on a terminal outcome. Surviving a crash is the
  // whole point, so it must not be removed just because this process is
  // done with the run.
@@ -865,7 +884,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  aborts.set(frame.runId, abort)
  heartbeats.set(
  frame.runId,
- setInterval( => send({ type: 'heartbeat', runId: frame.runId }), HEARTBEAT_INTERVAL_MS),
+ setInterval( => send(heartbeatFor(frame.runId)), HEARTBEAT_INTERVAL_MS),
 )
 
  void runAgentForRun({
@@ -896,6 +915,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  heartbeats.delete(frame.runId)
  }
  aborts.delete(frame.runId)
+ contextUsage.delete(frame.runId)
  runStates.delete(frame.runId)
  pendingTerminalEvents.delete(frame.runId)
  eventSeqs.delete(frame.runId)

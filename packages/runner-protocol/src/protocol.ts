@@ -322,7 +322,28 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  * `AgentEventSchema`: it must never become a chat message, only bump
  * `agent_run.last_heartbeat_at`.
  */
- z.object({ type: z.literal('heartbeat'), runId: z.string }),
+ z.object({
+ type: z.literal('heartbeat'),
+ runId: z.string,
+ /**
+ * How full the run's context window is.
+ *
+ * Read from the SDK's `getContextUsage`, which is a **platform fact**: it counts
+ * the system prompt, tools, MCP surface and messages against the model's real
+ * window. The event-tiering design models no token usage on `AgentEvent` and says token deltas are
+ * stream-only, so this is the only honest source — and it is better than a sum of
+ * deltas anyway, because compaction resets occupancy while a running total only
+ * ever climbs.
+ *
+ * Carried on the heartbeat rather than as its own frame: the heartbeat already
+ * fires on an interval for exactly as long as a run is live, so this adds no frame
+ * type and no second timer. Optional, because a Runner that has not yet sampled —
+ * or one built before this existed — must still produce a valid heartbeat, and
+ * because the answer is unavailable before the first turn.
+ */
+ contextTokens: z.number.int.nonnegative.optional,
+ contextMaxTokens: z.number.int.positive.optional,
+ }),
  /**
  * Authoritative spend, metered at the egress proxy and relayed by the Runner
  *. Deliberately not derived from the SDK's self-reported

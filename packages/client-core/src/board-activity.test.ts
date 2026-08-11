@@ -29,6 +29,8 @@ const card = (over: Partial<BoardCard>): BoardCard =>
  openCallCount: 0,
  lastEventAt: ago(5),
  budgetCapUsd: null,
+ contextTokens: null,
+ contextMaxTokens: null,
 ...over,
  }) as BoardCard
 
@@ -110,5 +112,40 @@ describe('describeCardActivity', => {
  expect(describeCardActivity(card({ totalCostUsd: 1, budgetCapUsd: 0 }), NOW).capUsedRatio)
 .toBeNull
  })
+ })
+})
+
+/**
+ * The context pressure. Reported even for a finished run: "how full was its window
+ * when it stopped" is exactly the post-mortem question, and it is also the figure the * warm handoff triggers on.
+ */
+describe('context pressure', => {
+ it('reports occupancy as a fraction of the model window', => {
+ const activity = describeCardActivity(
+ card({ contextTokens: 150_000, contextMaxTokens: 1_000_000 }),
+ NOW,
+)
+ expect(activity.contextUsedRatio).toBeCloseTo(0.15)
+ })
+
+ it('has no ratio before the Runner has sampled — which is not the same as empty', => {
+ expect(describeCardActivity(card({}), NOW).contextUsedRatio).toBeNull
+ expect(
+ describeCardActivity(card({ contextTokens: 100, contextMaxTokens: null }), NOW)
+.contextUsedRatio,
+).toBeNull
+ // A zero window would divide by zero and render as Infinity.
+ expect(
+ describeCardActivity(card({ contextTokens: 100, contextMaxTokens: 0 }), NOW).contextUsedRatio,
+).toBeNull
+ })
+
+ it('keeps reporting it for a finished run, since that is the post-mortem question', => {
+ const activity = describeCardActivity(
+ card({ status: 'completed', contextTokens: 900_000, contextMaxTokens: 1_000_000 }),
+ NOW,
+)
+ expect(activity.kind).toBe('finished')
+ expect(activity.contextUsedRatio).toBeCloseTo(0.9)
  })
 })

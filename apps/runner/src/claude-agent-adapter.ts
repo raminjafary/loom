@@ -112,11 +112,23 @@ export const toWireEvents = (message: SDKMessage): WireAgentEvent[] => {
  }
 }
 
+/**
+ * How often the context window is sampled. Long enough that a fast burst of messages
+ * costs one control request rather than dozens; short enough that a human watching the
+ * board sees pressure build within a turn or two.
+ */
+const CONTEXT_SAMPLE_INTERVAL_MS = 5_000
+
 export interface RunAgentOptions {
  readonly persona: WirePersonaSpec
  readonly cwd: string
  /** What a human asked for via `@mention`; absent for the sidebar-picker path. */
  readonly task?: string
+ /**
+ * Reports how full the model's context window is, sampled from the SDK.
+ * Absent for callers that do not care; the sampling is skipped entirely then.
+ */
+ readonly onContextUsage?: (usage: { totalTokens: number; maxTokens: number }) => void
  /**
  * May return a promise, and the stream loop awaits it — that await is how the
  * Runner applies backpressure: while it is unresolved the
@@ -393,6 +405,34 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  // Every SDK message repeats the session id; only the first is interesting.
  let reportedSessionId: string | null = null
 
+ /**
+ * Context-window sampling.
+ *
+ * `getContextUsage` is a control request to the agent process, so it is throttled
+ * rather than called per message: a burst of fourteen parallel tool results would
+ * otherwise mean fourteen round trips to learn the same number. It is also wrapped,
+ * because an observability read must never be the thing that fails a run — a Runner
+ * that cannot answer reports nothing and the board says "unknown", which is true.
+ *
+ * Deliberately *not* `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET`,
+ * whose own name is the reason; `getContextUsage` is a stable method on the query.
+ */
+ let lastSampleAt = 0
+ const sampleContextUsage = async : Promise<void> => {
+ if (!options.onContextUsage) return
+ const now = Date.now
+ if (now - lastSampleAt < CONTEXT_SAMPLE_INTERVAL_MS) return
+ lastSampleAt = now
+ try {
+ const usage = await stream.getContextUsage
+ if (usage.totalTokens >= 0 && usage.maxTokens > 0) {
+ options.onContextUsage({ totalTokens: usage.totalTokens, maxTokens: usage.maxTokens })
+ }
+ } catch {
+ // The run continues regardless; see above.
+ }
+ }
+
  try {
  for await (const message of stream) {
  // Read off the raw message rather than routed through toWireEvents: a
@@ -409,6 +449,7 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  for (const event of toWireEvents(message)) {
  await options.onEvent(event)
  }
+ await sampleContextUsage
  }
  } catch (error) {
  // An abort is an expected outcome, not a crash: the server already recorded

@@ -234,6 +234,32 @@ const collisionCount = computed(
  · quiet since {{ describeAge(node.card.lastEventAt, tick) }}
  </template>
  </text>
+ <!--
+ Context pressure as a bar across the node's foot. Drawn only
+ once past half, so an early-turn node carries no chrome, and turning
+ warm near the ceiling — the point at which the worker is about to
+ compact and get worse.
+ -->
+ <template v-if="(node.activity.contextUsedRatio ?? 0) >= 0.5">
+ <rect
+ class="ctx-track"
+ x="12"
+:y="NODE_H - 8"
+:width="NODE_W - 24"
+ height="3"
+ rx="1.5"
+ />
+ <rect
+ class="ctx-fill"
+:class="{ warn: (node.activity.contextUsedRatio ?? 0) >= 0.85 }"
+ x="12"
+:y="NODE_H - 8"
+:width="(NODE_W - 24) * Math.min(node.activity.contextUsedRatio ?? 0, 1)"
+ height="3"
+ rx="1.5"
+ />
+ </template>
+
  <!-- A dot rather than a pulse: one mark that means "this is the one moving". -->
  <circle
  v-if="node.activity.kind === 'working'"
@@ -504,5 +530,17 @@ text {
 
 .live-dot {
  fill: var(--accent);
+}
+
+.ctx-track {
+ fill: var(--surface-hover);
+}
+
+.ctx-fill {
+ fill: var(--text-faint);
+}
+
+.ctx-fill.warn {
+ fill: var(--warn);
 }
 </style>

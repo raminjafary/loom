@@ -378,6 +378,8 @@ export interface AgentRunRow {
  branchDisposition: string | null
  lastHeartbeatAt: Date | null
  lastEventAt: Date | null
+ contextTokens: number | null
+ contextMaxTokens: number | null
  createdAt: Date
  completedAt: Date | null
 }
@@ -436,6 +438,8 @@ export const toAgentRun = (row: AgentRunRow): AgentRun => ({
  branchDisposition: toAgentRunBranchDisposition(row.branchDisposition),
  lastHeartbeatAt: row.lastHeartbeatAt,
  lastEventAt: row.lastEventAt,
+ contextTokens: row.contextTokens,
+ contextMaxTokens: row.contextMaxTokens,
  createdAt: row.createdAt,
  completedAt: row.completedAt,
 })

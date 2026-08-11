@@ -239,6 +239,13 @@ export interface AgentRun {
  // from AgentRunSchema (packages/api-contract) so they never reach the browser.
  readonly lastHeartbeatAt: Date | null
  readonly lastEventAt: Date | null
+ /**
+ * How full this run's context window was when the Runner last sampled it.
+ * Both null until a sample arrives — and they move together, since a token count with
+ * no window to measure against is not a ratio.
+ */
+ readonly contextTokens: number | null
+ readonly contextMaxTokens: number | null
  readonly createdAt: Date
  readonly completedAt: Date | null
 }

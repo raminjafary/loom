@@ -37,6 +37,16 @@ export interface CardActivity {
  * which are both "no ratio to show" rather than zero.
  */
  readonly capUsedRatio: number | null
+ /**
+ * The context pressure: how full the model's window is, 0–1. Null before the Runner
+ * has sampled it, which is a real state and not zero — a run that has not had a turn
+ * has no occupancy to report.
+ *
+ * "A worker at 90% of its context is about to compact and get worse, and that is
+ * invisible today until it fails". This is the number that makes it visible, and
+ * the trigger the warm handoff is defined against.
+ */
+ readonly contextUsedRatio: number | null
 }
 
 const secondsSince = (at: Date | null, now: Date): number | null =>
@@ -52,6 +62,11 @@ export const describeCardActivity = (card: BoardCard, now: Date = new Date): Car
  ? null
 : card.totalCostUsd / card.budgetCapUsd
 
+ const contextUsedRatio =
+ card.contextTokens === null || card.contextMaxTokens === null || card.contextMaxTokens <= 0
+ ? null
+: card.contextTokens / card.contextMaxTokens
+
  const base = {
  toolName: card.currentToolName,
  target: card.currentToolTarget,
@@ -61,6 +76,7 @@ export const describeCardActivity = (card: BoardCard, now: Date = new Date): Car
  otherOpenCalls: Math.max(card.openCallCount - 1, 0),
  quietForSeconds,
  capUsedRatio,
+ contextUsedRatio,
  }
 
  if (TERMINAL.has(card.status)) return {...base, kind: 'finished' }

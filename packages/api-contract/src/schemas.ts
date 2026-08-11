@@ -251,6 +251,15 @@ export const SwarmBoardCardSchema = z.object({
  * change what a finished run was allowed to spend. Null means uncapped.
  */
  budgetCapUsd: z.number.nullable,
+ /**
+ * The context pressure, sampled by the Runner from the SDK's own
+ * `getContextUsage` — a platform fact counting system prompt, tools and messages
+ * against the model's real window, never a model's self-report. Null before the first
+ * sample. Maps to OTel GenAI's `gen_ai.usage.input_tokens` family, though the window
+ * ceiling has no standard attribute yet.
+ */
+ contextTokens: z.number.int.nullable,
+ contextMaxTokens: z.number.int.nullable,
 })
 
 export const SwarmBoardSchema = z.object({

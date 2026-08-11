@@ -22,6 +22,8 @@ const card = (over: Partial<BoardCard> & { runId: string }): BoardCard =>
  openCallCount: 0,
  lastEventAt: null,
  budgetCapUsd: null,
+ contextTokens: null,
+ contextMaxTokens: null,
 ...over,
  }) as BoardCard
 

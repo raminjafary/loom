@@ -58,6 +58,14 @@ const activityOf = (card: BoardCard) => describeCardActivity(card, tick.value)
 /** A cap is only worth drawing once it is close enough to bite. */
 const CAP_WARN_RATIO = 0.75
 
+/**
+ * Live swarm observability: "A worker at 90% of its context is about to compact and get worse." Drawn from
+ * half-full — early enough to see pressure building, late enough that an idle worker's
+ * card stays quiet.
+ */
+const CONTEXT_SHOW_RATIO = 0.5
+const CONTEXT_WARN_RATIO = 0.85
+
 const capPercent = (ratio: number) => `${Math.min(Math.round(ratio * 100), 100)}%`
 
 /**
@@ -153,6 +161,26 @@ const workingCount = computed(
  </span>
  {{ capPercent(activityOf(card).capUsedRatio ?? 0) }} of
  {{ money(card.budgetCapUsd) }} cap
+ </p>
+
+ <!--
+ Context pressure. A percentage of the model's real window, sampled
+ by the Runner from the SDK — the platform's own measurement, not the
+ model's account of itself, which is why it sits with the cap meter rather
+ than under the agent-note tag.
+ -->
+ <p
+ v-if="(activityOf(card).contextUsedRatio ?? 0) >= CONTEXT_SHOW_RATIO"
+ class="cap context"
+:class="{ spent: (activityOf(card).contextUsedRatio ?? 0) >= CONTEXT_WARN_RATIO }"
+ >
+ <span class="bar" aria-hidden="true">
+ <span
+ class="fill"
+:style="{ width: capPercent(activityOf(card).contextUsedRatio ?? 0) }"
+ ></span>
+ </span>
+ {{ capPercent(activityOf(card).contextUsedRatio ?? 0) }} of context
  </p>
 
  <p v-if="card.branchName" class="branch":title="card.branchName">
@@ -298,6 +326,16 @@ h3 {
 
 .cap.spent {
  color: var(--danger);
+}
+
+/* Context is a different pressure from spend, so it reads in a different colour until
+ it is near the ceiling — at which point both mean "this is about to stop being good". */
+.cap.context {
+ color: var(--text-muted);
+}
+
+.cap.context.spent {
+ color: var(--warn);
 }
 
 .cap.bar {

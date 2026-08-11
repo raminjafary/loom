@@ -113,6 +113,16 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  * so a run can be resumed rather than restarted after a Runner crash.
  */
  z.object({ t: z.literal('session'), sessionId: z.string }),
+ /**
+ * Context-window occupancy sampled inside the container. Its own frame
+ * rather than a field on an event, for the same reason the heartbeat carries it on the
+ * wire above: it is an observation about the run, never something to render in a thread.
+ */
+ z.object({
+ t: z.literal('context_usage'),
+ totalTokens: z.number.int.nonnegative,
+ maxTokens: z.number.int.positive,
+ }),
  z.object({ t: z.literal('done') }),
 ])
 

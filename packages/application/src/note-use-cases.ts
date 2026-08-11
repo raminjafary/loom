@@ -329,13 +329,20 @@ export interface SwarmBoardCard {
  * The cap this run is spending against, from its own frozen `PersonaSpec` snapshot
  * rather than from the persona as configured now — otherwise an edited cap would
  * retroactively rewrite what a finished run was allowed. Null means uncapped.
- *
- * Live swarm observability also asks for tokens against the model's context window. That is **not
- * derivable from anything persisted**: the event-tiering design makes token deltas stream-only and
- * models no usage on `AgentEvent`, so the honest options were to omit it or to invent
- * it. Cost against cap is the half of "context pressure" the platform actually knows.
  */
  readonly budgetCapUsd: number | null
+ /**
+ * The context pressure: tokens held against the model's window, as the Runner last
+ * sampled it from the SDK. Read straight off the run — the heartbeat already wrote it
+ * there — so it costs this read nothing.
+ *
+ * Null before the first sample, which is the honest answer for a run that has not had
+ * a turn yet. It is deliberately *not* a sum of per-event token deltas: compaction
+ * empties the window while a running total only climbs, so the two would disagree
+ * exactly when a human most needs the number.
+ */
+ readonly contextTokens: number | null
+ readonly contextMaxTokens: number | null
 }
 
 export interface SwarmBoard {
@@ -411,6 +418,8 @@ export const getSwarmBoard = async (
  openCallCount: isTerminalRunStatus(entry.status) ? 0: live?.openCallCount ?? 0,
  lastEventAt: live?.lastEventAt ?? null,
  budgetCapUsd: entry.persona.budgetCapUsd,
+ contextTokens: entry.contextTokens,
+ contextMaxTokens: entry.contextMaxTokens,
  }
  })
 

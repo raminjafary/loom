@@ -303,7 +303,16 @@ export interface AgentRunRepositoryPort {
  input: { since: Date | null },
 ): Promise<AgentRunCostRollup>
  /** Bumped by the Runner's periodic heartbeat frame. */
- recordHeartbeat(workspaceId: WorkspaceId, id: AgentRunId): Promise<void>
+ /**
+ * Liveness, and — when the Runner sampled it — how full the run's context window is
+ *. One write for both, because they arrive on one frame; passing no
+ * context leaves the stored figure untouched rather than nulling it.
+ */
+ recordHeartbeat(
+ workspaceId: WorkspaceId,
+ id: AgentRunId,
+ context?: { tokens: number; maxTokens: number } | undefined,
+): Promise<void>
  /** Bumped by any agent_event — distinct signal from a heartbeat: a hung-but-connected run keeps sending heartbeats but stops making progress. */
  recordEventActivity(workspaceId: WorkspaceId, id: AgentRunId): Promise<void>
  /**

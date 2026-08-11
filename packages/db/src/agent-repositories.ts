@@ -660,10 +660,15 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  }
  },
 
- async recordHeartbeat(workspaceId, id) {
+ async recordHeartbeat(workspaceId, id, context) {
  await db
 .update(agentRun)
-.set({ lastHeartbeatAt: new Date })
+.set({
+ lastHeartbeatAt: new Date,
+ // Only written when the Runner actually sampled: a heartbeat that could not read
+ // the window must leave the last known figure alone rather than blanking it.
+...(context ? { contextTokens: context.tokens, contextMaxTokens: context.maxTokens }: {}),
+ })
 .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
  },
 

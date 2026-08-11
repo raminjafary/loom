@@ -19,6 +19,8 @@ const card = (over: Partial<RunTreeCard> & { runId: string }): RunTreeCard => ({
  openCallCount: 0,
  lastEventAt: null,
  budgetCapUsd: null,
+ contextTokens: null,
+ contextMaxTokens: null,
 ...over,
 })
 

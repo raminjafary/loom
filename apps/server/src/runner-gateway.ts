@@ -635,7 +635,16 @@ export const createRunnerGateway = (
  return
 
  case 'heartbeat':
- await recordRunHeartbeat(deps, { workspaceId, agentRunId: asAgentRunId(frame.runId) })
+ await recordRunHeartbeat(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ // Both or neither: a tokens figure with no window to measure it against is
+ // not a ratio, and the schema keeps them together for that reason.
+ context:
+ frame.contextTokens !== undefined && frame.contextMaxTokens !== undefined
+ ? { tokens: frame.contextTokens, maxTokens: frame.contextMaxTokens }
+: undefined,
+ })
  return
 
  case 'cost_report':

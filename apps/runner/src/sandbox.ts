@@ -81,6 +81,8 @@ export interface SandboxOptions {
  /** The tree's ledger at start, rendered and fenced server-side. */
  readonly contextLedger?: string
  readonly onSessionId?: (sessionId: string) => void
+ /** How full the model's context window is, sampled inside the container. */
+ readonly onContextUsage?: (usage: { totalTokens: number; maxTokens: number }) => void
  readonly onPermissionRequest: (
  toolUseId: string,
  toolName: string,
@@ -512,6 +514,12 @@ export const runAgentInSandbox = async (
  return
  case 'session':
  options.onSessionId?.(frame.sessionId)
+ return
+ case 'context_usage':
+ // Not through `forwardEvent`'s queue: this is an observation about the run, and
+ // holding it behind a backlog of events would make it stale precisely when the
+ // backlog says the run is busy.
+ options.onContextUsage?.({ totalTokens: frame.totalTokens, maxTokens: frame.maxTokens })
  return
  case 'plan':
  options.onPlan?.(frame.subtasks)

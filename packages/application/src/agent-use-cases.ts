@@ -1341,8 +1341,18 @@ export const reconcileRunnerRuns = async (
 /** Called by runner-gateway.ts on every `heartbeat` frame. */
 export const recordRunHeartbeat = async (
  deps: AgentDeps,
- input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
-): Promise<void> => deps.agentRuns.recordHeartbeat(input.workspaceId, input.agentRunId)
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ /**
+ * Context-window occupancy, when the Runner sampled it. Absent
+ * leaves the last known figure in place rather than clearing it: a Runner that
+ * could not read the window has not told us the window emptied.
+ */
+ context?: { tokens: number; maxTokens: number } | undefined
+ },
+): Promise<void> =>
+ deps.agentRuns.recordHeartbeat(input.workspaceId, input.agentRunId, input.context)
 
 /** Backs the Inbox view — runs a human hasn't finished with yet. */
 export const listRunsNeedingAttention = (

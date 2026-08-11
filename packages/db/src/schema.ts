@@ -194,6 +194,13 @@ export const agentRun = pgTable(
  // caught, not ignored forever.
  lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
  lastEventAt: timestamp('last_event_at', { withTimezone: true }),
+ // Context-window occupancy, sampled by the Runner from the SDK and carried on the
+ // heartbeat. Stored on
+ // the run rather than as an event: only the *latest* figure means anything, and
+ // keeping it here is what lets the board read it without a query of its own.
+ // Both null until a Runner samples one — which never happens before the first turn.
+ contextTokens: integer('context_tokens'),
+ contextMaxTokens: integer('context_max_tokens'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  completedAt: timestamp('completed_at', { withTimezone: true }),
  },

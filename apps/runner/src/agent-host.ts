@@ -188,6 +188,8 @@ const main = async : Promise<void> => {
  onRawMessage: (line) => emitEvent({ t: 'raw', line }),
 ...(plannerTool ? { plannerTool: plannerTool.server }: {}),
  onSessionId: (sessionId) => emit({ t: 'session', sessionId }),
+ onContextUsage: (usage) =>
+ emit({ t: 'context_usage', totalTokens: usage.totalTokens, maxTokens: usage.maxTokens }),
  onPermissionRequest: (toolUseId, toolName, input) => {
  emit({ t: 'permission_request', toolUseId, toolName, input })
  return new Promise((resolve) => {
