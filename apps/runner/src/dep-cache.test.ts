@@ -90,10 +90,11 @@ describe('the warm step', => {
  timeoutMs: 600_000,
  }).join(' ')
 
- it('mounts the repository read-only', => {
- // Warming resolves dependencies; it has no business editing the repository, and an
- // install command that tries to is worth failing loudly.
- expect(args).toContain('/host/clone:/work:ro')
+ it('mounts a writable clone, because installers write into the project', => {
+ // Read-only was the first instinct and it broke every warm with
+ // `ENOENT: mkdir '/work/node_modules'`. What is mounted is a throwaway clone,
+ // discarded when the install finishes; the operator's repository is never mounted.
+ expect(args).toContain('/host/clone:/work:rw')
  })
 
  it('writes to the shared cache, which is the only writer it ever has', => {

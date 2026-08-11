@@ -316,7 +316,14 @@ const proxyHost = (dataUrl: string): string => {
  * secret leaving the host — the token is opaque and per-run, and the real
  * credential stays in the proxy.
  */
-const proxyUrlWithToken = (dataUrl: string, token: string): string => {
+/**
+ * The proxy URL with a lease in its userinfo. `HTTP_PROXY`-aware tools (npm, curl, git)
+ * have no other channel for a proxy credential — they turn this into
+ * `Proxy-Authorization: Basic`. Exported because the dependency-cache warm step needs
+ * exactly the same shape: without the lease the proxy answers 407 and the install
+ * fails, which is how the live check found it.
+ */
+export const proxyUrlWithToken = (dataUrl: string, token: string): string => {
  try {
  const parsed = new URL(dataUrl)
  parsed.username = 'loom'

@@ -43,6 +43,7 @@ import {
 } from './run-workspace.js'
 import {
  checkImageFreshness,
+ proxyUrlWithToken,
  runAgentInSandbox,
  sandboxConfigFromEnv,
  sandboxEnabled,
@@ -1002,13 +1003,38 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  return
  }
+ if (!egress) {
+ send({
+ type: 'warm_cache_result',
+ requestId: frame.requestId,
+ ok: false,
+ detail: 'this Runner has no egress proxy configured, so an install cannot reach a registry',
+ })
+ return
+ }
  log(`warming the dependency cache for ${frame.repositoryPath}`)
  // A throwaway clone, not the bound repository: the install runs in a
  // container with this path mounted, and the operator's own working tree is
  // not somewhere to do that even read-only.
- void prepareRunWorkspace(frame.repositoryPath, `warm-${frame.requestId}`)
+ const warmId = `warm-${frame.requestId}`
+ void prepareRunWorkspace(frame.repositoryPath, warmId)
 .then(async (workspace) => {
+ /**
+ * A lease, exactly like a run's. The proxy authenticates every caller —
+ * `HTTP_PROXY` without one gets `407 Proxy Authentication Required` and
+ * npm fails on the first metadata fetch. Found by the live check, which
+ * is the only place this path meets a real registry.
+ *
+ * `budgetCapUsd: null` because the cap governs the *model API* path and
+ * warming never touches it — packages come through the CONNECT
+ * forward-proxy to allowlisted registries, which is not metered spend.
+ * A zero cap would be the intuitive thing to pass and is rejected
+ * outright (the proxy requires a positive cap or none), which is the
+ * schema being clearer about this than the intuition was.
+ */
+ const token = await leaseEgressToken(egress, { runId: warmId, budgetCapUsd: null })
  try {
+ const proxy = proxyUrlWithToken(egress.dataUrl, token)
  return await warmDepCache({
  runtime: sandbox.runtime,
  image: sandbox.image,
@@ -1016,16 +1042,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  cacheRoot: cache.root,
  clonePath: workspace.clonePath,
  command: frame.installCommand,
- env: egress
- ? {
- HTTP_PROXY: egress.dataUrl,
- HTTPS_PROXY: egress.dataUrl,
-...depCacheEnv,
- }
-: depCacheEnv,
+ env: { HTTP_PROXY: proxy, HTTPS_PROXY: proxy,...depCacheEnv },
  timeoutMs: WARM_TIMEOUT_MS,
  })
  } finally {
+ // Revoked whatever happened: a lease outliving the step that needed it
+ // is a credential nobody is watching.
+ await revokeEgressToken(egress, warmId).catch( => {})
  await discardRunWorkspace(workspace.clonePath).catch( => {})
  }
  })

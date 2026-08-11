@@ -127,8 +127,12 @@ export const prepareDepCache = async (
  * directly — which is exactly what `copy` mode then protects, since no other writer
  * ever touches that directory.
  *
- * The clone is mounted read-only. A warm step has no business modifying the repository,
- * and an install command that tries to is one worth failing loudly.
+ * The clone is mounted **read-write**, and the first version of this got that wrong.
+ * "A warm step has no business modifying the repository" sounds right and is not what
+ * this mounts: it is a throwaway clone, discarded the moment the install finishes. The
+ * operator's actual repository is never mounted at all, which is the protection that
+ * matters. Read-only just broke the feature — `npm install` writes `node_modules`, so
+ * every warm failed with `ENOENT: mkdir '/work/node_modules'`, found by the live check.
  */
 export interface WarmDepCacheInput {
  readonly runtime: string
@@ -189,9 +193,10 @@ export const buildWarmArgs = (input: WarmDepCacheInput): string[] => [
  '--read-only',
  '--tmpfs',
  '/tmp:rw,noexec,nosuid,size=1g',
- // Read-only: warming resolves dependencies, it does not edit the repository.
+ // Writable, because installers write into the project. This is a throwaway clone,
+ // not the bound repository — see the note above.
  '-v',
- `${input.clonePath}:/work:ro`,
+ `${input.clonePath}:/work:rw`,
  '-v',
  `${input.cacheRoot}:${DEP_CACHE_DIR}:rw`,
  '-w',
