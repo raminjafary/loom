@@ -195,6 +195,52 @@ export const SwarmBoardSchema = z.object({
 ),
 })
 
+/**
+ * The cost dashboard.
+ *
+ * The cost model asks for spend "rolled up per thread/team/workspace", metered at the egress proxy,
+ * with model choice **visible** rather than buried in config — the reason given is that
+ * Cursor's 8x cost swing came from worker model choice. So the groupings here are not
+ * decoration: `byModel` and `byPersona` are the specific question the cost model says a human must
+ * be able to answer, and both read the persona *snapshot* the run carried, not the
+ * persona as it is configured today.
+ *
+ * Every figure is proxy-metered spend, never a model's self-report.
+ */
+export const SpendGroupSchema = z.object({
+ runCount: z.number.int,
+ totalUsd: z.number,
+})
+
+export const CostSummarySchema = z.object({
+ /** Null means all time; otherwise the window these figures cover. */
+ windowHours: z.number.int.nullable,
+ totals: SpendGroupSchema,
+ byPersona: z.array(
+ SpendGroupSchema.extend({
+ personaName: z.string,
+ model: z.string,
+ /** The single most expensive run in this group — a mean hides the run that hurt. */
+ maxUsd: z.number,
+ }),
+),
+ byModel: z.array(SpendGroupSchema.extend({ model: z.string })),
+ byThread: z.array(
+ SpendGroupSchema.extend({ threadId: z.string, channelName: z.string }),
+),
+ topRuns: z.array(
+ z.object({
+ agentRunId: z.string,
+ personaName: z.string,
+ model: z.string,
+ status: z.string,
+ relation: z.string.nullable,
+ totalUsd: z.number,
+ createdAt: z.date,
+ }),
+),
+})
+
 export const MergeQueueEntrySchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -357,6 +403,8 @@ export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
 export type WorkerNote = z.infer<typeof WorkerNoteSchema>
 export type SwarmBoardCard = z.infer<typeof SwarmBoardCardSchema>
 export type SwarmBoard = z.infer<typeof SwarmBoardSchema>
+export type CostSummary = z.infer<typeof CostSummarySchema>
+export type SpendGroup = z.infer<typeof SpendGroupSchema>
 export type Capability = z.infer<typeof CapabilitySchema>
 export type PersonaCapability = z.infer<typeof PersonaCapabilitySchema>
 export type DirectoryEntry = z.infer<typeof DirectoryEntrySchema>

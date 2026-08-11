@@ -3,6 +3,7 @@ import type {
  AgentRun,
  ApprovalRequest,
  Capability,
+ CostSummary,
  DirectoryListing,
  PersonaCapability,
  MergeQueueEntry,
@@ -71,6 +72,15 @@ export interface AgentSnapshot {
  */
  readonly swarmBoard: SwarmBoard | null
  readonly treeNotes: WorkerNote[]
+ /**
+ * Workspace spend.
+ *
+ * Workspace-wide rather than keyed to the watched run, unlike `swarmBoard` — and
+ * that is the whole reason it is a separate fetch. The cost model asks "what is this workspace
+ * costing", which no rollup of one tree can answer, and a human deciding whether a
+ * model tier is worth it is asking about all of them.
+ */
+ readonly costSummary: CostSummary | null
  readonly lastPairing: { runnerId: string; rawToken: string } | null
  readonly diff: string | null
  // Inbox — runs needing a human decision, workspace-wide.
@@ -170,6 +180,8 @@ export interface AgentSession {
  * executing.
  */
  refreshBoard(agentRunId: string): Promise<void>
+ /** Workspace spend. `windowHours` null or omitted means all time. */
+ refreshCostSummary(windowHours?: number | null): Promise<void>
  /**
  * Adds a human's note to a tree — authoritative, and rendered to workers outside
  * the untrusted fence. There is deliberately no client path to
@@ -229,6 +241,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  pendingApprovals: [],
  mergeQueue: [],
  swarmBoard: null,
+ costSummary: null,
  treeNotes: [],
  lastPairing: null,
  diff: null,
@@ -281,6 +294,20 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.workerNote.listByTree({ agentRunId }),
  ])
  patch({ swarmBoard, treeNotes })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ }
+
+ /**
+ * Kept out of `fetchBoard`'s `Promise.all` deliberately: the board is per-tree and
+ * refreshes on the run poll, while spend is workspace-wide and changes slowly. Folding
+ * them together would re-aggregate the whole workspace on every two-second tick to
+ * redraw a number that had not moved.
+ */
+ const fetchCostSummary = async (windowHours: number | null): Promise<void> => {
+ try {
+ patch({ costSummary: await options.api.cost.summary({ windowHours }) })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -664,6 +691,10 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
 
  async refreshBoard(agentRunId) {
  await fetchBoard(agentRunId)
+ },
+
+ async refreshCostSummary(windowHours) {
+ await fetchCostSummary(windowHours ?? null)
  },
 
  async writeNote(input) {

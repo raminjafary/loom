@@ -165,6 +165,45 @@ export interface WorkerNoteRepositoryPort {
  countByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<number>
 }
 
+/**
+ * Grouped spend, straight from the database.
+ *
+ * `personaName` and `model` are read out of the run's **persona snapshot**, not out of
+ * the live persona: the cost model exists because "Cursor's 8x swing came from worker model choice",
+ * and a rollup that read today's persona would attribute last week's Opus spend to
+ * whatever the persona was edited to since. The snapshot is what actually ran.
+ */
+export interface AgentRunCostRollup {
+ readonly totals: { readonly runCount: number; readonly totalUsd: number }
+ readonly byPersona: {
+ readonly personaName: string
+ readonly model: string
+ readonly runCount: number
+ readonly totalUsd: number
+ readonly maxUsd: number
+ }[]
+ readonly byModel: {
+ readonly model: string
+ readonly runCount: number
+ readonly totalUsd: number
+ }[]
+ readonly byThread: {
+ readonly threadId: ThreadId
+ readonly channelName: string
+ readonly runCount: number
+ readonly totalUsd: number
+ }[]
+ readonly topRuns: {
+ readonly agentRunId: AgentRunId
+ readonly personaName: string
+ readonly model: string
+ readonly status: string
+ readonly relation: string | null
+ readonly totalUsd: number
+ readonly createdAt: Date
+ }[]
+}
+
 export interface AgentRunRepositoryPort {
  create(input: {
  workspaceId: WorkspaceId
@@ -218,6 +257,23 @@ export interface AgentRunRepositoryPort {
  * status.
  */
  recordCost(workspaceId: WorkspaceId, id: AgentRunId, totalCostUsd: number): Promise<void>
+ /**
+ * Spend, grouped, for the cost dashboard.
+ *
+ * The one read on this port that aggregates in the database rather than returning
+ * runs. Every other rollup in this codebase is computed in memory over a bounded set
+ * — one tree's cards, one run's children — and that is right for those. A workspace's
+ * spend has no such bound: it grows for the life of the workspace, and the panel that
+ * shows it refreshes. Fetching every run to sum a column would make the dashboard
+ * slower exactly as it became worth looking at.
+ *
+ * Returns rows, not a summary: what counts as "expensive" is the question, not the
+ * database's, and the use case is where that judgement belongs.
+ */
+ costRollup(
+ workspaceId: WorkspaceId,
+ input: { since: Date | null },
+): Promise<AgentRunCostRollup>
  /** Bumped by the Runner's periodic heartbeat frame. */
  recordHeartbeat(workspaceId: WorkspaceId, id: AgentRunId): Promise<void>
  /** Bumped by any agent_event — distinct signal from a heartbeat: a hung-but-connected run keeps sending heartbeats but stops making progress. */

@@ -16,6 +16,7 @@ import PersonaForm from './PersonaForm.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
 import RepositoryPanel from './RepositoryPanel.vue'
 import RunnerPanel from './RunnerPanel.vue'
+import CostDashboardPanel from './CostDashboardPanel.vue'
 import RunTreePanel from './RunTreePanel.vue'
 import SwarmBoardPanel from './SwarmBoardPanel.vue'
 import WorkerNotesPanel from './WorkerNotesPanel.vue'
@@ -127,9 +128,24 @@ const onFocus = => {
  if (document.visibilityState === 'visible') void agent.refresh
 }
 
+/**
+ * The dashboard's window. Held here rather than in the panel because the
+ * fetch is the store's and the panel is a view — and because a refresh must ask for the
+ * window currently on screen, not the one it was mounted with.
+ */
+const costWindowHours = ref<number | null>(24)
+const setCostWindow = (hours: number | null) => {
+ costWindowHours.value = hours
+ void agent.refreshCostSummary(hours)
+}
+
 onMounted( => {
  void store.start
  void agent.start
+ // Fetched once on mount and on demand, never on the run poll: workspace spend changes
+ // slowly, and re-aggregating every two seconds would be a query per tick to redraw a
+ // number that had not moved.
+ void agent.refreshCostSummary(costWindowHours.value)
  consumeRunDeepLink
  navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
  window.addEventListener('focus', onFocus)
@@ -262,6 +278,16 @@ onBeforeUnmount( => {
 :board="agentSnapshot.swarmBoard"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
+ />
+ <!--
+ Workspace-wide, unlike everything above it: the board and the tree are scoped to
+ the watched run's tree, and the question is about all of them.
+ -->
+ <CostDashboardPanel
+:summary="agentSnapshot.costSummary"
+:window-hours="costWindowHours"
+ @refresh=" => agent.refreshCostSummary(costWindowHours)"
+ @window="(hours) => setCostWindow(hours)"
  />
  <WorkerNotesPanel
 :notes="agentSnapshot.treeNotes"

@@ -67,6 +67,7 @@ export const useAgentStore = defineStore('agent', () => {
     cancelMerge: (entryId: string) => session.cancelMerge(entryId),
     refreshMergeQueue: () => session.refreshMergeQueue(),
     refreshBoard: (agentRunId: string) => session.refreshBoard(agentRunId),
+    refreshCostSummary: (windowHours?: number | null) => session.refreshCostSummary(windowHours),
     writeNote: (input: Parameters<typeof session.writeNote>[0]) => session.writeNote(input),
     setVerifyCommand: (repositoryId: string, verifyCommand: string | null) =>
       session.setVerifyCommand(repositoryId, verifyCommand),

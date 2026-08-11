@@ -25,6 +25,7 @@ import {
  getRawTranscript,
  getRunControl,
  getSwarmBoard,
+ getWorkspaceCostSummary,
  keepAgentRun,
  listActiveAgentRuns,
  listChannels,
@@ -371,6 +372,22 @@ export const router = os.router({
  getSwarmBoard(context.deps, {
  workspaceId: context.principal.workspaceId,
  agentRunId: asAgentRunId(input.agentRunId),
+ }),
+),
+),
+ },
+
+ /**
+ * Workspace spend. Scoped to the caller's own workspace from the
+ * session, never from input — the same rule as every other read here, and the reason
+ * Identity-bound approval insists identity comes off the session.
+ */
+ cost: {
+ summary: os.cost.summary.handler(({ context, input }) =>
+ guard( =>
+ getWorkspaceCostSummary(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ windowHours: input.windowHours ?? null,
  }),
 ),
 ),

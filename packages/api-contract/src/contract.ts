@@ -19,6 +19,7 @@ import {
  RepositorySchema,
  RunControlSchema,
  RunnerSchema,
+ CostSummarySchema,
  SwarmBoardSchema,
  ThreadSchema,
  WorkerNoteSchema,
@@ -220,6 +221,17 @@ export const contract = {
 
  /** The board: a card per run in the tree, plus the path collisions to expect. */
  board: oc.input(z.object({ agentRunId: z.string })).output(SwarmBoardSchema),
+ },
+
+ /**
+ * Workspace spend. Distinct from `agentRun.board`, which
+ * rolls up **one tree**: this is the whole workspace, which is the rollup the cost model asks for
+ * and the one no in-memory pass over a tree can produce.
+ */
+ cost: {
+ summary: oc
+.input(z.object({ windowHours: z.number.int.min(1).max(8_760).nullable.optional }))
+.output(CostSummarySchema),
  },
 
  /** Phase 1 subset — markdown+frontmatter, read/CRUD only. */

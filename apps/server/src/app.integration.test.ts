@@ -185,6 +185,35 @@ describe('contract over HTTP', => {
  })
 })
 
+/**
+ * The cost dashboard over real HTTP.
+ *
+ * Worth its own trip across the wire rather than trusting the repository test: this
+ * payload carries a `Date` and figures Postgres returns as strings for `sum`, and both
+ * of those are exactly what a contract boundary silently mangles. The grouping logic is
+ * asserted against real rows in `@loom/db`; this asserts the shape survives transport.
+ */
+describe('cost summary over HTTP', => {
+ it('reports an empty workspace as zeroes, not as an error or a null', async => {
+ const summary = await client.cost.summary({ windowHours: null })
+ expect(summary.windowHours).toBeNull
+ expect(summary.totals).toEqual({ runCount: 0, totalUsd: 0 })
+ expect(summary.byModel).toEqual([])
+ expect(summary.byPersona).toEqual([])
+ expect(summary.topRuns).toEqual([])
+ })
+
+ it('echoes the window back so a client cannot mislabel what it renders', async => {
+ expect((await client.cost.summary({ windowHours: 24 })).windowHours).toBe(24)
+ expect((await client.cost.summary({})).windowHours).toBeNull
+ })
+
+ it('rejects a window the contract forbids, before reaching the database', async => {
+ await expect(client.cost.summary({ windowHours: 0 })).rejects.toThrow
+ await expect(client.cost.summary({ windowHours: 100_000 })).rejects.toThrow
+ })
+})
+
 describe('contract completeness', => {
  it('exposes every declared procedure on the client', => {
  // Guards the contract-first rule: the contract is the only surface, so a procedure
@@ -198,6 +227,7 @@ describe('contract completeness', => {
  'repository',
  'mergeQueue',
  'workerNote',
+ 'cost',
  'persona',
  'capability',
  'personaGroup',
@@ -209,6 +239,7 @@ describe('contract completeness', => {
  expect(Object.keys(contract.channel)).toEqual(['list', 'create', 'rootThread'])
  expect(Object.keys(contract.message)).toEqual(['list', 'post', 'backfill'])
  expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken'])
+ expect(Object.keys(contract.cost)).toEqual(['summary'])
  expect(Object.keys(contract.repository)).toEqual([
  'list',
  'bindExisting',

@@ -16,7 +16,11 @@ import {
  type WorkerNote,
  type WorkspaceId,
 } from '@loom/domain'
-import type { AgentRunRepositoryPort, WorkerNoteRepositoryPort } from './agent-ports.js'
+import type {
+ AgentRunCostRollup,
+ AgentRunRepositoryPort,
+ WorkerNoteRepositoryPort,
+} from './agent-ports.js'
 
 /**
  * The worker-notes ledger's use cases — and, since "the ledger
@@ -357,6 +361,35 @@ export const getSwarmBoard = async (
  })
 
  return { treeRunId, cards, pathCollisions: collidingCards(cards) }
+}
+
+/**
+ * Workspace spend, grouped.
+ *
+ * Deliberately *not* built on the board. `getSwarmBoard` rolls up one tree by loading
+ * its cards; the cost model asks for the workspace, which has no bound and grows for the workspace's
+ * life. The rollup is therefore a database aggregate (`costRollup`), and this use case's
+ * only job is turning the "per thread/team/workspace" window into a `since` and
+ * refusing to invent one.
+ *
+ * Nothing here re-prices anything. Every figure is what the egress proxy metered
+ * — a dashboard that recomputed spend from a price table would be a second, quietly
+ * disagreeing answer to the question the proxy already answered authoritatively.
+ */
+export const getWorkspaceCostSummary = async (
+ deps: NoteDeps,
+ input: { workspaceId: WorkspaceId; windowHours: number | null; now?: Date },
+): Promise<CostSummary> => {
+ const now = input.now ?? new Date
+ const since =
+ input.windowHours === null ? null: new Date(now.getTime - input.windowHours * 3_600_000)
+ const rollup = await deps.agentRuns.costRollup(input.workspaceId, { since })
+ return { windowHours: input.windowHours,...rollup }
+}
+
+export interface CostSummary extends AgentRunCostRollup {
+ /** Null means all time. Echoed back so a client cannot mislabel the figures it renders. */
+ readonly windowHours: number | null
 }
 
 /**

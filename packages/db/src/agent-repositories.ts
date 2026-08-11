@@ -12,9 +12,9 @@ import type {
  WorkerNoteRepositoryPort,
  WorkspaceRunControlRepositoryPort,
 } from '@loom/application'
-import { NotFoundError, asRunnerId } from '@loom/domain'
+import { NotFoundError, asAgentRunId, asRunnerId, asThreadId } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
-import { and, count, desc, eq, inArray, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
  toAgentPersona,
@@ -46,12 +46,14 @@ import {
  agentRunEvent,
  approvalRequest,
  capability,
+ channel,
  mergeQueueEntry,
  personaCapability,
  notificationTarget,
  personaGroup,
  repository,
  runner,
+ thread,
  workerNote,
  workspace,
 } from './schema.js'
@@ -506,6 +508,105 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
 .update(agentRun)
 .set({ totalCostUsd })
 .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
+ },
+
+ /**
+ * Grouped spend for the cost dashboard.
+ *
+ * Five aggregates in one round trip rather than five calls: they all read the same
+ * rows under the same filter, and a dashboard that issued five queries would be able
+ * to show a total that disagreed with the sum of its own groups.
+ *
+ * `persona` is a jsonb snapshot of what actually ran, so the grouping keys come out
+ * of it rather than out of today's persona row — see `AgentRunCostRollup` on why that
+ * distinction is the point of the feature rather than an implementation detail.
+ *
+ * `COALESCE(total_cost_usd, 0)`: a run that never reached the proxy has null spend,
+ * and null is "we never metered it", not "it was free". Counted as zero in the sums
+ * because that is the honest arithmetic, while `runCount` still counts the run — so a
+ * workspace full of failed runs reads as many runs and little money, which is true.
+ */
+ async costRollup(workspaceId, input) {
+ const scope = input.since
+ ? and(eq(agentRun.workspaceId, workspaceId), gte(agentRun.createdAt, input.since))
+: eq(agentRun.workspaceId, workspaceId)
+ const usd = sql<number>`coalesce(sum(coalesce(${agentRun.totalCostUsd}, 0)), 0)`
+ const personaName = sql<string>`coalesce(${agentRun.persona}->>'name', 'unknown')`
+ const model = sql<string>`coalesce(${agentRun.persona}->>'model', 'unknown')`
+
+ const [totals] = await db
+.select({ runCount: count, totalUsd: usd })
+.from(agentRun)
+.where(scope)
+
+ const byPersona = await db
+.select({
+ personaName,
+ model,
+ runCount: count,
+ totalUsd: usd,
+ maxUsd: sql<number>`coalesce(max(coalesce(${agentRun.totalCostUsd}, 0)), 0)`,
+ })
+.from(agentRun)
+.where(scope)
+.groupBy(personaName, model)
+.orderBy(desc(usd))
+
+ const byModel = await db
+.select({ model, runCount: count, totalUsd: usd })
+.from(agentRun)
+.where(scope)
+.groupBy(model)
+.orderBy(desc(usd))
+
+ const byThread = await db
+.select({
+ threadId: agentRun.threadId,
+ channelName: sql<string>`coalesce(${channel.name}, 'unknown')`,
+ runCount: count,
+ totalUsd: usd,
+ })
+.from(agentRun)
+.leftJoin(thread, eq(thread.id, agentRun.threadId))
+.leftJoin(channel, eq(channel.id, thread.channelId))
+.where(scope)
+.groupBy(agentRun.threadId, channel.name)
+.orderBy(desc(usd))
+
+ // Bounded deliberately: this is the "what was expensive" list a human scans, and an
+ // unbounded one on a busy workspace is a page nobody reads and a payload nobody
+ // needs. The groups above already account for every dollar.
+ const topRuns = await db
+.select({
+ agentRunId: agentRun.id,
+ personaName,
+ model,
+ status: agentRun.status,
+ relation: agentRun.relation,
+ totalUsd: sql<number>`coalesce(${agentRun.totalCostUsd}, 0)`,
+ createdAt: agentRun.createdAt,
+ })
+.from(agentRun)
+.where(scope)
+.orderBy(desc(agentRun.totalCostUsd))
+.limit(10)
+
+ const num = (value: unknown): number => (typeof value === 'number' ? value: Number(value ?? 0))
+ return {
+ totals: { runCount: totals?.runCount ?? 0, totalUsd: num(totals?.totalUsd) },
+ byPersona: byPersona.map((r) => ({...r, totalUsd: num(r.totalUsd), maxUsd: num(r.maxUsd) })),
+ byModel: byModel.map((r) => ({...r, totalUsd: num(r.totalUsd) })),
+ byThread: byThread.map((r) => ({
+...r,
+ threadId: asThreadId(r.threadId),
+ totalUsd: num(r.totalUsd),
+ })),
+ topRuns: topRuns.map((r) => ({
+...r,
+ agentRunId: asAgentRunId(r.agentRunId),
+ totalUsd: num(r.totalUsd),
+ })),
+ }
  },
 
  async recordHeartbeat(workspaceId, id) {
