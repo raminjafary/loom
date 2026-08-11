@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { BUILTIN_PERSONAS } from './builtin-personas.js'
+import { attenuateChildPersona } from './attenuation.js'
+import { BUILTIN_PERSONAS, type BuiltinPersona } from './builtin-personas.js'
 import { parsePersonaMarkdown } from './persona-markdown.js'
+import type { PersonaSpec } from './agents.js'
+
+/** The spec `startAgentRun` snapshots onto a run, built from the seeded row. */
+const asSpec = (persona: BuiltinPersona): PersonaSpec => ({
+ name: persona.name,
+ systemPrompt: persona.systemPrompt,
+ model: persona.model,
+ tools: persona.tools,
+ autoApprove: persona.harnessAutoApprove,
+ budgetCapUsd: persona.harnessBudgetCapUsd,
+ planner: persona.harnessPlanner,
+ delegates: persona.harnessDelegates,
+ capabilities: [],
+})
 
 describe('BUILTIN_PERSONAS', => {
  it('has exactly nine roles with unique names', => {
@@ -46,6 +61,42 @@ describe('BUILTIN_PERSONAS', => {
  for (const persona of BUILTIN_PERSONAS) {
  expect(persona.harnessBudgetCapUsd).toBeGreaterThan(0)
  }
+ })
+
+ /**
+ * The shipped defaults must compose into a swarm that can actually do the job.
+ *
+ * Three refusals, each individually correct, once combined into a Planner that
+ * could delegate only to read-only reviewers: the envelope excluded `Bash`, which
+ * is carried by every built-in that implements or verifies anything. Nothing failed
+ * — `attenuation.test.ts` proved the rule on personas it invented, and this file
+ * proved the seed one persona at a time. Neither asked whether the seed satisfies
+ * the rule, which is the only question a user hits on their first run.
+ */
+ it('lets the built-in planner delegate to every built-in worker', => {
+ const planner = asSpec(BUILTIN_PERSONAS.find((p) => p.name === 'planner')!)
+ const refusals = BUILTIN_PERSONAS.filter(
+ // The reconciler is exempt by design, not by oversight: it is platform-initiated
+ // from the merge queue, and `startAgentRun` skips attenuation for
+ // `relation: 'reconcile'` precisely so a narrow worker's branch stays fixable.
+ // A Planner cannot ask for one — `reconcile` is not reachable from the contract.
+ (persona) => persona.name !== 'planner' && persona.name !== 'reconciler',
+)
+.map((persona) => [persona.name, attenuateChildPersona(planner, asSpec(persona))] as const)
+.filter(([, verdict]) => !verdict.ok)
+.map(([name, verdict]) => `${name}: ${verdict.ok ? '': verdict.reason}`)
+
+ expect(refusals).toEqual([])
+ })
+
+ it('keeps the planner envelope to exactly what the built-in workers hold', => {
+ // The other half of the check above, and the one that catches the opposite drift:
+ // an envelope wider than any shipped worker is granting reach nothing asked for.
+ const planner = BUILTIN_PERSONAS.find((p) => p.name === 'planner')!
+ const held = new Set(
+ BUILTIN_PERSONAS.filter((p) => p.name !== 'planner').flatMap((p) => p.tools),
+)
+ expect([...planner.harnessDelegates].sort).toEqual([...held].sort)
  })
 
  it('security-reviewer is read-only', => {

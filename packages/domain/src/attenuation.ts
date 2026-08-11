@@ -44,6 +44,26 @@ export const attenuateChildPersona = (
  }
  }
 
+ /**
+ * A child Planner's *envelope* attenuates too, and for the same reason its tools
+ * do. Checking only `tools` reads a Planner as harmless — it holds nothing — so a
+ * Planner whose envelope excludes `Bash` could parent one whose envelope includes
+ * it, and that inner Planner could then start a `Bash` worker. Nothing is refused
+ * at any hop, and the outer envelope has been widened by delegating through it.
+ *
+ * That is the escalation this file exists to stop, moved one level down: what a
+ * parent may hand down bounds what its children may hand down.
+ */
+ const escalatedDelegates = (child.planner && child.delegates ? child.delegates: []).filter(
+ (tool) => !ceiling.includes(tool),
+)
+ if (escalatedDelegates.length > 0) {
+ return {
+ ok: false,
+ reason: `Child planner may not delegate tools outside its parent's own ceiling: ${escalatedDelegates.join(', ')}`,
+ }
+ }
+
  // A parent that must ask a human cannot hand down the right to skip asking.
  if (child.autoApprove && !parent.autoApprove) {
  return { ok: false, reason: 'Child run may not auto-approve when its parent does not' }

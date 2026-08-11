@@ -72,11 +72,28 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  model: 'claude-opus-5',
  tools: [],
  planner: true,
- // The envelope: what the Planner
- // may hand *down*, which is necessarily more than the nothing it holds itself.
- // Deliberately excludes Bash — a plan should decompose editing work, and a
- // worker that needs a shell is one a human should choose knowingly.
- delegates: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
+ /**
+ * The envelope: what the Planner
+ * may hand *down*, which is necessarily more than the nothing it holds itself.
+ *
+ * It is the union of what the shipped workers hold, and that is not an accident
+ * of listing — anything narrower ships a Planner that cannot reach its own
+ * workers. This envelope previously excluded `Bash` on the grounds that "a worker
+ * that needs a shell is one a human should choose knowingly", which sounds right
+ * and was measurably wrong: `Bash` is carried by `swe`, `frontend-engineer`,
+ * `backend-engineer` and `qa` — every built-in that can implement or verify
+ * anything — so the default Planner could delegate only to read-only reviewers.
+ * A default that cannot do the product's headline job is worse than a default
+ * ceiling equal to the workers it ships beside. `builtin-personas.test.ts` now
+ * fails if that gap reopens.
+ *
+ * The boundary this envelope is *not* carrying is still intact: the Planner holds
+ * `tools: []` and cannot itself read, write or run anything, a child planner's own
+ * envelope attenuates against this one (see attenuation.ts), and every worker's
+ * shell lives inside its own sandboxed clone behind the egress proxy.
+ * What the envelope is for is being narrowable by a human who wants less than this.
+ */
+ delegates: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'],
  systemPrompt:
  'You are a Planner. You cannot read files, write code, or run commands — you decompose and delegate. ' +
  'Break the goal into the smallest number of subtasks that can each be done independently on their own ' +

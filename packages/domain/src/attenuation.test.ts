@@ -67,6 +67,41 @@ describe('attenuateChildPersona', => {
  expect(verdict.reason).toContain('envelope')
  })
 
+ /**
+ * The envelope attenuates too, and this is the case every other test in this file
+ * reads straight past: a child Planner holds `tools: []` like any Planner, so
+ * checking only `tools` calls it harmless. Its *envelope* is the thing being
+ * handed down, and left unchecked it can be wider than the one that granted it.
+ */
+ it('refuses a child Planner whose envelope is wider than its parent ceiling', => {
+ const outer = spec({ name: 'outer', tools: [], planner: true, delegates: ['Read', 'Edit'] })
+ const inner = spec({
+ name: 'inner',
+ tools: [],
+ planner: true,
+ delegates: ['Read', 'Edit', 'Bash'],
+ })
+ const verdict = attenuateChildPersona(outer, inner)
+ expect(verdict.ok).toBe(false)
+ if (!verdict.ok) expect(verdict.reason).toContain('Bash')
+ })
+
+ it('allows a child Planner that narrows its parent envelope', => {
+ const outer = spec({ name: 'outer', tools: [], planner: true, delegates: ['Read', 'Edit'] })
+ const inner = spec({ name: 'inner', tools: [], planner: true, delegates: ['Read'] })
+ expect(attenuateChildPersona(outer, inner)).toEqual({ ok: true })
+ })
+
+ it('bounds a child Planner under a non-planner parent by that parent tools', => {
+ // A worker spawning a Planner: there is no envelope above, so the ceiling is
+ // what the worker itself holds — the same rule, with `tools` as the ceiling.
+ const worker = spec({ tools: ['Read', 'Edit'] })
+ const inner = spec({ name: 'inner', tools: [], planner: true, delegates: ['Read', 'Bash'] })
+ const verdict = attenuateChildPersona(worker, inner)
+ expect(verdict.ok).toBe(false)
+ if (!verdict.ok) expect(verdict.reason).toContain('Bash')
+ })
+
  // The envelope only widens what may be *handed down*. Everything else still
  // measures against the parent's own values.
  it('does not let the envelope widen budget, tier or auto-approve', => {
