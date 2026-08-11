@@ -720,6 +720,13 @@ export const startAgentRun = async (
  * what the board reads a card's claim from.
  */
  ownedPaths?: readonly string[]
+ /**
+ * Start this run as a reconciler over `parentRunId`'s conflicted branch
+ *. Only `reconcileConflict` sets this, and it always pairs
+ * with `relation: 'reconcile'` — the data model is explicit that a reconciler must not
+ * masquerade as a delegation child.
+ */
+ reconcile?: { branchName: string }
  },
 ): Promise<AgentRun> => {
  const parent = input.parentRunId
@@ -790,7 +797,28 @@ export const startAgentRun = async (
  // not its stored persona: the snapshot is what the parent is actually running
  // with, and editing a persona mid-run must not widen what its children may ask
  // for.
- if (parent) {
+ /**
+ *...except for a reconciler, which is **platform-initiated**.
+ *
+ * Attenuation exists so a parent cannot grant a child more than it holds — it is a
+ * defence against a parent that has been manipulated into escalating. A reconcile
+ * child is not something the parent asks for or shapes: the merge queue starts it
+ * when a rebase conflicts, the persona is looked up from the registry by a fixed
+ * name, the task text is platform-authored, and `relation` is not reachable from the
+ * contract. The parent contributes nothing but the branch that failed to merge, so
+ * there is no escalation for attenuation to prevent here.
+ *
+ * Applying it anyway is not merely redundant, it is wrong: it makes reconciliation
+ * impossible for exactly the runs most likely to need it. A worker on Haiku, or one
+ * with a deliberately narrow tool list, could never have its branch reconciled —
+ * the reconciler needs `Edit` and a model tier the worker does not have, and the * check reads both as escalation. That was found by an integration test refusing
+ * `Edit, Grep, Glob` for a read-only-ish parent.
+ *
+ * The reconciler's own bounds still apply: registry-provisioned capabilities and the
+ * budget cap on its persona. What is deliberately *not* relaxed is delegation — a
+ * Planner's children stay fully attenuated, which is the case the data model is actually about.
+ */
+ if (parent && input.relation !== 'reconcile') {
  const verdict = attenuateChildPersona(parent.persona, personaSpec)
  if (!verdict.ok) throw new ValidationError(verdict.reason)
  }
@@ -844,6 +872,9 @@ export const startAgentRun = async (
  defaultBranch: repository.defaultBranch,
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(contextLedger === '' ? {}: { contextLedger }),
+...(input.reconcile && parent
+ ? { reconcile: { parentRunId: parent.id, branchName: input.reconcile.branchName } }
+: {}),
  })
  } catch (error) {
  const errorMessage = error instanceof Error ? error.message: String(error)
@@ -1666,6 +1697,162 @@ export const cancelMergeQueueEntry = async (
  return cancelled
 }
 
+/** The built-in that resolves conflicts. Absent = feature off. */
+const RECONCILER_PERSONA_NAME = 'reconciler'
+
+/**
+ * Whether an agent may attempt a conflicted branch before the human sees it
+ *. Off by default, deliberately.
+ *
+ * The sequencing is that the mechanical queue ships first and the agent goes *in
+ * front of it*, with the queue catching what the agent gets wrong. The correctness
+ * gate that sequencing demands has been run — `tools/reconciler-check.mts`, 12/12 over
+ * three trials — but that is four scenarios on synthetic conflicts, not a population.
+ * An operator turning this on is accepting agent-resolved merges into their default
+ * branch, which is a decision worth making explicitly rather than by upgrading.
+ */
+export const reconcilerEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
+ env.LOOM_RECONCILER_ENABLED === '1'
+
+/**
+ * Starts a reconciler over a branch the queue could not rebase.
+ *
+ * Called *after* the entry has already failed, not instead of failing — and that
+ * ordering is the whole risk posture. The branch goes back to its owning run exactly as
+ * it does today, every existing merge-queue invariant is untouched, and the repository's
+ * queue keeps moving instead of being held open for the length of an agent run. If the
+ * reconciler succeeds, the branch is simply re-queued; if it fails, refuses, or never
+ * finishes, the human is already holding what they would have been holding anyway.
+ *
+ * Best-effort throughout: a reconciler that cannot start must never turn a merge
+ * failure the human can act on into an error they cannot.
+ */
+const startReconciler = async (
+ deps: AgentDeps,
+ entry: MergeQueueEntry,
+ run: AgentRun,
+): Promise<void> => {
+ if (!reconcilerEnabled) return
+ // Never reconcile a reconciliation, and never twice. Without this a branch that
+ // conflicts again after being reconciled would start another reconciler, and so on —
+ // an unbounded spend loop driven by whatever keeps failing to merge.
+ if (run.relation === 'reconcile') return
+ const children = await deps.agentRuns.listByParent(entry.workspaceId, run.id)
+ if (children.some((child: AgentRun) => child.relation === 'reconcile')) return
+
+ const personas = await deps.personas.listByWorkspace(entry.workspaceId)
+ const reconciler = personas.find((persona) => persona.name === RECONCILER_PERSONA_NAME)
+ if (!reconciler) return
+
+ await startAgentRun(deps, {
+ workspaceId: entry.workspaceId,
+ // The run acts as itself: `startAgentRun` only lets a run spawn children of
+ // itself, which is also what ties the attenuation to the right parent.
+ actor: agentRunActor(run.id),
+ threadId: run.threadId,
+ repositoryId: run.repositoryId,
+ personaId: reconciler.id,
+ parentRunId: run.id,
+ // Never 'delegation' — the data model is explicit that a reconciler attaches distinctly rather
+ // than pretending to be a worker the parent asked for.
+ relation: 'reconcile',
+ reconcile: { branchName: entry.branchName },
+ task:
+ `Your working tree is a paused rebase of ${entry.branchName} onto the merge target. ` +
+ 'Resolve the conflict markers, or refuse if the two sides genuinely contradict each other.',
+ })
+}
+
+/**
+ * The outcome of a reconciler run, relayed from the Runner.
+ *
+ * On success the branch is re-queued and takes its turn at the back — never merged from
+ * here. The "don't merge on click" applies with more force to an agent than to a
+ * human: the sweep is the only thing that merges, so an agent-reconciled branch is
+ * rebased, verified and fast-forwarded by exactly the same mechanical path as any other.
+ * That is what the roadmap means by the queue catching what the agent gets wrong.
+ */
+export const recordReconcileResult = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ parentRunId: AgentRunId
+ ok: boolean
+ commitSha?: string
+ reason?: string
+ },
+): Promise<void> => {
+ const parent = await deps.agentRuns.findById(input.workspaceId, input.parentRunId)
+ if (!parent) return
+
+ if (!input.ok) {
+ // A refusal is a normal outcome, not an incident: the persona is told to decline a
+ // conflict that encodes a real disagreement. The branch is already back with its
+ // run, so this only has to say what happened.
+ await postRunSystemMessage(
+ deps,
+ parent,
+ `The reconciler did not resolve ${parent.branchName ?? 'this branch'}: ${input.reason ?? 'no reason given'}. The branch is yours to fix and re-queue.`,
+)
+ await recordRunPlatformNote(deps, parent, {
+ kind: 'merge_result',
+ title: `reconciler declined ${parent.branchName ?? 'a branch'}`,
+ body: input.reason ?? 'no reason given',
+ })
+ return
+ }
+
+ await postRunSystemMessage(
+ deps,
+ parent,
+ `The reconciler resolved ${parent.branchName ?? 'this branch'} at ${(input.commitSha ?? '').slice(0, 8)} and re-queued it for merge.`,
+)
+ try {
+ /**
+ * Queued directly rather than through `enqueueMergeRun`, which is human-only by
+ * design — it is the same gate as keep/discard/push, and those are a human's
+ * decision about what happens to a branch. This is not that decision: the human
+ * already made it when they queued the branch the first time, and the reconciler
+ * only restored the entry the conflict cancelled. Relaxing `enqueueMergeRun`'s
+ * actor check to allow this would also let any agent run queue any branch.
+ *
+ * The disposition guard still matters and is kept: a human who discarded, kept or
+ * pushed the branch while the reconciler was working has overridden it, and their
+ * decision wins.
+ */
+ if (!parent.branchName || !parent.clonePath) {
+ throw new ValidationError('the reconciled run no longer has a branch to merge')
+ }
+ if (parent.branchDisposition) {
+ throw new ValidationError(`a human already ${parent.branchDisposition} this branch`)
+ }
+ const entry = await deps.mergeQueue.enqueue({
+ workspaceId: input.workspaceId,
+ repositoryId: parent.repositoryId,
+ agentRunId: parent.id,
+ branchName: parent.branchName,
+ enqueuedByUserId: null,
+ })
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: agentRunActor(input.agentRunId),
+ action: 'merge_queue.enqueued',
+ subjectType: 'merge_queue_entry',
+ subjectId: entry.id,
+ metadata: { reconciledBy: input.agentRunId },
+ })
+ } catch (error) {
+ // Enqueueing can legitimately lose a race — a human may have discarded the branch,
+ // or re-queued it themselves while the reconciler worked.
+ await postRunSystemMessage(
+ deps,
+ parent,
+ `The reconciled branch could not be re-queued: ${error instanceof Error ? error.message: String(error)}`,
+)
+ }
+}
+
 /**
  * Merges one claimed entry. Every exit finishes the entry — a `merging` row left
  * behind would wedge that repository's queue permanently, since the unique partial
@@ -1696,6 +1883,19 @@ const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<v
  await notifyRun(deps, run, 'merge_failed', {
  detail: describeMergeFailure(reason, entry.branchName, null),
  })
+
+ // Only a conflict — the other failure reasons are not an agent's to fix. A dirty
+ // target and a stale target are the human's and the queue's respectively, and a
+ // failed verification means the branch is wrong rather than merely out of date.
+ if (reason === 'conflict') {
+ try {
+ await startReconciler(deps, entry, run)
+ } catch {
+ // Swallowed on purpose: the branch is already back with its run and the human
+ // has already been told. A reconciler that cannot start must not turn a merge
+ // failure someone can act on into an error they cannot.
+ }
+ }
  }
 
  const run = await deps.agentRuns.findById(entry.workspaceId, entry.agentRunId)

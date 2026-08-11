@@ -184,6 +184,32 @@ export const finishReconcile = async (
 }
 
 /**
+ * Moves a reconciled branch back into the clone the merge queue merges from.
+ *
+ * The queue merges `<run>`'s branch out of `<run>`'s own clone, so a reconciliation
+ * performed in a separate clone is invisible to it — the queue would re-merge the
+ * untouched branch and conflict again on every sweep. Fetching the ref across is what
+ * makes the reconciliation the thing that merges.
+ *
+ * A forced update, and safely so: the destination branch is a run's own branch, the
+ * reconciled commit is a rebase of exactly that branch onto the merge target, and
+ * nothing else writes it. It is not a fast-forward, because a rebase never is.
+ */
+export const updateBranchFrom = async (
+ destinationClonePath: string,
+ sourceClonePath: string,
+ branchName: string,
+): Promise<void> => {
+ await execFileAsync('git', [
+ '-C', destinationClonePath,
+ '-c', 'core.hooksPath=/dev/null',
+ '-c', 'core.fsmonitor=false',
+ 'fetch', '--quiet', '--force', sourceClonePath,
+ `refs/heads/${branchName}:refs/heads/${branchName}`,
+ ])
+}
+
+/**
  * Commits whatever the agent left in the working tree, on the run's own branch.
  *
  * Not optional, and not the model's job. Repository binding renders "the run's branch diff"

@@ -289,6 +289,28 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  detail: z.string.optional,
  }),
  /**
+ * The outcome of a reconciler run's paused rebase.
+ *
+ * Separate from `run_completed`, because the run completing and the conflict being
+ * resolved are genuinely different facts: a reconciler that reads the conflict, judges
+ * it a real disagreement and declines is a *successful* run that resolved nothing.
+ * Collapsing the two would make refusal — which the persona is explicitly told is a
+ * correct outcome — indistinguishable from a crash.
+ *
+ * Unsolicited rather than a reply to a request, unlike `merge_result`: the server
+ * started the run and then let go, so there is no in-flight call to answer.
+ */
+ z.object({
+ type: z.literal('reconcile_result'),
+ runId: z.string,
+ /** The run whose branch was being reconciled. */
+ parentRunId: z.string,
+ ok: z.boolean,
+ commitSha: z.string.optional,
+ /** Why it was not resolved — including the legitimate case of a refusal. */
+ reason: z.string.optional,
+ }),
+ /**
  * Periodic liveness signal while a run is in flight — deliberately a sibling of `agent_event`, not folded into
  * `AgentEventSchema`: it must never become a chat message, only bump
  * `agent_run.last_heartbeat_at`.
@@ -338,6 +360,23 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  * place to get it wrong.
  */
  contextLedger: z.string.optional,
+ /**
+ * Start this run as a **reconciler** over another run's conflicted branch
+ *.
+ *
+ * Present, the Runner prepares the workspace differently: it clones the named
+ * run's clone, checks out its branch, and rebases onto the merge target *without
+ * aborting* — so the agent opens onto real conflict markers. On termination the
+ * paused rebase is completed rather than a plain commit taken.
+ *
+ * `parentRunId` rather than a path: the branch lives only in that run's clone
+ * until it merges, and the Runner is the only thing that knows where that is.
+ * A Runner that no longer holds it fails the reconcile with a clear reason, the
+ * same limitation `getDiff`, `push` and the merge itself already carry.
+ */
+ reconcile: z
+.object({ parentRunId: z.string, branchName: z.string })
+.optional,
  }),
  z.object({
  type: z.literal('permission_response'),

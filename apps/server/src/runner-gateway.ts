@@ -7,6 +7,7 @@ import {
  recordAgentNote,
  recordRunCost,
  recordRawTranscriptChunk,
+ recordReconcileResult,
  recordRunHeartbeat,
  recordRunWorkspace,
  requestApproval,
@@ -199,7 +200,7 @@ export const createRunnerGateway = (
  })
  },
 
- async startRun({ runnerId, runId, persona, cwd, defaultBranch, task, contextLedger }) {
+ async startRun({ runnerId, runId, persona, cwd, defaultBranch, task, contextLedger, reconcile }) {
  send(runnerId, {
  type: 'start_run',
  runId,
@@ -208,6 +209,7 @@ export const createRunnerGateway = (
  defaultBranch,
 ...(task === undefined ? {}: { task }),
 ...(contextLedger === undefined ? {}: { contextLedger }),
+...(reconcile === undefined ? {}: { reconcile }),
  })
  },
 
@@ -560,6 +562,22 @@ export const createRunnerGateway = (
  agentRunId: asAgentRunId(frame.runId),
  chunkIndex: frame.chunkIndex,
  lines: frame.lines,
+ })
+ return
+
+ /**
+ * A reconciler run's verdict on a conflicted branch.
+ * Unsolicited — the server started the run and let go — so there is no pending
+ * request to resolve, unlike `merge_result`.
+ */
+ case 'reconcile_result':
+ await recordReconcileResult(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ parentRunId: asAgentRunId(frame.parentRunId),
+ ok: frame.ok,
+...(frame.commitSha === undefined ? {}: { commitSha: frame.commitSha }),
+...(frame.reason === undefined ? {}: { reason: frame.reason }),
  })
  return
 

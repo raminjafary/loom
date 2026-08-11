@@ -6,6 +6,7 @@ import {
  startAgentRun,
 } from '@loom/application'
 import {
+ BUILTIN_PERSONAS,
  UNTRUSTED_NOTE_OPEN,
  agentRunActor,
  asAgentPersonaId,
@@ -1150,6 +1151,164 @@ describe('runner-gateway: serialized merge queue', => {
  expect(delivered.some((n) => n.kind === 'merge_failed')).toBe(true)
 
  socket.close
+ })
+
+ /**
+ * The reconciler agent in front of the queue. Driven over the
+ * real protocol, because the thing worth testing is the *ordering*: the entry fails
+ * and the branch goes back to its run first, and only then does an agent get a turn.
+ */
+ describe('reconciler', => {
+ /**
+ * The shipped built-in, not a stand-in: `startReconciler` finds the persona by
+ * name, so a test persona called something else would pass while the real lookup
+ * failed. This suite does not seed built-ins, hence creating it here.
+ */
+ const ensureReconcilerPersona = async : Promise<void> => {
+ const existing = await client.persona.list
+ if (existing.some((p: any) => p.name === 'reconciler')) return
+ const builtin = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
+ if (!builtin) throw new Error('the reconciler built-in is gone')
+ await client.persona.create({ markdownSource: builtin.markdownSource })
+ }
+
+ const withReconciler = async <T>(body: => Promise<T>): Promise<T> => {
+ await ensureReconcilerPersona
+ process.env.LOOM_RECONCILER_ENABLED = '1'
+ try {
+ return await body
+ } finally {
+ delete process.env.LOOM_RECONCILER_ENABLED
+ }
+ }
+
+ it('is off unless an operator turns it on', async => {
+ // Default-off is the shipped posture: turning it on means accepting
+ // agent-resolved merges into the default branch.
+ const { socket, runnerId } = await pairFakeRunner('recon-off')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'recon-off' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/recon-off-1')
+
+ await client.mergeQueue.enqueue({ agentRunId: run.id })
+ const failing = sweep
+ await answerMerge(socket, { ok: false, reason: 'conflict', detail: 'a.md' })
+ await failing
+
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toEqual([])
+ socket.close
+ })
+
+ it('starts a reconcile child only after the branch is back with its run', async => {
+ await withReconciler(async => {
+ const { socket, runnerId } = await pairFakeRunner('recon-on')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'recon-on' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/recon-1')
+
+ await client.mergeQueue.enqueue({ agentRunId: run.id })
+ const started = nextFrame(socket, (v) => v.type === 'start_run', 10_000)
+ const failing = sweep
+ await answerMerge(socket, { ok: false, reason: 'conflict', detail: 'a.md' })
+ await failing
+
+ // The existing contract is untouched: entry failed, branch handed back.
+ const entries = await client.mergeQueue.list
+ expect(entries[0]?.status).toBe('failed')
+ expect((await client.agentRun.get({ agentRunId: run.id })).branchDisposition).toBeNull
+
+ // And the frame carries the reconcile hint, which is what makes the Runner
+ // prepare a paused rebase rather than a fresh branch.
+ const frame = await started
+ expect(frame.reconcile).toEqual({ parentRunId: run.id, branchName: 'loom/recon-1' })
+
+ const children = await client.agentRun.listChildren({ agentRunId: run.id })
+ expect(children).toHaveLength(1)
+ // The data model: a reconciler attaches distinctly, never as a delegation child.
+ expect(children[0]?.relation).toBe('reconcile')
+
+ socket.close
+ })
+ })
+
+ it('re-queues the branch when the reconciler resolves it, and never merges directly', async => {
+ await withReconciler(async => {
+ const { socket, runnerId } = await pairFakeRunner('recon-ok')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'recon-ok' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/recon-ok-1')
+
+ await client.mergeQueue.enqueue({ agentRunId: run.id })
+ const started = nextFrame(socket, (v) => v.type === 'start_run', 10_000)
+ const failing = sweep
+ await answerMerge(socket, { ok: false, reason: 'conflict', detail: 'a.md' })
+ await failing
+ const child = await started
+
+ socket.send(
+ JSON.stringify({
+ type: 'reconcile_result',
+ runId: child.runId,
+ parentRunId: run.id,
+ ok: true,
+ commitSha: 'reconciled123',
+ }),
+)
+
+ // Re-queued rather than merged from the result handler: the "the sweep
+ // merges, nothing else" applies with more force to an agent than to a human.
+ for (let i = 0; i < 40; i += 1) {
+ const open = (await client.mergeQueue.list).filter((e: any) => e.status === 'queued')
+ if (open.length === 1) {
+ expect(open[0]?.agentRunId).toBe(run.id)
+ socket.close
+ return
+ }
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ throw new Error('the reconciled branch was never re-queued')
+ })
+ })
+
+ it('says so and re-queues nothing when the reconciler refuses', async => {
+ await withReconciler(async => {
+ const { socket, runnerId } = await pairFakeRunner('recon-refuse')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'recon-refuse' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/recon-refuse-1')
+
+ await client.mergeQueue.enqueue({ agentRunId: run.id })
+ const started = nextFrame(socket, (v) => v.type === 'start_run', 10_000)
+ const failing = sweep
+ await answerMerge(socket, { ok: false, reason: 'conflict', detail: 'a.md' })
+ await failing
+ const child = await started
+
+ socket.send(
+ JSON.stringify({
+ type: 'reconcile_result',
+ runId: child.runId,
+ parentRunId: run.id,
+ ok: false,
+ reason: 'the two sides set the same key to different values',
+ }),
+)
+
+ // A refusal is a normal outcome, so it must reach the human as prose and must
+ // leave the queue exactly as the conflict left it.
+ for (let i = 0; i < 40; i += 1) {
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ if (page.messages.some((m: any) => m.body.text?.includes('same key to different values'))) {
+ const queued = (await client.mergeQueue.list).filter((e: any) => e.status === 'queued')
+ expect(queued).toEqual([])
+ socket.close
+ return
+ }
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ throw new Error('the refusal never reached the thread')
+ })
+ })
  })
 
  it('refuses to queue the same branch twice, or to discard one already queued', async => {

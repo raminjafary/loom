@@ -33,9 +33,12 @@ import { createSendQueue } from './send-queue.js'
 import {
  commitRunWork,
  discardRunWorkspace,
+ finishReconcile,
  getDiff,
+ prepareReconcileWorkspace,
  prepareRunWorkspace,
  pushRunBranch,
+ updateBranchFrom,
 } from './run-workspace.js'
 import {
  checkImageFreshness,
@@ -300,6 +303,63 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  if (committed) log(`committed run ${runId}'s work on ${workspace.branchName}`)
  } catch (error) {
  log(`failed to commit run ${runId}'s work: ${error instanceof Error ? error.message: String(error)}`)
+ }
+ }
+
+ /**
+ * A reconciler run's terminal step, in place of `commitWork`.
+ *
+ * A reconciler's workspace is a paused rebase, so "commit whatever is in the working
+ * tree" is the wrong ending: it would make an ordinary commit on top of a rebase git
+ * still considers in progress. `finishReconcile` completes the rebase instead, and
+ * refuses on any surviving conflict marker.
+ *
+ * A refusal is reported as a `reconcile_failed` frame rather than a run failure. The
+ * distinction is the whole design: the reconciler is *allowed* to decline a conflict
+ * that encodes a real disagreement, and the mechanical queue behind it then does
+ * exactly what it does today — hands the branch back to its owning run.
+ */
+ const finishReconcileRun = async (runId: string, reconcileOf: string): Promise<void> => {
+ const workspace = runWorkspaces.get(runId)
+ if (!workspace) return
+ try {
+ const result = await finishReconcile(workspace.clonePath)
+ if (!result.ok) {
+ log(`reconcile ${runId} did not resolve ${workspace.branchName}: ${result.reason}`)
+ send({ type: 'reconcile_result', runId, parentRunId: reconcileOf, ok: false, reason: result.reason })
+ return
+ }
+ // The reconciled branch is written back into the *parent's* clone, because that
+ // is the clone the merge queue merges from. Without this the queue would re-merge
+ // the untouched branch and conflict again, forever.
+ const parent = runWorkspaces.get(reconcileOf)
+ if (!parent) {
+ send({
+ type: 'reconcile_result',
+ runId,
+ parentRunId: reconcileOf,
+ ok: false,
+ reason: 'the run that owns this branch is no longer held by this Runner',
+ })
+ return
+ }
+ await updateBranchFrom(parent.clonePath, workspace.clonePath, workspace.branchName)
+ log(`reconciled ${workspace.branchName} at ${result.commitSha.slice(0, 8)}`)
+ send({
+ type: 'reconcile_result',
+ runId,
+ parentRunId: reconcileOf,
+ ok: true,
+ commitSha: result.commitSha,
+ })
+ } catch (error) {
+ send({
+ type: 'reconcile_result',
+ runId,
+ parentRunId: reconcileOf,
+ ok: false,
+ reason: error instanceof Error ? error.message: String(error),
+ })
  }
  }
 
@@ -662,7 +722,31 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const abort = new AbortController
  aborts.set(runId, abort)
 
- void prepareRunWorkspace(frame.cwd, runId)
+ const reconcile = frame.reconcile
+ // A reconciler opens onto a paused rebase in a clone of the conflicted run's
+ // clone; every other run opens onto a fresh branch. Same run machinery from
+ // here on — sandbox, budget, notes, approval gate all apply unchanged.
+ const prepare = reconcile
+ ? ( => {
+ const parent = runWorkspaces.get(reconcile.parentRunId)
+ if (!parent) {
+ return Promise.reject(
+ new Error(
+ `cannot reconcile ${reconcile.branchName}: this Runner no longer holds run ${reconcile.parentRunId}'s clone`,
+),
+)
+ }
+ return prepareReconcileWorkspace(
+ parent.clonePath,
+ frame.cwd,
+ frame.defaultBranch,
+ reconcile.branchName,
+ runId,
+)
+ })
+: prepareRunWorkspace(frame.cwd, runId)
+
+ void prepare
 .then(({ clonePath, branchName, homePath }) => {
  // A cancel that landed while the clone was still running has no
  // agent loop to abort yet — honor it here instead of starting one.
@@ -706,7 +790,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  })
 .then(async => {
- await commitWork(runId, frame.persona.name)
+ if (reconcile) await finishReconcileRun(runId, reconcile.parentRunId)
+ else await commitWork(runId, frame.persona.name)
  flushRunTerminalEvent(runId)
  log(`run ${runId} finished`)
  })

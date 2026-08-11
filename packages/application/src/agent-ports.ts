@@ -461,6 +461,12 @@ export interface RunDispatchPort {
  * and a second formatter on the Runner would be a second place to get it wrong.
  */
  contextLedger?: string
+ /**
+ * Start this run as a reconciler over another run's conflicted branch
+ *. Changes how the Runner prepares the workspace — a
+ * paused rebase rather than a fresh branch — and how it ends it.
+ */
+ reconcile?: { parentRunId: AgentRunId; branchName: string }
  }): Promise<void>
  /**
  * Aborts a run mid-flight. Fire-and-forget and
