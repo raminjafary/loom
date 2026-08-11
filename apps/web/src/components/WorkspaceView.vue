@@ -114,14 +114,31 @@ const onServiceWorkerMessage = (event: MessageEvent) => {
  void openRun(data.runId)
 }
 
+/**
+ * Re-read on focus.
+ *
+ * The 1.5s poll is scoped to a *watched run* and stops when nothing is active, so a
+ * tab left open shows whatever it last saw — a merged branch, a reconciler that ran
+ * after its parent finished, a new note. Focus rather than a second timer: not polling
+ * continuously is a deliberate decision about background cost, and a tab nobody is
+ * looking at is precisely the case that decision protects.
+ */
+const onFocus = => {
+ if (document.visibilityState === 'visible') void agent.refresh
+}
+
 onMounted( => {
  void store.start
  void agent.start
  consumeRunDeepLink
  navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
+ window.addEventListener('focus', onFocus)
+ document.addEventListener('visibilitychange', onFocus)
 })
 
 onBeforeUnmount( => {
+ window.removeEventListener('focus', onFocus)
+ document.removeEventListener('visibilitychange', onFocus)
  navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
  store.dispose
  agent.dispose
@@ -175,9 +192,16 @@ onBeforeUnmount( => {
  </div>
  </header>
 
- <template v-if="view === 'workspace'">
+ <!--
+ Outside the workspace-only block, deliberately. These sat inside it, so any
+ failure while the Inbox was open produced no visible change at all — a click on
+ "Queue for merge" or "Load diff" that errored looked identical to a click that
+ did nothing, which is exactly how the Inbox came to be reported as broken.
+ -->
  <p v-if="snapshot.error" class="error" role="alert">{{ snapshot.error }}</p>
  <p v-if="agentSnapshot.error" class="error" role="alert">{{ agentSnapshot.error }}</p>
+
+ <template v-if="view === 'workspace'">
 
  <MessageList:messages="snapshot.messages":persona-name-by-run-id="personaNameByRunId" />
 

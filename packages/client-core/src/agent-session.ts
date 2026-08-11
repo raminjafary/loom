@@ -95,6 +95,17 @@ export interface AgentSession {
  snapshot: AgentSnapshot
  onChange(listener: (snapshot: AgentSnapshot) => void): => void
  init: Promise<void>
+ /**
+ * Re-reads everything `init` reads, without the loading flag.
+ *
+ * Exists because the 1.5s poll is scoped to a *watched run* and stops once nothing
+ * is active, so a page that has been sitting open shows whatever it last saw — a
+ * merged branch, a finished reconciler and a new note all arrive invisibly. Clients
+ * call this on focus rather than adding a second timer: the deliberate decision not
+ * to poll continuously (see the Inbox) is about background cost, and a tab nobody is
+ * looking at is exactly the case that decision is protecting.
+ */
+ refresh: Promise<void>
  createPairingToken(name: string): Promise<void>
  bindRepository(input: { runnerId: string; path: string; displayName: string }): Promise<void>
  /**
@@ -324,17 +335,11 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  }, POLL_INTERVAL_MS)
  }
 
- return {
- snapshot: => state,
-
- onChange(listener) {
- listeners.add(listener)
- return => listeners.delete(listener)
- },
-
- async init {
- patch({ loading: true, error: null })
- try {
+ /**
+ * Everything the workspace view needs, in one pass. Shared by `init` (with a loading
+ * flag) and `refresh` (without) so the two can never drift about what "current" means.
+ */
+ const loadAll = async : Promise<void> => {
  const [
  runners,
  repositories,
@@ -372,19 +377,47 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  capabilities,
  capabilityAttachments,
  })
- // Resume watching whatever run is already active — otherwise a page
- // reload during a run leaves no path back to its approval card.
+ // Resume watching whatever run is already active — otherwise a page reload during
+ // a run leaves no path back to its approval card.
  if (activeRun && !TERMINAL_STATUSES.has(activeRun.status)) {
  const pendingApprovals = await options.api.approval.listPending({ agentRunId: activeRun.id })
  patch({ activeRun, pendingApprovals })
  await fetchBoard(activeRun.id)
  pollActiveRun(activeRun.id)
+ } else if (state.activeRun) {
+ // A finished run still has a board worth refreshing: a reconciler starts *after*
+ // its parent terminates, so the tree gains a node when nothing is polling.
+ await fetchBoard(state.activeRun.id)
  }
  await fetchInbox
+ }
+
+ return {
+ snapshot: => state,
+
+ onChange(listener) {
+ listeners.add(listener)
+ return => listeners.delete(listener)
+ },
+
+ async init {
+ patch({ loading: true, error: null })
+ try {
+ await loadAll
  } catch (error) {
  patch({ error: errorMessage(error) })
  } finally {
  patch({ loading: false })
+ }
+ },
+
+ async refresh {
+ // No loading flag: this runs on focus, and flipping the whole view to a spinner
+ // because someone switched tabs back would be worse than the staleness it fixes.
+ try {
+ await loadAll
+ } catch (error) {
+ patch({ error: errorMessage(error) })
  }
  },
 

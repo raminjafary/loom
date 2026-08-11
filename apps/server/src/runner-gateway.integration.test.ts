@@ -16,6 +16,7 @@ import {
  asWorkspaceId,
  type Notification,
 } from '@loom/domain'
+import { seedBuiltinPersonas } from '@loom/application'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
@@ -60,9 +61,11 @@ const pairingTokens = new Map<string, string>
  * is a live check.
  */
 const delivered: Notification[] = []
+let workspaceId = ''
 
 beforeAll(async => {
  const row = await seedWorkspace(db, `runner-gateway-${Date.now}`)
+ workspaceId = row.id
  app = await buildApp(config, devAuth({ userId: 'dev-user', workspaceId: row.id }), {
  notifications: {
  clientConfig: => ({ transport: 'web_push', publicKey: 'test-public-key' }),
@@ -1159,6 +1162,30 @@ describe('runner-gateway: serialized merge queue', => {
  * and the branch goes back to its run first, and only then does an agent get a turn.
  */
  describe('reconciler', => {
+ it('seeds built-ins that did not exist when the workspace was made', async => {
+ /**
+ * The bug a browser found: built-ins were seeded once, at workspace creation, so
+ * a workspace made before the `planner` and `reconciler` personas existed never
+ * received them — and the reconciler is looked up *by name*, so the feature was a
+ * silent no-op there. Seeding now converges and skips names already present.
+ */
+ const before = await client.persona.list
+ expect(before.some((p: any) => p.name === 'reconciler')).toBe(false)
+
+ await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+ const after = await client.persona.list
+ for (const builtin of BUILTIN_PERSONAS) {
+ expect(after.some((p: any) => p.name === builtin.name)).toBe(true)
+ }
+
+ // Idempotent, and non-destructive: an operator who edited `swe` must not have it
+ // reverted on the next restart.
+ await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+ const again = await client.persona.list
+ expect(again.filter((p: any) => p.name === 'reconciler')).toHaveLength(1)
+ expect(again.length).toBe(after.length)
+ })
+
  /**
  * The shipped built-in, not a stand-in: `startReconciler` finds the persona by
  * name, so a test persona called something else would pass while the real lookup

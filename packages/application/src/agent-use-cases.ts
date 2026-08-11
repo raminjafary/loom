@@ -310,16 +310,30 @@ export const createPersona = async (
 }
 
 /**
- * Called from apps/server/src/app.ts only when `ensureWorkspace` reports
- * `created: true` — i.e. exactly once, on the request that actually creates
- * the workspace row. Not actor-gated: this is system
- * provisioning, not a human action.
+ * Provisions the built-in personas. Not
+ * actor-gated: this is system provisioning, not a human action.
+ *
+ * **Runs on every workspace resolution, not only on creation, and skips names that
+ * already exist.** It used to run once, at creation, and that quietly broke every
+ * built-in added afterwards: a workspace created before the `planner` and `reconciler`
+ * personas existed never received them, and nothing said so. The reconciler is looked
+ * up *by name* when a merge conflicts, so on an existing workspace the feature was a
+ * no-op — no persona, no run, no log. Found by opening the app in a browser and
+ * counting seven personas where there should have been nine.
+ *
+ * Skipping by name rather than upserting is the important half: these are real,
+ * editable `agent_persona` rows, and an operator who has tuned the `swe` prompt must
+ * not have it silently reverted every time the server restarts.
  */
 export const seedBuiltinPersonas = async (
  deps: AgentDeps,
  input: { workspaceId: WorkspaceId },
 ): Promise<void> => {
+ const existing = new Set(
+ (await deps.personas.listByWorkspace(input.workspaceId)).map((persona) => persona.name),
+)
  for (const persona of BUILTIN_PERSONAS) {
+ if (existing.has(persona.name)) continue
  await deps.personas.create({
  workspaceId: input.workspaceId,
  name: persona.name,
@@ -1844,7 +1858,23 @@ const startReconciler = async (
 
  const personas = await deps.personas.listByWorkspace(entry.workspaceId)
  const reconciler = personas.find((persona) => persona.name === RECONCILER_PERSONA_NAME)
- if (!reconciler) return
+ if (!reconciler) {
+ /**
+ * Said out loud rather than returned silently. This is exactly how the feature
+ * managed to be a no-op on every pre-existing workspace: the persona is looked up
+ * by name, built-ins used to be seeded only at workspace creation, and an absent
+ * reconciler produced no run, no message and no trace. Seeding now converges (see
+ * `seedBuiltinPersonas`), so reaching this means someone deleted or renamed it —
+ * which is their right, and still worth saying.
+ */
+ await postRunSystemMessage(
+ deps,
+ run,
+ 'A reconciler would have attempted this conflict, but no persona named ' +
+ `"${RECONCILER_PERSONA_NAME}" exists in this workspace. The branch is yours to fix.`,
+)
+ return
+ }
 
  await startAgentRun(deps, {
  workspaceId: entry.workspaceId,

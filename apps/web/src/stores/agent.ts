@@ -29,6 +29,7 @@ export const useAgentStore = defineStore('agent', () => {
   return {
     snapshot,
     start,
+    refresh: () => session.refresh(),
     createPairingToken: (name: string) => session.createPairingToken(name),
     bindRepository: (input: { runnerId: string; path: string; displayName: string }) =>
       session.bindRepository(input),

@@ -125,9 +125,11 @@ export const buildApp = async (
  betterAuthPort(betterAuth, {
  ensureMembership: async (userId) => {
  const result = await ensureWorkspaceMembership(db, userId, DEFAULT_WORKSPACE)
- if (result.created) {
+ // Every time, not only on creation: `seedBuiltinPersonas` skips names that
+ // already exist, and running it once meant a workspace never received any
+ // built-in added after it was made — silently, since the reconciler is looked
+ // up by name and simply does nothing when absent.
  await seedBuiltinPersonas(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
- }
  return result
  },
  })
