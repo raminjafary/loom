@@ -45,7 +45,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
-import { advanceMergeQueue } from '../packages/application/src/index.js'
+import { advanceMergeQueue, seedBuiltinPersonas } from '../packages/application/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
 
 const execFileAsync = promisify(execFile)
@@ -60,6 +60,8 @@ const MODE = (arg('mode', 'parallel') ?? 'parallel') as 'parallel' | 'serial'
 const REPO_ARG = arg('repo')
 const MODEL = arg('model', 'claude-sonnet-5') as string
 const BUDGET = Number(arg('budget', '2'))
+/** Let the reconciler agents attempt the conflicts before the run is scored. */
+const RECONCILE = process.argv.includes('--reconcile')
 
 /**
  * The decomposed goal. Deliberately three sibling tasks over the *same* area of a
@@ -81,7 +83,11 @@ const config = loadConfig({
  // Serial is the control arm: one worker at a time, each cloning from the result
  // of the last. Parallel gets the whole fleet at once, which is the claim.
  MAX_CONCURRENT_RUNS_PER_WORKSPACE: MODE === 'serial' ? '1': String(DEFAULT_TASKS.length),
+...(RECONCILE ? { LOOM_RECONCILER_ENABLED: '1' }: {}),
 } as NodeJS.ProcessEnv)
+// `reconcilerEnabled` reads process.env directly rather than config, because the
+// merge sweep is not a request and has no config in scope.
+if (RECONCILE) process.env.LOOM_RECONCILER_ENABLED = '1'
 
 const git = (cwd: string, args: string[]) =>
  execFileAsync('git', ['-C', cwd,...args]).then((r) => r.stdout.trim)
@@ -113,6 +119,10 @@ const main = async => {
  const addr = app.fastify.server.address
  if (addr === null || typeof addr === 'string') throw new Error('no port')
  const client: any = createORPCClient(new RPCLink({ url: `http://127.0.0.1:${addr.port}/rpc` }))
+
+ // seedWorkspace writes the row directly, bypassing the server's ensureWorkspace path
+ // where built-ins are seeded — and `startReconciler` finds its persona by name.
+ if (RECONCILE) await seedBuiltinPersonas(app.deps, { workspaceId: ws.id })
 
  const repoPath = REPO_ARG ?? (await buildFixtureRepo)
  const baseSha = await git(repoPath, ['rev-parse', 'HEAD'])
@@ -220,6 +230,37 @@ const main = async => {
  await advanceMergeQueue(app.deps, { mergeStuckMs: 1_800_000 })
  }
  }
+
+ /**
+ * With `--reconcile`, wait for the agents the roadmap puts in front of the queue and sweep
+ * again. This is the only place the whole path runs against a
+ * real model: a real conflict, a real paused rebase in a real clone, a real agent
+ * editing the markers out, and the mechanical queue verifying the result.
+ *
+ * Reconciliation is asynchronous by design — the entry fails first so the queue keeps
+ * moving — so the wait is on the reconcile children reaching a terminal state, not on
+ * the sweep.
+ */
+ let reconciled = 0
+ if (MODE === 'parallel' && RECONCILE) {
+ const children: any[] = []
+ for (const run of runs) {
+ for (const child of await client.agentRun.listChildren({ agentRunId: run.id })) {
+ if (child.relation === 'reconcile') children.push(child)
+ }
+ }
+ console.log(`reconcilers started: ${children.length}`)
+ for (const child of children) {
+ const settled = await awaitTerminal(child.id)
+ console.log(` reconciler ${child.id.slice(0, 8)} ${settled.status} $${(settled.totalCostUsd ?? 0).toFixed(4)}`)
+ }
+ // Give the reconcile_result frames time to land and re-queue before sweeping.
+ await new Promise((r) => setTimeout(r, 3000))
+ for (let i = 0; i < children.length + 1; i += 1) {
+ await advanceMergeQueue(app.deps, { mergeStuckMs: 1_800_000 })
+ }
+ reconciled = children.length
+ }
  const mergeMs = Date.now - mergeStartedAt
 
  const entries = await client.mergeQueue.list
@@ -247,6 +288,8 @@ const main = async => {
  console.log(`conflicted ${conflicted.length}`)
  console.log(`failed verification ${verifyFailed.length}`)
  console.log(`failed otherwise ${otherFailed.length}`)
+ console.log('')
+ if (RECONCILE) console.log(`reconcilers run ${reconciled}`)
  console.log('')
  console.log(`>> BRANCHES NEEDING HANDS: ${conflicted.length + verifyFailed.length + otherFailed.length}`)
  console.log(' This is the number the riskiest assumption is about. The queue handled everything else')
