@@ -16,6 +16,7 @@ import PersonaForm from './PersonaForm.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
 import RepositoryPanel from './RepositoryPanel.vue'
 import RunnerPanel from './RunnerPanel.vue'
+import RunTreePanel from './RunTreePanel.vue'
 import SwarmBoardPanel from './SwarmBoardPanel.vue'
 import WorkerNotesPanel from './WorkerNotesPanel.vue'
 import { useAgentStore } from '../stores/agent'
@@ -225,6 +226,15 @@ onBeforeUnmount( => {
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
  />
  <SwarmBoardPanel
+:board="agentSnapshot.swarmBoard"
+ @watch="(agentRunId) => agent.watchRun(agentRunId)"
+ @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
+ />
+ <!--
+ Beneath the board and fed by the same payload: the board is "what state is
+ everything in", the tree is "who asked for what, and what did it cost".
+ -->
+ <RunTreePanel
 :board="agentSnapshot.swarmBoard"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"

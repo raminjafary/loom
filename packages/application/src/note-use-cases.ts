@@ -278,6 +278,13 @@ export const readContextLedger = async (
  */
 export interface SwarmBoardCard {
  readonly runId: AgentRunId
+ /**
+ * Null for the tree's root. Present so the same payload renders as a *tree*
+ * and not only as a flat board — the hierarchy is already
+ * in the data, and a second endpoint to re-fetch it would be two sources of truth
+ * for what a swarm's shape is, which is exactly what the worker-notes design refuses.
+ */
+ readonly parentRunId: AgentRunId | null
  readonly personaName: string
  readonly title: string
  readonly status: string
@@ -334,6 +341,7 @@ export const getSwarmBoard = async (
  const ownership = own.filter((note) => note.kind === 'run_started')
  return {
  runId: entry.id,
+ parentRunId: entry.parentRunId,
  personaName: entry.persona.name,
  title: own.find((note) => note.kind === 'run_started')?.title ?? entry.persona.name,
  status: entry.status,

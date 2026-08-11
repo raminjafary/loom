@@ -170,6 +170,8 @@ export const WorkerNoteSchema = z.object({
 /** One card on the kanban — a *run*, since the board and the ledger are one object. */
 export const SwarmBoardCardSchema = z.object({
  runId: z.string,
+ /** Null for the tree's root — what makes the board renderable as a tree. */
+ parentRunId: z.string.nullable,
  personaName: z.string,
  title: z.string,
  status: z.string,
