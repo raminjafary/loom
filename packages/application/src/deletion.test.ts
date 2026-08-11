@@ -53,16 +53,16 @@ const deps = (overrides: Record<string, unknown>): AgentDeps =>
 describe('deletePersona', => {
  const persona = { id: asAgentPersonaId('p_1'), name: 'swe' }
 
- const personaDeps = (activeRuns: AgentRun[], groups: unknown[] = []) => {
+ const personaDeps = (activeRuns: AgentRun[], prunedGroupCount = 0) => {
  const del = vi.fn(async => {})
- const updateGroup = vi.fn(async => ({}))
+ const prunePersona = vi.fn(async => prunedGroupCount)
  return {
  del,
- updateGroup,
+ prunePersona,
  deps: deps({
  personas: { findById: async => persona, delete: del },
  agentRuns: { listActiveByWorkspace: async => activeRuns },
- personaGroups: { listByWorkspace: async => groups, update: updateGroup },
+ personaGroups: { prunePersona },
  }),
  }
  }
@@ -91,18 +91,29 @@ describe('deletePersona', => {
  expect(del).toHaveBeenCalled
  })
 
- /** Group membership is a plain id array — a deleted persona would leave a blank chip. */
- it('prunes the persona out of every group that held it', async => {
- const { deps: d, updateGroup } = personaDeps(
- [],
- [
- { id: 'g_1', name: 'backend', personaIds: [persona.id, 'p_2'] },
- { id: 'g_2', name: 'frontend', personaIds: ['p_2'] },
- ],
-)
+ /**
+ * Group membership is a plain id array with no foreign key, so a deleted persona
+ * would leave a chip with no name behind it. What this asserts is only that the
+ * pruning is *asked for*, and before the delete — which group rows change is the
+ * port's business now, tested against real Postgres in
+ * packages/db/src/repositories.integration.test.ts. Asserting the write pattern here
+ * meant this test knew how membership was stored.
+ */
+ it('asks the port to prune the persona out of its groups, before deleting it', async => {
+ const { deps: d, prunePersona, del } = personaDeps([], 1)
  await deletePersona(d, { workspaceId: WS, actor: human, personaId: persona.id })
- expect(updateGroup).toHaveBeenCalledTimes(1)
- expect(updateGroup).toHaveBeenCalledWith(WS, 'g_1', { name: 'backend', personaIds: ['p_2'] })
+ expect(prunePersona).toHaveBeenCalledWith(WS, persona.id)
+ expect(prunePersona.mock.invocationCallOrder[0]!).toBeLessThan(del.mock.invocationCallOrder[0]!)
+ })
+
+ it('does not prune when it refuses the delete', async => {
+ const { deps: d, prunePersona } = personaDeps([
+ run({ persona: { name: 'swe' } as AgentRun['persona'] }),
+ ])
+ await expect(
+ deletePersona(d, { workspaceId: WS, actor: human, personaId: persona.id }),
+).rejects.toBeInstanceOf(ValidationError)
+ expect(prunePersona).not.toHaveBeenCalled
  })
 
  it('is a human-only action', async => {

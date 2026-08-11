@@ -19,7 +19,7 @@ import {
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { createDatabase, type Database } from './client.js'
-import { agentRunRepository } from './agent-repositories.js'
+import { agentRunRepository, personaGroupRepository } from './agent-repositories.js'
 import {
  auditAdapter,
  channelRepository,
@@ -418,5 +418,64 @@ describe('agent run cost rollup', => {
  expect(rollup.totals).toEqual({ runCount: 0, totalUsd: 0 })
  expect(rollup.byModel).toEqual([])
  expect(rollup.topRuns).toEqual([])
+ })
+})
+
+/**
+ * The pruning `deletePersona` used to do for itself, now the port's job and therefore
+ * tested where the storage actually is. The use-case test can only assert that pruning
+ * was asked for; whether a jsonb array really loses the right element, and only in the
+ * right workspace, is a question about Postgres.
+ */
+describe('persona group pruning', => {
+ const groups = personaGroupRepository(db)
+
+ const group = (workspaceId: WorkspaceId, name: string, personaIds: string[]) =>
+ groups.create({ workspaceId, name, personaIds })
+
+ it('drops the persona from every group holding it and leaves the rest alone', async => {
+ const held = await group(WS, 'backend', ['p_1', 'p_2'])
+ const alsoHeld = await group(WS, 'oncall', ['p_2', 'p_1', 'p_3'])
+ const untouched = await group(WS, 'frontend', ['p_3'])
+
+ expect(await groups.prunePersona(WS, 'p_1')).toBe(2)
+
+ const after = new Map((await groups.listByWorkspace(WS)).map((g) => [g.id, g.personaIds]))
+ expect(after.get(held.id)).toEqual(['p_2'])
+ expect(after.get(alsoHeld.id)).toEqual(['p_2', 'p_3'])
+ expect(after.get(untouched.id)).toEqual(['p_3'])
+ })
+
+ it('empties a group whose only member was the persona, rather than deleting it', async => {
+ const solo = await group(WS, 'solo', ['p_1'])
+ expect(await groups.prunePersona(WS, 'p_1')).toBe(1)
+
+ const after = await groups.listByWorkspace(WS)
+ expect(after.map((g) => g.id)).toContain(solo.id)
+ expect(after.find((g) => g.id === solo.id)?.personaIds).toEqual([])
+ })
+
+ it('reports zero when nothing held the persona, and touches no row', async => {
+ const other = await group(WS, 'backend', ['p_2'])
+ const before = (await groups.listByWorkspace(WS)).find((g) => g.id === other.id)
+
+ expect(await groups.prunePersona(WS, 'p_1')).toBe(0)
+
+ const after = (await groups.listByWorkspace(WS)).find((g) => g.id === other.id)
+ expect(after?.personaIds).toEqual(['p_2'])
+ // The guard exists so an unaffected group does not claim to have been edited.
+ expect(after?.updatedAt).toEqual(before?.updatedAt)
+ })
+
+ it('never reaches into another workspace\'s groups', async => {
+ const mine = await group(WS, 'backend', ['p_1'])
+ const theirs = await group(OTHER_WS, 'backend', ['p_1'])
+
+ expect(await groups.prunePersona(WS, 'p_1')).toBe(1)
+
+ expect((await groups.listByWorkspace(WS)).find((g) => g.id === mine.id)?.personaIds).toEqual([])
+ expect(
+ (await groups.listByWorkspace(OTHER_WS)).find((g) => g.id === theirs.id)?.personaIds,
+).toEqual(['p_1'])
  })
 })

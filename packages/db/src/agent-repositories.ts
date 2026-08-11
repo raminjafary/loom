@@ -995,6 +995,27 @@ export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort
  async delete(workspaceId, id) {
  await db.delete(personaGroup).where(and(eq(personaGroup.workspaceId, workspaceId), eq(personaGroup.id, id)))
  },
+
+ async prunePersona(workspaceId, personaId) {
+ // `jsonb - text` drops every matching element of a jsonb array, so this is one
+ // statement rather than a read of every group followed by a write of the matches.
+ // The `jsonb_exists` guard keeps `updatedAt` honest: a group that never listed the
+ // persona has not changed, and should not claim it did.
+ const rows = await db
+.update(personaGroup)
+.set({
+ personaIds: sql`${personaGroup.personaIds} - ${personaId}::text`,
+ updatedAt: new Date,
+ })
+.where(
+ and(
+ eq(personaGroup.workspaceId, workspaceId),
+ sql`jsonb_exists(${personaGroup.personaIds}, ${personaId})`,
+),
+)
+.returning({ id: personaGroup.id })
+ return rows.length
+ },
 })
 
 // --- Runner pairing (infra-only concern: not behind a port, see the replaceability contract — replaceability

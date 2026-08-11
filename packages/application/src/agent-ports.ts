@@ -425,6 +425,18 @@ export interface PersonaGroupRepositoryPort {
  patch: { name: string; personaIds: string[] },
 ): Promise<PersonaGroup>
  delete(workspaceId: WorkspaceId, id: PersonaGroupId): Promise<void>
+ /**
+ * Drops a persona from every group that lists it, and answers how many changed.
+ *
+ * Membership is a plain id array with no foreign key, so nothing in the database
+ * removes a deleted persona from the groups holding it — the entry survives as a
+ * chip with no name behind it. `deletePersona` used to do this itself, reading every
+ * group and writing back the ones that matched. That works and is the wrong place
+ * for it: a use case cannot know what else references a group, and the next
+ * reference added would have to remember to repeat the chore. Behind the port, the
+ * adapter that owns the storage owns the integrity, and can do it in one statement.
+ */
+ prunePersona(workspaceId: WorkspaceId, personaId: string): Promise<number>
 }
 
 /**

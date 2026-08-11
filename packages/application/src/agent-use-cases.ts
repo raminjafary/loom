@@ -2627,15 +2627,10 @@ export const deletePersona = async (
  }
 
  // Group membership is a plain id array, so a deleted persona would leave a dangling
- // entry that renders as a blank chip. Pruned here rather than left for the reader.
- const groups = await deps.personaGroups.listByWorkspace(input.workspaceId)
- for (const group of groups) {
- if (!group.personaIds.includes(persona.id)) continue
- await deps.personaGroups.update(input.workspaceId, group.id, {
- name: group.name,
- personaIds: group.personaIds.filter((id) => id !== persona.id),
- })
- }
+ // entry that renders as a chip with no name behind it. The port prunes it, rather
+ // than this use case reading every group and writing back the matches: which stores
+ // reference a persona is not a thing a use case should have to keep a list of.
+ await deps.personaGroups.prunePersona(input.workspaceId, persona.id)
 
  await deps.personas.delete(input.workspaceId, input.personaId)
 
