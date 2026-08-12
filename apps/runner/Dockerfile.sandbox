@@ -59,6 +59,7 @@ COPY apps/runner/src/path-check.ts src/
 # sandboxed run could call write_note, read_notes or submit_plan — see
 # src/sandbox-closure.ts.
 COPY apps/runner/src/notes-tool.ts src/
+COPY apps/runner/src/question-tool.ts src/
 COPY apps/runner/src/planner-tool.ts src/
 COPY apps/runner/src/capabilities.ts src/
 COPY tsconfig.base.json./

@@ -222,7 +222,12 @@ export interface AgentSession {
  * run's approvals and diff are on screen.
  */
  watchRun(agentRunId: string): Promise<void>
- decide(approvalRequestId: string, decision: 'approve' | 'deny'): Promise<void>
+ /** `answer` carries the reply when the gate is a clarifying question. */
+ decide(
+ approvalRequestId: string,
+ decision: 'approve' | 'deny',
+ answer?: string,
+): Promise<void>
  loadDiff(agentRunId: string): Promise<void>
  keepRun(agentRunId: string): Promise<void>
  discardRun(agentRunId: string): Promise<void>
@@ -809,10 +814,14 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  }
  },
 
- async decide(approvalRequestId, decision) {
+ async decide(approvalRequestId, decision, answer) {
  patch({ error: null })
  try {
- await options.api.approval.decide({ approvalRequestId, decision })
+ await options.api.approval.decide({
+ approvalRequestId,
+ decision,
+...(answer === undefined ? {}: { answer }),
+ })
  if (state.activeRun) pollActiveRun(state.activeRun.id)
  if (state.inspectedRun) await fetchInspected(state.inspectedRun.id)
  await fetchInbox

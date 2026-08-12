@@ -539,6 +539,11 @@ export interface ApprovalRepositoryPort {
  toolUseId: string
  toolName: string
  input: Record<string, unknown>
+ /**
+ * Set when this gate carries a clarifying question rather than a tool call
+ *. Model-authored, so untrusted — see `ApprovalRequest.question`.
+ */
+ question?: string
  }): Promise<ApprovalRequest>
  findById(workspaceId: WorkspaceId, id: ApprovalRequestId): Promise<ApprovalRequest | null>
  listPendingByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<ApprovalRequest[]>
@@ -560,7 +565,7 @@ export interface ApprovalRepositoryPort {
  resolve(
  workspaceId: WorkspaceId,
  id: ApprovalRequestId,
- patch: { status: ApprovalStatus; resolvedByUserId: UserId | null },
+ patch: { status: ApprovalStatus; resolvedByUserId: UserId | null; answer?: string },
 ): Promise<ApprovalRequest>
 }
 
@@ -658,6 +663,23 @@ export interface RunDispatchPort {
  runnerId: RunnerId
  toolUseId: string
  decision: 'allow' | 'deny'
+ }): Promise<void>
+ /**
+ * The human's reply to a clarifying question.
+ *
+ * A separate method rather than an optional field on the one above, because the two
+ * carry different frames and a caller must not be able to send a decision where an
+ * answer is expected: the Runner is holding a tool call open on exactly one of them,
+ * and the wrong frame leaves the run blocked until the reaper takes it.
+ *
+ * `answer: null` is a refusal — denied, or auto-denied by the SLA. Mid-flight steering: "a run
+ * blocked forever on a question nobody saw is worse than a run that guessed and
+ * said so", so the tool returns either way.
+ */
+ sendQuestionAnswer(input: {
+ runnerId: RunnerId
+ toolUseId: string
+ answer: string | null
  }): Promise<void>
  /** Asks the Runner for the run's branch diff on demand. */
  getDiff(input: {

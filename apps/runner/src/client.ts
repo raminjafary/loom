@@ -30,6 +30,7 @@ import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
 import { createNotesTool } from './notes-tool.js'
+import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
 import {
  commitRunWork,
@@ -80,6 +81,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  string,
  (result: { ok: boolean; ledger?: string | undefined; error?: string | undefined }) => void
  >
+ /** `ask_human` round-trips, keyed by the id the answer comes back on. */
+ const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
  const NOTE_TIMEOUT_MS = Number(process.env.LOOM_NOTE_TIMEOUT_MS ?? 30_000)
 
  let noteRequestCounter = 0
@@ -500,6 +503,20 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // The notes channel is given to every run, planner included: a note is not a
  // capability, so it does not weaken `tools: []` (see notes-tool.ts).
  const notesTool = createNotesTool({ writeNote: onNote, readNotes: onNotesRequest })
+ // `ask_human`, on the same reasoning and the same round-trip. No
+ // timeout here, unlike a notes read: this one is *meant* to block for as long as a
+ // human takes, and the approval SLA is what bounds it — a second, shorter clock in
+ // here would resolve the tool while the gate was still open, and the human's answer
+ // would then arrive for a call that had already returned.
+ const questionTool = createQuestionTool({
+ askHuman: (question) => {
+ const requestId = nextNoteRequestId
+ send({ type: 'question_asked', runId: input.runId, toolUseId: requestId, question })
+ return new Promise((resolve) => {
+ pendingQuestions.set(requestId, resolve)
+ })
+ },
+ })
  // Sandboxed, the tool lives inside the container and its result arrives as a
  // frame; unsandboxed, it is the in-process handle above. One holder either way.
  let sandboxPlan: { title: string; task: string; personaName: string; paths?: string[] }[] | null =
@@ -536,6 +553,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  cwd: input.clonePath,
 ...(plannerTool ? { plannerTool: plannerTool.server }: {}),
  notesTool,
+ questionTool: questionTool.server,
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(input.contextLedger === undefined ? {}: { contextLedger: input.contextLedger }),
 ...(input.resumeSessionId === undefined ? {}: { resumeSessionId: input.resumeSessionId }),
@@ -602,6 +620,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 ...(input.persona.planner ? { onPlan: (subtasks) => (sandboxPlan = subtasks) }: {}),
  onNote,
  onNotesRequest,
+ onQuestion: (question) =>
+ new Promise<{ answer: string | null }>((resolve) => {
+ const requestId = nextNoteRequestId
+ send({ type: 'question_asked', runId: input.runId, toolUseId: requestId, question })
+ pendingQuestions.set(requestId, resolve)
+ }),
  onSessionId,
  onPermissionRequest,
  onContextUsage: (usage) => contextUsage.set(input.runId, usage),
@@ -957,6 +981,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  if (resolve) {
  pendingNoteReads.delete(frame.requestId)
  resolve(frame)
+ }
+ return
+ }
+
+ case 'question_answered': {
+ const resolve = pendingQuestions.get(frame.toolUseId)
+ if (resolve) {
+ pendingQuestions.delete(frame.toolUseId)
+ resolve({ answer: frame.answer })
  }
  return
  }

@@ -13,7 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
  select: [agentRunId: string]
- decide: [approvalRequestId: string, decision: 'approve' | 'deny']
+ decide: [approvalRequestId: string, decision: 'approve' | 'deny', answer?: string]
  'load-diff': [agentRunId: string]
  keep: [agentRunId: string]
  discard: [agentRunId: string]
@@ -115,7 +115,7 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
  {{ props.selectedRun.errorMessage }}
  </p>
 
- <ApprovalCard:approvals="props.approvals" @decide="(id, decision) => emit('decide', id, decision)" />
+ <ApprovalCard:approvals="props.approvals" @decide="(id, decision, answer) => emit('decide', id, decision, answer)" />
  <DiffView
 :run="props.selectedRun"
 :diff="props.diff"

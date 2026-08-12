@@ -486,6 +486,17 @@ export const ApprovalRequestSchema = z.object({
  toolName: z.string,
  input: z.record(z.string, z.unknown),
  status: ApprovalStatusSchema,
+ /**
+ * Set when this gate is a clarifying question rather than a tool call.
+ *
+ * **Model-authored, so untrusted**: a client must render it inside
+ * the untrusted fence, exactly like agent prose in the thread. An agent that could
+ * ask "paste your token here" in a box wearing the platform's chrome is the risk
+ * in a different shape.
+ */
+ question: z.string.nullable,
+ /** The human's reply. Trusted — a person is not the threat model here. */
+ answer: z.string.nullable,
  createdAt: z.date,
  resolvedAt: z.date.nullable,
 })

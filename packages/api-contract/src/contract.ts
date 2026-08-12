@@ -515,6 +515,14 @@ export const contract = {
  z.object({
  approvalRequestId: z.string,
  decision: z.enum(['approve', 'deny']),
+ /**
+ * The reply, when this gate carries a clarifying question.
+ *
+ * Approving a question with no answer is treated as a denial by the server:
+ * resuming the run having told the model nothing, while implying it was
+ * answered, is worse than a clean refusal — the model reads silence as assent.
+ */
+ answer: z.string.min(1).max(4_000).optional,
  }),
 )
 .output(ApprovalRequestSchema),

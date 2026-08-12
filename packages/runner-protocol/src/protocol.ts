@@ -139,6 +139,23 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  toolName: z.string,
  input: z.record(z.string, z.unknown),
  }),
+ /**
+ * An agent asking a human a question and blocking on the answer.
+ *
+ * Shaped like `permission_request` because it *is* one: the "a clarifying question
+ * is that same gate carrying a prompt and returning a string. Reuse it rather than
+ * build a second blocking channel." `toolUseId` is the correlation id the answer
+ * comes back on, exactly as for a tool gate, so the SLA, the notification and the
+ * identity binding are all inherited rather than rebuilt.
+ *
+ * `question` is composed by a model and is therefore untrusted text.
+ */
+ z.object({
+ type: z.literal('question_asked'),
+ runId: z.string,
+ toolUseId: z.string,
+ question: z.string.min(1).max(2_000),
+ }),
  /** Sent once the Runner finishes cloning, before the agent starts. */
  z.object({
  type: z.literal('run_workspace_ready'),
@@ -422,6 +439,17 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  type: z.literal('permission_response'),
  toolUseId: z.string,
  decision: z.enum(['allow', 'deny']),
+ }),
+ /**
+ * The human's reply to a `question_asked`. `answer` is null when the
+ * gate was denied or auto-denied by the SLA — a run blocked forever on a question
+ * nobody saw is worse than a run that guessed and said so, so the tool returns and
+ * tells the model it got no answer.
+ */
+ z.object({
+ type: z.literal('question_answered'),
+ toolUseId: z.string,
+ answer: z.string.nullable,
  }),
  /**
  * Kill switch. Fire-and-forget with no result frame on purpose:

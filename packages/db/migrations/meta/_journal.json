@@ -162,6 +162,13 @@
       "when": 1786481937956,
       "tag": "0022_bright_lady_mastermind",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786515764167,
+      "tag": "0023_young_ricochet",
+      "breakpoints": true
     }
   ]
 }

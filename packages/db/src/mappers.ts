@@ -445,6 +445,8 @@ export const toAgentRun = (row: AgentRunRow): AgentRun => ({
 })
 
 export interface ApprovalRequestRow {
+ question?: string | null
+ answer?: string | null
  id: string
  workspaceId: string
  agentRunId: string
@@ -471,6 +473,9 @@ export const toApprovalRequest = (row: ApprovalRequestRow): ApprovalRequest => (
  toolName: row.toolName,
  input: (row.input ?? {}) as Record<string, unknown>,
  status: toApprovalStatus(row.status),
+ // Null on every gate created before mid-flight steering, and on every ordinary tool gate since.
+ question: row.question ?? null,
+ answer: row.answer ?? null,
  createdAt: row.createdAt,
  resolvedAt: row.resolvedAt,
 })

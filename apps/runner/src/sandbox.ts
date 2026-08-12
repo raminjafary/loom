@@ -78,6 +78,12 @@ export interface SandboxOptions {
  readonly onNotesRequest?: => Promise<
  { ok: true; ledger: string } | { ok: false; error: string }
  >
+ /**
+ * The agent asking a human a question and blocking on the answer.
+ * Resolves with `answer: null` when nobody answered — the run must continue either
+ * way, or it blocks until the reaper takes it.
+ */
+ readonly onQuestion?: (question: string) => Promise<{ answer: string | null }>
  /** The tree's ledger at start, rendered and fenced server-side. */
  readonly contextLedger?: string
  readonly onSessionId?: (sessionId: string) => void
@@ -553,6 +559,16 @@ export const runAgentInSandbox = async (
  requestId: frame.requestId,
  ok: result.ok,
 ...(result.ok ? { ledger: result.ledger }: { error: result.error }),
+ })
+ })
+ return
+ case 'question_request':
+ void (async => {
+ const result = (await options.onQuestion?.(frame.question)) ?? { answer: null }
+ send({
+ t: 'question_result',
+ requestId: frame.requestId,
+...(result.answer === null ? {}: { answer: result.answer }),
  })
  })
  return

@@ -623,6 +623,107 @@ describe('runner-gateway: agent run event ingest', => {
  reconnected.close
  })
 
+ /**
+ * The clarifying question, end to end: "a clarifying question is that same gate
+ * carrying a prompt and returning a string. Reuse it rather than build a second
+ * blocking channel." So the assertions are as much about what it *inherits* — the
+ * `awaiting_approval` status, the identity binding, the Inbox — as about the answer.
+ */
+ it('blocks a run on a question and relays the answer back on its own frame', async => {
+ const { socket, runnerId } = await pairFakeRunner('question-gate')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'question-gate' })
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startFrame
+ const run = await runPromise
+
+ const QUESTION = 'Should the config be TOML or JSON? I will use JSON by default.'
+ socket.send(
+ JSON.stringify({
+ type: 'question_asked',
+ runId: run.id,
+ toolUseId: 'ask-1',
+ question: QUESTION,
+ }),
+)
+
+ let pending: Awaited<ReturnType<typeof client.approval.listPending>> = []
+ for (let i = 0; i < 40 && pending.length === 0; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ pending = await client.approval.listPending({ agentRunId: run.id })
+ }
+ expect(pending).toHaveLength(1)
+ expect(pending[0]!.question).toBe(QUESTION)
+ // Inherited from the tool gate rather than reimplemented: the run is blocked, and
+ // it is blocked in the state the Inbox and the SLA sweep already understand.
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('awaiting_approval')
+
+ const answered = nextFrame(socket, (v) => v.type === 'question_answered')
+ const resolved = await client.approval.decide({
+ approvalRequestId: pending[0]!.id,
+ decision: 'approve',
+ answer: 'TOML.',
+ })
+ expect(resolved.answer).toBe('TOML.')
+
+ // Its own frame, not `permission_response`: the Runner is holding a tool call open
+ // on this one, and the wrong frame leaves the run blocked until the reaper.
+ const frame = await answered
+ expect(frame.toolUseId).toBe('ask-1')
+ expect(frame.answer).toBe('TOML.')
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('running')
+
+ socket.close
+ })
+
+ /**
+ * Approving a question with no answer would resume the run having told the model
+ * nothing while implying it was answered — and a model reads silence as assent.
+ */
+ it('treats approving a question with no answer as a refusal', async => {
+ const { socket, runnerId } = await pairFakeRunner('question-empty')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'question-empty' })
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startFrame
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({
+ type: 'question_asked',
+ runId: run.id,
+ toolUseId: 'ask-2',
+ question: 'Which one?',
+ }),
+)
+ let pending: Awaited<ReturnType<typeof client.approval.listPending>> = []
+ for (let i = 0; i < 40 && pending.length === 0; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ pending = await client.approval.listPending({ agentRunId: run.id })
+ }
+ expect(pending).toHaveLength(1)
+
+ const answered = nextFrame(socket, (v) => v.type === 'question_answered')
+ const resolved = await client.approval.decide({
+ approvalRequestId: pending[0]!.id,
+ decision: 'approve',
+ })
+ expect(resolved.status).toBe('denied')
+ expect((await answered).answer).toBeNull
+
+ socket.close
+ })
+
  it('rejects resolving the same approval twice', async => {
  const { socket, runnerId } = await pairFakeRunner('double-decide-test')
  const repo = await bindViaFakeRunner(socket, runnerId)

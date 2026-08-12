@@ -9,6 +9,7 @@ import {
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
+import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
 import { PLANNER_SERVER_NAME, PLANNER_TOOL_NAME } from './planner-tool.js'
 
 /**
@@ -153,6 +154,12 @@ export interface RunAgentOptions {
  */
  readonly notesTool?: McpSdkServerConfigWithInstance
  /**
+ * `ask_human`. Present for every run the
+ * platform starts, including a Planner: asking is not a capability, and a
+ * `tools: []` Planner still holds no filesystem and no shell.
+ */
+ readonly questionTool?: McpSdkServerConfigWithInstance
+ /**
  * The tree's ledger, rendered and fenced by the *server*.
  *
  * Appended to the prompt rather than to the persona's system prompt: the persona is
@@ -236,7 +243,7 @@ export const settingSourcesFromEnv = (
 export const buildQueryOptions = (
  options: Pick<
  RunAgentOptions,
- 'persona' | 'cwd' | 'resumeSessionId' | 'plannerTool' | 'notesTool'
+ 'persona' | 'cwd' | 'resumeSessionId' | 'plannerTool' | 'notesTool' | 'questionTool'
  >,
  settingSources: SettingSourceName[] = settingSourcesFromEnv,
 ) => {
@@ -248,6 +255,7 @@ export const buildQueryOptions = (
  if (options.plannerTool) mcpServers[PLANNER_SERVER_NAME] = options.plannerTool
  // The shared-context channel, in-process for the same reason.
  if (options.notesTool) mcpServers[NOTES_SERVER_NAME] = options.notesTool
+ if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
  const skills = capabilities
 .filter((capability) => capability.kind === 'skill')
 .map((capability) => capability.name)
@@ -278,6 +286,7 @@ export const buildQueryOptions = (
  const platformTools = [
 ...(options.plannerTool ? [PLANNER_TOOL_NAME]: []),
 ...(options.notesTool ? NOTES_TOOL_NAMES: []),
+...(options.questionTool ? [ASK_HUMAN_TOOL_NAME]: []),
  ]
 
  return {

@@ -2524,11 +2524,26 @@ export const expireStaleApprovals = async (
  if (!runIsLive) continue
 
  try {
+ /**
+ * A question is unblocked on its own frame, or the run stays stuck. The
+ * Runner is holding a tool call open on `question_answered`; a
+ * `permission_response` for the same id is a frame it is not waiting for, so the
+ * SLA would "resolve" the row and leave the run blocked until the reaper killed
+ * it — the exact failure the "keep the SLA" clause exists to prevent.
+ */
+ if (approval.question !== null) {
+ await deps.dispatch.sendQuestionAnswer({
+ runnerId: run.runnerId,
+ toolUseId: approval.toolUseId,
+ answer: null,
+ })
+ } else {
  await deps.dispatch.sendApprovalDecision({
  runnerId: run.runnerId,
  toolUseId: approval.toolUseId,
  decision: 'deny',
  })
+ }
  } catch {
  // Runner gone: the row is resolved either way, and the run's stale
  // heartbeat is what the dead-run reaper acts on. Swallowing here keeps one
@@ -2539,7 +2554,9 @@ export const expireStaleApprovals = async (
  await postRunSystemMessage(
  deps,
  run,
- `Approval for ${approval.toolName} auto-denied after ${Math.round(options.approvalSlaMs / 60_000)} min with no decision.`,
+ approval.question !== null
+ ? `A question from ${run.persona.name} went unanswered for ${Math.round(options.approvalSlaMs / 60_000)} min. The run was told nobody answered and continued.`
+: `Approval for ${approval.toolName} auto-denied after ${Math.round(options.approvalSlaMs / 60_000)} min with no decision.`,
 )
  // Worth saying out loud rather than only in the thread: the human's window
  // to decide closed, and the run went on with the call denied.
@@ -2727,6 +2744,71 @@ export const requestApproval = async (
 }
 
 /**
+ * An agent asking a human a question, and blocking on the answer, called by runner-gateway.ts on a `question_asked` frame.
+ *
+ * Mid-flight steering: "a clarifying question is that same gate carrying a prompt and returning a
+ * string. Reuse it rather than build a second blocking channel." So this is
+ * `requestApproval` with a question on it — which means the SLA, the auto-deny, the
+ * notification, the `awaiting_approval` status and the identity binding all come
+ * for free and cannot drift from the tool-gate versions of themselves.
+ *
+ * The question is **not** posted into the thread as system text. It is model-authored
+ * and the thread's system lines are the platform's own voice; a
+ * question rendered there would be attacker-controlled text wearing the platform's
+ * chrome, which is the risk in a different shape. The pointer line is the
+ * platform's; the question itself renders in the card, inside the untrusted fence.
+ */
+export const askClarifyingQuestion = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ toolUseId: string
+ question: string
+ },
+): Promise<ApprovalRequest> => {
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!run) throw new NotFoundError('AgentRun')
+
+ const approval = await deps.approvals.create({
+ workspaceId: input.workspaceId,
+ agentRunId: input.agentRunId,
+ toolUseId: input.toolUseId,
+ // A synthetic tool name, so every existing consumer — the SLA sweep, the audit
+ // record, the notification — has the non-null string it expects without a
+ // discriminator any of them could read wrongly. `question` is the real signal.
+ toolName: 'ask_human',
+ input: {},
+ question: input.question,
+ })
+
+ await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
+ status: 'awaiting_approval',
+ })
+
+ const message = await deps.messages.append({
+ workspaceId: input.workspaceId,
+ threadId: run.threadId,
+ author: systemActor,
+ body: {
+ kind: 'system',
+ text: `${run.persona.name} asked a question and is waiting — see the card below.`,
+ },
+ })
+
+ await deps.events.publish({
+ type: 'message.created',
+ workspaceId: input.workspaceId,
+ threadId: run.threadId,
+ message,
+ })
+
+ await notifyRun(deps, run, 'approval_needed', { toolName: 'a question' })
+
+ return approval
+}
+
+/**
  * Hard rule: only a human actor may resolve an approval. An
  * agent-authored message can never open this gate — that is the entire fix
  * for the forgery flaw the security review found.
@@ -2738,6 +2820,8 @@ export const decideApproval = async (
  actor: Actor
  approvalRequestId: ApprovalRequestId
  decision: 'approve' | 'deny'
+ /** The reply, when this gate is a clarifying question. */
+ answer?: string
  },
 ): Promise<ApprovalRequest> => {
  if (!isHuman(input.actor)) {
@@ -2757,23 +2841,42 @@ export const decideApproval = async (
  // function call — asserting explicitly rather than casting.
  if (input.actor.kind !== 'user') throw new ForbiddenError('Only a human may resolve an approval request')
 
+ /**
+ * A question with no answer is a denial, whatever the button said.
+ * "Approve" on a question that carries no text would resume the run having told the
+ * model nothing while implying it was answered, which is worse than a clean refusal
+ * — the model would treat silence as assent.
+ */
+ const isQuestion = approval.question !== null
+ const answer = isQuestion ? input.answer?.trim: undefined
+ const decision = isQuestion && !answer ? 'deny': input.decision
+
  const resolved = await deps.approvals.resolve(input.workspaceId, input.approvalRequestId, {
- status: input.decision === 'approve' ? 'approved': 'denied',
+ status: decision === 'approve' ? 'approved': 'denied',
  resolvedByUserId: input.actor.userId,
+...(answer === undefined ? {}: { answer }),
  })
 
+ if (isQuestion) {
+ await deps.dispatch.sendQuestionAnswer({
+ runnerId: run.runnerId,
+ toolUseId: approval.toolUseId,
+ answer: decision === 'approve' && answer ? answer: null,
+ })
+ } else {
  await deps.dispatch.sendApprovalDecision({
  runnerId: run.runnerId,
  toolUseId: approval.toolUseId,
- decision: input.decision === 'approve' ? 'allow': 'deny',
+ decision: decision === 'approve' ? 'allow': 'deny',
  })
+ }
 
  await deps.agentRuns.updateStatus(input.workspaceId, run.id, { status: 'running' })
 
  await deps.audit.record({
  workspaceId: input.workspaceId,
  actor: input.actor,
- action: `approval_request.${input.decision}d`,
+ action: `approval_request.${decision}d`,
  subjectType: 'approval_request',
  subjectId: approval.id,
  metadata: { toolName: approval.toolName },

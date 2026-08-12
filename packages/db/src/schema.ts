@@ -456,6 +456,21 @@ export const approvalRequest = pgTable(
  // Better Auth's `user` table, and a resolver's identity here is an audit
  // fact that must survive even if the referenced user is later removed.
  resolvedByUserId: text('resolved_by_user_id'),
+ /**
+ * A clarifying question, when this gate is one
+ * rather than a tool call.
+ *
+ * Mid-flight steering: "a clarifying question is that same gate carrying a prompt and returning a
+ * string. Reuse it rather than build a second blocking channel" — so this is two
+ * nullable columns on the proven mechanism rather than a second table with its own
+ * SLA, its own notification path and its own identity rules to get wrong.
+ *
+ * `question` is **model-authored**, so it is attacker-controllable text and must render inside the untrusted fence. `answer` is a human's
+ * and is trusted input. Null on an ordinary tool gate, which is what distinguishes
+ * the two kinds without a discriminator column that could disagree with them.
+ */
+ question: text('question'),
+ answer: text('answer'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
  },

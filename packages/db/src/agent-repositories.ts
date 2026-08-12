@@ -872,6 +872,9 @@ export const approvalRepository = (db: Database): ApprovalRepositoryPort => ({
  toolName: input.toolName,
  input: input.input,
  status: 'pending',
+ // Null on an ordinary tool gate, which is what distinguishes the two kinds
+ //.
+ question: input.question ?? null,
  })
 .returning
  if (!row) throw new Error('approval_request insert returned no row')
@@ -915,6 +918,9 @@ export const approvalRepository = (db: Database): ApprovalRepositoryPort => ({
 .set({
  status: patch.status,
  resolvedByUserId: patch.resolvedByUserId,
+ // Only written when there is one: a tool gate resolves with no answer, and
+ // spreading `undefined` here would blank a stored one on a re-resolve.
+...(patch.answer === undefined ? {}: { answer: patch.answer }),
  resolvedAt: new Date,
  })
 .where(and(eq(approvalRequest.workspaceId, workspaceId), eq(approvalRequest.id, id)))

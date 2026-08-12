@@ -301,9 +301,26 @@ export interface ApprovalRequest {
  readonly toolName: string
  readonly input: Readonly<Record<string, unknown>>
  readonly status: ApprovalStatus
+ /**
+ * A clarifying question this gate is carrying,
+ * or null when it is an ordinary tool gate.
+ *
+ * **Model-authored, therefore untrusted**: a question is composed
+ * by an agent, so it renders inside the untrusted fence like any other agent prose.
+ * An agent that could ask "paste your token here" in a box that looks like the
+ * platform's own is the risk wearing a different hat.
+ */
+ readonly question: string | null
+ /** The human's reply. Trusted input — a person is not the threat model here. */
+ readonly answer: string | null
  readonly createdAt: Date
  readonly resolvedAt: Date | null
 }
+
+/** A gate carrying a question rather than a tool call, and what to do with it. */
+export const isClarifyingQuestion = (request: {
+ readonly question: string | null
+}): boolean => request.question !== null
 
 /**
  * Tried in order; the first string field present is a call's headline argument.

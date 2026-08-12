@@ -53,6 +53,16 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  ledger: z.string.optional,
  error: z.string.optional,
  }),
+ /**
+ * A human's reply to `ask_human`. `answer` absent means nobody
+ * answered — denied, or the SLA expired — and the tool must still return, or the
+ * agent blocks until the reaper takes the run.
+ */
+ z.object({
+ t: z.literal('question_result'),
+ requestId: z.string,
+ answer: z.string.optional,
+ }),
 ])
 
 /** Container → host. */
@@ -108,6 +118,8 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  }),
  /** The agent asking for its tree's ledger mid-run, answered by `notes_result`. */
  z.object({ t: z.literal('notes_request'), requestId: z.string }),
+ /** The agent asking a human a question, answered by `question_result`. */
+ z.object({ t: z.literal('question_request'), requestId: z.string, question: z.string }),
  /**
  * The SDK's session id, emitted as soon as it is known. The Runner persists it
  * so a run can be resumed rather than restarted after a Runner crash.

@@ -409,7 +409,7 @@ onBeforeUnmount( => {
 
  <ApprovalCard
 :approvals="agentSnapshot.pendingApprovals"
- @decide="(id, decision) => agent.decide(id, decision)"
+ @decide="(id, decision, answer) => agent.decide(id, decision, answer)"
  />
 
  <div v-if="pendingMention" class="mention-bar">
@@ -435,7 +435,7 @@ onBeforeUnmount( => {
 :approvals="agentSnapshot.inspectedApprovals"
 :diff="agentSnapshot.diff"
  @select="(agentRunId) => agent.inspectRun(agentRunId)"
- @decide="(id, decision) => agent.decide(id, decision)"
+ @decide="(id, decision, answer) => agent.decide(id, decision, answer)"
  @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
  @keep="(agentRunId) => agent.keepRun(agentRunId)"
  @discard="(agentRunId) => agent.discardRun(agentRunId)"

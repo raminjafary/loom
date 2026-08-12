@@ -64,8 +64,8 @@ export const useAgentStore = defineStore('agent', () => {
     // drops a field is worse than one that will not compile.
     startRun: (input: Parameters<typeof session.startRun>[0]) => session.startRun(input),
     watchRun: (agentRunId: string) => session.watchRun(agentRunId),
-    decide: (approvalRequestId: string, decision: 'approve' | 'deny') =>
-      session.decide(approvalRequestId, decision),
+    decide: (approvalRequestId: string, decision: 'approve' | 'deny', answer?: string) =>
+      session.decide(approvalRequestId, decision, answer),
     loadDiff: (agentRunId: string) => session.loadDiff(agentRunId),
     keepRun: (agentRunId: string) => session.keepRun(agentRunId),
     discardRun: (agentRunId: string) => session.discardRun(agentRunId),

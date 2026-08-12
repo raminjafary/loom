@@ -3,6 +3,7 @@ import { once } from 'node:events'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
 import { createNotesTool } from './notes-tool.js'
+import { createQuestionTool } from './question-tool.js'
 import { createPlannerTool } from './planner-tool.js'
 import { resolveWithinRoot } from './path-check.js'
 import {
@@ -61,6 +62,8 @@ const pendingNoteReads = new Map<
  string,
  (result: { ok: boolean; ledger?: string | undefined; error?: string | undefined }) => void
 >
+/** `ask_human` round-trips, same shape as a notes read. */
+const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
 
 let requestCounter = 0
 const nextRequestId = : string => {
@@ -111,6 +114,15 @@ const main = async : Promise<void> => {
  if (resolveRead) {
  pendingNoteReads.delete(parsed.data.requestId)
  resolveRead(parsed.data)
+ }
+ return
+ }
+
+ if (parsed.data.t === 'question_result') {
+ const resolveQuestion = pendingQuestions.get(parsed.data.requestId)
+ if (resolveQuestion) {
+ pendingQuestions.delete(parsed.data.requestId)
+ resolveQuestion({ answer: parsed.data.answer ?? null })
  }
  return
  }
@@ -168,12 +180,23 @@ const main = async : Promise<void> => {
  },
  })
 
+ const questionTool = createQuestionTool({
+ askHuman: (question) => {
+ const requestId = nextRequestId
+ emit({ t: 'question_request', requestId, question })
+ return new Promise((resolve) => {
+ pendingQuestions.set(requestId, resolve)
+ })
+ },
+ })
+
  await runAgent({
  persona,
  cwd: command.cwd,
 ...(command.task === undefined ? {}: { task: command.task }),
 ...(command.contextLedger === undefined ? {}: { contextLedger: command.contextLedger }),
  notesTool,
+ questionTool: questionTool.server,
 ...(command.resumeSessionId === undefined ? {}: { resumeSessionId: command.resumeSessionId }),
  isRiskyTool,
  // Resolved inside the container, against the mount point — which is where

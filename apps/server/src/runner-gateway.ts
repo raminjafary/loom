@@ -10,6 +10,7 @@ import {
  recordReconcileResult,
  recordRunHeartbeat,
  recordRunWorkspace,
+ askClarifyingQuestion,
  requestApproval,
 } from '@loom/application'
 import {
@@ -238,6 +239,10 @@ export const createRunnerGateway = (
  send(runnerId, { type: 'permission_response', toolUseId, decision })
  },
 
+ async sendQuestionAnswer({ runnerId, toolUseId, answer }) {
+ send(runnerId, { type: 'question_answered', toolUseId, answer })
+ },
+
  async getDiff({ runnerId, runId }) {
  if (!connections.has(runnerId)) {
  return { ok: false, error: 'Runner is not currently connected' }
@@ -463,6 +468,16 @@ export const createRunnerGateway = (
  toolUseId: frame.toolUseId,
  toolName: frame.toolName,
  input: frame.input,
+ })
+ return
+
+ case 'question_asked':
+ // Same gate as a tool approval, carrying a prompt.
+ await askClarifyingQuestion(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ toolUseId: frame.toolUseId,
+ question: frame.question,
  })
  return
 

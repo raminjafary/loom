@@ -775,6 +775,7 @@ export const router = os.router({
  actor: context.principal.actor,
  approvalRequestId: asApprovalRequestId(input.approvalRequestId),
  decision: input.decision,
+...(input.answer === undefined ? {}: { answer: input.answer }),
  }),
 ),
 ),
