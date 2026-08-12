@@ -2,6 +2,7 @@ import { classifyToolEffect, isRiskyTool } from '@loom/domain'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
+import { createMapTool } from './map-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import {
@@ -67,6 +68,17 @@ const pendingNoteReads = new Map<
  string,
  (result: { ok: boolean; ledger?: string | undefined; error?: string | undefined }) => void
 >
+/** `record_map` round-trips, same shape as a note write. */
+const pendingMapWrites = new Map<
+ string,
+ (result: {
+ ok: boolean
+ reason?: string | undefined
+ nodesWritten?: number | undefined
+ edgesWritten?: number | undefined
+ superseded?: number | undefined
+ }) => void
+>
 /** `ask_human` round-trips, same shape as a notes read. */
 const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
 
@@ -121,6 +133,15 @@ const main = async : Promise<void> => {
  if (resolveNote) {
  pendingNotes.delete(parsed.data.requestId)
  resolveNote({ ok: parsed.data.ok,...(parsed.data.reason === undefined ? {}: { reason: parsed.data.reason }) })
+ }
+ return
+ }
+
+ if (parsed.data.t === 'map_result') {
+ const resolveMap = pendingMapWrites.get(parsed.data.requestId)
+ if (resolveMap) {
+ pendingMapWrites.delete(parsed.data.requestId)
+ resolveMap(parsed.data)
  }
  return
  }
@@ -199,6 +220,34 @@ const main = async : Promise<void> => {
  },
  })
 
+ /**
+ * The mapping channel, present only on a mastery run and
+ * round-tripping to the host for the same reason the notes channel does: the map is
+ * workspace-side state, and this process has no network and no database.
+ */
+ const mapTool = command.mastery
+ ? createMapTool({
+ recordMap: (fragment) => {
+ const requestId = nextRequestId
+ emit({ t: 'map', requestId, fragment })
+ return new Promise((resolve) => {
+ pendingMapWrites.set(requestId, (result) =>
+ resolve(
+ result.ok
+ ? {
+ ok: true,
+ nodesWritten: result.nodesWritten ?? 0,
+ edgesWritten: result.edgesWritten ?? 0,
+ superseded: result.superseded ?? 0,
+ }
+: { ok: false, reason: result.reason ?? 'the platform refused it' },
+),
+)
+ })
+ },
+ })
+: null
+
  const questionTool = createQuestionTool({
  askHuman: (question) => {
  const requestId = nextRequestId
@@ -215,6 +264,9 @@ const main = async : Promise<void> => {
 ...(command.task === undefined ? {}: { task: command.task }),
 ...(command.contextLedger === undefined ? {}: { contextLedger: command.contextLedger }),
  notesTool,
+...(mapTool ? { mapTool }: {}),
+...(command.mapContext === undefined ? {}: { mapContext: command.mapContext }),
+...(command.mastery === undefined ? {}: { mastery: command.mastery }),
  questionTool: questionTool.server,
 ...(command.resumeSessionId === undefined ? {}: { resumeSessionId: command.resumeSessionId }),
  isRiskyTool,

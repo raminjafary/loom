@@ -26,6 +26,22 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  t: z.literal('start'),
  persona: PersonaSpecSchema,
  task: z.string.optional,
+ /**
+ * What this persona already knows about the subject,
+ * selected, rendered and fenced host-side for the same reason `contextLedger` is.
+ */
+ mapContext: z.string.optional,
+ /**
+ * Present when this run's deliverable is a map rather than a diff.
+ * Its presence is what gives the agent `record_map` at all — see agent-host.ts.
+ */
+ mastery: z
+.object({
+ subjectKind: z.enum(['repository', 'author', 'corpus']),
+ subjectRef: z.string,
+ revision: z.string,
+ })
+.optional,
  /** The tree's ledger, rendered and fenced server-side. */
  contextLedger: z.string.optional,
  /** Where the run's clone is mounted inside the container, not the host path. */
@@ -52,6 +68,16 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  requestId: z.string,
  ok: z.boolean,
  reason: z.string.optional,
+ }),
+ /** The host's verdict on a map fragment. */
+ z.object({
+ t: z.literal('map_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ reason: z.string.optional,
+ nodesWritten: z.number.int.nonnegative.optional,
+ edgesWritten: z.number.int.nonnegative.optional,
+ superseded: z.number.int.nonnegative.optional,
  }),
  /** The tree's ledger, in answer to the agent's `notes_request`. */
  z.object({
@@ -142,6 +168,16 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  }),
  /** The agent asking for its tree's ledger mid-run, answered by `notes_result`. */
  z.object({ t: z.literal('notes_request'), requestId: z.string }),
+ /**
+ * One map fragment the agent wrote, crossing out as it is
+ * written for the same reason a note does — and more so, since a mastery run is the
+ * longest-lived run in the system and the likeliest to be stopped before it finishes.
+ */
+ z.object({
+ t: z.literal('map'),
+ requestId: z.string,
+ fragment: z.record(z.string, z.unknown),
+ }),
  /** The agent asking a human a question, answered by `question_result`. */
  z.object({ t: z.literal('question_request'), requestId: z.string, question: z.string }),
  /**

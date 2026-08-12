@@ -272,6 +272,38 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  runId: z.string,
  requestId: z.string,
  }),
+ /**
+ * One fragment of a map a mastery run wrote, sent **as it is written**.
+ *
+ * Same requirement and same reasoning as `note_written`, and it bites harder here: a
+ * mastery run is the longest-lived run in the system and therefore the likeliest to be
+ * killed, reaped or capped before any stop handler could fire. Writing incrementally is
+ * also what makes the partial map readable *during* the run, which is what makes
+ * stopping it early a real option rather than a loss.
+ *
+ * `fragment` is unvalidated here on purpose — the domain's `parseMapFragment` is the
+ * one validator, and it is the only place that knows a model may not claim `extracted`
+ * provenance. A second schema on the wire would be a second answer to that question.
+ */
+ z.object({
+ type: z.literal('map_written'),
+ runId: z.string,
+ requestId: z.string,
+ fragment: z.record(z.string, z.unknown),
+ }),
+ /**
+ * A mastery run's measured progress.
+ *
+ * `filesRead` is a count of distinct files the Runner observed the agent open, not a
+ * figure the agent reported: an agent's own estimate of its progress is model output
+ * and may be a remark, never the number.
+ */
+ z.object({
+ type: z.literal('mastery_progress'),
+ runId: z.string,
+ filesRead: z.number.int.nonnegative,
+ filesInScope: z.number.int.nonnegative,
+ }),
  z.object({
  type: z.literal('raw_transcript_chunk'),
  runId: z.string,
@@ -325,6 +357,10 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  ok: z.boolean,
  commitSha: z.string.optional,
  verified: z.boolean.optional,
+ /**
+ * What the merge actually changed, from `git diff --name-only`.
+ */
+ changedPaths: z.array(z.string).optional,
  /** Why verification did not run, when it did not. */
  note: z.string.optional,
  reason: z
@@ -446,6 +482,28 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  * place to get it wrong.
  */
  contextLedger: z.string.optional,
+ /**
+ * What this persona already knows about the subject it is working on, already selected, rendered and fenced by the server.
+ *
+ * Pre-rendered for exactly the reason `contextLedger` is: the trusted/untrusted
+ * split in `renderMapForPrompt` is the mitigation, and a second formatter on the
+ * Runner would be a second place to get it wrong.
+ */
+ mapContext: z.string.optional,
+ /**
+ * Start this run as a **mastery run**: its deliverable is a map, not a diff.
+ *
+ * Carries the subject so the Runner can frame the task, and `filesInScope` so the
+ * platform's coverage denominator is fixed at dispatch rather than recomputed per
+ * checkpoint against a tree the run may itself have changed.
+ */
+ mastery: z
+.object({
+ subjectKind: z.enum(['repository', 'author', 'corpus']),
+ subjectRef: z.string,
+ revision: z.string,
+ })
+.optional,
  /**
  * Start this run as a **reconciler** over another run's conflicted branch
  *.
@@ -608,6 +666,23 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  requestId: z.string,
  ok: z.boolean,
  reason: z.string.optional,
+ }),
+ /**
+ * The server's verdict on a map fragment. Same shape and same reason as
+ * `note_result`: a refusal a model cannot see is a refusal it earns again next call.
+ *
+ * `written` and `superseded` come back because they are the only honest feedback a
+ * mapping agent gets — "3 nodes recorded, 1 replaced what you said earlier" tells it
+ * whether it is adding to the map or arguing with itself.
+ */
+ z.object({
+ type: z.literal('map_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ reason: z.string.optional,
+ nodesWritten: z.number.int.nonnegative.optional,
+ edgesWritten: z.number.int.nonnegative.optional,
+ superseded: z.number.int.nonnegative.optional,
  }),
  /**
  * A tree's ledger, rendered, in answer to `notes_requested`. `ledger` is empty when

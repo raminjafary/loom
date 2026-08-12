@@ -100,8 +100,25 @@ export interface SandboxOptions {
  * way, or it blocks until the reaper takes it.
  */
  readonly onQuestion?: (question: string) => Promise<{ answer: string | null }>
+ /**
+ * One map fragment the agent wrote, relayed as it is written.
+ * Absent on an ordinary run, which is what makes `record_map` a mastery-run-only tool
+ * rather than something any worker could write to the persona's shared memory with.
+ */
+ readonly onMapWrite?: (fragment: Record<string, unknown>) => Promise<
+ | { ok: true; nodesWritten: number; edgesWritten: number; superseded: number }
+ | { ok: false; reason: string }
+ >
  /** The tree's ledger at start, rendered and fenced server-side. */
  readonly contextLedger?: string
+ /** What the persona already knows about this subject, rendered server-side. */
+ readonly mapContext?: string
+ /** Present when the deliverable is a map rather than a diff. */
+ readonly mastery?: {
+ subjectKind: 'repository' | 'author' | 'corpus'
+ subjectRef: string
+ revision: string
+ }
  readonly onSessionId?: (sessionId: string) => void
  /** How full the model's context window is, sampled inside the container. */
  readonly onContextUsage?: (usage: { totalTokens: number; maxTokens: number }) => void
@@ -463,6 +480,8 @@ export const runAgentInSandbox = async (
  persona: options.persona,
 ...(options.task === undefined ? {}: { task: options.task }),
 ...(options.contextLedger === undefined ? {}: { contextLedger: options.contextLedger }),
+...(options.mapContext === undefined ? {}: { mapContext: options.mapContext }),
+...(options.mastery === undefined ? {}: { mastery: options.mastery }),
  cwd: WORK_DIR,
 ...(options.resumeSessionId === undefined ? {}: { resumeSessionId: options.resumeSessionId }),
 ...(options.steering ? { steering: true }: {}),
@@ -572,6 +591,29 @@ export const runAgentInSandbox = async (
  requestId: frame.requestId,
  ok: result.ok,
 ...(result.ok ? {}: { reason: result.reason }),
+ })
+ })
+ return
+ case 'map':
+ // Same reasoning as `note` above: off the event queue, because a map fragment
+ // is not part of the transcript sequence and making it wait on a backlog would
+ // defeat the incremental write mastery requires.
+ void (async => {
+ const result = (await options.onMapWrite?.(frame.fragment)) ?? {
+ ok: false,
+ reason: 'this run is not a mastery run, so it has no map to write to',
+ }
+ send({
+ t: 'map_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok
+ ? {
+ nodesWritten: result.nodesWritten,
+ edgesWritten: result.edgesWritten,
+ superseded: result.superseded,
+ }
+: { reason: result.reason }),
  })
  })
  return

@@ -23,6 +23,15 @@ export type MergeOutcome =
  readonly ok: true
  readonly commitSha: string
  readonly verified: boolean
+ /**
+ * The files this merge actually changed, from git rather than from anyone's
+ * claim.
+ *
+ * From git deliberately: a run's *claimed* paths are a Planner's guess
+ *, and invalidating a persona's map on a guess would retire true
+ * claims and keep false ones.
+ */
+ readonly changedPaths: string[]
  /** Why verification did not run, when it did not. Recorded, never implied. */
  readonly note?: string
  }
@@ -284,6 +293,18 @@ export const mergeRunBranch = async (input: MergeRunBranchInput): Promise<MergeO
 
  const rebasedSha = await git(clonePath, ['rev-parse', 'HEAD'])
 
+ // Computed after the rebase and before the fast-forward, which is the one moment
+ // the branch's own contribution is exactly `targetTipBefore..HEAD`.
+ let changedPaths: string[] = []
+ try {
+ const names = await git(clonePath, ['diff', '--name-only', `${targetTipBefore}..HEAD`])
+ changedPaths = names.split('\n').map((line) => line.trim).filter((line) => line.length > 0)
+ } catch {
+ // A merge that succeeded must not fail because the file list could not be read.
+ // The cost of an empty list is a map that stays stale until the next curation
+ // pass, which is strictly better than a merge reported as failed.
+ }
+
  let verified = false
  let note: string | undefined
  if (plan.kind === 'run') {
@@ -359,5 +380,11 @@ export const mergeRunBranch = async (input: MergeRunBranchInput): Promise<MergeO
  }
 
  log(`merged ${branchName} into ${defaultBranch} at ${rebasedSha.slice(0, 8)}`)
- return { ok: true, commitSha: rebasedSha, verified,...(note === undefined ? {}: { note }) }
+ return {
+ ok: true,
+ commitSha: rebasedSha,
+ verified,
+ changedPaths,
+...(note === undefined ? {}: { note }),
+ }
 }

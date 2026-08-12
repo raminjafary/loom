@@ -6,6 +6,8 @@ import {
  reconcileRunnerRuns,
  recordAgentEvent,
  recordAgentNote,
+ recordMapFragment,
+ recordMasteryCheckpoint,
  recordRunCost,
  recordRawTranscriptChunk,
  recordReconcileResult,
@@ -81,7 +83,7 @@ interface PendingWarm {
 interface PendingMerge {
  resolve(
  result:
- | { ok: true; commitSha: string; verified: boolean; note?: string }
+ | { ok: true; commitSha: string; verified: boolean; changedPaths: string[]; note?: string }
  | { ok: false; reason: MergeFailureReason; detail: string },
 ): void
  reject(error: Error): void
@@ -380,7 +382,7 @@ export const createRunnerGateway = (
  }
  const requestId = randomUUID
  return new Promise<
- | { ok: true; commitSha: string; verified: boolean; note?: string }
+ | { ok: true; commitSha: string; verified: boolean; changedPaths: string[]; note?: string }
  | { ok: false; reason: MergeFailureReason; detail: string }
  >((resolve, reject) => {
  const timer = setTimeout( => {
@@ -578,6 +580,7 @@ export const createRunnerGateway = (
  ok: true,
  commitSha: frame.commitSha ?? '',
  verified: frame.verified ?? false,
+ changedPaths: frame.changedPaths ?? [],
 ...(frame.note === undefined ? {}: { note: frame.note }),
  }
 : {
@@ -644,6 +647,62 @@ export const createRunnerGateway = (
  ok: false,
  reason: error instanceof Error ? error.message: String(error),
  })
+ }
+ return
+ }
+
+ /**
+ * One fragment of a mastery run's map. Same shape as `note_written`
+ * and for the same reasons: the Runner is holding a tool call open on the reply,
+ * a refusal is returned rather than thrown so the model can act on it, and a
+ * genuine fault is caught here rather than escaping into the socket handler.
+ */
+ case 'map_written': {
+ try {
+ const result = await recordMapFragment(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ fragment: frame.fragment,
+ })
+ send(from, {
+ type: 'map_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok
+ ? {
+ nodesWritten: result.nodesWritten,
+ edgesWritten: result.edgesWritten,
+ superseded: result.superseded,
+ }
+: { reason: result.reason }),
+ })
+ } catch (error) {
+ send(from, {
+ type: 'map_result',
+ requestId: frame.requestId,
+ ok: false,
+ reason: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
+ /**
+ * A mastery run's measured progress. Fire-and-forget: nothing is
+ * waiting on a reply, and a checkpoint that fails to record must never be able to
+ * stop the run whose progress it was describing.
+ */
+ case 'mastery_progress': {
+ try {
+ await recordMasteryCheckpoint(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ filesRead: frame.filesRead,
+ filesInScope: frame.filesInScope,
+ spendUsd: 0,
+ })
+ } catch {
+ // Deliberately swallowed — see above.
  }
  return
  }

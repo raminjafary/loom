@@ -10,6 +10,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk'
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
+import { MAP_SERVER_NAME, MAP_TOOL_NAMES } from './map-tool.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
 import { PLANNER_SERVER_NAME } from './planner-tool.js'
@@ -178,6 +179,19 @@ export interface RunAgentOptions {
  */
  readonly contextLedger?: string
  /**
+ * What this persona already knows about the subject, selected,
+ * rendered and fenced by the server. Same placement and same reasoning as
+ * `contextLedger`: it holds claims a *model* wrote, so it goes in the prompt and never
+ * into the persona's system prompt.
+ */
+ readonly mapContext?: string
+ /**
+ * Present when this run's deliverable is a map rather than a diff.
+ */
+ readonly mastery?: { subjectKind: string; subjectRef: string; revision: string }
+ /** The `record_map`, offered only on a mastery run. */
+ readonly mapTool?: McpSdkServerConfigWithInstance
+ /**
  * Hands the caller the run's delivery channel.
  *
  * Called once, synchronously, before the agent loop starts. What comes through it
@@ -260,7 +274,13 @@ export const settingSourcesFromEnv = (
 export const buildQueryOptions = (
  options: Pick<
  RunAgentOptions,
- 'persona' | 'cwd' | 'resumeSessionId' | 'plannerTool' | 'notesTool' | 'questionTool'
+ | 'persona'
+ | 'cwd'
+ | 'resumeSessionId'
+ | 'plannerTool'
+ | 'notesTool'
+ | 'questionTool'
+ | 'mapTool'
  >,
  settingSources: SettingSourceName[] = settingSourcesFromEnv,
 ) => {
@@ -272,6 +292,7 @@ export const buildQueryOptions = (
  if (options.plannerTool) mcpServers[PLANNER_SERVER_NAME] = options.plannerTool.server
  // The shared-context channel, in-process for the same reason.
  if (options.notesTool) mcpServers[NOTES_SERVER_NAME] = options.notesTool
+ if (options.mapTool) mcpServers[MAP_SERVER_NAME] = options.mapTool
  if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
  const skills = capabilities
 .filter((capability) => capability.kind === 'skill')
@@ -303,6 +324,7 @@ export const buildQueryOptions = (
  const platformTools = [
 ...(options.plannerTool ? [options.plannerTool.toolName]: []),
 ...(options.notesTool ? NOTES_TOOL_NAMES: []),
+...(options.mapTool ? MAP_TOOL_NAMES: []),
 ...(options.questionTool ? [ASK_HUMAN_TOOL_NAME]: []),
  ]
 
@@ -362,14 +384,57 @@ export const buildQueryOptions = (
  * and not after.
  */
 export const buildPrompt = (
- options: Pick<RunAgentOptions, 'persona' | 'task' | 'contextLedger'>,
+ options: Pick<RunAgentOptions, 'persona' | 'task' | 'contextLedger' | 'mapContext' | 'mastery'>,
 ): string => {
- const opening = options.task
+ const opening = options.mastery
+ ? masteryOpening(options.persona.name, options.mastery, options.task)
+: options.task
  ? `You are ${options.persona.name}. ${options.task}`
 : `You are ${options.persona.name}. Begin working now.`
- const ledger = options.contextLedger?.trim
- return ledger ? `${opening}\n\n${ledger}`: opening
+
+ /**
+ * Both context blocks after the task, ledger last. The map is older and broader; the
+ * ledger is about the work happening right now, and the thing nearest the end of a
+ * prompt is the thing a model weighs most.
+ */
+ return [opening, options.mapContext?.trim, options.contextLedger?.trim]
+.filter((part): part is string => typeof part === 'string' && part.length > 0)
+.join('\n\n')
 }
+
+/**
+ * A mastery run's opening.
+ *
+ * It says the deliverable is a map and not a diff, because the default reading of any
+ * task by a coding agent is "change something", and a mastery run that starts editing
+ * is a run spending a read-only budget on work the merge queue will never see. It also
+ * says what a *worthless* map looks like — the "technically a graph and practically a
+ * directory listing" — since that is the failure this run will produce by default: it
+ * is the easiest possible output and it looks like success.
+ */
+const masteryOpening = (
+ personaName: string,
+ mastery: { subjectKind: string; subjectRef: string; revision: string },
+ task: string | undefined,
+): string =>
+ [
+ `You are ${personaName}. Your job in this run is to LEARN the ${mastery.subjectKind} ` +
+ `"${mastery.subjectRef}" at revision ${mastery.revision}, and to record what you learn ` +
+ 'with the record_map tool. You are not being asked to change anything: do not edit, ' +
+ 'create or delete files, and do not run anything that would.',
+ 'Work outside in. Find the entry points, then the modules, then the ideas that span ' +
+ 'them. Call record_map as you go, in small batches — everything you record is saved ' +
+ 'immediately, and anything you are holding back for a final summary is lost if this ' +
+ 'run is stopped.',
+ 'What makes this map worth its cost is what someone could NOT get by skimming the ' +
+ 'repository for a minute: which files together implement one idea, a convention the ' +
+ 'code follows that is written down nowhere, a place where past changes went wrong, ' +
+ 'something that must stay true. A node for every file and an edge for every import is ' +
+ 'worth nothing to the next reader.',
+ task,
+ ]
+.filter((part): part is string => typeof part === 'string' && part.length > 0)
+.join('\n\n')
 
 /**
  * The run's input channel — the opening prompt, plus anything the platform delivers

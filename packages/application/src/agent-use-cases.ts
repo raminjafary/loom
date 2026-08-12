@@ -57,6 +57,7 @@ import {
  type AgentPersona,
  type AgentPersonaId,
  type AgentRun,
+ type MapSubjectKind,
  type Message,
  type AgentRunId,
  type AgentRunRelation,
@@ -111,6 +112,13 @@ import type {
 import type { BlobStoragePort } from './ports.js'
 import type { NotificationDeps } from './notification-use-cases.js'
 import {
+ buildMapContext,
+ closeMap,
+ invalidateMapsForMerge,
+ openMap,
+ type MasteryDeps,
+} from './mastery-use-cases.js'
+import {
  buildContextLedger,
  recordPlatformNote,
  deliverNoteToActiveRuns,
@@ -119,7 +127,7 @@ import {
 } from './note-use-cases.js'
 import { startThread, type Deps } from './use-cases.js'
 
-export interface AgentDeps extends Deps, NotificationDeps, NoteDeps {
+export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps {
  readonly runners: RunnerRepositoryPort
  readonly repositories: RepositoryRepositoryPort
  readonly agentRuns: AgentRunRepositoryPort
@@ -1298,6 +1306,12 @@ export const startAgentRun = async (
  * relation already existed.
  */
  review?: { targetRunId: AgentRunId; branchName: string }
+ /**
+ * Start this run as a **mastery run**: its deliverable is a map of the
+ * named subject, not a diff. Opens (or re-opens) the persona's map for that subject
+ * before dispatch, and is what gives the run `record_map` at all.
+ */
+ mastery?: { subjectKind: MapSubjectKind; subjectRef: string; revision: string }
  },
 ): Promise<AgentRun> => {
  const parent = input.parentRunId
@@ -1626,6 +1640,51 @@ export const startAgentRun = async (
  // Deliberately swallowed — see above.
  }
 
+ /**
+ * A mastery run's map, opened before dispatch.
+ *
+ * Opened here rather than on the run's first `record_map` call, and the difference is
+ * the whole of the progress story: a mastery run that produced nothing must still
+ * leave a row saying it tried, against which subject, at what revision. A map that
+ * comes into existence only once a model has succeeded cannot record a failure.
+ */
+ let mastery: { subjectKind: MapSubjectKind; subjectRef: string; revision: string } | null = null
+ if (input.mastery) {
+ const map = await openMap(deps, {
+ workspaceId: input.workspaceId,
+ personaId: persona.id,
+ subjectKind: input.mastery.subjectKind,
+ repositoryId: repository.id,
+ subjectRef: input.mastery.subjectRef,
+ revision: input.mastery.revision,
+ masteryRunId: run.id,
+ })
+ mastery = {
+ subjectKind: map.subjectKind,
+ subjectRef: map.subjectRef,
+ revision: map.revision,
+ }
+ }
+
+ /**
+ * What this persona already knows.
+ *
+ * Swallowed on failure for the same reason the ledger is: a run without its map is
+ * worse off, not broken, and making a start depend on this read would tie throughput
+ * to a query that has nothing to do with the work.
+ */
+ let mapContext = ''
+ try {
+ mapContext = await buildMapContext(deps, {
+ workspaceId: input.workspaceId,
+ personaId: persona.id,
+ repositoryId: repository.id,
+ excludeRunId: run.id,
+ })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+
  try {
  await deps.dispatch.startRun({
  runnerId: repository.runnerId,
@@ -1636,6 +1695,8 @@ export const startAgentRun = async (
  repositoryId: repository.id,
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(contextLedger === '' ? {}: { contextLedger }),
+...(mapContext === '' ? {}: { mapContext }),
+...(mastery ? { mastery }: {}),
 ...(input.reconcile && parent
  ? { reconcile: { parentRunId: parent.id, branchName: input.reconcile.branchName } }
 : {}),
@@ -3975,6 +4036,28 @@ const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<v
  title: `${entry.branchName} merged into ${repository.defaultBranch}`,
  body: `Merged as ${result.commitSha.slice(0, 8)} (${verification}). Later branches rebase onto this.`,
  })
+
+ /**
+ * The merge queue is where a map learns it is wrong.
+ *
+ * Every map bound to this repository, across every persona — a merged change makes a
+ * claim false for whoever holds it, and invalidating only the map of whichever persona
+ * happened to be involved would leave every other expert on this repository
+ * confidently wrong.
+ *
+ * Swallowed, and last: a merge that landed must not be reported as failed because
+ * bookkeeping about someone's memory did not.
+ */
+ try {
+ await invalidateMapsForMerge(deps, {
+ workspaceId: entry.workspaceId,
+ repositoryId: repository.id,
+ changedPaths: result.changedPaths,
+ revision: result.commitSha,
+ })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
 }
 
 /**
@@ -4301,6 +4384,10 @@ export const recordAgentEvent = async (
  * terminal, and a subtask released here is a new non-terminal sibling. Reversed,
  * a two-stage plan would post "plan finished" at the end of stage one.
  */
+ // A mastery run's map is finished when its run is. A no-op for
+ // every other run, which is why it is unconditional rather than behind a check
+ // this function would have to keep in step with.
+ await closeMap(deps, { workspaceId: input.workspaceId, agentRunId: completed.id, ok: true })
  await releaseDependents(deps, completed)
  await aggregateForParent(deps, completed)
  } else if (input.event.kind === 'run_failed') {
@@ -4322,6 +4409,12 @@ export const recordAgentEvent = async (
  // A failure releases nothing, but it is what *skips* the dependents that were
  // waiting on it — and those skips have to be recorded before the aggregation
  // decides the plan is over.
+ /**
+ * A failed mastery run still leaves the claims it wrote. Mastery writes the map
+ * incrementally precisely so a killed run's partial work survives, so `ok: false`
+ * marks the map `failed` only when it holds nothing at all — see `closeMap`.
+ */
+ await closeMap(deps, { workspaceId: input.workspaceId, agentRunId: failed.id, ok: false })
  await releaseDependents(deps, failed)
  await aggregateForParent(deps, failed)
  }

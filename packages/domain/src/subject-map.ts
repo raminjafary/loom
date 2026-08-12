@@ -598,6 +598,7 @@ export const renderMapForPrompt = (
  map: Pick<SubjectMap, 'subjectKind' | 'subjectRef' | 'revision'>,
  nodes: readonly MapNode[],
  edges: readonly MapEdge[],
+ elided: { readonly nodes: number; readonly edges: number } = { nodes: 0, edges: 0 },
 ): string => {
  const liveNodes = nodes.filter((node) => node.invalidatedAt === null)
  const liveEdges = edges.filter((edge) => edge.invalidatedAt === null)
@@ -650,7 +651,86 @@ export const renderMapForPrompt = (
 )
  }
 
+ if (elided.nodes > 0 || elided.edges > 0) {
+ sections.push(
+ `This is a summary of a larger map: ${elided.nodes} further node(s) and ` +
+ `${elided.edges} edge(s) exist and are not shown. If what you need is not here, ` +
+ 'read the code rather than assuming the map is complete.',
+)
+ }
+
  return sections.join('\n\n')
+}
+
+/**
+ * How many nodes of a map go into one worker's context.
+ *
+ * Phase 3b makes retrieval the gate on everything after the map, and this constant
+ * is where that gate is won or lost: a map is worth building only if reading it costs
+ * less than rediscovering what it holds. `MAX_NODES_PER_MAP` is 2,000; pasting those
+ * into a prompt would spend more context than the rediscovery it replaces, which is
+ * The failure with a different artifact's name on it.
+ */
+export const MAX_NODES_IN_CONTEXT = 60
+export const MAX_EDGES_IN_CONTEXT = 120
+
+/**
+ * Chooses which of a map's claims a run is shown, and returns what it dropped.
+ *
+ * The ranking is the argument for the map existing at all, so it is worth stating.
+ * **Concepts first**, because a concept node is the only thing here that a worker could
+ * not have derived with `grep` in the time it takes to read this — a file node repeats
+ * what an `ls` already says. **Then hubs**, because the god node is where a change
+ * reaches furthest, and that is the single most useful warning to arrive before the
+ * first edit. **Then whatever is left, by recency of derivation**, since a claim
+ * re-confirmed at a newer revision has survived more scrutiny than one that has not.
+ *
+ * Edges follow their nodes: an edge whose endpoints are both dropped is noise, and an
+ * edge to a node the reader cannot see is worse than noise because it invites a
+ * question the context cannot answer.
+ *
+ * The count dropped is returned rather than swallowed, for the same reason
+ * `selectNotesForContext` returns it: a worker shown a silently truncated map believes
+ * it has the whole picture, which is precisely the belief that makes a partial map
+ * more dangerous than none.
+ */
+export const selectMapForContext = (
+ nodes: readonly MapNode[],
+ edges: readonly MapEdge[],
+ nodeLimit: number = MAX_NODES_IN_CONTEXT,
+ edgeLimit: number = MAX_EDGES_IN_CONTEXT,
+): {
+ readonly nodes: MapNode[]
+ readonly edges: MapEdge[]
+ readonly elidedNodes: number
+ readonly elidedEdges: number
+} => {
+ const liveNodes = nodes.filter((node) => node.invalidatedAt === null)
+ const liveEdges = edges.filter((edge) => edge.invalidatedAt === null)
+
+ const hubKeys = new Set(findHubNodes(liveNodes, liveEdges).map((hub) => hub.key))
+ const rank = (node: MapNode): number => {
+ if (CONCEPT_NODE_KINDS.includes(node.kind)) return 0
+ if (hubKeys.has(node.key)) return 1
+ return 2
+ }
+
+ const selectedNodes = [...liveNodes]
+.sort((a, b) => rank(a) - rank(b) || b.createdAt.getTime - a.createdAt.getTime)
+.slice(0, Math.max(0, nodeLimit))
+
+ const visible = new Set(selectedNodes.map((node) => node.key))
+ const candidateEdges = liveEdges.filter(
+ (edge) => visible.has(edge.fromKey) && visible.has(edge.toKey),
+)
+ const selectedEdges = candidateEdges.slice(0, Math.max(0, edgeLimit))
+
+ return {
+ nodes: selectedNodes,
+ edges: selectedEdges,
+ elidedNodes: liveNodes.length - selectedNodes.length,
+ elidedEdges: liveEdges.length - selectedEdges.length,
+ }
 }
 
 /**

@@ -896,7 +896,7 @@ export interface RunDispatchPort {
  runId: AgentRunId
  verifyCommand: string | null
  }): Promise<
- | { ok: true; commitSha: string; verified: boolean; note?: string }
+ | { ok: true; commitSha: string; verified: boolean; changedPaths: string[]; note?: string }
  | { ok: false; reason: MergeFailureReason; detail: string }
  >
 }

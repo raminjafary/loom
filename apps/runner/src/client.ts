@@ -40,6 +40,7 @@ import { mergeRunBranch } from './merge.js'
 import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
+import { createMapTool } from './map-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
@@ -92,6 +93,17 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const pendingNoteReads = new Map<
  string,
  (result: { ok: boolean; ledger?: string | undefined; error?: string | undefined }) => void
+ >
+ /** `record_map` round-trips. Same shape and bound as a note write. */
+ const pendingMapWrites = new Map<
+ string,
+ (result: {
+ ok: boolean
+ reason?: string | undefined
+ nodesWritten?: number | undefined
+ edgesWritten?: number | undefined
+ superseded?: number | undefined
+ }) => void
  >
  /** `ask_human` round-trips, keyed by the id the answer comes back on. */
  const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
@@ -435,6 +447,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  contextLedger?: string
  /** A re-planning turn: the delta channel replaces the plan channel. */
  steering?: boolean
+ /** What the persona already knows about this subject, rendered server-side. */
+ mapContext?: string
+ /** Present when the deliverable is a map rather than a diff. */
+ mastery?: { subjectKind: 'repository' | 'author' | 'corpus'; subjectRef: string; revision: string }
  }): Promise<void> => {
  // Async, and awaited by whoever produces events (the SDK loop in-process, the
  // container's stdout reader when sandboxed) — that await is the backpressure.
@@ -534,6 +550,44 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // The notes channel is given to every run, planner included: a note is not a
  // capability, so it does not weaken `tools: []` (see notes-tool.ts).
  const notesTool = createNotesTool({ writeNote: onNote, readNotes: onNotesRequest })
+ /**
+ * The mapping channel, present **only on a mastery run**.
+ *
+ * Unlike notes, this is not given to every run. A map is a persona-level artifact
+ * that later runs are handed as context, so letting an ordinary worker write to it
+ * would mean any run could edit what every future run reads — which is the * "one poisoned run could write a lesson every future run reads", the exact risk
+ * that section says must not be structural.
+ */
+ const onMapWrite = (fragment: {
+ nodes: unknown[]
+ edges: unknown[]
+ }): Promise<
+ | { ok: true; nodesWritten: number; edgesWritten: number; superseded: number }
+ | { ok: false; reason: string }
+ > => {
+ const requestId = nextNoteRequestId
+ send({ type: 'map_written', runId: input.runId, requestId, fragment })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingMapWrites.delete(requestId)
+ resolve({ ok: false, reason: 'the platform did not answer in time — it was not saved' })
+ }, NOTE_TIMEOUT_MS)
+ pendingMapWrites.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok
+ ? {
+ ok: true,
+ nodesWritten: result.nodesWritten ?? 0,
+ edgesWritten: result.edgesWritten ?? 0,
+ superseded: result.superseded ?? 0,
+ }
+: { ok: false, reason: result.reason ?? 'the platform refused it' },
+)
+ })
+ })
+ }
+ const mapTool = input.mastery !== undefined ? createMapTool({ recordMap: onMapWrite }): null
  // `ask_human`, on the same reasoning and the same round-trip. No
  // timeout here, unlike a notes read: this one is *meant* to block for as long as a
  // human takes, and the approval SLA is what bounds it — a second, shorter clock in
@@ -610,9 +664,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  ? { plannerTool: { server: deltaTool.server, toolName: PLAN_DELTA_TOOL_NAME } }
 : {}),
  notesTool,
+...(mapTool ? { mapTool }: {}),
  questionTool: questionTool.server,
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(input.contextLedger === undefined ? {}: { contextLedger: input.contextLedger }),
+...(input.mapContext === undefined ? {}: { mapContext: input.mapContext }),
+...(input.mastery === undefined ? {}: { mastery: input.mastery }),
 ...(input.resumeSessionId === undefined ? {}: { resumeSessionId: input.resumeSessionId }),
  abortController: input.abort,
  isRiskyTool,
@@ -667,6 +724,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  persona: input.persona,
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(input.contextLedger === undefined ? {}: { contextLedger: input.contextLedger }),
+...(input.mapContext === undefined ? {}: { mapContext: input.mapContext }),
+...(input.mastery === undefined ? {}: { mastery: input.mastery }),
  clonePath: input.clonePath,
  homePath: input.homePath,
  egressToken,
@@ -683,6 +742,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 : {}),
  onNote,
  onNotesRequest,
+...(mapTool
+ ? {
+ onMapWrite: (fragment: Record<string, unknown>) =>
+ onMapWrite(fragment as { nodes: unknown[]; edges: unknown[] }),
+ }
+: {}),
  onQuestion: (question) =>
  new Promise<{ answer: string | null }>((resolve) => {
  const requestId = nextNoteRequestId
@@ -944,6 +1009,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // of other runs' notes, and a resumed run should read the ledger as
  // it is *now* (via read_notes), not replay a stale copy of it.
 ...(frame.contextLedger === undefined ? {}: { contextLedger: frame.contextLedger }),
+ // Same as the ledger, and for the same reason: a map is workspace-side
+ // state that moves while a run works, so a resumed run gets whatever
+ // the server sends it now rather than a replay of what it had.
+...(frame.mapContext === undefined ? {}: { mapContext: frame.mapContext }),
+...(frame.mastery === undefined ? {}: { mastery: frame.mastery }),
 ...(frame.steering ? { steering: true }: {}),
  clonePath,
  homePath,
@@ -1084,6 +1154,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  if (resolve) {
  pendingPermissions.delete(frame.toolUseId)
  resolve(frame.decision)
+ }
+ return
+ }
+
+ case 'map_result': {
+ const resolve = pendingMapWrites.get(frame.requestId)
+ if (resolve) {
+ pendingMapWrites.delete(frame.requestId)
+ resolve(frame)
  }
  return
  }
@@ -1323,6 +1402,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  ok: true,
  commitSha: result.commitSha,
  verified: result.verified,
+ changedPaths: result.changedPaths,
 ...(result.note === undefined ? {}: { note: result.note }),
  }
 : {
