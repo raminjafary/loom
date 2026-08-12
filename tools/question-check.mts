@@ -36,12 +36,27 @@ import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
 const execFileAsync = promisify(execFile)
 const REPO_ROOT = new URL('..', import.meta.url).pathname
 
+/**
+ * The sandbox needs the egress proxy's control secret, and that lives in `.env` —
+ * which a spawned process does not inherit. Without it `egressConfigFromEnv` returns
+ * nothing, the Runner has no sandbox to run in, and the run is refused. Loaded here so
+ * the refusal is about something real rather than about a missing shell export.
+ */
+try {
+ process.loadEnvFile(join(REPO_ROOT, '.env'))
+} catch {
+ // No.env is fine unsandboxed; sandboxed, the refusal below will say what is missing.
+}
+
 const config = loadConfig({
 ...process.env,
  NODE_ENV: 'test',
  BETTER_AUTH_SECRET: 'question-secret-at-least-32-characters-long-x',
  SERVER_PORT: '0',
 } as NodeJS.ProcessEnv)
+
+/** `LOOM_SANDBOX_ENABLED=1` drives the container path — see the env block below. */
+const sandboxed = process.env.LOOM_SANDBOX_ENABLED === '1'
 
 const results: { ok: boolean; what: string }[] = []
 const check = (ok: boolean, what: string) => {
@@ -75,7 +90,7 @@ const main = async => {
  const addr = app.fastify.server.address
  if (addr === null || typeof addr === 'string') throw new Error('no port')
  const client: any = createORPCClient(new RPCLink({ url: `http://127.0.0.1:${addr.port}/rpc` }))
- console.log('server on', `http://127.0.0.1:${addr.port}`)
+ console.log('server on', `http://127.0.0.1:${addr.port}`, sandboxed ? '(sandboxed)': '(unsandboxed)')
 
  const repoPath = await mkdtemp(join(tmpdir, 'question-repo-'))
  await execFileAsync('git', ['init', '--quiet', '-b', 'main', repoPath])
@@ -94,9 +109,23 @@ const main = async => {
  LOOM_SERVER_WS_URL: `ws://127.0.0.1:${addr.port}/ws/runner`,
  LOOM_PAIRING_TOKEN: rawToken,
  LOOM_ALLOWED_ROOTS: tmpdir,
- LOOM_SANDBOX_ENABLED: process.env.LOOM_SANDBOX_ENABLED ?? '0',
+ LOOM_SANDBOX_ENABLED: sandboxed ? '1': '0',
+ /**
+ * **Not supplied when the sandbox was asked for.** The Runner falls back to an
+ * unsandboxed run whenever the sandbox is unavailable *and* this acknowledgement
+ * is set — so a driver that passes it unconditionally turns
+ * `LOOM_SANDBOX_ENABLED=1` into a silent downgrade, and reports a clean pass
+ * about the path it was not testing. That happened on this file's first
+ * sandboxed run: 5/5, with `WARNING: running UNSANDBOXED` two lines above it.
+ *
+ * Withheld here, the same situation is a loud refusal naming what is missing.
+ */
+...(sandboxed
+ ? {}
+: {
  LOOM_ALLOW_UNSANDBOXED:
  process.env.LOOM_ALLOW_UNSANDBOXED ?? 'i-understand-the-agent-gets-my-privileges',
+ }),
  LOOM_RUNNER_STATE_DIR: join(tmpdir, `question-state-${Date.now}`),
  },
  stdio: ['ignore', 'pipe', 'pipe'],
@@ -158,6 +187,9 @@ const main = async => {
  final = await client.agentRun.get({ agentRunId: run.id })
  }
  check(final.status === 'completed', `the run finished after answering (${final.status})`)
+ if (final.status !== 'completed' && final.errorMessage) {
+ console.log(' run error:', String(final.errorMessage).slice(0, 400))
+ }
 
  // The clone, not the source repo — the run works on its own copy.
  const clonePath = final.clonePath
