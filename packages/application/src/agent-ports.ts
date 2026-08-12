@@ -32,6 +32,15 @@ import type {
  UserId,
  WorkerNote,
  WorkerNoteKind,
+ MapEdge,
+ MapFragmentEdge,
+ MapFragmentNode,
+ MapNode,
+ MapSubjectKind,
+ MasteryCheckpoint,
+ SubjectMap,
+ SubjectMapId,
+ SubjectMapStatus,
  WorkspaceId,
  WorkspaceRunControl,
 } from '@loom/domain'
@@ -890,4 +899,84 @@ export interface RunDispatchPort {
  | { ok: true; commitSha: string; verified: boolean; note?: string }
  | { ok: false; reason: MergeFailureReason; detail: string }
  >
+}
+
+/**
+ * A persona's expertise in a subject.
+ *
+ * Its own port rather than methods on `PersonaRepositoryPort` for the same reason the
+ * notes ledger has one: a map outlives the runs that wrote it and is read by runs that
+ * did not, so it is not part of any one run's or persona edit's lifecycle.
+ *
+ * There is no `deleteNode`. Invalidation is a write — `invalidateNodes` stamps a
+ * row rather than removing it, which is what lets a curation pass tell a claim it
+ * already retired from one it never had, and what makes "this was true until commit
+ * `abc`" sayable at all. Dropping a whole map is a persona-level act and cascades from
+ * the persona or the repository.
+ */
+export interface SubjectMapRepositoryPort {
+ /**
+ * Creates the map or moves an existing one to a new revision.
+ *
+ * Upsert rather than insert, because mastering the same subject again must *update*
+ * the map: a new map per run would leave retrieval guessing which of five is current,
+ * which is the failure mastery means by "a map with no commit is a rumour" wearing a
+ * different hat.
+ */
+ upsertMap(input: {
+ workspaceId: WorkspaceId
+ personaId: AgentPersonaId
+ subjectKind: MapSubjectKind
+ repositoryId: RepositoryId | null
+ subjectRef: string
+ revision: string
+ status: SubjectMapStatus
+ masteryRunId: AgentRunId | null
+ }): Promise<SubjectMap>
+ setStatus(
+ workspaceId: WorkspaceId,
+ mapId: SubjectMapId,
+ status: SubjectMapStatus,
+): Promise<SubjectMap | null>
+ getMap(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<SubjectMap | null>
+ findMapByRun(workspaceId: WorkspaceId, masteryRunId: AgentRunId): Promise<SubjectMap | null>
+ listMapsForPersona(workspaceId: WorkspaceId, personaId: AgentPersonaId): Promise<SubjectMap[]>
+ listMapsForRepository(workspaceId: WorkspaceId, repositoryId: RepositoryId): Promise<SubjectMap[]>
+ /**
+ * Writes one fragment, bi-temporally.
+ *
+ * A live node whose content is unchanged is *re-confirmed* at the new revision rather
+ * than superseded — otherwise every re-mastering would invalidate the entire map and
+ * write it again, and the invalidation history would record churn instead of change.
+ */
+ writeFragment(input: {
+ workspaceId: WorkspaceId
+ mapId: SubjectMapId
+ revision: string
+ nodes: readonly MapFragmentNode[]
+ edges: readonly MapFragmentEdge[]
+ }): Promise<{ nodesWritten: number; edgesWritten: number; superseded: number }>
+ listNodes(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<MapNode[]>
+ listEdges(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<MapEdge[]>
+ /** Live counts, which is what `MAX_NODES_PER_MAP` bounds. */
+ countLive(
+ workspaceId: WorkspaceId,
+ mapId: SubjectMapId,
+): Promise<{ nodes: number; edges: number }>
+ invalidateNodes(
+ workspaceId: WorkspaceId,
+ nodeIds: readonly string[],
+ reason: string,
+): Promise<number>
+ appendCheckpoint(input: {
+ workspaceId: WorkspaceId
+ mapId: SubjectMapId
+ agentRunId: AgentRunId | null
+ filesRead: number
+ filesInScope: number
+ nodeCount: number
+ edgeCount: number
+ spendUsd: number
+ }): Promise<MasteryCheckpoint>
+ listCheckpoints(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<MasteryCheckpoint[]>
 }

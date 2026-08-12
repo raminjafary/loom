@@ -772,3 +772,153 @@ export const planSubtask = pgTable(
  index('plan_subtask_planner_idx').on(t.workspaceId, t.plannerRunId, t.status),
  ],
 )
+
+/**
+ * A persona's expertise in one subject.
+ *
+ * **Keyed by persona, not by team, and that is the whole portability story.** portable expertise:
+ * "a run carries a persona, not a team", so an expert persona carries its maps onto
+ * every team a human puts it on. A `team_expertise` join table is the instinct and the
+ * bug — it would make the same expert on two teams two different experts, the second
+ * one starting from zero.
+ *
+ * `repositoryId` cascades rather than nulls: a map of a repository that no longer
+ * exists is not a partial map, it is a set of claims about nothing, and leaving it
+ * would put a stale expertise in front of a worker with no way to check it.
+ *
+ * The unique index is what makes a mastery run *re-runnable*: mastering the same
+ * subject again updates the map's revision and re-derives against it, rather than
+ * accumulating a new map per run and leaving retrieval to guess which is current.
+ */
+export const subjectMap = pgTable(
+ 'subject_map',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ // 'repository' | 'author' | 'corpus' — the three subjects.
+ subjectKind: text('subject_kind').notNull,
+ repositoryId: uuid('repository_id').references( => repository.id, { onDelete: 'cascade' }),
+ subjectRef: text('subject_ref').notNull,
+ // Mastery: "a map with no commit is a rumour."
+ revision: text('revision').notNull,
+ status: text('status').notNull.default('mastering'),
+ masteryRunId: uuid('mastery_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ uniqueIndex('subject_map_unique_idx').on(t.workspaceId, t.personaId, t.subjectKind, t.subjectRef),
+ index('subject_map_persona_idx').on(t.workspaceId, t.personaId),
+ index('subject_map_repository_idx').on(t.workspaceId, t.repositoryId),
+ ],
+)
+
+/**
+ * One claim in a map.
+ *
+ * **The partial unique index is the bi-temporal model**: at most one
+ * *live* node per key, and unlimited invalidated history behind it. A plain unique
+ * index would have forced invalidation to be a delete, which costs the three things
+ * Domain expertise names — a curation pass re-deriving what it already retired, a wrong belief with
+ * no trail back to the run that acted on it, and the unsayable "this was true until
+ * commit `abc`".
+ */
+export const subjectMapNode = pgTable(
+ 'subject_map_node',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ mapId: uuid('map_id')
+.notNull
+.references( => subjectMap.id, { onDelete: 'cascade' }),
+ key: text('key').notNull,
+ kind: text('kind').notNull,
+ label: text('label').notNull,
+ summary: text('summary').notNull.default(''),
+ // 'extracted' | 'inferred' | 'ambiguous'. The trust boundary inside the graph:
+ // only the platform's parsers may write the first and third (see parseMapFragment).
+ provenance: text('provenance').notNull,
+ paths: jsonb('paths').$type<string[]>.notNull.default([]),
+ observationCount: integer('observation_count').notNull.default(1),
+ derivedAtRevision: text('derived_at_revision').notNull,
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+ invalidatedReason: text('invalidated_reason'),
+ },
+ (t) => [
+ uniqueIndex('subject_map_node_live_key_idx')
+.on(t.mapId, t.key)
+.where(sql`${t.invalidatedAt} is null`),
+ index('subject_map_node_map_idx').on(t.mapId, t.provenance),
+ ],
+)
+
+/** An edge in a map. Same bi-temporal treatment as a node, for the same reason. */
+export const subjectMapEdge = pgTable(
+ 'subject_map_edge',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ mapId: uuid('map_id')
+.notNull
+.references( => subjectMap.id, { onDelete: 'cascade' }),
+ fromKey: text('from_key').notNull,
+ toKey: text('to_key').notNull,
+ kind: text('kind').notNull,
+ provenance: text('provenance').notNull,
+ derivedAtRevision: text('derived_at_revision').notNull,
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+ invalidatedReason: text('invalidated_reason'),
+ },
+ (t) => [
+ uniqueIndex('subject_map_edge_live_idx')
+.on(t.mapId, t.fromKey, t.toKey, t.kind)
+.where(sql`${t.invalidatedAt} is null`),
+ index('subject_map_edge_map_idx').on(t.mapId),
+ ],
+)
+
+/**
+ * A measured checkpoint of a mastery run.
+ *
+ * Rows rather than columns on the map, because mastery wants a finished run reviewable as
+ * a *curve* — where the yield came from, where it flattened, what it cost — and because
+ * `yieldFlat` is a statement about a sequence, not about a latest value. Every figure
+ * here is one the platform computed: an agent's own estimate of its progress is model
+ * output, and may be a remark but never the number.
+ */
+export const masteryCheckpoint = pgTable(
+ 'mastery_checkpoint',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ seq: bigserial('seq', { mode: 'bigint' }).notNull,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ mapId: uuid('map_id')
+.notNull
+.references( => subjectMap.id, { onDelete: 'cascade' }),
+ agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ filesRead: integer('files_read').notNull.default(0),
+ filesInScope: integer('files_in_scope').notNull.default(0),
+ nodeCount: integer('node_count').notNull.default(0),
+ edgeCount: integer('edge_count').notNull.default(0),
+ spendUsd: doublePrecision('spend_usd').notNull.default(0),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [index('mastery_checkpoint_map_idx').on(t.workspaceId, t.mapId, t.seq)],
+)

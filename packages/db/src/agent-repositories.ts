@@ -11,6 +11,7 @@ import type {
  RepositoryRepositoryPort,
  RunLiveActivity,
  RunnerRepositoryPort,
+ SubjectMapRepositoryPort,
  WorkerNoteRepositoryPort,
  WorkspaceRunControlRepositoryPort,
 } from '@loom/application'
@@ -21,6 +22,9 @@ import type { Database } from './client.js'
 import {
  toAgentPersona,
  toAgentRun,
+ toMapEdge,
+ toMapNode,
+ toSubjectMap,
  toApprovalRequest,
  toCapability,
  toMergeQueueEntry,
@@ -42,6 +46,9 @@ import {
  type PlanSubtaskRow,
  type RepositoryRow,
  type RunnerRow,
+ type SubjectMapEdgeRow,
+ type SubjectMapNodeRow,
+ type SubjectMapRow,
  type WorkerNoteRow,
 } from './mappers.js'
 import {
@@ -59,6 +66,10 @@ import {
  repository,
  runner,
  thread,
+ masteryCheckpoint,
+ subjectMap,
+ subjectMapEdge,
+ subjectMapNode,
  workerNote,
  workspace,
 } from './schema.js'
@@ -1361,3 +1372,289 @@ export const setRunnerConnection = async (
  })
 .where(eq(runner.id, runnerId))
 }
+
+/**
+ * A persona's expertise in a subject.
+ *
+ * The one method worth reading is `writeFragment`, and the thing it is careful about is
+ * bi-temporality: a claim is never overwritten and never deleted, so the map can answer
+ * *when* it stopped believing something and not only what it believes now.
+ */
+export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => ({
+ async upsertMap(input) {
+ const [row] = await db
+.insert(subjectMap)
+.values({
+ workspaceId: input.workspaceId,
+ personaId: input.personaId,
+ subjectKind: input.subjectKind,
+ repositoryId: input.repositoryId,
+ subjectRef: input.subjectRef,
+ revision: input.revision,
+ status: input.status,
+ masteryRunId: input.masteryRunId,
+ })
+.onConflictDoUpdate({
+ target: [
+ subjectMap.workspaceId,
+ subjectMap.personaId,
+ subjectMap.subjectKind,
+ subjectMap.subjectRef,
+ ],
+ set: {
+ revision: input.revision,
+ status: input.status,
+ masteryRunId: input.masteryRunId,
+ repositoryId: input.repositoryId,
+ updatedAt: new Date,
+ },
+ })
+.returning
+ if (!row) throw new Error('subject_map upsert returned no row')
+ return toSubjectMap(row as SubjectMapRow)
+ },
+
+ async setStatus(workspaceId, mapId, status) {
+ const [row] = await db
+.update(subjectMap)
+.set({ status, updatedAt: new Date })
+.where(and(eq(subjectMap.workspaceId, workspaceId), eq(subjectMap.id, mapId)))
+.returning
+ return row ? toSubjectMap(row as SubjectMapRow): null
+ },
+
+ async getMap(workspaceId, mapId) {
+ const [row] = await db
+.select
+.from(subjectMap)
+.where(and(eq(subjectMap.workspaceId, workspaceId), eq(subjectMap.id, mapId)))
+ return row ? toSubjectMap(row as SubjectMapRow): null
+ },
+
+ async findMapByRun(workspaceId, masteryRunId) {
+ const [row] = await db
+.select
+.from(subjectMap)
+.where(and(eq(subjectMap.workspaceId, workspaceId), eq(subjectMap.masteryRunId, masteryRunId)))
+ return row ? toSubjectMap(row as SubjectMapRow): null
+ },
+
+ async listMapsForPersona(workspaceId, personaId) {
+ const rows = await db
+.select
+.from(subjectMap)
+.where(and(eq(subjectMap.workspaceId, workspaceId), eq(subjectMap.personaId, personaId)))
+.orderBy(subjectMap.subjectKind, subjectMap.subjectRef)
+ return rows.map((row) => toSubjectMap(row as SubjectMapRow))
+ },
+
+ async listMapsForRepository(workspaceId, repositoryId) {
+ const rows = await db
+.select
+.from(subjectMap)
+.where(
+ and(eq(subjectMap.workspaceId, workspaceId), eq(subjectMap.repositoryId, repositoryId)),
+)
+.orderBy(subjectMap.subjectRef)
+ return rows.map((row) => toSubjectMap(row as SubjectMapRow))
+ },
+
+ /**
+ * One transaction, and it is the only one in this file.
+ *
+ * Superseding is an invalidate *then* an insert, and a crash between the two would
+ * leave the map with neither the old claim nor the new one — a node silently missing
+ * from an artifact whose whole value is that a worker can rely on it. Every other
+ * write in this repository is a single statement, which is why none of them needed
+ * this.
+ */
+ async writeFragment(input) {
+ return db.transaction(async (tx) => {
+ let nodesWritten = 0
+ let edgesWritten = 0
+ let superseded = 0
+
+ for (const node of input.nodes) {
+ const [live] = await tx
+.select
+.from(subjectMapNode)
+.where(
+ and(
+ eq(subjectMapNode.mapId, input.mapId),
+ eq(subjectMapNode.key, node.key),
+ isNull(subjectMapNode.invalidatedAt),
+),
+)
+
+ if (live) {
+ const unchanged =
+ live.kind === node.kind &&
+ live.label === node.label &&
+ live.summary === node.summary &&
+ live.provenance === node.provenance &&
+ live.observationCount === node.observationCount &&
+ JSON.stringify(live.paths ?? []) === JSON.stringify(node.paths)
+
+ if (unchanged) {
+ // Re-confirmed, not rewritten. Without this branch a re-mastering would
+ // invalidate every node and write it again, and the history would record
+ // churn rather than change.
+ await tx
+.update(subjectMapNode)
+.set({ derivedAtRevision: input.revision })
+.where(eq(subjectMapNode.id, live.id))
+ continue
+ }
+
+ await tx
+.update(subjectMapNode)
+.set({ invalidatedAt: new Date, invalidatedReason: 'superseded' })
+.where(eq(subjectMapNode.id, live.id))
+ superseded += 1
+ }
+
+ await tx.insert(subjectMapNode).values({
+ workspaceId: input.workspaceId,
+ mapId: input.mapId,
+ key: node.key,
+ kind: node.kind,
+ label: node.label,
+ summary: node.summary,
+ provenance: node.provenance,
+ paths: node.paths,
+ observationCount: node.observationCount,
+ derivedAtRevision: input.revision,
+ })
+ nodesWritten += 1
+ }
+
+ for (const edge of input.edges) {
+ // An edge carries no content beyond its identity, so a repeat is a
+ // re-confirmation and never a supersession — `onConflictDoNothing` against the
+ // live partial index is the whole of it.
+ const inserted = await tx
+.insert(subjectMapEdge)
+.values({
+ workspaceId: input.workspaceId,
+ mapId: input.mapId,
+ fromKey: edge.fromKey,
+ toKey: edge.toKey,
+ kind: edge.kind,
+ provenance: edge.provenance,
+ derivedAtRevision: input.revision,
+ })
+.onConflictDoNothing
+.returning
+ if (inserted.length > 0) edgesWritten += 1
+ }
+
+ return { nodesWritten, edgesWritten, superseded }
+ })
+ },
+
+ async listNodes(workspaceId, mapId) {
+ const rows = await db
+.select
+.from(subjectMapNode)
+.where(and(eq(subjectMapNode.workspaceId, workspaceId), eq(subjectMapNode.mapId, mapId)))
+.orderBy(subjectMapNode.createdAt, subjectMapNode.key)
+ return rows.map((row) => toMapNode(row as SubjectMapNodeRow))
+ },
+
+ async listEdges(workspaceId, mapId) {
+ const rows = await db
+.select
+.from(subjectMapEdge)
+.where(and(eq(subjectMapEdge.workspaceId, workspaceId), eq(subjectMapEdge.mapId, mapId)))
+.orderBy(subjectMapEdge.createdAt, subjectMapEdge.fromKey)
+ return rows.map((row) => toMapEdge(row as SubjectMapEdgeRow))
+ },
+
+ async countLive(workspaceId, mapId) {
+ const [nodeRow] = await db
+.select({ total: count })
+.from(subjectMapNode)
+.where(
+ and(
+ eq(subjectMapNode.workspaceId, workspaceId),
+ eq(subjectMapNode.mapId, mapId),
+ isNull(subjectMapNode.invalidatedAt),
+),
+)
+ const [edgeRow] = await db
+.select({ total: count })
+.from(subjectMapEdge)
+.where(
+ and(
+ eq(subjectMapEdge.workspaceId, workspaceId),
+ eq(subjectMapEdge.mapId, mapId),
+ isNull(subjectMapEdge.invalidatedAt),
+),
+)
+ return { nodes: Number(nodeRow?.total ?? 0), edges: Number(edgeRow?.total ?? 0) }
+ },
+
+ /**
+ * Stamps rather than deletes, and only ever a live row: `isNull(invalidatedAt)` in
+ * the predicate is what stops a second pass moving an existing invalidation forward
+ * and losing the answer to "when did we stop believing this".
+ */
+ async invalidateNodes(workspaceId, nodeIds, reason) {
+ if (nodeIds.length === 0) return 0
+ const rows = await db
+.update(subjectMapNode)
+.set({ invalidatedAt: new Date, invalidatedReason: reason })
+.where(
+ and(
+ eq(subjectMapNode.workspaceId, workspaceId),
+ inArray(subjectMapNode.id, [...nodeIds]),
+ isNull(subjectMapNode.invalidatedAt),
+),
+)
+.returning({ id: subjectMapNode.id })
+ return rows.length
+ },
+
+ async appendCheckpoint(input) {
+ const [row] = await db
+.insert(masteryCheckpoint)
+.values({
+ workspaceId: input.workspaceId,
+ mapId: input.mapId,
+ agentRunId: input.agentRunId,
+ filesRead: input.filesRead,
+ filesInScope: input.filesInScope,
+ nodeCount: input.nodeCount,
+ edgeCount: input.edgeCount,
+ spendUsd: input.spendUsd,
+ })
+.returning
+ if (!row) throw new Error('mastery_checkpoint insert returned no row')
+ return {
+ at: row.createdAt,
+ filesRead: row.filesRead,
+ filesInScope: row.filesInScope,
+ nodeCount: row.nodeCount,
+ edgeCount: row.edgeCount,
+ spendUsd: row.spendUsd,
+ }
+ },
+
+ async listCheckpoints(workspaceId, mapId) {
+ const rows = await db
+.select
+.from(masteryCheckpoint)
+.where(
+ and(eq(masteryCheckpoint.workspaceId, workspaceId), eq(masteryCheckpoint.mapId, mapId)),
+)
+.orderBy(masteryCheckpoint.seq)
+ return rows.map((row) => ({
+ at: row.createdAt,
+ filesRead: row.filesRead,
+ filesInScope: row.filesInScope,
+ nodeCount: row.nodeCount,
+ edgeCount: row.edgeCount,
+ spendUsd: row.spendUsd,
+ }))
+ },
+})

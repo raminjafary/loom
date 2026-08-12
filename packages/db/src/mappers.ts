@@ -1,4 +1,9 @@
 import {
+ MAP_EDGE_KINDS,
+ MAP_NODE_KINDS,
+ MAP_PROVENANCES,
+ MAP_SUBJECT_KINDS,
+ asSubjectMapId,
  asAgentPersonaId,
  asAgentRunId,
  asApprovalRequestId,
@@ -48,6 +53,10 @@ import {
  type Thread,
  type WorkerNote,
  type WorkerNoteKind,
+ type MapEdge,
+ type MapNode,
+ type SubjectMap,
+ type SubjectMapStatus,
 } from '@loom/domain'
 import type { PlanSubtaskRecord } from '@loom/application'
 
@@ -713,4 +722,120 @@ export const decodeCursor = (cursor: string): bigint => {
  const match = /^seq:(\d+)$/.exec(raw)
  if (!match?.[1]) throw new Error('malformed cursor')
  return BigInt(match[1])
+}
+
+export interface SubjectMapRow {
+ id: string
+ workspaceId: string
+ personaId: string
+ subjectKind: string
+ repositoryId: string | null
+ subjectRef: string
+ revision: string
+ status: string
+ masteryRunId: string | null
+ createdAt: Date
+ updatedAt: Date
+}
+
+export interface SubjectMapNodeRow {
+ id: string
+ workspaceId: string
+ mapId: string
+ key: string
+ kind: string
+ label: string
+ summary: string
+ provenance: string
+ paths: unknown
+ observationCount: number
+ derivedAtRevision: string
+ createdAt: Date
+ invalidatedAt: Date | null
+ invalidatedReason: string | null
+}
+
+export interface SubjectMapEdgeRow {
+ id: string
+ workspaceId: string
+ mapId: string
+ fromKey: string
+ toKey: string
+ kind: string
+ provenance: string
+ derivedAtRevision: string
+ createdAt: Date
+ invalidatedAt: Date | null
+ invalidatedReason: string | null
+}
+
+const SUBJECT_MAP_STATUSES: readonly SubjectMapStatus[] = ['mastering', 'ready', 'failed']
+
+export const toSubjectMap = (row: SubjectMapRow): SubjectMap => {
+ const subjectKind = MAP_SUBJECT_KINDS.find((candidate) => candidate === row.subjectKind)
+ if (!subjectKind) throw new Error(`unknown subject_map.subject_kind: ${row.subjectKind}`)
+
+ const status = SUBJECT_MAP_STATUSES.find((candidate) => candidate === row.status)
+ if (!status) throw new Error(`unknown subject_map.status: ${row.status}`)
+
+ return {
+ id: asSubjectMapId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ personaId: asAgentPersonaId(row.personaId),
+ subjectKind,
+ repositoryId: row.repositoryId === null ? null: asRepositoryId(row.repositoryId),
+ subjectRef: row.subjectRef,
+ revision: row.revision,
+ status,
+ masteryRunId: row.masteryRunId === null ? null: asAgentRunId(row.masteryRunId),
+ createdAt: row.createdAt,
+ updatedAt: row.updatedAt,
+ }
+}
+
+export const toMapNode = (row: SubjectMapNodeRow): MapNode => {
+ const kind = MAP_NODE_KINDS.find((candidate) => candidate === row.kind)
+ if (!kind) throw new Error(`unknown subject_map_node.kind: ${row.kind}`)
+
+ const provenance = MAP_PROVENANCES.find((candidate) => candidate === row.provenance)
+ if (!provenance) throw new Error(`unknown subject_map_node.provenance: ${row.provenance}`)
+
+ return {
+ id: row.id,
+ mapId: asSubjectMapId(row.mapId),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ key: row.key,
+ kind,
+ label: row.label,
+ summary: row.summary,
+ provenance,
+ paths: Array.isArray(row.paths) ? (row.paths as string[]): [],
+ observationCount: row.observationCount,
+ derivedAtRevision: row.derivedAtRevision,
+ createdAt: row.createdAt,
+ invalidatedAt: row.invalidatedAt,
+ invalidatedReason: row.invalidatedReason,
+ }
+}
+
+export const toMapEdge = (row: SubjectMapEdgeRow): MapEdge => {
+ const kind = MAP_EDGE_KINDS.find((candidate) => candidate === row.kind)
+ if (!kind) throw new Error(`unknown subject_map_edge.kind: ${row.kind}`)
+
+ const provenance = MAP_PROVENANCES.find((candidate) => candidate === row.provenance)
+ if (!provenance) throw new Error(`unknown subject_map_edge.provenance: ${row.provenance}`)
+
+ return {
+ id: row.id,
+ mapId: asSubjectMapId(row.mapId),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ fromKey: row.fromKey,
+ toKey: row.toKey,
+ kind,
+ provenance,
+ derivedAtRevision: row.derivedAtRevision,
+ createdAt: row.createdAt,
+ invalidatedAt: row.invalidatedAt,
+ invalidatedReason: row.invalidatedReason,
+ }
 }
