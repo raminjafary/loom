@@ -479,8 +479,40 @@ export const PersonaGroupSchema = z.object({
  workspaceId: z.string,
  name: z.string,
  personaIds: z.array(z.string),
+ /**
+ * Where each member sits on the composition canvas. Persisted because on an
+ * authoring canvas position is a fact a human recorded, not a layout to recompute —
+ * the line Phase 2 draws between this canvas and the observability graph.
+ */
+ layout: z.record(z.string, z.object({ x: z.number, y: z.number })),
  createdAt: z.date,
  updatedAt: z.date,
+})
+
+/**
+ * Why one persona cannot delegate to another, at design time.
+ *
+ * Computed server-side with the same rules the child-start gate applies, for the
+ * reason `persona.parse` exists: a client that decided this for itself would show a
+ * human a team the runtime then refuses, one error at a time.
+ */
+export const DelegationRefusalSchema = z.object({
+ rule: z.enum(['tools', 'delegates', 'autoApprove', 'budget', 'model', 'capabilities', 'depth']),
+ detail: z.string,
+ fix: z.string,
+ /**
+ * Tools that, added to the planner's envelope, would satisfy this refusal — the one
+ * repair a composer may offer, since widening an envelope is what drawing an edge
+ * asked for. Absent on every other rule, which would change what a *worker* is.
+ */
+ widenEnvelopeWith: z.array(z.string).optional,
+})
+
+export const DelegationEdgeSchema = z.object({
+ plannerId: z.string,
+ workerId: z.string,
+ ok: z.boolean,
+ refusals: z.array(DelegationRefusalSchema),
 })
 
 export const AgentRunStatusSchema = z.enum([
@@ -601,6 +633,8 @@ export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type PersonaDraft = z.infer<typeof PersonaDraftSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
+export type DelegationEdge = z.infer<typeof DelegationEdgeSchema>
+export type DelegationRefusal = z.infer<typeof DelegationRefusalSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>
 export type RunControl = z.infer<typeof RunControlSchema>
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>

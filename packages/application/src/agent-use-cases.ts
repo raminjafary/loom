@@ -13,6 +13,7 @@ import {
  buildNotification,
  describeMergeFailure,
  describeCrossPlanOverlaps,
+ delegationMatrix,
  describeDelegationRoster,
  describePathOverlaps,
  describePlanStages,
@@ -38,6 +39,7 @@ import {
  transcriptChunkKey,
  transcriptPrefix,
  type Actor,
+ type DelegationRefusal,
  type AgentEvent,
  type AgentPersona,
  type AgentPersonaId,
@@ -769,6 +771,12 @@ export const updatePersonaGroup = async (
  personaGroupId: PersonaGroupId
  name: string
  personaIds: string[]
+ /**
+ * Where each member sits on the composition canvas. Omitted leaves the stored
+ * layout untouched — a client that does not draw a canvas is not saying the
+ * positions should be forgotten.
+ */
+ layout?: Record<string, { x: number; y: number }>
  },
 ): Promise<PersonaGroup> => {
  if (!isHuman(input.actor)) {
@@ -778,6 +786,74 @@ export const updatePersonaGroup = async (
  return deps.personaGroups.update(input.workspaceId, input.personaGroupId, {
  name: input.name,
  personaIds: input.personaIds,
+...(input.layout === undefined
+ ? {}
+: {
+ // Positions for members that are gone are dropped rather than kept: a group
+ // that has churned would otherwise accumulate coordinates forever, and a
+ // persona re-added under the same id would silently reappear where the last
+ // person left it rather than where this one dropped it.
+ layout: Object.fromEntries(
+ Object.entries(input.layout).filter(([personaId]) =>
+ input.personaIds.includes(personaId),
+),
+),
+ }),
+ })
+}
+
+/**
+ * Every planner-to-persona pair in this workspace, and why each refused one is
+ * refused.
+ *
+ * Server-side for the reason `parsePersonaDraft` is: these are the rules the
+ * child-start gate applies, and a client that decided them for itself would show a
+ * human a team the runtime then refuses one error at a time — which is the exact
+ * failure this is built against.
+ *
+ * Capabilities are resolved per persona, unlike in the delegation *roster* where they
+ * are deliberately skipped. The roster runs at every Planner start and pays a query
+ * per candidate; this runs when a human opens a canvas, and the capability rule is one
+ * of the refusals they most need to see — an MCP server is a route to a shell.
+ */
+export const delegationMatrixForWorkspace = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<
+ { plannerId: string; workerId: string; ok: boolean; refusals: DelegationRefusal[] }[]
+> => {
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const specs = await Promise.all(
+ personas.map(async (persona) => ({
+ id: persona.id,
+ spec: {
+ name: persona.name,
+ // Empty rather than the real prompt: nothing here reads it, and a matrix is
+ // not a reason to put every persona's instructions on the wire.
+ systemPrompt: '',
+ model: persona.model,
+ tools: persona.tools,
+ autoApprove: persona.harnessAutoApprove,
+ budgetCapUsd: persona.harnessBudgetCapUsd,
+ planner: persona.harnessPlanner,
+ delegates: persona.harnessDelegates,
+ capabilities: await resolveCapabilities(deps, input.workspaceId, persona.id),
+ } satisfies PersonaSpec,
+ })),
+)
+ const byName = new Map(specs.map((entry) => [entry.spec.name, entry.id]))
+
+ return delegationMatrix(
+ specs.map((entry) => entry.spec),
+ // Hops left below a planner's children, measured from a root: the same
+ // arithmetic `startAgentRun` does, one level up. A canvas is authored before
+ // anything runs, so the most permissive real position is the one to show.
+ deps.limits.maxDelegationDepth - 1,
+).flatMap((edge) => {
+ const plannerId = byName.get(edge.plannerName)
+ const workerId = byName.get(edge.workerName)
+ if (!plannerId || !workerId) return []
+ return [{ plannerId, workerId, ok: edge.ok, refusals: [...edge.refusals] }]
  })
 }
 

@@ -529,6 +529,7 @@ export interface PersonaGroupRow {
  workspaceId: string
  name: string
  personaIds: unknown
+ layout?: unknown
  createdAt: Date
  updatedAt: Date
 }
@@ -538,6 +539,13 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
  workspaceId: asWorkspaceId(row.workspaceId),
  name: row.name,
  personaIds: Array.isArray(row.personaIds) ? (row.personaIds as string[]): [],
+ // Defaulted rather than trusted: rows written before the column existed carry no
+ // layout, and a group with no positions must open as an unarranged canvas rather
+ // than fail to load.
+ layout:
+ row.layout && typeof row.layout === 'object' && !Array.isArray(row.layout)
+ ? (row.layout as Record<string, { x: number; y: number }>)
+: {},
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
 })

@@ -1,0 +1,1 @@
+ALTER TABLE "persona_group" ADD COLUMN "layout" jsonb DEFAULT '{}'::jsonb NOT NULL;

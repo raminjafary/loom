@@ -166,6 +166,14 @@ export interface PersonaGroup {
  readonly workspaceId: WorkspaceId
  readonly name: string
  readonly personaIds: string[]
+ /**
+ * Where each member sits on the composition canvas, keyed by persona id.
+ *
+ * Persisted because on an authoring canvas **position is a fact** a human recorded
+ * — which is the line between this canvas and the
+ * observability graph, whose positions are computed and worth nothing.
+ */
+ readonly layout: Record<string, { x: number; y: number }>
  readonly createdAt: Date
  readonly updatedAt: Date
 }

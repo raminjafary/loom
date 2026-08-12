@@ -47,6 +47,7 @@ import {
  listRunners,
  listRunsNeedingAttention,
  listTreeNotes,
+ delegationMatrixForWorkspace,
  parsePersonaDraft,
  pauseAllRuns,
  postMessage,
@@ -587,7 +588,14 @@ export const router = os.router({
  personaGroupId: asPersonaGroupId(input.personaGroupId),
  name: input.name,
  personaIds: input.personaIds,
+...(input.layout === undefined ? {}: { layout: input.layout }),
  }),
+),
+),
+
+ delegationMatrix: os.personaGroup.delegationMatrix.handler(({ context }) =>
+ guard( =>
+ delegationMatrixForWorkspace(context.deps, { workspaceId: context.principal.workspaceId }),
 ),
 ),
 

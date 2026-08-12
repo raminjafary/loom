@@ -434,6 +434,21 @@ export const personaGroup = pgTable(
 .references( => workspace.id, { onDelete: 'cascade' }),
  name: text('name').notNull,
  personaIds: jsonb('persona_ids').$type<string[]>.notNull.default([]),
+ /**
+ * Where each member sits on the composition canvas, keyed by persona id.
+ *
+ * Persisted rather than laid out on open, because on an authoring canvas
+ * **position is a fact**. A human who arranged a team around a lead
+ * planner has recorded an intent; recomputing it on the next open would throw
+ * that away every time.
+ *
+ * A member with no entry is placed by the client on first open and saved with the
+ * next edit — so adding a persona through any other surface is not a broken row.
+ */
+ layout: jsonb('layout')
+.$type<Record<string, { x: number; y: number }>>
+.notNull
+.default({}),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },

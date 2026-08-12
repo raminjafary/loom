@@ -8,6 +8,7 @@ import type {
  PersonaCapability,
  MergeQueueEntry,
  NotificationConfig,
+ DelegationEdge,
  PersonaDraft,
  PersonaGroup,
  Repository,
@@ -61,6 +62,14 @@ export interface AgentSnapshot {
  readonly repositories: Repository[]
  readonly personas: AgentPersona[]
  readonly personaGroups: PersonaGroup[]
+ /**
+ * Which planner may delegate to which persona, and why not. Computed server-side by the rules
+ * that refuse a child start, so a canvas cannot draw a team the runtime refuses.
+ *
+ * Re-read whenever a persona changes, because every one of these edges is a
+ * statement about two personas — editing one silently invalidates a row of them.
+ */
+ readonly delegationMatrix: DelegationEdge[]
  /** The capability registry and its attachments. */
  readonly capabilities: Capability[]
  readonly capabilityAttachments: PersonaCapability[]
@@ -278,7 +287,13 @@ export interface AgentSession {
  attachCapability(input: { personaId: string; capabilityId: string; allowedTools?: string[] }): Promise<void>
  detachCapability(input: { personaId: string; capabilityId: string }): Promise<void>
  createPersonaGroup(input: { name: string; personaIds: string[] }): Promise<void>
- updatePersonaGroup(input: { personaGroupId: string; name: string; personaIds: string[] }): Promise<void>
+ updatePersonaGroup(input: {
+ personaGroupId: string
+ name: string
+ personaIds: string[]
+ /** Canvas positions. Omitted leaves the stored ones alone. */
+ layout?: Record<string, { x: number; y: number }>
+ }): Promise<void>
  deletePersonaGroup(personaGroupId: string): Promise<void>
  startRun(input: {
  threadId: string
@@ -407,6 +422,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  repositories: [],
  personas: [],
  personaGroups: [],
+ delegationMatrix: [],
  capabilities: [],
  capabilityAttachments: [],
  activeRun: null,
@@ -650,6 +666,25 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  * Everything the workspace view needs, in one pass. Shared by `init` (with a loading
  * flag) and `refresh` (without) so the two can never drift about what "current" means.
  */
+ /**
+ * Personas and the delegation matrix together.
+ *
+ * Never one without the other: every edge in the matrix is a statement about two
+ * personas, so editing one invalidates a whole row and column of it. A composition
+ * canvas showing stale edges is worse than one showing none — being wrong about
+ * what the runtime would allow is the single thing it exists not to be.
+ */
+ const readPersonasAndMatrix = async : Promise<{
+ personas: AgentPersona[]
+ delegationMatrix: DelegationEdge[]
+ }> => {
+ const [personas, delegationMatrix] = await Promise.all([
+ options.api.persona.list,
+ options.api.personaGroup.delegationMatrix,
+ ])
+ return { personas, delegationMatrix }
+ }
+
  const loadAll = async : Promise<void> => {
  const [
  runners,
@@ -663,6 +698,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  mergeQueue,
  capabilities,
  capabilityAttachments,
+ delegationMatrix,
  ] = await Promise.all([
  options.api.runner.list,
  options.api.repository.list,
@@ -675,12 +711,14 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.mergeQueue.list,
  options.api.capability.list,
  options.api.capability.listAttachments,
+ options.api.personaGroup.delegationMatrix,
  ])
  patch({
  runners,
  repositories,
  personas,
  personaGroups,
+ delegationMatrix,
  activeRuns,
  runControl,
  notificationConfig,
@@ -740,7 +778,12 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  await options.api.persona.delete({ personaId })
- patch({ personas: await options.api.persona.list })
+ // Groups too: `prunePersona` drops it from every group that listed it, so a
+ // stale group would keep a chip with no persona behind it.
+ patch({
+...(await readPersonasAndMatrix),
+ personaGroups: await options.api.personaGroup.list,
+ })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -815,8 +858,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  await options.api.persona.create({ markdownSource })
- const personas = await options.api.persona.list
- patch({ personas })
+ patch(await readPersonasAndMatrix)
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -866,7 +908,12 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  await options.api.capability.attach(input)
- patch({ capabilityAttachments: await options.api.capability.listAttachments })
+ patch({
+ capabilityAttachments: await options.api.capability.listAttachments,
+ // A capability is a route to a shell, so attaching one can move
+ // a persona out of a planner's envelope — the matrix has to be re-read.
+ delegationMatrix: await options.api.personaGroup.delegationMatrix,
+ })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -876,7 +923,10 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  await options.api.capability.detach(input)
- patch({ capabilityAttachments: await options.api.capability.listAttachments })
+ patch({
+ capabilityAttachments: await options.api.capability.listAttachments,
+ delegationMatrix: await options.api.personaGroup.delegationMatrix,
+ })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }
@@ -886,7 +936,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  await options.api.persona.update(input)
- patch({ personas: await options.api.persona.list })
+ patch(await readPersonasAndMatrix)
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

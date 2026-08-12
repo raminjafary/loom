@@ -16,6 +16,7 @@ import {
  NotificationConfigSchema,
  NotificationTargetSchema,
  NotificationTransportSchema,
+ DelegationEdgeSchema,
  PersonaDraftSchema,
  PersonaGroupSchema,
  RepositorySchema,
@@ -376,11 +377,31 @@ export const contract = {
  personaGroupId: z.string,
  name: z.string.min(1).max(100),
  personaIds: z.array(z.string),
+ /**
+ * Optional so every other caller of this procedure — the chip list, a TUI —
+ * keeps working without inventing coordinates. Omitting it leaves the stored
+ * layout alone rather than clearing it, which is what a client that does not
+ * draw a canvas means by not sending one.
+ */
+ layout: z
+.record(z.string, z.object({ x: z.number, y: z.number }))
+.optional,
  }),
 )
 .output(PersonaGroupSchema),
 
  delete: oc.input(z.object({ personaGroupId: z.string })).output(z.object({ ok: z.literal(true) })),
+
+ /**
+ * Every planner-to-persona pair in this workspace, and why each refused one is
+ * refused.
+ *
+ * Workspace-wide rather than per group, because the rules are properties of the
+ * personas rather than of a grouping — and because the same answer belongs under
+ * the run launcher's model select, where choosing a cheap planner silently empties
+ * its roster.
+ */
+ delegationMatrix: oc.output(z.array(DelegationEdgeSchema)),
  },
 
  agentRun: {

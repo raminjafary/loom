@@ -77,6 +77,8 @@ const emit = defineEmits<{
  'create-group': [input: { name: string; personaIds: string[] }]
  'update-group': [input: { personaGroupId: string; name: string; personaIds: string[] }]
  'delete-group': [personaGroupId: string]
+ /** Opens the composition canvas. */
+ compose: []
 }>
 
 type Tab = 'infrastructure' | 'personas' | 'capabilities'
@@ -175,6 +177,7 @@ onMounted( => scrim.value?.focus)
  @create="(input) => emit('create-group', input)"
  @update="(input) => emit('update-group', input)"
  @delete="(id) => emit('delete-group', id)"
+ @compose="emit('compose')"
  />
  </template>
 

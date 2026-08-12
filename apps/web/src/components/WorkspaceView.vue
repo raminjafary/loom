@@ -20,6 +20,7 @@ import MessageList from './MessageList.vue'
 import NotificationToggle from './NotificationToggle.vue'
 import RunLauncher from './RunLauncher.vue'
 import SettingsOverlay from './SettingsOverlay.vue'
+import TeamComposer from './TeamComposer.vue'
 import SidebarSection from './SidebarSection.vue'
 import CostDashboardPanel from './CostDashboardPanel.vue'
 import RunTreePanel from './RunTreePanel.vue'
@@ -77,6 +78,7 @@ const threadTrail = computed( =>
 )
 
 const settingsOpen = ref(false)
+const composerOpen = ref(false)
 
 const CONNECTION_LABEL: Record<string, string> = {
  open: 'Live',
@@ -467,6 +469,21 @@ onBeforeUnmount( => {
  >
  Graph
  </button>
+ <!--
+ The design canvas, beside the observability one and never disabled — the "visual creation" is what a human does *before* there is a swarm, so gating
+ it on there being one would put it behind the thing it exists to produce.
+ Two canvases, deliberately: this one's positions are choices, the Graph's
+ are computed.
+ -->
+ <button
+ v-if="view === 'workspace'"
+ type="button"
+ class="graph-open"
+ title="Design a team — who is on it, and what each planner may hand down"
+ @click="composerOpen = true"
+ >
+ Design
+ </button>
  <KillSwitch
  v-if="view === 'workspace'"
 :control="agentSnapshot.runControl"
@@ -766,6 +783,23 @@ onBeforeUnmount( => {
  @create-group="(input) => agent.createPersonaGroup(input)"
  @update-group="(input) => agent.updatePersonaGroup(input)"
  @delete-group="(id) => agent.deletePersonaGroup(id)"
+ @compose="composerOpen = true"
+ />
+
+ <!--
+ The composition canvas.
+ Deliberately a sibling of Settings rather than a tab inside it: a canvas needs
+ the viewport, the same argument the diff review overlay already makes.
+ -->
+ <TeamComposer
+ v-if="composerOpen"
+:personas="agentSnapshot.personas"
+:groups="agentSnapshot.personaGroups"
+:matrix="agentSnapshot.delegationMatrix"
+ @close="composerOpen = false"
+ @create-group="(input) => agent.createPersonaGroup(input)"
+ @save-group="(input) => agent.updatePersonaGroup(input)"
+ @update-persona="(input) => agent.updatePersona(input)"
  />
  </div>
 </template>

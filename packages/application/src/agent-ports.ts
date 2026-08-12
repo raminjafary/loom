@@ -528,7 +528,8 @@ export interface PersonaGroupRepositoryPort {
  update(
  workspaceId: WorkspaceId,
  id: PersonaGroupId,
- patch: { name: string; personaIds: string[] },
+ /** `layout` absent leaves the stored positions alone. */
+ patch: { name: string; personaIds: string[]; layout?: Record<string, { x: number; y: number }> },
 ): Promise<PersonaGroup>
  delete(workspaceId: WorkspaceId, id: PersonaGroupId): Promise<void>
  /**

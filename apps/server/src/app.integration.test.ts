@@ -344,6 +344,126 @@ describe('removal over HTTP', => {
  await client.persona.delete({ personaId: created.id })
  })
 
+ /**
+ * The composition canvas draws these edges. The property that
+ * matters is that they are the *runtime's* answer: an edge the canvas shows as
+ * allowed must be a child start the gate then permits.
+ */
+ describe('personaGroup.delegationMatrix', => {
+ const author = (frontmatter: string[]) =>
+ client.persona.create({
+ markdownSource: ['---',...frontmatter, '---', '', 'Do a thing.'].join('\n'),
+ })
+
+ it('reports every reason a planner cannot delegate, not only the first', async => {
+ const planner = await author([
+ 'name: matrix-planner',
+ 'description: Decomposes',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read, Grep, Glob]',
+ 'harness:',
+ ' planner: true',
+ ' delegates: [Read]',
+ ' budgetCapUsd: 1',
+ ])
+ const worker = await author([
+ 'name: matrix-worker',
+ 'description: Acts',
+ // Higher tier, wider tools, uncapped, and auto-approving: four separate correct
+ // refusals, which is the situation the roadmap says a human currently discovers one
+ // runtime error at a time.
+ 'model: claude-opus-5',
+ 'tools: [Read, Bash]',
+ 'harness:',
+ ' autoApprove: true',
+ ])
+
+ const matrix = await client.personaGroup.delegationMatrix
+ const edge = matrix.find(
+ (row) => row.plannerId === planner.id && row.workerId === worker.id,
+)
+ expect(edge?.ok).toBe(false)
+ expect(edge?.refusals.map((refusal) => refusal.rule).sort).toEqual([
+ 'autoApprove',
+ 'budget',
+ 'model',
+ 'tools',
+ ])
+ // Only the envelope one is offered as a repair — the rest would change what the
+ // worker is, which drawing an edge did not ask for.
+ expect(
+ edge?.refusals.filter((refusal) => refusal.widenEnvelopeWith !== undefined),
+).toHaveLength(1)
+
+ await client.persona.delete({ personaId: worker.id })
+ await client.persona.delete({ personaId: planner.id })
+ })
+
+ it('has no row for a persona that is not a planner', async => {
+ const worker = await author([
+ 'name: matrix-plain',
+ 'description: Acts',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ ])
+ const matrix = await client.personaGroup.delegationMatrix
+ expect(matrix.some((row) => row.plannerId === worker.id)).toBe(false)
+ await client.persona.delete({ personaId: worker.id })
+ })
+ })
+
+ /**
+ * A layout is a fact a human recorded, so it has to survive a
+ * roster edit — and a client that does not draw a canvas must not erase it by
+ * saving without one.
+ */
+ it('keeps canvas positions across an update that does not send them', async => {
+ const persona = await client.persona.create({
+ markdownSource: [
+ '---',
+ 'name: layout-member',
+ 'description: On a team',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'Do nothing.',
+ ].join('\n'),
+ })
+ const group = await client.personaGroup.create({
+ name: `layout-${Date.now}`,
+ personaIds: [persona.id],
+ })
+ expect(group.layout).toEqual({})
+
+ const placed = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [persona.id],
+ layout: { [persona.id]: { x: 120, y: 40 } },
+ })
+ expect(placed.layout[persona.id]).toEqual({ x: 120, y: 40 })
+
+ const renamed = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: `${group.name}-renamed`,
+ personaIds: [persona.id],
+ })
+ expect(renamed.layout[persona.id]).toEqual({ x: 120, y: 40 })
+
+ // A position for someone no longer on the team is dropped rather than kept
+ // forever — otherwise a re-added persona reappears where the last person left it.
+ const emptied = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [],
+ layout: { [persona.id]: { x: 120, y: 40 } },
+ })
+ expect(emptied.layout).toEqual({})
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ await client.persona.delete({ personaId: persona.id })
+ })
+
  it('refuses to remove a Runner that still has a repository bound', async => {
  const pairing = await client.runner.createPairingToken({ name: 'removable' })
  // Nothing bound yet, so this one goes.
@@ -435,7 +555,13 @@ describe('contract completeness', => {
  'update',
  'delete',
  ])
- expect(Object.keys(contract.personaGroup)).toEqual(['list', 'create', 'update', 'delete'])
+ expect(Object.keys(contract.personaGroup)).toEqual([
+ 'list',
+ 'create',
+ 'update',
+ 'delete',
+ 'delegationMatrix',
+ ])
  expect(Object.keys(contract.agentRun)).toEqual([
  'start',
  'get',

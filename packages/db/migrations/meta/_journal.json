@@ -190,6 +190,13 @@
       "when": 1786530494186,
       "tag": "0026_nasty_azazel",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1786541130963,
+      "tag": "0027_blue_loners",
+      "breakpoints": true
     }
   ]
 }

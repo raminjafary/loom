@@ -58,8 +58,12 @@ export const useAgentStore = defineStore('agent', () => {
       session.detachCapability(input),
     createPersonaGroup: (input: { name: string; personaIds: string[] }) =>
       session.createPersonaGroup(input),
-    updatePersonaGroup: (input: { personaGroupId: string; name: string; personaIds: string[] }) =>
-      session.updatePersonaGroup(input),
+    updatePersonaGroup: (input: {
+      personaGroupId: string
+      name: string
+      personaIds: string[]
+      layout?: Record<string, { x: number; y: number }>
+    }) => session.updatePersonaGroup(input),
     deletePersonaGroup: (personaGroupId: string) => session.deletePersonaGroup(personaGroupId),
     // Typed from the session rather than restated: the local copy had already fallen
     // behind `responseStyle`, `model` and `budgetCapUsd`, and a store that silently

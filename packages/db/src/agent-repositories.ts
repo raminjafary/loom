@@ -1224,7 +1224,13 @@ export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort
  async update(workspaceId, id, patch) {
  const [row] = await db
 .update(personaGroup)
-.set({ name: patch.name, personaIds: patch.personaIds, updatedAt: new Date })
+.set({
+ name: patch.name,
+ personaIds: patch.personaIds,
+ // Absent leaves the stored positions alone — see PersonaGroupRepositoryPort.
+...(patch.layout === undefined ? {}: { layout: patch.layout }),
+ updatedAt: new Date,
+ })
 .where(and(eq(personaGroup.workspaceId, workspaceId), eq(personaGroup.id, id)))
 .returning
  if (!row) throw new NotFoundError('PersonaGroup')

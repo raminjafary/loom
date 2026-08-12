@@ -3,6 +3,13 @@ packages:
  - "packages/*"
 allowBuilds:
  esbuild: true
+ # Arrived under `@vue-flow/core` → `@vueuse/core` when the composition canvas landed
+ # (the tech stack pins Vue Flow for it). Its postinstall is `vue-demi-switch`, which points the
+ # package's entry at the installed Vue major — with the script skipped it can resolve
+ # to the Vue 2 shim, and the failure is an import error deep inside a dependency
+ # rather than anything that names vue-demi. This repository is Vue 3 only, so the
+ # switch has exactly one outcome.
+ vue-demi: true
 # Dependabot triage — 16 advisories (8 high) down to 1. Every entry is the smallest bump
 # that clears an advisory, and all of them are transitive: nothing here is a dependency
 # this repository chose. Ranges are keyed by major where two majors are installed.
