@@ -8,8 +8,8 @@ import {
  type ComposerEdge,
  type ConnectVerdict,
 } from '@loom/client-core'
-import { VueFlow, type Connection, type NodeDragEvent } from '@vue-flow/core'
-import { computed, ref, watch } from 'vue'
+import { VueFlow, useVueFlow, type Connection, type NodeDragEvent } from '@vue-flow/core'
+import { computed, nextTick, ref, watch } from 'vue'
 
 /**
  * The canvas-based team composition, on the pinned Vue Flow.
@@ -128,6 +128,30 @@ const flowEdges = computed( =>
  ? { stroke: 'var(--accent)', strokeWidth: 2 }
 : { stroke: 'var(--danger, #b42318)', strokeWidth: 1.5, strokeDasharray: '5 4' },
  })),
+)
+
+/**
+ * Two things `fit-view-on-init` alone got wrong, both found by opening the canvas.
+ *
+ * It fits **once**, so adding a member put the new node outside the viewport — the
+ * edge to it was drawn heading off the bottom of the canvas with nothing at the end.
+ * And it fits *to fill*, so a team of one rendered a single node at several times its
+ * natural size; `maxZoom` is what keeps a two-node team from looking like a poster.
+ */
+const { fitView } = useVueFlow
+
+const FIT = { maxZoom: 1, padding: 0.2 }
+
+watch(
+ => members.value.map((persona) => persona.id).join(','),
+ async => {
+ // Two ticks and a frame: Vue Flow fits to the nodes it has *measured*, and a node
+ // added this tick has no dimensions yet — fitting too early leaves the newest
+ // member outside the viewport, which is exactly the case a re-fit exists for.
+ await nextTick
+ await nextTick
+ requestAnimationFrame( => fitView(FIT))
+ },
 )
 
 const selectedEdgeId = ref('')
@@ -254,6 +278,15 @@ const onKeydown = (event: KeyboardEvent) => {
  >
  + New team
  </button>
+ <button
+ v-if="members.length > 0"
+ type="button"
+ class="link"
+ title="Bring every member back into view"
+ @click="fitView(FIT)"
+ >
+ Fit
+ </button>
  <span class="hint">
  Edges are what the platform would allow, not what you drew. Drag a planner onto a
  worker to ask for one.
@@ -290,6 +323,8 @@ const onKeydown = (event: KeyboardEvent) => {
 :nodes-draggable="true"
 :edges-updatable="false"
 :fit-view-on-init="true"
+:max-zoom="1.5"
+:min-zoom="0.2"
 :default-viewport="{ zoom: 0.9, x: 0, y: 0 }"
  @node-drag-stop="onNodeDragStop"
  @connect="onConnect"
@@ -386,9 +421,7 @@ const onKeydown = (event: KeyboardEvent) => {
 </template>
 
 <style scoped>
-@import '@vue-flow/core/dist/style.css';
-@import '@vue-flow/core/dist/theme-default.css';
-
+/* Vue Flow's own stylesheet is imported globally in main.ts — see the note there. */
 .scrim {
  position: fixed;
  inset: 0;
@@ -414,9 +447,28 @@ const onKeydown = (event: KeyboardEvent) => {
 header {
  display: flex;
  align-items: center;
- gap: 0.75rem;
+ flex-wrap: wrap;
+ gap: 0.5rem 0.75rem;
  padding: 0.6rem 0.8rem;
  border-bottom: 1px solid var(--border);
+}
+
+header select {
+ /*
+ * Bounded on both sides. A bare `<select>` in a flex row sizes from its widest
+ * option and does not shrink below it, which squeezed every sibling — the hint
+ * wrapped to one word per line and the header grew taller than the canvas.
+ */
+ flex: 0 1 14rem;
+ min-width: 6rem;
+ max-width: 14rem;
+ font: inherit;
+ font-size: 0.8rem;
+ padding: 0.25rem 0.4rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text);
 }
 
 h2 {
@@ -431,10 +483,24 @@ h3 {
 }
 
 .hint {
- flex: 1;
+ /* Basis, not `flex: 1`: with a zero basis it was the first thing to be squeezed. */
+ flex: 1 1 14rem;
  min-width: 0;
  font-size: 0.72rem;
  color: var(--text-faint);
+}
+
+header h2 {
+ flex: 0 0 auto;
+ white-space: nowrap;
+}
+
+.close {
+ flex: 0 0 auto;
+ margin-left: auto;
+ font-size: 1rem;
+ line-height: 1;
+ padding: 0.1rem 0.3rem;
 }
 
 .close {
@@ -449,12 +515,35 @@ h3 {
  flex: 1;
  min-height: 0;
  display: grid;
- grid-template-columns: 1fr 20rem;
+ grid-template-columns: minmax(0, 1fr) 20rem;
 }
 
 .canvas {
  min-width: 0;
+ min-height: 0;
  border-right: 1px solid var(--border);
+}
+
+/*
+ * Vue Flow measures its own container; without a definite height here the pane
+ * computes to zero and nothing renders, however many nodes it was given.
+ */
+.canvas:deep(.vue-flow) {
+ width: 100%;
+ height: 100%;
+}
+
+/*
+ * Vue Flow's default edge label is black on white, which on a refused edge put an
+ * unreadable chip in the middle of the one thing the edge is trying to say.
+ */
+.canvas:deep(.vue-flow__edge-textbg) {
+ fill: var(--bg);
+}
+
+.canvas:deep(.vue-flow__edge-text) {
+ fill: var(--danger, #b42318);
+ font-size: 10px;
 }
 
 .canvas:deep(.persona-node) {

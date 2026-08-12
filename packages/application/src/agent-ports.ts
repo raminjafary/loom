@@ -496,6 +496,8 @@ export interface PersonaRepositoryPort {
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
+ /** The markdown the platform seeded, for a built-in — see `seedBuiltinPersonas`. */
+ builtinSource?: string
  }): Promise<AgentPersona>
  findById(workspaceId: WorkspaceId, id: AgentPersonaId): Promise<AgentPersona | null>
  listByWorkspace(workspaceId: WorkspaceId): Promise<AgentPersona[]>
@@ -518,6 +520,13 @@ export interface PersonaRepositoryPort {
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
+ /**
+ * Only `seedBuiltinPersonas` sends this, when it brings an untouched built-in
+ * forward. A human's edit deliberately leaves it alone: the recorded seed is
+ * what makes "untouched" answerable at all, and rewriting it on every save
+ * would make every persona look untouched forever.
+ */
+ builtinSource?: string
  },
 ): Promise<AgentPersona>
 }

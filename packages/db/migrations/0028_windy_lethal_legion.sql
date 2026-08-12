@@ -1,0 +1,1 @@
+ALTER TABLE "agent_persona" ADD COLUMN "builtin_source" text;

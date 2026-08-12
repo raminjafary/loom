@@ -153,6 +153,14 @@ export interface AgentPersona {
  readonly harnessPlanner: boolean
  readonly harnessDelegates: string[]
  readonly harnessBudgetCapUsd: number | null
+ /**
+ * The markdown the platform seeded, for a built-in, or null for a
+ * hand-authored persona and for a built-in seeded before this was recorded.
+ *
+ * It exists so "the human edited this" and "the platform shipped a new one" stop
+ * being the same observation — see `seedBuiltinPersonas` for what that cost.
+ */
+ readonly builtinSource: string | null
  readonly createdAt: Date
  readonly updatedAt: Date
 }

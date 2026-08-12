@@ -158,7 +158,14 @@ const mentionPersonaModel = computed( => {
  return agentSnapshot.value.personas.find((persona) => persona.id === personaId)?.model ?? ''
 })
 
+/**
+ * Bumped on every send so the thread follows to the bottom (see MessageList.sentTick).
+ * Someone who scrolled up and then typed is waiting to see what they just said.
+ */
+const sentTick = ref(0)
+
 const handleSend = (text: string) => {
+ sentTick.value += 1
  void store.send(text)
  const mention = parseMention(text, agentSnapshot.value.personas)
  pendingMention.value = mention
@@ -542,6 +549,7 @@ onBeforeUnmount( => {
 :has-more-history="snapshot.hasMoreHistory"
 :loading-history="snapshot.loadingHistory"
 :area-thread-by-message-id="areaThreadByMessageId"
+:sent-tick="sentTick"
  @load-earlier="store.loadOlderMessages"
  @unknown-authors="(ids) => agent.resolvePersonaNames(ids)"
  @open-thread="(threadId) => store.openThread(threadId)"

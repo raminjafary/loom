@@ -447,16 +447,60 @@ export const createPersona = async (
  * Skipping by name rather than upserting is the important half: these are real,
  * editable `agent_persona` rows, and an operator who has tuned the `swe` prompt must
  * not have it silently reverted every time the server restarts.
+ *
+ * **[AMENDED — skipping by name alone meant a shipped fix never reached an existing
+ * workspace, and that had already cost something real.]** The `planner` built-in
+ * shipped with `tools: []`; the planner/worker trust boundary was later amended to give a planner read-only tools
+ * *because* the empty list made sub-planners stall on the approval SLA. Every
+ * workspace that already had the old row kept the version that stalls, and a new
+ * workspace got the fixed one — so the same build behaved differently depending on
+ * when the workspace was created, and nothing said so anywhere.
+ *
+ * The distinction that fixes it is between two things "skip by name" could not tell
+ * apart: *the human edited this* and *the platform shipped a new one*.
+ * `builtinSource` records the markdown the platform seeded, so a row whose markdown
+ * still equals it was never touched and can be brought forward silently. Anything
+ * else is a human's work and is left exactly as it is — the original rule, now
+ * applied only where it was actually protecting something.
+ *
+ * A built-in seeded before `builtinSource` existed carries null, and is **not**
+ * auto-updated: with nothing recorded there is no way to tell an untouched row from a
+ * tuned one, and silently overwriting a human's prompt to fix a different persona is
+ * the wrong trade. Those surface through `builtinStatus` as `'stale'`, which the
+ * persona editor offers to resolve in one click.
  */
 export const seedBuiltinPersonas = async (
  deps: AgentDeps,
  input: { workspaceId: WorkspaceId },
 ): Promise<void> => {
- const existing = new Set(
- (await deps.personas.listByWorkspace(input.workspaceId)).map((persona) => persona.name),
+ const existing = new Map(
+ (await deps.personas.listByWorkspace(input.workspaceId)).map((persona) => [
+ persona.name,
+ persona,
+ ]),
 )
  for (const persona of BUILTIN_PERSONAS) {
- if (existing.has(persona.name)) continue
+ const current = existing.get(persona.name)
+ if (current) {
+ const untouched =
+ current.builtinSource !== null && current.builtinSource === current.markdownSource
+ if (!untouched || current.markdownSource === persona.markdownSource) continue
+ const parsed = parsePersonaMarkdown(persona.markdownSource)
+ await deps.personas.update(input.workspaceId, current.id, {
+ description: parsed.description,
+ markdownSource: persona.markdownSource,
+ model: parsed.model,
+ tools: parsed.tools,
+ harnessEffort: parsed.harnessEffort,
+ harnessMaxTurns: parsed.harnessMaxTurns,
+ harnessAutoApprove: parsed.harnessAutoApprove,
+ harnessPlanner: parsed.harnessPlanner,
+ harnessDelegates: parsed.harnessDelegates,
+ harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ builtinSource: persona.markdownSource,
+ })
+ continue
+ }
  await deps.personas.create({
  workspaceId: input.workspaceId,
  name: persona.name,
@@ -470,6 +514,7 @@ export const seedBuiltinPersonas = async (
  harnessPlanner: persona.harnessPlanner,
  harnessDelegates: persona.harnessDelegates,
  harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
+ builtinSource: persona.markdownSource,
  })
  }
 }

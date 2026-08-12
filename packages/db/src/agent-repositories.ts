@@ -1160,6 +1160,7 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  harnessPlanner: input.harnessPlanner,
  harnessDelegates: input.harnessDelegates,
  harnessBudgetCapUsd: input.harnessBudgetCapUsd,
+...(input.builtinSource === undefined ? {}: { builtinSource: input.builtinSource }),
  })
 .returning
  if (!row) throw new Error('agent_persona insert returned no row')
@@ -1197,6 +1198,10 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  harnessPlanner: patch.harnessPlanner,
  harnessDelegates: patch.harnessDelegates,
  harnessBudgetCapUsd: patch.harnessBudgetCapUsd,
+ // Absent leaves the recorded seed alone: it is what makes "untouched"
+ // answerable, and rewriting it on a human's save would make every persona
+ // look untouched forever.
+...(patch.builtinSource === undefined ? {}: { builtinSource: patch.builtinSource }),
  updatedAt: new Date,
  })
 .where(and(eq(agentPersona.workspaceId, workspaceId), eq(agentPersona.id, id)))

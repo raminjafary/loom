@@ -26,6 +26,19 @@ const props = defineProps<{
  * turns that announcement from a dead end into the way in.
  */
  areaThreadByMessageId?: Record<string, string>
+ /**
+ * Bumped when this client sends a message, which always follows to the bottom.
+ *
+ * The append rule below is deliberately conditional — it carries a reader who was
+ * already at the bottom and leaves one reading history where they were. Sending is
+ * the case that rule gets wrong: someone who scrolled up, then typed, is waiting to
+ * see what they just said, and the jump button counting it as unseen is the wrong
+ * answer to a question they asked out loud.
+ *
+ * A counter rather than a boolean, for `SidebarSection.reveal`'s reason: a flag that
+ * stays true fires its watcher once, and the second message sent would not follow.
+ */
+ sentTick?: number
 }>
 
 const emit = defineEmits<{
@@ -106,6 +119,21 @@ watch(
  } else {
  unseenBelow.value += Math.max(rowsNow - rowsBefore, 0)
  }
+ },
+)
+
+/**
+ * Following a send. Two ticks, not one: the message is optimistic, so the row exists
+ * before its height does, and scrolling on the same tick lands short of the bottom
+ * when the new row wraps.
+ */
+watch(
+ => props.sentTick,
+ async (next, previous) => {
+ if (next === undefined || previous === undefined) return
+ await nextTick
+ await nextTick
+ scrollToBottom
  },
 )
 

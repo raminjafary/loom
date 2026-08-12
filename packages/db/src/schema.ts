@@ -343,6 +343,29 @@ export const agentPersona = pgTable(
  harnessDelegates: jsonb('harness_delegates').$type<string[]>.notNull.default([]),
  // Enforced at the egress proxy, not advisory. Null = uncapped.
  harnessBudgetCapUsd: doublePrecision('harness_budget_cap_usd'),
+ /**
+ * The markdown **the platform seeded**, verbatim, for a built-in.
+ * Null on a hand-authored persona, and on a built-in seeded before this column
+ * existed.
+ *
+ * The whole text rather than a digest, because it is a couple of kilobytes on a
+ * table with tens of rows and it answers a question a hash cannot: *what* the
+ * shipped version said, so a human deciding whether to take an update can be shown
+ * the difference instead of a boolean.
+ *
+ * It exists because built-ins seed once per workspace as editable rows, which is
+ * deliberate and had a consequence nobody had named: a change to a shipped persona
+ * never reached a workspace that already had one. That is not cosmetic — the
+ * `planner` built-in shipped with `tools: []`, the planner/worker trust boundary was later amended to give a
+ * planner read-only tools precisely because the empty list made it stall on the
+ * approval SLA, and every existing workspace kept the version that stalls.
+ *
+ * With this, "the human edited it" and "the platform shipped a new one" stop being
+ * the same observation: a row whose markdown still hashes to what was seeded was
+ * never touched, so it can be brought forward silently. Anything else is a human's
+ * work and is left alone.
+ */
+ builtinSource: text('builtin_source'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },

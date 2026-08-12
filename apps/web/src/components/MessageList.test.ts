@@ -122,4 +122,51 @@ describe('MessageList: the way into an area thread', => {
  expect(list.find('button.open-area').exists).toBe(false)
  expect(list.text).toContain('delegated as its own area')
  })
+
+ /**
+ * Someone who scrolled up to re-read something, then typed, is waiting to see what
+ * they just said. The append rule is deliberately conditional — it leaves a reader
+ * of history where they are — and sending is the case it gets wrong.
+ */
+ describe('following on send', => {
+ const scrollerOf = (list: ReturnType<typeof mount>) =>
+ list.get('.messages').element as HTMLElement
+
+ /** happy-dom reports zero heights, so the geometry is staged by hand. */
+ const stageScrolledUp = (el: HTMLElement) => {
+ Object.defineProperty(el, 'scrollHeight', { value: 1_000, configurable: true })
+ Object.defineProperty(el, 'clientHeight', { value: 200, configurable: true })
+ el.scrollTop = 0
+ }
+
+ it('scrolls to the bottom when this client sends, wherever it was reading', async => {
+ const list = mount(MessageList, {
+ props: { messages: [message({ id: 'm1' })], sentTick: 0 },
+ })
+ const el = scrollerOf(list)
+ stageScrolledUp(el)
+
+ await list.setProps({ sentTick: 1, messages: [message({ id: 'm1' }), message({ id: 'm2' })] })
+ await list.vm.$nextTick
+ await list.vm.$nextTick
+ await list.vm.$nextTick
+
+ expect(el.scrollTop).toBe(1_000)
+ })
+
+ it('leaves a reader of history alone when someone else posts', async => {
+ const list = mount(MessageList, {
+ props: { messages: [message({ id: 'm1' })], sentTick: 0 },
+ })
+ const el = scrollerOf(list)
+ stageScrolledUp(el)
+ // A scroll event is what tells the component it is no longer at the bottom.
+ await list.get('.messages').trigger('scroll')
+
+ await list.setProps({ messages: [message({ id: 'm1' }), message({ id: 'm2' })] })
+ await list.vm.$nextTick
+
+ expect(el.scrollTop).toBe(0)
+ })
+ })
 })

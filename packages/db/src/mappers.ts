@@ -502,6 +502,7 @@ export interface AgentPersonaRow {
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
+ builtinSource?: string | null
  createdAt: Date
  updatedAt: Date
 }
@@ -520,6 +521,7 @@ export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
  harnessPlanner: row.harnessPlanner,
  harnessDelegates: row.harnessDelegates,
  harnessBudgetCapUsd: row.harnessBudgetCapUsd,
+ builtinSource: row.builtinSource ?? null,
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
 })
