@@ -44,6 +44,14 @@ const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
  * inactivity — and covering that ten times a minute is enough.
  */
 const POLL_INTERVAL_MS = 10_000
+/**
+ * How long a live-activity frame stays worth drawing.
+ *
+ * Long enough that an animation started on arrival finishes, short enough that a
+ * quiet canvas is visibly quiet — a stale pulse is worse than none, because the whole
+ * claim the canvas makes is "this is happening now".
+ */
+const ACTIVITY_TTL_MS = 6_000
 /** Long enough to coalesce a burst of tool events, short enough to feel immediate. */
 const NUDGE_DEBOUNCE_MS = 150
 
@@ -161,6 +169,35 @@ export interface AgentSnapshot {
  * and it killed nothing", and zero is a real and reassuring answer.
  */
  readonly lastPauseCancelledCount: number | null
+ /**
+ * Recent live-activity frames for the watched tree.
+ *
+ * A short, self-expiring buffer rather than a log: its only consumer is the canvas,
+ * which asks "is anything crossing this edge *right now*". Frames older than
+ * `ACTIVITY_TTL_MS` are dropped on every insert, so a tab left open overnight holds
+ * nothing, and a client that never renders them pays one array write per frame.
+ *
+ * Not a source of truth. The board fetch remains the answer to what a swarm is
+ * doing; this only says what just happened, and a dropped frame costs an animation
+ * rather than a wrong tree.
+ */
+ readonly recentActivity: RunActivity[]
+}
+
+/** One live-activity frame, narrowed to what a canvas can draw. */
+export interface RunActivity {
+ readonly agentRunId: string
+ readonly parentRunId: string | null
+ readonly kind:
+ | 'started'
+ | 'tool_call'
+ | 'tool_result'
+ | 'delegated'
+ | 'note_written'
+ | 'awaiting_human'
+ | 'finished'
+ readonly label: string | null
+ readonly at: number
 }
 
 export interface AgentSession {
@@ -338,6 +375,11 @@ export interface AgentSession {
  */
  noteRealtimeActivity: void
  /**
+ * Feeds one `run.activity` frame in. Called by whoever owns the
+ * socket; the session decides whether it belongs to the watched tree and expires it.
+ */
+ noteRunActivity(activity: RunActivity, treeRunId: string): void
+ /**
  * Fills in persona names for runs this session never saw — the ones whose messages
  * are in the thread's history but which finished before the page was opened.
  *
@@ -379,6 +421,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  error: null,
  fetchErrors: { inbox: null, board: null, cost: null, diff: null },
  lastPauseCancelledCount: null,
+ recentActivity: [],
  }
 
  /**
@@ -563,6 +606,25 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  * answers all of them. Trailing rather than leading: the last event in a burst is
  * the one whose state we want.
  */
+ /**
+ * Records one live-activity frame for the watched tree, and drops expired ones.
+ *
+ * Filtered to the watched tree here rather than in the view: every client in a
+ * workspace receives every tree's frames, and a canvas that filtered on render
+ * would still grow this array with work it will never draw.
+ */
+ const noteRunActivity = (activity: RunActivity, treeRunId: string): void => {
+ const watchedTree = state.swarmBoard?.treeRunId ?? null
+ if (watchedTree !== null && treeRunId !== watchedTree) return
+ const now = Date.now
+ patch({
+ recentActivity: [
+...state.recentActivity.filter((entry) => now - entry.at < ACTIVITY_TTL_MS),
+ activity,
+ ],
+ })
+ }
+
  const noteRealtimeActivity = : void => {
  const watched = state.activeRun
  if (!watched) return
@@ -1108,6 +1170,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  refreshInbox: fetchInbox,
  inspectRun: fetchInspected,
  noteRealtimeActivity,
+ noteRunActivity,
 
  async resolvePersonaNames(agentRunIds) {
  const unknown = [...new Set(agentRunIds)].filter(

@@ -169,6 +169,13 @@ export const createWorkspaceSession = (options: {
  break
  case 'thread.created':
  break
+ /**
+ * Handled by whoever subscribes via `onEvent` — the agent session turns it into
+ * a board nudge, and the canvas turns it into an animation. Nothing to merge into
+ * *this* session's state: a run's activity is not chat.
+ */
+ case 'run.activity':
+ break
  }
  }
 

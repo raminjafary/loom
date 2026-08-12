@@ -1,5 +1,6 @@
 import type {
  Actor,
+ AgentRunId,
  AuditEvent,
  Channel,
  ChannelId,
@@ -125,6 +126,30 @@ export type DomainEvent =
  | { readonly type: 'message.created'; readonly workspaceId: WorkspaceId; readonly threadId: ThreadId; readonly message: Message }
  | { readonly type: 'channel.created'; readonly workspaceId: WorkspaceId; readonly channel: Channel }
  | { readonly type: 'thread.created'; readonly workspaceId: WorkspaceId; readonly thread: Thread }
+ /**
+ * A run's structure or activity changed. See `ServerEventSchema`
+ * for why this exists and, more importantly, for why it is a nudge with a payload
+ * rather than a second source of truth about the tree.
+ */
+ | {
+ readonly type: 'run.activity'
+ readonly workspaceId: WorkspaceId
+ readonly treeRunId: AgentRunId
+ readonly agentRunId: AgentRunId
+ readonly parentRunId: AgentRunId | null
+ readonly kind:
+ | 'started'
+ | 'tool_call'
+ | 'tool_result'
+ | 'delegated'
+ | 'note_written'
+ | 'awaiting_human'
+ | 'finished'
+ /** A tool name, never its arguments — effect-based classification keeps argv on the approval card alone. */
+ readonly label: string | null
+ readonly status: string
+ readonly at: Date
+ }
 
 export interface EventPublisherPort {
  publish(event: DomainEvent): Promise<void>

@@ -363,3 +363,75 @@ describe('lastPauseCancelledCount', => {
  session.dispose
  })
 })
+
+/**
+ * The live-activity buffer.
+ *
+ * Three properties, and the third is the one that matters: it is filtered to the
+ * watched tree, it expires, and it is never a source of truth. A canvas that held a
+ * pulse after the work ended would make exactly the stale-liveness claim the rest of
+ * this app is careful not to make.
+ */
+describe('noteRunActivity', => {
+ const frame = (agentRunId: string, at = Date.now) => ({
+ agentRunId,
+ parentRunId: 'root',
+ kind: 'tool_call' as const,
+ label: 'Read',
+ at,
+ })
+
+ const boardApi = (treeRunId: string) =>
+ ({
+ agentRun: { get: async => run('running'), listActive: async => [] },
+ approval: { listPending: async => [] },
+ workerNote: {
+ board: async => ({ treeRunId, cards: [], pathCollisions: [] }),
+ listByTree: async => [],
+ },
+ }) as unknown as LoomApi
+
+ it('starts empty', => {
+ const session = createAgentSession({ api: stubApi.api })
+ expect(session.snapshot.recentActivity).toEqual([])
+ session.dispose
+ })
+
+ it('keeps a frame for the watched tree', async => {
+ const session = createAgentSession({ api: boardApi('root') })
+ await session.watchRun('run-1')
+ session.noteRunActivity(frame('run-1'), 'root')
+ expect(session.snapshot.recentActivity).toHaveLength(1)
+ session.dispose
+ })
+
+ it('drops a frame from a tree this client is not watching', async => {
+ // Every client in a workspace receives every tree's frames. Filtering on render
+ // would still grow this array with work that will never be drawn.
+ const session = createAgentSession({ api: boardApi('root') })
+ await session.watchRun('run-1')
+ session.noteRunActivity(frame('other'), 'a-different-tree')
+ expect(session.snapshot.recentActivity).toEqual([])
+ session.dispose
+ })
+
+ it('expires frames older than the TTL on the next insert', async => {
+ const session = createAgentSession({ api: boardApi('root') })
+ await session.watchRun('run-1')
+ session.noteRunActivity(frame('old', Date.now - 60_000), 'root')
+ session.noteRunActivity(frame('fresh'), 'root')
+ const kept = session.snapshot.recentActivity
+ expect(kept).toHaveLength(1)
+ expect(kept[0]?.agentRunId).toBe('fresh')
+ session.dispose
+ })
+
+ it('keeps frames when no tree is being watched rather than dropping them', async => {
+ // Null board means "nothing to compare against", not "reject everything" — a
+ // client that has not fetched a board yet should still see the first pulse.
+ const session = createAgentSession({ api: stubApi.api })
+ session.noteRunActivity(frame('run-1'), 'root')
+ expect(session.snapshot.recentActivity).toHaveLength(1)
+ session.dispose
+ })
+})

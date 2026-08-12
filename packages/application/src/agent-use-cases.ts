@@ -1342,6 +1342,10 @@ const startPlannedChild = async (
  relation: 'delegation',
  ownedPaths: subtask.paths,
  })
+ // The edge, at the moment it is created. This is the one frame a client cannot
+ // derive from the child's own events: by the time the child emits anything, the
+ // delegation that produced it is already history.
+ await publishRunActivity(deps, child, { kind: 'delegated', label: subtask.personaName })
  return { ok: true, runId: child.id }
  } catch (error) {
  return { ok: false, reason: error instanceof Error ? error.message: String(error) }
@@ -1753,6 +1757,43 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
 ...skippedTitles.map((title) => `✗ ${title} — skipped, a dependency did not complete`),
  ]
  await postRunSystemMessage(deps, planner, ['Plan stage advanced:',...lines].join('\n'))
+ }
+}
+
+/**
+ * Publishes one live-activity frame for a run.
+ *
+ * Resolving the tree root is a read, so this is not free — but it is the field that
+ * makes the frame usable: a client watching one swarm has to be able to drop frames
+ * from every other tree in the workspace without fetching anything to find out.
+ *
+ * **Swallowed on failure, and that is the whole contract.** This is an animation cue.
+ * A publisher that is down must never be the reason a run's real state transition,
+ * note or approval did not happen — the same rule `notifyRun` follows, for the same
+ * reason.
+ */
+const publishRunActivity = async (
+ deps: AgentDeps,
+ run: AgentRun,
+ input: {
+ kind: 'started' | 'tool_call' | 'tool_result' | 'delegated' | 'note_written' | 'awaiting_human' | 'finished'
+ label: string | null
+ },
+): Promise<void> => {
+ try {
+ await deps.events.publish({
+ type: 'run.activity',
+ workspaceId: run.workspaceId,
+ treeRunId: await resolveTreeRunId(deps, run),
+ agentRunId: run.id,
+ parentRunId: run.parentRunId,
+ kind: input.kind,
+ label: input.label,
+ status: run.status,
+ at: new Date,
+ })
+ } catch {
+ // Deliberately swallowed — see above.
  }
 }
 
@@ -3344,6 +3385,35 @@ export const recordAgentEvent = async (
  message,
  })
 
+ /**
+ * The live-activity frame.
+ *
+ * Published beside `message.created` rather than instead of it: the thread and the
+ * canvas want different things from the same event, and folding them together would
+ * make the graph re-parse prose to find out a tool was called.
+ *
+ * **The label is a tool name and never its arguments.** the rule is that a human
+ * decides against the exact argv on the approval card; a fan-out frame carrying
+ * `rm -rf …` would put that string on every connected client's canvas, which is the
+ * same mistake the notification body was guarded against making.
+ *
+ * Best-effort, and deliberately after the message: this is an animation cue, and a
+ * publish failure must never be the reason a run's event went unrecorded.
+ */
+ await publishRunActivity(deps, run, {
+ kind:
+ input.event.kind === 'tool_call'
+ ? 'tool_call'
+: input.event.kind === 'tool_result'
+ ? 'tool_result'
+: input.event.kind === 'run_completed' || input.event.kind === 'run_failed'
+ ? 'finished'
+: 'started',
+ // Only `tool_call` carries a name; a result is identified by its `toolUseId` and
+ // the client already pairs the two on that (see `thread.ts`).
+ label: input.event.kind === 'tool_call' ? input.event.toolName: null,
+ })
+
  if (input.event.kind === 'run_completed') {
  // The SDK's self-reported cost is a fallback, not the truth.
  // If the egress proxy already metered this run, its figure stands; only an
@@ -3427,6 +3497,16 @@ export const requestApproval = async (
 
  await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
  status: 'awaiting_approval',
+ })
+
+ /**
+ * The one activity kind a human is *waiting on*, so it is worth arriving without a
+ * poll. `label` is the tool's name only — the argv stays on the approval card, per
+ * Effect-based classification and for the same reason a notification body does not carry it.
+ */
+ await publishRunActivity(deps, {...run, status: 'awaiting_approval' }, {
+ kind: 'awaiting_human',
+ label: input.toolName,
  })
 
  // This chat line is just a pointer — the exact argv, never a

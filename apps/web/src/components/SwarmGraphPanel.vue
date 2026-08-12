@@ -47,6 +47,21 @@ const props = defineProps<{
  * UI at all", which was true.
  */
  openSignal?: number
+ /**
+ * Live-activity frames for this tree — see `AgentSnapshot.recentActivity`.
+ *
+ * The canvas already rendered live *facts*: the call in flight, idle time, cost
+ * against cap. What it could not show was anything *happening*, because every one of
+ * those facts arrives by refetch and a refetch lands after the moment it describes.
+ * These frames are what make an edge light up while work is crossing it.
+ */
+ activity?: readonly {
+ agentRunId: string
+ parentRunId: string | null
+ kind: string
+ label: string | null
+ at: number
+ }[]
 }>
 const emit = defineEmits<{
  /**
@@ -79,10 +94,59 @@ watch(
  * keep counting while nothing arrives, because silence is the state no event announces.
  */
 const tick = ref(new Date)
-const clock = setInterval( => (tick.value = new Date), 5_000)
-onUnmounted( => clearInterval(clock))
+let clock: ReturnType<typeof setInterval> | null = null
+
+/**
+ * One second while the canvas is open, five while it is not.
+ *
+ * The clock is what *expires* a pulse, so its interval is the resolution of every
+ * animation here — at five seconds a highlight lingers seconds after the work ended,
+ * which is the stale-liveness claim this canvas exists to avoid making. Slowed back
+ * down when closed because the panel still renders ages in the sidebar and nothing
+ * there needs per-second accuracy.
+ */
+const startClock = (ms: number) => {
+ if (clock !== null) clearInterval(clock)
+ clock = setInterval( => (tick.value = new Date), ms)
+}
+startClock(5_000)
+watch(open, (isOpen) => startClock(isOpen ? 1_000: 5_000))
+onUnmounted( => {
+ if (clock !== null) clearInterval(clock)
+})
 
 const graph = computed( => buildSwarmGraph(props.board, tick.value))
+
+/**
+ * Which runs and edges are lit right now.
+ *
+ * Recomputed off `tick` as well as the frames themselves so a pulse *expires* on its
+ * own: without the clock in the dependency list a canvas with no new frames would
+ * hold its last highlight forever, which is exactly the stale-liveness lie the quiet
+ * label elsewhere in this app is careful not to tell.
+ */
+const PULSE_MS = 2_500
+
+const liveRuns = computed( => {
+ const now = tick.value.getTime
+ const map = new Map<string, string>
+ for (const entry of props.activity ?? []) {
+ if (now - entry.at > PULSE_MS) continue
+ map.set(entry.agentRunId, entry.label ?? entry.kind)
+ }
+ return map
+})
+
+/** Edges lit because work just crossed them — a delegation, or a child reporting up. */
+const liveEdges = computed( => {
+ const now = tick.value.getTime
+ const set = new Set<string>
+ for (const entry of props.activity ?? []) {
+ if (now - entry.at > PULSE_MS) continue
+ if (entry.parentRunId) set.add(`${entry.parentRunId}->${entry.agentRunId}`)
+ }
+ return set
+})
 
 // Node geometry, in SVG user units. One place, because the edge maths depends on it.
 const NODE_W = 210
@@ -266,7 +330,7 @@ const collisionCount = computed(
 :key="`e${index}`"
 :d="edgePath(edge.from, edge.to, edge.kind)"
  class="edge"
-:class="edge.kind"
+:class="[edge.kind, { live: liveEdges.has(`${edge.from}->${edge.to}`) }]"
  >
  <title>{{ edge.kind }}: {{ edge.detail }}</title>
  </path>
@@ -278,7 +342,10 @@ const collisionCount = computed(
 :class="[
  node.activity.kind,
  node.role,
- { blocked: node.card.blockerCount > 0 },
+ {
+ blocked: node.card.blockerCount > 0,
+ live: liveRuns.has(node.card.runId),
+ },
  ]"
 :transform="`translate(${left(node)} ${top(node)})`"
  role="button"
@@ -583,6 +650,42 @@ header button:disabled {
 
 .node:hover.box {
  stroke: var(--accent);
+}
+
+/*
+ Work crossing a node, right now. A halo rather than a fill change: fill on this
+ canvas already means activity state (working / quiet / blocked), and a second
+ meaning on the same channel would make both unreadable — the same reasoning that
+ made a planner a different *shape* rather than a different colour.
+*/
+.node.live.box {
+ stroke: var(--accent);
+ stroke-width: 2;
+ filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 70%, transparent));
+}
+
+/*
+ An edge with something on it. The dash *moves*, which is the only property here
+ that says "in flight" rather than "recently true" — a brighter static line would be
+ indistinguishable from the selected state.
+*/
+.edge.live {
+ stroke: var(--accent);
+ stroke-width: 2.5;
+ stroke-dasharray: 6 6;
+ animation: flow 0.7s linear infinite;
+}
+
+@keyframes flow {
+ to {
+ stroke-dashoffset: -12;
+ }
+}
+
+@media (prefers-reduced-motion: reduce) {
+.edge.live {
+ animation: none;
+ }
 }
 
 .node:focus-visible.box {

@@ -326,7 +326,28 @@ const setCostWindow = (hours: number | null) => {
 let unsubscribeEvents: ( => void) | null = null
 
 onMounted( => {
- unsubscribeEvents = store.onServerEvent( => agent.noteRealtimeActivity)
+ /**
+ * One subscription, two jobs. Every frame nudges the structured
+ * re-read as before; a `run.activity` frame *additionally* feeds the canvas, which
+ * draws it immediately rather than waiting for the re-read it triggered — the whole
+ * point being that by the time a board fetch lands, the call that prompted it has
+ * usually finished.
+ */
+ unsubscribeEvents = store.onServerEvent((event) => {
+ agent.noteRealtimeActivity
+ if (event.type === 'run.activity') {
+ agent.noteRunActivity(
+ {
+ agentRunId: event.agentRunId,
+ parentRunId: event.parentRunId,
+ kind: event.kind,
+ label: event.label,
+ at: Date.now,
+ },
+ event.treeRunId,
+)
+ }
+ })
  void store.start
  void agent.start
  // Fetched once on mount and on demand, never on the run poll: workspace spend changes
@@ -616,6 +637,7 @@ onBeforeUnmount( => {
 :board="agentSnapshot.swarmBoard"
 :active-run-id="agentSnapshot.activeRun?.id ?? null"
 :open-signal="revealGraph"
+:activity="agentSnapshot.recentActivity"
  @open="(agentRunId) => openRunThread(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />

@@ -3,6 +3,7 @@ import {
   createApi,
   type AgentSnapshot,
   type PushRegistration,
+  type RunActivity,
 } from '@loom/client-core'
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
@@ -93,6 +94,8 @@ export const useAgentStore = defineStore('agent', () => {
     refreshInbox: () => session.refreshInbox(),
     inspectRun: (agentRunId: string) => session.inspectRun(agentRunId),
     noteRealtimeActivity: () => session.noteRealtimeActivity(),
+    noteRunActivity: (activity: RunActivity, treeRunId: string) =>
+      session.noteRunActivity(activity, treeRunId),
     resolvePersonaNames: (agentRunIds: readonly string[]) =>
       session.resolvePersonaNames(agentRunIds),
     dispose: () => session.dispose(),

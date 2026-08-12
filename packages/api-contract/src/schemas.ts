@@ -94,6 +94,47 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
  }),
  z.object({ type: z.literal('channel.created'), channel: ChannelSchema }),
  z.object({ type: z.literal('thread.created'), thread: ThreadSchema }),
+ /**
+ * A run's structure or activity changed.
+ *
+ * **The frame the graph never had.** Every other run-state surface in this client
+ * re-reads `workerNote.board` on a socket nudge plus a 10s safety net, which is why
+ * the canvas renders live *facts* but never shows anything *happening*: by the time
+ * a refetch lands, the tool call that prompted it has usually finished. This carries
+ * the change itself, so an edge can light up when work crosses it and a node can
+ * show the call in flight.
+ *
+ * Deliberately **not** a replacement for the board fetch. It is a nudge with enough
+ * payload to animate, not a second source of truth about what a swarm is doing —
+ * The worker-notes design refuses that, and a client that rebuilt its tree from a stream would
+ * disagree with the board the moment one frame was dropped. Everything here is
+ * either an id or a short label; nothing is authoritative.
+ */
+ z.object({
+ type: z.literal('run.activity'),
+ /** The tree this run belongs to, so a client can ignore trees it is not watching. */
+ treeRunId: z.string,
+ agentRunId: z.string,
+ /** The run that caused this, when it is not `agentRunId` — a parent starting a child. */
+ parentRunId: z.string.nullable,
+ /**
+ * What happened, as a closed set. A closed set because a client *animates* on it:
+ * free text would mean a new server-side string silently renders as nothing.
+ */
+ kind: z.enum([
+ 'started',
+ 'tool_call',
+ 'tool_result',
+ 'delegated',
+ 'note_written',
+ 'awaiting_human',
+ 'finished',
+ ]),
+ /** The tool being called, for `tool_call`/`tool_result`. Never its arguments. */
+ label: z.string.nullable,
+ status: z.string,
+ at: wireDate,
+ }),
 ])
 
 export const RunnerSchema = z.object({
