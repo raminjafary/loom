@@ -406,3 +406,54 @@ describe('buildSwarmGraph: note-read edges', => {
  expect(graph.edges.some((e) => e.kind === 'note_read')).toBe(false)
  })
 })
+
+describe('buildSwarmGraph: expertise on the tree', => {
+ const board = {
+ treeRunId: 'root',
+ cards: [
+ card({ runId: 'root', parentRunId: null, personaName: 'planner' }),
+ card({ runId: 'child', parentRunId: 'root', personaName: 'swe' }),
+ ],
+ pathCollisions: [],
+ noteReads: [],
+ }
+ const map = {
+ mapId: 'm1',
+ subjectRef: 'booking',
+ subjectKind: 'repository',
+ personaName: 'swe',
+ }
+
+ it('joins a map to every run carrying that persona', => {
+ const graph = buildSwarmGraph(board, [], [map])
+
+ expect(graph.knowledge).toHaveLength(1)
+ expect(graph.knowledge[0]?.runIds).toEqual(['child'])
+ expect(graph.edges.some((e) => e.kind === 'knows' && e.from === 'child')).toBe(true)
+ })
+
+ it('drops a map whose persona is not on this board rather than drawing it floating', => {
+ const graph = buildSwarmGraph(board, [], [{...map, personaName: 'qa' }])
+
+ expect(graph.knowledge).toEqual([])
+ expect(graph.edges.some((e) => e.kind === 'knows')).toBe(false)
+ })
+
+ it('adds nothing when nothing has been mastered', => {
+ expect(buildSwarmGraph(board, []).knowledge).toEqual([])
+ })
+
+ it('carries one map to several runs of the same persona', => {
+ const wide = {
+...board,
+ cards: [
+...board.cards,
+ card({ runId: 'child-2', parentRunId: 'root', personaName: 'swe' }),
+ ],
+ }
+ const graph = buildSwarmGraph(wide, [], [map])
+
+ expect(graph.knowledge[0]?.runIds).toEqual(['child', 'child-2'])
+ expect(graph.edges.filter((e) => e.kind === 'knows')).toHaveLength(2)
+ })
+})

@@ -36,6 +36,14 @@ export type SwarmEdgeKind =
  * earlier. Drawn reader→author, so the arrow reads "got this from".
  */
  | 'note_read'
+ /**
+ * A run is working with expertise its persona holds.
+ *
+ * The edge that joins the two surfaces live swarm observability left separate: the swarm graph is
+ * run-level and a map is persona-level, so without this a human watching a swarm
+ * cannot tell which of these workers actually knows the codebase.
+ */
+ | 'knows'
  /** A run's branch to the merge-queue entry holding it. */
  | 'queue'
  /** That entry to its verification. */
@@ -146,6 +154,23 @@ export interface SwarmGraphEdge {
  readonly detail: string
 }
 
+/**
+ * A map a run's persona holds for the repository that run is against.
+ *
+ * Its own array rather than a `SwarmGraphNode`, for the same reason the queue band is:
+ * a map is not a run — it has no status, no cost, no activity and no context pressure —
+ * and a union would make every reader narrow before it could draw.
+ */
+export interface SwarmKnowledgeNode {
+ readonly mapId: string
+ readonly subjectRef: string
+ readonly subjectKind: string
+ readonly personaName: string
+ /** Runs on this board carrying it, so a renderer can place it near them. */
+ readonly runIds: string[]
+ readonly order: number
+}
+
 export interface SwarmGraph {
  readonly nodes: SwarmGraphNode[]
  /**
@@ -158,6 +183,8 @@ export interface SwarmGraph {
  * separate bands anyway.
  */
  readonly queue: SwarmQueueNode[]
+ /** Expertise in play on this tree — empty when nothing has been mastered. */
+ readonly knowledge: SwarmKnowledgeNode[]
  readonly edges: SwarmGraphEdge[]
  /** Widest layer, so a renderer can size the canvas without measuring. */
  readonly width: number
@@ -236,6 +263,20 @@ export const buildSwarmGraph = (
  * how the board came to omit every run under a sub-planner.
  */
  mergeQueue: readonly MergeQueueEntry[],
+ /**
+ * Maps held for the repository this tree is against, already joined to persona names
+ * by the caller.
+ *
+ * Fetched once when the graph opens rather than carried on the board, because the
+ * board is polled and expertise does not change between polls — the rule that
+ * watching a swarm must not add a per-tick query.
+ */
+ expertise: readonly {
+ mapId: string
+ subjectRef: string
+ subjectKind: string
+ personaName: string
+ }[] = [],
  now: Date = new Date,
 ): SwarmGraph => {
  const cards = board?.cards ?? []
@@ -425,12 +466,54 @@ export const buildSwarmGraph = (
  })
  }
 
+ /**
+ * Expertise in play.
+ *
+ * Joined by **persona name**, because a run carries a persona *snapshot* and not a
+ * persona id — the same fact the fleet design records about teams. A name is the address this
+ * platform already resolves everything by (`@mention`, the delegation roster, the merge
+ * queue), and renaming a persona is refused outright for exactly that reason, so the
+ * join is as sound here as it is there.
+ *
+ * A map with no run on this board is dropped rather than drawn floating: this band
+ * answers "which of these workers knows the codebase", and a map nobody here holds is
+ * not an answer to it.
+ */
+ const knowledge: SwarmKnowledgeNode[] = []
+ const runsByPersona = new Map<string, string[]>
+ for (const card of cards) {
+ runsByPersona.set(card.personaName, [...(runsByPersona.get(card.personaName) ?? []), card.runId])
+ }
+ let knowledgeOrder = 0
+ for (const map of expertise) {
+ const runIds = runsByPersona.get(map.personaName) ?? []
+ if (runIds.length === 0) continue
+ knowledge.push({
+ mapId: map.mapId,
+ subjectRef: map.subjectRef,
+ subjectKind: map.subjectKind,
+ personaName: map.personaName,
+ runIds,
+ order: knowledgeOrder,
+ })
+ knowledgeOrder += 1
+ for (const runId of runIds) {
+ edges.push({
+ from: runId,
+ to: `map:${map.mapId}`,
+ kind: 'knows',
+ detail: `knows ${map.subjectRef}`,
+ })
+ }
+ }
+
  const queueWidth = new Set(queue.map((node) => node.order)).size
  const queueLayers = new Set(queue.map((node) => node.depth)).size
 
  return {
  nodes,
  queue,
+ knowledge,
  edges,
  width: Math.max(...[...perLayer.values], queueWidth, 0),
  depth: perLayer.size + queueLayers,

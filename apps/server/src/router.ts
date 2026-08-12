@@ -431,6 +431,15 @@ export const router = os.router({
 ),
 ),
 
+ listForRepository: os.mastery.listForRepository.handler(({ context, input }) =>
+ guard( =>
+ context.deps.subjectMaps.listMapsForRepository(
+ context.principal.workspaceId,
+ asRepositoryId(input.repositoryId),
+),
+),
+),
+
  get: os.mastery.get.handler(({ context, input }) =>
  guard(async => {
  const view = await getMastery(context.deps, {

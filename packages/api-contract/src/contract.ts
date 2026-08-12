@@ -307,6 +307,18 @@ export const contract = {
  get: oc.input(z.object({ mapId: z.string })).output(MasteryViewSchema),
 
  /**
+ * Every persona's map of one repository.
+ *
+ * Its own procedure rather than a field on the board, and the reason is the cost
+ * discipline: the board is polled, and expertise does not change between polls. The
+ * graph fetches this once when it opens and joins it against the cards it already
+ * has, so watching a swarm costs exactly what it did before.
+ */
+ listForRepository: oc
+.input(z.object({ repositoryId: z.string }))
+.output(z.array(SubjectMapSchema)),
+
+ /**
  * Start a mastery run.
  *
  * Takes a repository rather than a free-text subject: the revision has to be

@@ -264,6 +264,7 @@ export interface AgentSession {
  */
  listPersonaMaps(personaId: string): Promise<SubjectMap[]>
  getMastery(mapId: string): Promise<MasteryView | null>
+ listRepositoryMaps(repositoryId: string): Promise<SubjectMap[]>
  /**
  * Starts a mastery run, which
  * means it is subject to the concurrency limit, the kill switch and the budget cap
@@ -976,6 +977,22 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
 
  async getMastery(mapId) {
  return options.api.mastery.get({ mapId })
+ },
+
+ /**
+ * Every persona's map of one repository — what the swarm graph draws
+ * its expertise band from.
+ *
+ * Returns `[]` on failure rather than throwing, unlike the two above: this decorates
+ * a graph that is otherwise complete, so a failure here should cost the band and
+ * never the canvas.
+ */
+ async listRepositoryMaps(repositoryId) {
+ try {
+ return await options.api.mastery.listForRepository({ repositoryId })
+ } catch {
+ return []
+ }
  },
 
  async startMastery(input) {

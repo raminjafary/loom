@@ -171,6 +171,53 @@ const MASTERY_FOLLOW_MS = 4_000
 const masteryFollowTimer = window.setInterval(followOpenMap, MASTERY_FOLLOW_MS)
 onBeforeUnmount( => window.clearInterval(masteryFollowTimer))
 
+/**
+ * The expertise the swarm graph draws.
+ *
+ * Fetched when the canvas opens and when the watched run changes repository — never on
+ * the board's poll. The cost discipline is that watching a swarm adds no per-tick
+ * query, and expertise does not move between polls: a map changes when a mastery run
+ * writes to it, which is rare and is its own surface.
+ *
+ * Joined to persona *names* here rather than in `client-core`, because the id→name map
+ * is session state the graph module deliberately does not import.
+ */
+const graphExpertise = ref<
+ { mapId: string; subjectRef: string; subjectKind: string; personaName: string }[]
+>([])
+
+const loadGraphExpertise = async => {
+ const repositoryId = agentSnapshot.value.activeRun?.repositoryId ?? null
+ if (!repositoryId) {
+ graphExpertise.value = []
+ return
+ }
+ const nameById = new Map(agentSnapshot.value.personas.map((p) => [p.id, p.name]))
+ const maps = await agent.listRepositoryMaps(repositoryId)
+ graphExpertise.value = maps
+.filter((map) => map.status === 'ready')
+.flatMap((map) => {
+ const personaName = nameById.get(map.personaId)
+ // A map whose persona no longer exists is dropped rather than drawn under a uuid.
+ // The byline lesson: a label that resolves to an id says less than none.
+ return personaName
+ ? [
+ {
+ mapId: map.id,
+ subjectRef: map.subjectRef,
+ subjectKind: map.subjectKind,
+ personaName,
+ },
+ ]
+: []
+ })
+}
+
+watch(
+ => [revealGraph.value, agentSnapshot.value.activeRun?.repositoryId] as const,
+ => void loadGraphExpertise,
+)
+
 const startMastery = async (repositoryId: string) => {
  const personaId = masteryPersonaId.value
  const threadId = snapshot.value.activeThread?.id
@@ -809,6 +856,7 @@ onBeforeUnmount( => {
 :active-run-id="agentSnapshot.activeRun?.id ?? null"
 :open-signal="revealGraph"
 :activity="agentSnapshot.recentActivity"
+:expertise="graphExpertise"
  @review="(agentRunId) => reviewFromGraph(agentRunId)"
  @steer="(agentRunId) => steerFromGraph(agentRunId)"
  @open="(agentRunId) => openRunThread(agentRunId)"

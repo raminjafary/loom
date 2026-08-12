@@ -46,6 +46,7 @@ export const useAgentStore = defineStore('agent', => {
  // many, so folding every map in would put an unbounded read on app open.
  listPersonaMaps: (personaId: string) => session.listPersonaMaps(personaId),
  getMastery: (mapId: string) => session.getMastery(mapId),
+ listRepositoryMaps: (repositoryId: string) => session.listRepositoryMaps(repositoryId),
  startMastery: (input: {
  threadId: string
  personaId: string

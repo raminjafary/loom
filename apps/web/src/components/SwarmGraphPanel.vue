@@ -39,6 +39,19 @@ const props = defineProps<{
  */
  mergeQueue: readonly MergeQueueEntry[]
  /**
+ * Maps held for this tree's repository, joined to persona names.
+ *
+ * Fetched by the parent when the canvas opens, not carried on the polled board:
+ * expertise does not change between polls, and the rule is that watching a swarm
+ * adds no per-tick query.
+ */
+ expertise?: readonly {
+ mapId: string
+ subjectRef: string
+ subjectKind: string
+ personaName: string
+ }[]
+ /**
  * The run currently being watched, so the canvas can say which node that is.
  *
  * Without it, clicking a node changed the app's state and the graph reflected
@@ -136,7 +149,9 @@ onUnmounted( => {
  if (clock !== null) clearInterval(clock)
 })
 
-const graph = computed( => buildSwarmGraph(props.board, props.mergeQueue, tick.value))
+const graph = computed( =>
+ buildSwarmGraph(props.board, props.mergeQueue, props.expertise ?? [], tick.value),
+)
 
 /**
  * Which runs and edges are lit right now.
@@ -193,7 +208,8 @@ interface Placed {
 }
 
 const centerX = (node: Placed) => node.order * (NODE_W + GAP_X) + NODE_W / 2
-const centerY = (node: Placed) => node.depth * (NODE_H + GAP_Y) + NODE_H / 2
+const centerY = (node: Placed) =>
+ knowledgeBandH.value + node.depth * (NODE_H + GAP_Y) + NODE_H / 2
 const left = (node: Placed) => centerX(node) - NODE_W / 2
 const top = (node: Placed) => centerY(node) - NODE_H / 2
 
@@ -216,10 +232,26 @@ const runLayers = computed( =>
  * spacing is what makes `run → entry → verification` legible as a sequence.
  */
 const QUEUE_GAP_Y = 30
-const queueTop = computed( => runLayers.value * (NODE_H + GAP_Y))
+const queueTop = computed( => knowledgeBandH.value + runLayers.value * (NODE_H + GAP_Y))
 const queueBand = (node: SwarmQueueNode) => node.depth - runLayers.value
 const queueY = (node: SwarmQueueNode) =>
  queueTop.value + queueBand(node) * (QUEUE_H + QUEUE_GAP_Y) + QUEUE_H / 2
+
+/**
+ * The expertise band sits **above** the tree, in its own rhythm like the queue's below.
+ *
+ * Above rather than below because it is what a run brings *to* the work: reading down
+ * the canvas then goes knowledge → runs → branches → merges, which is the order things
+ * actually happen in. It is also why the whole canvas is offset by this band's height —
+ * SVG has no negative-coordinate origin to hang it from.
+ */
+const KNOWLEDGE_H = 38
+const KNOWLEDGE_GAP_Y = 26
+const knowledgeBandH = computed( =>
+ graph.value.knowledge.length === 0 ? 0: KNOWLEDGE_H + KNOWLEDGE_GAP_Y,
+)
+const knowledgeY = => KNOWLEDGE_H / 2
+const knowledgeLeft = (node: { order: number }) => node.order * (NODE_W + GAP_X)
 
 /**
  * Resolved geometry per drawable endpoint — runs by `runId`, queue nodes by their
@@ -238,6 +270,13 @@ const positions = computed(
 ),
 ...graph.value.queue.map(
  (node) => [node.id, { cx: centerX(node), cy: queueY(node), h: QUEUE_H }] as const,
+),
+...graph.value.knowledge.map(
+ (node) =>
+ [
+ `map:${node.mapId}`,
+ { cx: knowledgeLeft(node) + NODE_W / 2, cy: knowledgeY, h: KNOWLEDGE_H },
+ ] as const,
 ),
  ]),
 )
@@ -554,6 +593,9 @@ const collisionCount = computed(
  <!-- Only shown when there is a queue to explain: a legend entry for an
  absent band is a promise the canvas is not keeping. -->
  <li v-if="graph.queue.length > 0"><span class="swatch queue"></span>merge queue</li>
+ <li v-if="graph.knowledge.length > 0">
+ <span class="swatch knows"></span>expertise in play
+ </li>
  </ul>
  <button type="button" @click="emit('refresh')">Refresh</button>
  <button type="button" @click="fit">Fit</button>
@@ -727,6 +769,33 @@ const collisionCount = computed(
  answers "what is happening to my branches", which is the question the canvas design
  says a human currently has to assemble from four surfaces.
  -->
+ <!--
+ The expertise band — the join live swarm observability left missing
+ between a run-level graph and a persona-level artifact.
+
+ Not clickable, like the queue band and for the same reason: the map has
+ its own surface with the graph, the progress and the provenance on it,
+ and a second place to open it would be a second place to keep correct.
+ What this band answers is narrower and is the question a human watching a
+ swarm actually has — which of these workers already knows this codebase.
+ -->
+ <g
+ v-for="knode in graph.knowledge"
+:key="knode.mapId"
+ class="knode"
+:transform="`translate(${knowledgeLeft(knode)} ${knowledgeY - KNOWLEDGE_H / 2})`"
+ >
+ <rect:width="NODE_W":height="KNOWLEDGE_H" rx="8" class="box" />
+ <text class="ksubject" x="10" y="16">{{ knode.subjectRef }}</text>
+ <text class="kmeta" x="10" y="30">
+ {{ knode.personaName }} knows this {{ knode.subjectKind }}
+ </text>
+ <title>
+ {{ knode.personaName }} holds a map of {{ knode.subjectRef }}, carried by
+ {{ knode.runIds.length }} run(s) on this tree.
+ </title>
+ </g>
+
  <g
  v-for="qnode in graph.queue"
 :key="qnode.id"
@@ -1039,6 +1108,38 @@ header button:disabled {
 .edge.steer {
  stroke: var(--warn, var(--accent));
  stroke-dasharray: 2 3;
+}
+
+/* The expertise band and its edges. Dotted and quiet: a map is context a run
+ brought with it, not an action anyone took, and it must not compete with the tree. */
+.edge.knows {
+ stroke: var(--accent);
+ stroke-dasharray: 1 4;
+ stroke-width: 1.25;
+ opacity: 0.6;
+}
+
+.knode.box {
+ fill: var(--surface-2, transparent);
+ stroke: var(--accent);
+ stroke-dasharray: 3 3;
+ opacity: 0.9;
+}
+
+.knode.ksubject {
+ font-size: 12px;
+ font-weight: 600;
+ fill: var(--text);
+}
+
+.knode.kmeta {
+ font-size: 10px;
+ fill: var(--text-faint);
+}
+
+.swatch.knows {
+ border-top-style: dotted;
+ border-color: var(--accent);
 }
 
 /* Faint and dashed: a note-read says what a swarm already shared. It is deliberately
