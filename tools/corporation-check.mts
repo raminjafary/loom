@@ -37,6 +37,7 @@ import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
+import { BUILTIN_PERSONAS } from '../packages/domain/src/index.js'
 
 const execFileAsync = promisify(execFile)
 const REPO_ROOT = new URL('..', import.meta.url).pathname
@@ -64,25 +65,69 @@ const PLANNER = (name: string) =>
  `name: ${name}`,
  'description: Decomposes a goal into areas or subtasks and delegates them.',
  'model: claude-haiku-4-5-20251001',
- 'tools: []',
+ /**
+ * Read-only, matching the shipped built-in.
+ *
+ * This line said `tools: []` for one run after the rule changed, and the driver
+ * went on reporting the old failure — because it authors its own persona rather
+ * than seeding the built-in, so a change to `builtin-personas.ts` does not reach
+ * it. `assertPlannerMatchesBuiltin` below now fails loudly if the two drift again,
+ * which is the difference between a driver that measures the product and one that
+ * measures a fixture nobody ships.
+ */
+ 'tools: [Read, Grep, Glob]',
  'harness:',
  ' planner: true',
  ' delegates: [Read, Edit, Write, Grep, Glob]',
  // The workers below auto-approve so nothing stalls at a gate with no human
  // present, and the data model refuses a child that auto-approves under a parent that does
- // not — so the planners must too. Harmless on a `tools: []` persona, which can
- // reach no risky tool of its own; here it is purely the permission being handed
- // down. Getting this wrong is what the first live run of this driver found: the
- // sub-planners' rosters came back empty and they correctly declined to plan.
+ // not — so the planners must too. Harmless on a read-only persona, which can
+ // reach no risky tool of its own (`Read`/`Grep`/`Glob` are not gated); here it
+ // is purely the permission being handed down. Getting this wrong is what the
+ // first live run of this driver found: the sub-planners' rosters came back empty
+ // and they correctly declined to plan.
  ' autoApprove: true',
  ' budgetCapUsd: 0.5',
  '---',
  '',
- 'You are a Planner. You cannot read files, write code, or run commands — you ' +
- 'decompose and delegate. Submit exactly one plan with submit_plan, then stop. ' +
- 'Name a persona for each subtask from the roster you were given, and claim the ' +
- 'paths each subtask owns.',
+ 'You are a Planner. You can read the repository with Read, Grep and Glob, but you ' +
+ 'cannot write code or run commands — you decompose and delegate. Read only what ' +
+ 'you need to scope the work, then submit exactly one plan with submit_plan and ' +
+ 'stop. Name a persona for each subtask from the roster you were given, and claim ' +
+ 'the paths each subtask owns.',
  ].join('\n')
+
+/**
+ * The driver authors its own personas — cheap models, tiny caps, a fixture repo — so
+ * nothing makes its planner resemble the one Loom actually ships. That is fine for the
+ * parts it deliberately varies and a trap for the parts it does not: this driver spent
+ * a whole run reporting "the sub-planner planned nothing" after the shipped planner had
+ * already been fixed, because its own fixture still said `tools: []`.
+ *
+ * So the one property under test is asserted against the built-in rather than copied
+ * from it: same tool list, same planner flag. It throws rather than printing, because a
+ * printed warning is what let the previous drift survive (see HANDOFF.md on
+ * `corporation-check.mts` printing claims instead of asserting them).
+ */
+const assertPlannerMatchesBuiltin = (markdown: string) => {
+ const builtin = BUILTIN_PERSONAS.find((persona) => persona.name === 'planner')
+ if (!builtin) throw new Error('no built-in planner persona to compare against')
+ const declared = /^tools: \[(.*)\]$/m
+.exec(markdown)?.[1]
+ ?.split(',')
+.map((tool) => tool.trim)
+.filter((tool) => tool !== '')
+ if (declared === undefined) throw new Error('driver planner declares no tools line')
+ const same =
+ declared.length === builtin.tools.length &&
+ [...declared].sort.join === [...builtin.tools].sort.join
+ if (!same) {
+ throw new Error(
+ `driver planner holds [${declared.join(', ')}] but the shipped planner holds ` +
+ `[${builtin.tools.join(', ')}] — this driver would measure a persona nobody ships`,
+)
+ }
+}
 
 const WORKER = [
  '---',
@@ -161,6 +206,7 @@ const main = async => {
  })
  const channel = await client.channel.create({ name: 'corp' })
 
+ assertPlannerMatchesBuiltin(PLANNER('corp-planner'))
  const rootPersona = await client.persona.create({ markdownSource: PLANNER('corp-planner') })
  await client.persona.create({ markdownSource: WORKER })
 
@@ -267,11 +313,40 @@ const main = async => {
  `a planner claimed paths for its subtasks (${ownership.length} claim(s))`,
 )
 
- const messages = await client.message.list({ threadId: channel.rootThread.id })
- const refusals = messages.messages
+ /**
+ * A *subtask* refusal, not any `✗` anywhere in the thread.
+ *
+ * This matched every message containing the glyph, which was fine while planners
+ * held no tools and produced no tool results. The moment they could read, the first
+ * `Read` of a path the model guessed wrong rendered as `✗ File does not exist` — an
+ * ordinary exploration miss — and the driver reported it as a refused subtask. The
+ * failure being measured is `startPlannedChild` declining to start a child, and that
+ * only ever appears in the plan summary this asserts against by shape.
+ *
+ * And across *every* thread, not just the root's. A sub-planner runs in its own
+ * area thread, so scanning only the root thread could never have seen a
+ * refusal at the depth this driver exists to exercise.
+ */
+ // `channel.create` returns `{ channel, rootThread }`, so the id is one level down.
+ const threads = await client.channel.threads({ channelId: channel.channel.id })
+ const threadIds = [
+ channel.rootThread.id,
+...threads.map((thread: any) => thread.id).filter((id: string) => id !== channel.rootThread.id),
+ ]
+ const refusals: string[] = []
+ for (const threadId of threadIds) {
+ const messages = await client.message.list({ threadId })
+ refusals.push(
+...messages.messages
 .map((m: any) => m.body.text ?? '')
-.filter((t: string) => t.includes('✗'))
- check(refusals.length === 0, `no subtask was refused${refusals.length ? `: ${refusals[0]}`: ''}`)
+.filter((t: string) => t.startsWith('Plan accepted:'))
+.flatMap((t: string) => t.split('\n').filter((line: string) => line.startsWith('✗ '))),
+)
+ }
+ check(
+ refusals.length === 0,
+ `no subtask was refused across ${threadIds.length} thread(s)${refusals.length ? `: ${refusals[0]}`: ''}`,
+)
 
  const failed = results.filter((r) => !r.ok)
  console.log(`\n${results.length - failed.length}/${results.length} checks passed`)
