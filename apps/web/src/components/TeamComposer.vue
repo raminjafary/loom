@@ -7,9 +7,12 @@ import {
  connectVerdict,
  layoutForGroup,
  plannerLikeMarkdown,
+ removeDelegateVerdict,
+ withoutDelegate,
  withWiderEnvelope,
  type ComposerEdge,
  type ConnectVerdict,
+ type RemoveEdgeVerdict,
 } from '@loom/client-core'
 import { VueFlow, useVueFlow, type Connection, type NodeDragEvent } from '@vue-flow/core'
 import { computed, nextTick, ref, watch } from 'vue'
@@ -453,6 +456,74 @@ const onConnect = (connection: Connection) => {
  // answer, and it changes when the personas change — not when someone drags.
 }
 
+/**
+ * Taking an edge off the canvas (the operator's ask: "you should be able to remove edges
+ * in the design graph too").
+ *
+ * The two kinds are removed by genuinely different acts, because they are stored
+ * differently, and pretending otherwise would be the canvas inventing a rule:
+ *
+ * - A **reviews** edge is stored on the group, so removing it is clearing that entry —
+ * exactly what the reviewer picker already does, reached from the edge instead.
+ * - A **delegates** edge is *derived* from the planner's envelope against the worker's
+ * tools, so there is no row to delete. It goes only by narrowing the envelope, which
+ * can take other workers with it — so the removal is proposed with its cost first and
+ * never applied silently.
+ */
+const removal = ref<{
+ verdict: RemoveEdgeVerdict
+ plannerId: string
+ targetName: string
+} | null>(null)
+
+const requestRemoveEdge = => {
+ const edge = selectedEdge.value
+ if (!edge) return
+
+ if (edge.kind === 'reviews') {
+ // `source` reviews `target` — clearing is the picker's own empty state.
+ setReviewer(edge.target, '')
+ selectedEdgeId.value = ''
+ return
+ }
+
+ const planner = personaById(edge.source)
+ const target = personaById(edge.target)
+ if (!planner || !target) return
+
+ /**
+ * The other workers this planner currently delegates to — read from the matrix rather
+ * than from the team roster, because the matrix is what the runtime would allow and the
+ * roster is only who is on the canvas. Narrowing against the roster would report a cost
+ * that does not match what actually changes.
+ */
+ const others = props.matrix
+.filter((entry) => entry.plannerId === planner.id && entry.ok && entry.workerId !== target.id)
+.flatMap((entry) => {
+ const worker = personaById(entry.workerId)
+ return worker ? [{ name: worker.name, tools: worker.tools }]: []
+ })
+
+ removal.value = {
+ verdict: removeDelegateVerdict(planner, { name: target.name, tools: target.tools }, others),
+ plannerId: planner.id,
+ targetName: target.name,
+ }
+}
+
+const applyRemoval = => {
+ const request = removal.value
+ if (!request || request.verdict.kind === 'impossible') return
+ const planner = personaById(request.plannerId)
+ if (!planner) return
+ emit('update-persona', {
+ personaId: planner.id,
+ markdownSource: withoutDelegate(planner, request.verdict.tools),
+ })
+ removal.value = null
+ selectedEdgeId.value = ''
+}
+
 const applyWidening = => {
  const request = pending.value
  if (!request || request.verdict.kind !== 'widen') return
@@ -467,7 +538,8 @@ const applyWidening = => {
 
 const onKeydown = (event: KeyboardEvent) => {
  if (event.key !== 'Escape') return
- if (pending.value) pending.value = null
+ if (removal.value) removal.value = null
+ else if (pending.value) pending.value = null
  else if (selectedEdgeId.value) selectedEdgeId.value = ''
  else emit('close')
 }
@@ -690,6 +762,48 @@ const onKeydown = (event: KeyboardEvent) => {
  <em>{{ refusal.fix }}</em>
  </li>
  </ul>
+ <!--
+ Offered only for an edge that actually exists. A refused delegation is
+ already not there, and "remove" on it would promise to undo something that
+ never happened.
+ -->
+ <button
+ v-if="selectedEdge.kind === 'reviews' || selectedEdge.ok"
+ type="button"
+ class="link danger"
+:disabled="props.busy"
+ @click="requestRemoveEdge"
+ >
+ Remove this edge
+ </button>
+ </section>
+
+ <section v-if="removal" class="pending" role="alert">
+ <template v-if="removal.verdict.kind === 'impossible'">
+ <p>{{ removal.verdict.reason }}</p>
+ <button type="button" class="link" @click="removal = null">Dismiss</button>
+ </template>
+ <template v-else>
+ <p>
+ Removing this edge narrows the planner's envelope by
+ <strong>{{ removal.verdict.tools.join(', ') }}</strong
+ >, which is the only way to stop it delegating to
+ {{ removal.targetName }} — a delegation edge is derived from the envelope,
+ not stored as a pair.
+ </p>
+ <p v-if="removal.verdict.kind === 'collateral'" class="fine">
+ It also stops this planner delegating to
+ <strong>{{ removal.verdict.alsoLoses.join(', ') }}</strong
+ >, which need the same tool. Said before it happens rather than discovered
+ afterwards.
+ </p>
+ <div class="actions">
+ <button type="button":disabled="props.busy" @click="applyRemoval">
+ Narrow the envelope
+ </button>
+ <button type="button" class="link" @click="removal = null">Cancel</button>
+ </div>
+ </template>
  </section>
 
  <section v-if="pending" class="pending" role="alert">
@@ -737,6 +851,12 @@ const onKeydown = (event: KeyboardEvent) => {
 </template>
 
 <style scoped>
+/* The one destructive control on this canvas. Every other action here adds — a member, a
+ planner, an edge, a width — and this one takes away, so it must not look like them. */
+.link.danger {
+ color: var(--danger);
+}
+
 /* Vue Flow's own stylesheet is imported globally in main.ts — see the note there. */
 .scrim {
  position: fixed;

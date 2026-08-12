@@ -297,24 +297,28 @@ export const removeDelegateVerdict = (
  }
  }
 
- const othersNeed = new Set(others.flatMap((worker) => worker.tools))
- const exclusive = needed.filter((tool) => !othersNeed.has(tool))
- if (exclusive.length === 0) {
- return {
- kind: 'impossible',
- reason: `Every tool ${remove.name} needs is also needed by ${others
-.map((worker) => worker.name)
-.join(', ')}, so no envelope excludes it while keeping them.`,
- }
- }
+ /**
+ * **One tool at a time, choosing the least damaging.**
+ *
+ * The first version of this compared the removed worker's tools against the union of
+ * every other worker's, and concluded "impossible" whenever no tool was exclusive to
+ * it — which is wrong, and a test caught it. Dropping *any* one tool the worker needs
+ * removes it; the question is only which tool costs the least, since each one also
+ * takes every other worker that needs it. So the choice is a minimum, not an
+ * intersection, and "impossible" survives only for the case where there is nothing to
+ * drop at all.
+ */
+ const options = needed
+.map((tool) => ({
+ tool,
+ alsoLoses: others.filter((worker) => worker.tools.includes(tool)).map((w) => w.name),
+ }))
+.sort((a, b) => a.alsoLoses.length - b.alsoLoses.length || (a.tool < b.tool ? -1: 1))
 
- const alsoLoses = others
-.filter((worker) => worker.tools.some((tool) => exclusive.includes(tool)))
-.map((worker) => worker.name)
-
- return alsoLoses.length === 0
- ? { kind: 'clean', tools: exclusive }
-: { kind: 'collateral', tools: exclusive, alsoLoses }
+ const best = options[0]!
+ return best.alsoLoses.length === 0
+ ? { kind: 'clean', tools: [best.tool] }
+: { kind: 'collateral', tools: [best.tool], alsoLoses: best.alsoLoses }
 }
 
 /** The planner's markdown with those tools removed from `harness.delegates`. */

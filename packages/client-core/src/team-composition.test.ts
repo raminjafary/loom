@@ -8,6 +8,8 @@ import {
  layoutForGroup,
  summarizeRefusals,
  withWiderEnvelope,
+ withoutDelegate,
+ removeDelegateVerdict,
 } from './team-composition.js'
 
 const persona = (overrides: Partial<AgentPersona> = {}): AgentPersona => ({
@@ -351,5 +353,82 @@ describe('composerEdges review policy', => {
  const edges = composerEdges(['planner', 'swe'], [edge])
  expect(edges).toHaveLength(1)
  expect(edges[0]?.kind).toBe('delegates')
+ })
+})
+
+describe('removeDelegateVerdict / withoutDelegate — taking an edge off the canvas', => {
+ const planner = persona({
+ id: 'planner',
+ name: 'planner',
+ tools: ['Read', 'Grep', 'Glob'],
+ harnessPlanner: true,
+ harnessDelegates: ['Read', 'Edit', 'Bash'],
+ markdownSource: [
+ '---',
+ 'name: planner',
+ 'description: Decomposes',
+ 'model: claude-sonnet-5',
+ 'tools: [Read, Grep, Glob]',
+ 'harness:',
+ ' planner: true',
+ ' delegates: [Read, Edit, Bash]',
+ '---',
+ '',
+ 'You decompose.',
+ ].join('\n'),
+ })
+
+ it('removes cleanly when the worker needs a tool no other delegate does', => {
+ const verdict = removeDelegateVerdict(
+ planner,
+ { name: 'swe', tools: ['Read', 'Bash'] },
+ [{ name: 'qa', tools: ['Read'] }],
+)
+
+ expect(verdict.kind).toBe('clean')
+ if (verdict.kind === 'clean') expect(verdict.tools).toEqual(['Bash'])
+ })
+
+ it('names who else would be lost, because narrowing is not a per-pair act', => {
+ const verdict = removeDelegateVerdict(
+ planner,
+ { name: 'swe', tools: ['Read', 'Edit'] },
+ [
+ { name: 'qa', tools: ['Read'] },
+ { name: 'frontend', tools: ['Read', 'Edit'] },
+ ],
+)
+
+ expect(verdict.kind).toBe('collateral')
+ if (verdict.kind === 'collateral') {
+ expect(verdict.tools).toEqual(['Edit'])
+ expect(verdict.alsoLoses).toEqual(['frontend'])
+ }
+ })
+
+ it('offers the removal with its cost when every tool is shared, rather than refusing', => {
+ const verdict = removeDelegateVerdict(
+ planner,
+ { name: 'swe', tools: ['Read'] },
+ [{ name: 'qa', tools: ['Read'] }],
+)
+
+ // Dropping Read really does remove swe — it just takes qa with it. Saying so is more
+ // useful than refusing, and it is what actually happens.
+ expect(verdict.kind).toBe('collateral')
+ if (verdict.kind === 'collateral') expect(verdict.alsoLoses).toEqual(['qa'])
+ })
+
+ it('refuses when the envelope grants the worker nothing to begin with', => {
+ const verdict = removeDelegateVerdict(planner, { name: 'oddball', tools: ['WebFetch'] }, [])
+ expect(verdict.kind).toBe('impossible')
+ })
+
+ it('narrows the markdown through the same serializer, keeping everything else', => {
+ const markdown = withoutDelegate(planner, ['Bash'])
+
+ expect(markdown).toContain('delegates: [Read, Edit]')
+ expect(markdown).toContain('tools: [Read, Grep, Glob]')
+ expect(markdown.endsWith('You decompose.')).toBe(true)
  })
 })
