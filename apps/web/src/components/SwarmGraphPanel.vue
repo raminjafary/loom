@@ -187,11 +187,6 @@ const GAP_Y = 92
  */
 const QUEUE_H = 42
 
-/**
- * Layout takes anything with a layer and a place in it, so the merge-queue band
- * lands in the same coordinate space as the runs without a second set
- * of geometry to keep in step.
- */
 interface Placed {
  readonly depth: number
  readonly order: number
@@ -203,14 +198,47 @@ const left = (node: Placed) => centerX(node) - NODE_W / 2
 const top = (node: Placed) => centerY(node) - NODE_H / 2
 
 /**
- * Every drawable endpoint by id — runs by `runId`, queue nodes by their namespaced `id`
- * — so `edgePath` resolves a run→entry edge exactly as it resolves a parent→child one.
+ * How many layers the runs occupy, so the queue band can start where they end.
+ * `graph.depth` counts the queue's own layers too, which is what the canvas needs and
+ * not what this needs.
+ */
+const runLayers = computed( =>
+ graph.value.nodes.reduce((deepest, node) => Math.max(deepest, node.depth + 1), 0),
+)
+
+/**
+ * The queue band gets **its own vertical rhythm**, tighter than the
+ * runs'.
+ *
+ * Laying it out on the run grid was the obvious thing and looked wrong in a browser: the
+ * gap is sized for 76px nodes, so 42px queue boxes ended up 120px apart and the pipeline
+ * read as three unrelated boxes stacked down the canvas rather than as one flow. Its own
+ * spacing is what makes `run → entry → verification` legible as a sequence.
+ */
+const QUEUE_GAP_Y = 30
+const queueTop = computed( => runLayers.value * (NODE_H + GAP_Y))
+const queueBand = (node: SwarmQueueNode) => node.depth - runLayers.value
+const queueY = (node: SwarmQueueNode) =>
+ queueTop.value + queueBand(node) * (QUEUE_H + QUEUE_GAP_Y) + QUEUE_H / 2
+
+/**
+ * Resolved geometry per drawable endpoint — runs by `runId`, queue nodes by their
+ * namespaced `id`.
+ *
+ * Resolved rather than derived-on-demand because the two bands no longer share one
+ * formula: an edge has to leave a box at *that box's* edge, and a single `NODE_H / 2`
+ * left every queue edge ending 17px short of the node it pointed at. Visible immediately
+ * in a browser and invisible to every test, which is the usual split.
  */
 const positions = computed(
  =>
- new Map<string, Placed>([
-...graph.value.nodes.map((node) => [node.card.runId, node] as const),
-...graph.value.queue.map((node) => [node.id, node] as const),
+ new Map<string, { cx: number; cy: number; h: number }>([
+...graph.value.nodes.map(
+ (node) => [node.card.runId, { cx: centerX(node), cy: centerY(node), h: NODE_H }] as const,
+),
+...graph.value.queue.map(
+ (node) => [node.id, { cx: centerX(node), cy: queueY(node), h: QUEUE_H }] as const,
+),
  ]),
 )
 
@@ -244,7 +272,12 @@ const queueTitle = (node: SwarmQueueNode): string => {
 
 const canvas = computed( => ({
  width: Math.max(graph.value.width, 1) * (NODE_W + GAP_X),
- height: Math.max(graph.value.depth, 1) * (NODE_H + GAP_Y),
+ // The queue band's layers are shorter than a run's, so the height is the two bands
+ // added rather than one grid multiplied — otherwise a tree with a queue reserves space
+ // it does not use and `fit` zooms out past what there is to read.
+ height:
+ Math.max(runLayers.value, 1) * (NODE_H + GAP_Y) +
+ new Set(graph.value.queue.map((node) => node.depth)).size * (QUEUE_H + QUEUE_GAP_Y),
 }))
 
 /**
@@ -261,15 +294,15 @@ const edgePath = (fromId: string, toId: string, kind: SwarmEdgeKind): string => 
  if (!from || !to) return ''
 
  if (kind === 'collision') {
- const [a, b] = centerX(from) <= centerX(to) ? [from, to]: [to, from]
- const y = Math.max(centerY(a), centerY(b)) + NODE_H / 2 + 22
- return `M ${centerX(a)} ${centerY(a) + NODE_H / 2} C ${centerX(a)} ${y}, ${centerX(b)} ${y}, ${centerX(b)} ${centerY(b) + NODE_H / 2}`
+ const [a, b] = from.cx <= to.cx ? [from, to]: [to, from]
+ const y = Math.max(a.cy + a.h / 2, b.cy + b.h / 2) + 22
+ return `M ${a.cx} ${a.cy + a.h / 2} C ${a.cx} ${y}, ${b.cx} ${y}, ${b.cx} ${b.cy + b.h / 2}`
  }
 
- const x1 = centerX(from)
- const y1 = centerY(from) + NODE_H / 2
- const x2 = centerX(to)
- const y2 = centerY(to) - NODE_H / 2
+ const x1 = from.cx
+ const y1 = from.cy + from.h / 2
+ const x2 = to.cx
+ const y2 = to.cy - to.h / 2
  const mid = (y1 + y2) / 2
  return `M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`
 }
@@ -684,7 +717,7 @@ const collisionCount = computed(
 :key="qnode.id"
  class="qnode"
 :class="[qnode.kind, qnode.kind === 'verification' ? qnode.verification: qnode.status]"
-:transform="`translate(${left(qnode)} ${top(qnode) + (NODE_H - QUEUE_H) / 2})`"
+:transform="`translate(${left(qnode)} ${queueY(qnode) - QUEUE_H / 2})`"
  clip-path="url(#loom-queue-clip)"
  >
  <rect:width="NODE_W":height="QUEUE_H" rx="8" class="box" />
@@ -699,7 +732,21 @@ const collisionCount = computed(
  <text class="qstatus":x="NODE_W - 10" y="17" text-anchor="end">
  {{ qnode.status }}
  </text>
- <text class="qbranch" x="10" y="32">{{ shortBranchName(qnode.branchName) }}</text>
+ <!--
+ The reason replaces the branch name when it failed. The branch is
+ already on the run node directly above — repeating it costs the one
+ line the node has, and a browser showed the cost plainly: a failed
+ entry said only "failed", with why it failed reachable by hovering.
+ -->
+ <text class="qbranch" x="10" y="32">
+ {{
+ qnode.status === 'failed' && qnode.detail
+ ? qnode.detail.length > 30
+ ? `${qnode.detail.slice(0, 29)}…`
+: qnode.detail
+: shortBranchName(qnode.branchName)
+ }}
+ </text>
  </template>
  <template v-else>
  <text class="qplace" x="10" y="17">verification</text>
@@ -1006,8 +1053,12 @@ header button:disabled {
  stroke-dasharray: 3 2;
 }
 
-.qnode.merging.box,
-.qnode.pending.box {
+/* The accent means "this is in flight", and it belongs to the entry that is merging —
+ not to a verification whose state is `pending`, which means the opposite: nothing is
+ known yet. Drawn in the accent, a pending verification read as selected or running, and
+ sat under a *failed* entry claiming attention it had not earned. It stays dashed and
+ quiet; the entry above it is what lights up while the merge is actually running. */
+.qnode.merging.box {
  stroke: var(--accent);
  stroke-dasharray: none;
 }
