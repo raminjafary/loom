@@ -1,4 +1,5 @@
 import { attenuateChildPersona } from './attenuation.js'
+import { canPlannerRead } from './planner-tools.js'
 import type { PersonaSpec } from './agents.js'
 
 /**
@@ -116,6 +117,16 @@ export const describeDelegationRoster = (
 )
 
  /**
+ * Whether *every* offered planner can scope its own area. Any that cannot is
+ * the case the paragraph below has to keep warning about, so this is `every`
+ * rather than `some`: a roster mixing a reading planner with a `tools: []` one
+ * must still say a file reference can stop a recipient.
+ */
+ const subPlannersCanRead = delegatable
+.filter((candidate) => candidate.planner)
+.every((candidate) => canPlannerRead(candidate.tools))
+
+ /**
  * A Planner that may delegate to a Planner is told what that is *for*, because the
  * decision it changes is the size of a subtask. Without it, the roster reads as a
  * longer list of workers and the model splits the goal into leaf-sized pieces
@@ -129,17 +140,26 @@ export const describeDelegationRoster = (
  'small enough to finish on one branch. Prefer a planner when a part of the goal ' +
  'would otherwise need more subtasks than you can describe precisely.',
  /**
- * A planner holds no tools — including yours. Observed live: a root that
- * delegated "decompose the docs area (docs-area.md)" produced two sub-planners
- * that each stopped and asked a human what was in the file, planned nothing,
- * and sat on the gate until the SLA denied them. The subtask text is the only
- * thing a sub-planner has, and naming a file inside it describes work the
- * recipient cannot look at.
+ * The sentence that has to track what a sub-planner can actually do.
+ *
+ * Observed live, before planners could read: a root that delegated
+ * "decompose the docs area (docs-area.md)" produced two sub-planners that
+ * each stopped and asked a human what was in the file, planned nothing, and
+ * sat on the gate until the SLA denied them. Two prompt-level mitigations
+ * were written against that and neither held with a Haiku planner, which is
+ * what settled the read-only question (`planner-tools.ts`).
+ *
+ * A `tools: []` planner is still legal to author, so the old warning is not
+ * deleted — it is now the branch that applies when one is on the roster.
  */
- 'A planner cannot read files — it has no tools at all, exactly as you have none. ' +
- "So write a subtask for a planner as a self-contained brief: say what that area " +
- 'has to end up containing and what constraints apply, in the task text itself. ' +
- 'Naming a file it should go and read will stop it, because it cannot.',
+ subPlannersCanRead
+ ? 'A planner reads the same way you do — Read, Grep and Glob — so pointing one at ' +
+ 'the files or directories its area covers is useful, not a dead end. Say what the ' +
+ 'area has to end up containing and where it lives; it will look before it decomposes.'
+: 'A planner cannot read files — it has no tools at all. So write a subtask for a ' +
+ 'planner as a self-contained brief: say what that area has to end up containing and ' +
+ 'what constraints apply, in the task text itself. Naming a file it should go and ' +
+ 'read will stop it, because it cannot.',
  ]
 : []
 

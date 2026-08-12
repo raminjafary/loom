@@ -1,4 +1,5 @@
 import { serializePersonaMarkdown } from './persona-markdown.js'
+import { PLANNER_READABLE_TOOLS } from './planner-tools.js'
 
 /**
  * Seeded once per workspace, on the request that actually creates it
@@ -20,7 +21,12 @@ export interface BuiltinPersona {
  readonly markdownSource: string
 }
 
-const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob']
+/**
+ * Shared with the planner rule deliberately (`planner-tools.ts`). The two lists
+ * were identical by coincidence before, and a planner authored from a list that
+ * had drifted apart from the one validating it would fail at seed time.
+ */
+const READ_ONLY_TOOLS = [...PLANNER_READABLE_TOOLS]
 const ENGINEERING_TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob']
 const QA_TOOLS = ['Read', 'Grep', 'Glob', 'Bash']
 
@@ -60,17 +66,21 @@ const define = (spec: {
 
 export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  /**
- * The Planner. `tools: []` is not a
- * scope cut — it is the boundary: a Planner cannot read, write, or run anything,
- * so the only effect it can have is the decomposition it submits, and every
- * child it asks for is attenuated against what it does *not* have. Give it Bash
- * and every attenuation check below it becomes meaningless.
+ * The Planner.
+ *
+ * Read-only is not a scope cut — the boundary is that a Planner cannot *act*:
+ * no shell and no write, so the only effect it can have on the world is the
+ * decomposition it submits, and every child it asks for is attenuated against
+ * what it does not have. Give it Bash and every attenuation check below it
+ * becomes meaningless. It reads because the corporation hands a sub-planner a whole
+ * area of a repository and a planner that cannot open a file in that area has
+ * nothing to decompose from — see `planner-tools.ts` for what that cost live.
  */
  define({
  name: 'planner',
- description: 'Decomposes a goal into subtasks and delegates them to workers. Runs nothing itself.',
+ description: 'Decomposes a goal into subtasks and delegates them to workers. Reads to scope; runs nothing.',
  model: 'claude-opus-5',
- tools: [],
+ tools: READ_ONLY_TOOLS,
  planner: true,
  /**
  * The envelope: what the Planner
@@ -87,19 +97,22 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  * ceiling equal to the workers it ships beside. `builtin-personas.test.ts` now
  * fails if that gap reopens.
  *
- * The boundary this envelope is *not* carrying is still intact: the Planner holds
- * `tools: []` and cannot itself read, write or run anything, a child planner's own
- * envelope attenuates against this one (see attenuation.ts), and every worker's
- * shell lives inside its own sandboxed clone behind the egress proxy.
- * What the envelope is for is being narrowable by a human who wants less than this.
+ * The boundary this envelope is *not* carrying is still intact: the Planner can
+ * read but cannot write or run anything, a child planner's own envelope attenuates
+ * against this one (see attenuation.ts), and every worker's shell lives inside its
+ * own sandboxed clone behind the egress proxy. What the envelope is for is
+ * being narrowable by a human who wants less than this.
  */
  delegates: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'],
  systemPrompt:
- 'You are a Planner. You cannot read files, write code, or run commands — you decompose and delegate. ' +
+ 'You are a Planner. You can read the repository — Read, Grep and Glob — but you cannot write code or ' +
+ 'run commands. Read enough to scope the work accurately, then decompose and delegate; do not try to ' +
+ 'do the work yourself, and do not read the whole repository before planning. ' +
  'Break the goal into the smallest number of subtasks that can each be done independently on their own ' +
  'branch, and submit them with the submit_plan tool in one call. Name a persona for each subtask from ' +
  'the ones registered in this workspace. Two subtasks that edit the same file will conflict when their ' +
- 'branches merge, so prefer splitting by file or by area rather than by phase. ' +
+ 'branches merge, so prefer splitting by file or by area rather than by phase — and because you can ' +
+ 'look, claim the real paths each subtask owns rather than guessing at them. ' +
  /**
  * The split-brain rule. Two planners handed "design the config format" will
  * each design one, and both answers arrive as finished branches — the most

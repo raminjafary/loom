@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { attenuateChildPersona } from './attenuation.js'
 import { BUILTIN_PERSONAS, type BuiltinPersona } from './builtin-personas.js'
 import { parsePersonaMarkdown } from './persona-markdown.js'
+import { actingTools, canPlannerRead } from './planner-tools.js'
 import type { PersonaSpec } from './agents.js'
 
 /** The spec `startAgentRun` snapshots onto a run, built from the seeded row. */
@@ -24,14 +25,32 @@ describe('BUILTIN_PERSONAS', => {
  })
 
  /**
- * The `tools: []` is the Planner's trust boundary, not a scope cut —
- * The attenuation measures every child against what the parent holds, so a
- * Planner with tools would make every check below it meaningless.
+ * The planner/worker trust boundary is the Planner's trust boundary, and the boundary is *acting*,
+ * not tooling — the attenuation measures every child against what the parent
+ * holds, so a Planner that could write or run a shell would make every check
+ * below it meaningless. It reads because the corporation hands a sub-planner an area of
+ * a repository to decompose; see `planner-tools.ts`.
  */
- it('ships the planner with no tools at all', => {
+ it('ships the planner able to read and unable to act', => {
  const planner = BUILTIN_PERSONAS.find((p) => p.name === 'planner')
  expect(planner?.harnessPlanner).toBe(true)
- expect(planner?.tools).toEqual([])
+ expect(actingTools(planner?.tools ?? [])).toEqual([])
+ // Stated as a positive too: a planner that could not read is the stall this
+ // change exists to fix, and an empty list would pass the assertion above.
+ expect(canPlannerRead(planner?.tools ?? [])).toBe(true)
+ })
+
+ /**
+ * The named tools, not just "some read tool". `Bash` is the one that would make
+ * attenuation meaningless, and it is worth failing by name if it ever appears.
+ */
+ it('never ships a planner holding Bash, Write or Edit', => {
+ for (const persona of BUILTIN_PERSONAS.filter((p) => p.harnessPlanner)) {
+ expect(persona.tools).not.toContain('Bash')
+ expect(persona.tools).not.toContain('Write')
+ expect(persona.tools).not.toContain('Edit')
+ expect(persona.tools).not.toContain('NotebookEdit')
+ }
  })
 
  it.each(BUILTIN_PERSONAS.map((p) => [p.name, p] as const))(

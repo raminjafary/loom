@@ -152,6 +152,34 @@ describe('describeDelegationRoster', => {
  expect(text).toContain('Do not submit a plan')
  })
 
+ /**
+ * The sentence about sub-planners has to track what the offered sub-planners can
+ * actually do. Telling a root that a planner cannot
+ * read when it can wastes the read; telling it a planner can read when it cannot
+ * is the stall that forced the amendment. Both directions are asserted.
+ */
+ it('tells a root that a reading sub-planner may be pointed at files', => {
+ const sub = candidate({ name: 'sub-planner', tools: ['Read', 'Grep', 'Glob'], planner: true })
+ const text = describeDelegationRoster(planner, [sub, candidate], 1)
+ expect(text).toContain('A planner reads the same way you do')
+ expect(text).not.toContain('cannot read files')
+ })
+
+ it('still warns about a tools-less sub-planner, which is legal to author', => {
+ const sub = candidate({ name: 'sub-planner', tools: [], planner: true })
+ const text = describeDelegationRoster(planner, [sub, candidate], 1)
+ expect(text).toContain('A planner cannot read files')
+ })
+
+ it('warns when any offered sub-planner cannot read, not only when all cannot', => {
+ // A mixed roster is the dangerous case: one reading planner is not a licence
+ // to point the blind one at a path.
+ const reading = candidate({ name: 'reads', tools: ['Read'], planner: true })
+ const blind = candidate({ name: 'blind', tools: [], planner: true })
+ const text = describeDelegationRoster(planner, [reading, blind], 1)
+ expect(text).toContain('A planner cannot read files')
+ })
+
  it('offers the built-in planner every built-in worker', => {
  // End to end on the shipped seed: the roster a real first run receives.
  const builtinPlanner = BUILTIN_PERSONAS.find((p) => p.name === 'planner')!

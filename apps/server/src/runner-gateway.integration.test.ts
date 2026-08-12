@@ -1718,15 +1718,30 @@ Decompose and delegate.`
  return { run: await runPromise, frame }
  }
 
- it('refuses to author a planner persona that also holds tools', async => {
- // The `tools: []` is the trust boundary — a planner with Bash would make
- // every attenuation check below it meaningless, since children could
- // legitimately inherit it.
+ it('refuses to author a planner persona that holds an acting tool', async => {
+ // The trust boundary is *acting*, not tooling — a planner with Bash would
+ // make every attenuation check below it meaningless, since children could
+ // legitimately inherit it. The refusal names the offending tool, because a
+ // persona a human cannot fix from the error is one they will guess at.
  await expect(
  client.persona.create({
  markdownSource: PLANNER_MARKDOWN.replace('tools: []', 'tools: [Bash]'),
  }),
-).rejects.toThrow(/tools: \[\]/)
+).rejects.toThrow(/Remove: Bash/)
+ })
+
+ it('accepts a planner persona holding read-only tools', async => {
+ // The other half of the same rule, and the one corporation depends on: a
+ // sub-planner handed an area of a repository has to be able to look at it
+ //.
+ const created = await client.persona.create({
+ markdownSource: PLANNER_MARKDOWN.replace('tools: []', 'tools: [Read, Grep, Glob]').replace(
+ 'name: test-planner',
+ 'name: reading-planner',
+),
+ })
+ expect(created.tools).toEqual(['Read', 'Grep', 'Glob'])
+ expect(created.harnessPlanner).toBe(true)
  })
 
  it('sends the planner its delegation flag, and no tools', async => {

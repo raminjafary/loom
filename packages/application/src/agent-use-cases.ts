@@ -3,10 +3,13 @@ import {
  DEFAULT_RESPONSE_STYLE,
  ForbiddenError,
  NotFoundError,
+ PLANNER_READABLE_TOOLS,
  ValidationError,
+ actingTools,
  agentRunActor,
  applyResponseStyle,
  attenuateChildPersona,
+ canPlannerRead,
  buildNotification,
  describeMergeFailure,
  describeCrossPlanOverlaps,
@@ -319,19 +322,21 @@ export const listRunners = (
 ): Promise<Runner[]> => deps.runners.listByWorkspace(input.workspaceId)
 
 /**
- * The product shape gives a Planner no filesystem and no shell, and the roadmap writes it as `tools: []`.
+ * A Planner may read, and may not act.
+ *
  * Enforced at authoring time rather than trusted: a Planner that also held `Bash`
  * would make every attenuation check downstream meaningless, since its children
  * could then legitimately inherit it.
  */
-const assertPlannerHasNoTools = (parsed: {
+const assertPlannerToolsAreReadOnly = (parsed: {
  harnessPlanner: boolean
  tools: string[]
  harnessDelegates: string[]
 }): void => {
- if (parsed.harnessPlanner && parsed.tools.length > 0) {
+ const acting = parsed.harnessPlanner ? actingTools(parsed.tools): []
+ if (acting.length > 0) {
  throw new ValidationError(
- `A planner persona must declare "tools: []" — it delegates rather than acting. Got: ${parsed.tools.join(', ')}`,
+ `A planner persona may only hold read-only tools (${PLANNER_READABLE_TOOLS.join(', ')}) — it decomposes rather than acting. Remove: ${acting.join(', ')}`,
 )
  }
  // Only a planner may carry an envelope. On any other persona it would be a
@@ -353,7 +358,7 @@ export const createPersona = async (
  throw new ForbiddenError('Only a human may create a persona')
  }
  const parsed = parsePersonaMarkdown(input.markdownSource)
- assertPlannerHasNoTools(parsed)
+ assertPlannerToolsAreReadOnly(parsed)
  const existing = await deps.personas.listByWorkspace(input.workspaceId)
  if (existing.some((p) => p.name === parsed.name)) {
  throw new ValidationError(`Persona "${parsed.name}" already exists`)
@@ -443,7 +448,7 @@ export const updatePersona = async (
  throw new ForbiddenError('Only a human may update a persona')
  }
  const parsed = parsePersonaMarkdown(input.markdownSource)
- assertPlannerHasNoTools(parsed)
+ assertPlannerToolsAreReadOnly(parsed)
  return deps.personas.update(input.workspaceId, input.personaId, {
  description: parsed.description,
  markdownSource: input.markdownSource,
@@ -1309,18 +1314,24 @@ const startPlannedChild = async (
  * is meant to treat as authoritative.
  *
  * **Worded differently for a sub-planner, because it cannot act on the worker
- * version.** A planner holds `tools: []`: told "you own these paths, leave the
- * others alone", it reads that as an instruction about files it is expected to
- * open, finds it has no way to open them, and asks a human for their contents —
- * observed live, twice in one run, with both sub-planners parked on `ask_human`
- * having planned nothing. What a planner owns is an *area to decompose*, and
- * the paths are the boundary it should hand down.
+ * version.** What a worker owns is a set of files to edit; what a planner owns
+ * is an *area to decompose*, and the paths are the boundary it hands down.
+ *
+ * Three wordings rather than two, because a planner's ability to read is now a
+ * property of the persona and not of being a planner (`planner-tools.ts`). A
+ * planner that can read is told to go and look; one authored with `tools: []`
+ * gets the sentence that kept it from stalling — told "you own these paths", it
+ * read that as files it was expected to open, found it could not, and asked a
+ * human for their contents, observed live twice in one run with both
+ * sub-planners parked on `ask_human` having planned nothing.
  */
  task:
  subtask.paths.length === 0
  ? subtask.task
 : persona.harnessPlanner
- ? `${subtask.task}\n\nYour area covers these paths: ${subtask.paths.join(', ')}. You cannot read files yourself — decompose the work and let the workers you delegate to read them, claiming paths within your area for each subtask. Other areas own the rest.`
+ ? canPlannerRead(persona.tools)
+ ? `${subtask.task}\n\nYour area covers these paths: ${subtask.paths.join(', ')}. Read what you need of them to scope the area, then decompose it and claim paths within your area for each subtask. Other areas own the rest — do not plan work outside these paths.`
+: `${subtask.task}\n\nYour area covers these paths: ${subtask.paths.join(', ')}. You cannot read files yourself — decompose the work and let the workers you delegate to read them, claiming paths within your area for each subtask. Other areas own the rest.`
 : `${subtask.task}\n\nYou own these paths for this task: ${subtask.paths.join(', ')}. Other workers own the rest; prefer leaving their paths alone and reporting what you need from them.`,
  parentRunId: planner.id,
  relation: 'delegation',
