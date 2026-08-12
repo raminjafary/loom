@@ -433,6 +433,17 @@ export const AgentPersonaSchema = z.object({
  harnessPlanner: z.boolean,
  harnessDelegates: z.array(z.string),
  harnessBudgetCapUsd: z.number.nullable,
+ /**
+ * Where this persona stands relative to the version this build ships,
+ * or null when it is not a built-in.
+ *
+ * Derived rather than stored, and on the wire because it is the only way a client
+ * can offer the one action that resolves it: `'stale'` means the markdown differs
+ * from the shipped version and the recorded seed does not explain why — so either a
+ * human edited it, or it predates the recording. `seedBuiltinPersonas` deliberately
+ * leaves those alone; a human choosing is the honest resolution.
+ */
+ builtinStatus: z.enum(['current', 'stale']).nullable,
  createdAt: z.date,
  updatedAt: z.date,
 })
@@ -634,6 +645,17 @@ export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type PersonaDraft = z.infer<typeof PersonaDraftSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
 export type DelegationEdge = z.infer<typeof DelegationEdgeSchema>
+
+/** What a planner could delegate to under a launcher's overrides. */
+export interface DelegationPreview {
+ readonly planner: boolean
+ readonly delegatable: ReadonlyArray<{ readonly id: string; readonly name: string }>
+ readonly refused: ReadonlyArray<{
+ readonly id: string
+ readonly name: string
+ readonly refusals: ReadonlyArray<z.infer<typeof DelegationRefusalSchema>>
+ }>
+}
 export type DelegationRefusal = z.infer<typeof DelegationRefusalSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>
 export type RunControl = z.infer<typeof RunControlSchema>

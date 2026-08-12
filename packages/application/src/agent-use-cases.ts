@@ -13,6 +13,7 @@ import {
  buildNotification,
  describeMergeFailure,
  describeCrossPlanOverlaps,
+ delegationDesign,
  delegationMatrix,
  describeDelegationRoster,
  describePathOverlaps,
@@ -31,6 +32,7 @@ import {
  parseDecomposition,
  parsePlanDelta,
  parsePersonaMarkdown,
+ shippedBuiltin,
  planStages,
  primaryToolArgument,
  selectNextMergeEntry,
@@ -365,6 +367,60 @@ const assertPlannerToolsAreReadOnly = (parsed: {
 }): void => {
  const problems = plannerToolProblems(parsed)
  if (problems[0]) throw new ValidationError(problems[0])
+}
+
+/**
+ * Replaces a built-in's markdown with the version this build ships.
+ *
+ * The resolution for a `'stale'` built-in — one whose markdown differs from the
+ * shipped version in a way the recorded seed does not explain. `seedBuiltinPersonas`
+ * will not touch those, because it cannot distinguish an operator's tuned prompt from
+ * a row that predates the recording; this is the human saying which it was.
+ *
+ * Records the seed on the way through, so the row rejoins the population that gets
+ * shipped fixes automatically from here on.
+ */
+export const resetPersonaToBuiltin = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; personaId: AgentPersonaId },
+): Promise<AgentPersona> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may reset a persona')
+ }
+ const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+ if (!persona) throw new NotFoundError('AgentPersona')
+
+ const shipped = shippedBuiltin(persona.name)
+ if (!shipped) {
+ throw new ValidationError(
+ `"${persona.name}" is not a built-in persona, so there is no shipped version to reset it to.`,
+)
+ }
+
+ const parsed = parsePersonaMarkdown(shipped.markdownSource)
+ const reset = await deps.personas.update(input.workspaceId, input.personaId, {
+ description: parsed.description,
+ markdownSource: shipped.markdownSource,
+ model: parsed.model,
+ tools: parsed.tools,
+ harnessEffort: parsed.harnessEffort,
+ harnessMaxTurns: parsed.harnessMaxTurns,
+ harnessAutoApprove: parsed.harnessAutoApprove,
+ harnessPlanner: parsed.harnessPlanner,
+ harnessDelegates: parsed.harnessDelegates,
+ harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ builtinSource: shipped.markdownSource,
+ })
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'persona.reset_to_builtin',
+ subjectType: 'agent_persona',
+ subjectId: persona.id,
+ metadata: { name: persona.name },
+ })
+ return reset
 }
 
 /**
@@ -845,6 +901,76 @@ export const updatePersonaGroup = async (
 ),
  }),
  })
+}
+
+/**
+ * Who one persona could delegate to under the overrides a launcher is about to
+ * apply.
+ *
+ * Its own procedure rather than a filter over `delegationMatrixForWorkspace`, because
+ * the answer changes with the overrides and the matrix is computed from stored
+ * personas. The two fields a launcher lets a human change — model and cap — are
+ * exactly the two that silently empty a roster: a planner moved down a tier cannot
+ * start a worker above it, so every persona in the workspace becomes correct and
+ * unusable at once. That cost a real run to discover, which is the argument for
+ * saying it under the control that causes it.
+ */
+export const delegationPreviewForPersona = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ personaId: AgentPersonaId
+ model?: string
+ budgetCapUsd?: number | null
+ },
+): Promise<{
+ planner: boolean
+ delegatable: { id: string; name: string }[]
+ refused: { id: string; name: string; refusals: DelegationRefusal[] }[]
+}> => {
+ const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+ if (!persona) throw new NotFoundError('AgentPersona')
+ if (!persona.harnessPlanner) return { planner: false, delegatable: [], refused: [] }
+
+ const plannerSpec: PersonaSpec = {
+ name: persona.name,
+ systemPrompt: '',
+ model: input.model ?? persona.model,
+ tools: persona.tools,
+ autoApprove: persona.harnessAutoApprove,
+ budgetCapUsd:
+ input.budgetCapUsd === undefined ? persona.harnessBudgetCapUsd: input.budgetCapUsd,
+ planner: true,
+ delegates: persona.harnessDelegates,
+ capabilities: await resolveCapabilities(deps, input.workspaceId, persona.id),
+ }
+
+ const candidates = await deps.personas.listByWorkspace(input.workspaceId)
+ const delegatable: { id: string; name: string }[] = []
+ const refused: { id: string; name: string; refusals: DelegationRefusal[] }[] = []
+
+ for (const candidate of candidates) {
+ if (candidate.id === persona.id) continue
+ const design = delegationDesign(
+ plannerSpec,
+ {
+ name: candidate.name,
+ systemPrompt: '',
+ model: candidate.model,
+ tools: candidate.tools,
+ autoApprove: candidate.harnessAutoApprove,
+ budgetCapUsd: candidate.harnessBudgetCapUsd,
+ planner: candidate.harnessPlanner,
+ delegates: candidate.harnessDelegates,
+ capabilities: await resolveCapabilities(deps, input.workspaceId, candidate.id),
+ },
+ deps.limits.maxDelegationDepth - 1,
+)
+ if (design.ok) delegatable.push({ id: candidate.id, name: candidate.name })
+ else refused.push({ id: candidate.id, name: candidate.name, refusals: [...design.refusals] })
+ }
+
+ return { planner: true, delegatable, refused }
 }
 
 /**

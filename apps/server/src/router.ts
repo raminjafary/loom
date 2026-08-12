@@ -48,11 +48,13 @@ import {
  listRunsNeedingAttention,
  listTreeNotes,
  delegationMatrixForWorkspace,
+ delegationPreviewForPersona,
  parsePersonaDraft,
  pauseAllRuns,
  postMessage,
  pushAgentRun,
  registerNotificationTarget,
+ resetPersonaToBuiltin,
  resumeAllRuns,
  setRepositoryInstallCommand,
  setRepositoryVerifyCommand,
@@ -65,7 +67,13 @@ import {
  writeHumanNote,
  type AgentDeps,
 } from '@loom/application'
-import { DomainError, type MergeQueueEntry, type WorkerNote } from '@loom/domain'
+import {
+ DomainError,
+ builtinPersonaStatus,
+ type AgentPersona,
+ type MergeQueueEntry,
+ type WorkerNote,
+} from '@loom/domain'
 import {
  asAgentPersonaId,
  asAgentRunId,
@@ -90,6 +98,18 @@ import type { Principal } from './auth.js'
 const toWireMergeQueueEntry = (entry: MergeQueueEntry) => ({
 ...entry,
  position: entry.position.toString,
+})
+
+/**
+ * Adds the derived `builtinStatus`.
+ *
+ * Derived here rather than stored, and rather than computed in the client: the client
+ * has no copy of what this build ships, and giving it one would be a second place for
+ * the shipped personas to live.
+ */
+const toWirePersona = (persona: AgentPersona) => ({
+...persona,
+ builtinStatus: builtinPersonaStatus(persona),
 })
 
 /** `paths` is readonly in the domain and mutable on the wire — same as `runner.allowedRoots`. */
@@ -451,14 +471,31 @@ export const router = os.router({
 
  persona: {
  list: os.persona.list.handler(({ context }) =>
- guard( => listPersonas(context.deps, { workspaceId: context.principal.workspaceId })),
+ guard(async =>
+ (await listPersonas(context.deps, { workspaceId: context.principal.workspaceId })).map(
+ toWirePersona,
+),
+),
 ),
 
  get: os.persona.get.handler(({ context, input }) =>
- guard( =>
- getPersona(context.deps, {
+ guard(async =>
+ toWirePersona(
+ await getPersona(context.deps, {
  workspaceId: context.principal.workspaceId,
  personaId: asAgentPersonaId(input.personaId),
+ }),
+),
+),
+),
+
+ delegationPreview: os.persona.delegationPreview.handler(({ context, input }) =>
+ guard( =>
+ delegationPreviewForPersona(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ personaId: asAgentPersonaId(input.personaId),
+...(input.model === undefined ? {}: { model: input.model }),
+...(input.budgetCapUsd === undefined ? {}: { budgetCapUsd: input.budgetCapUsd }),
  }),
 ),
 ),
@@ -468,23 +505,39 @@ export const router = os.router({
 ),
 
  create: os.persona.create.handler(({ context, input }) =>
- guard( =>
- createPersona(context.deps, {
+ guard(async =>
+ toWirePersona(
+ await createPersona(context.deps, {
  workspaceId: context.principal.workspaceId,
  actor: context.principal.actor,
  markdownSource: input.markdownSource,
  }),
 ),
 ),
+),
 
  update: os.persona.update.handler(({ context, input }) =>
- guard( =>
- updatePersona(context.deps, {
+ guard(async =>
+ toWirePersona(
+ await updatePersona(context.deps, {
  workspaceId: context.principal.workspaceId,
  actor: context.principal.actor,
  personaId: asAgentPersonaId(input.personaId),
  markdownSource: input.markdownSource,
  }),
+),
+),
+),
+
+ resetToBuiltin: os.persona.resetToBuiltin.handler(({ context, input }) =>
+ guard(async =>
+ toWirePersona(
+ await resetPersonaToBuiltin(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ personaId: asAgentPersonaId(input.personaId),
+ }),
+),
 ),
 ),
 

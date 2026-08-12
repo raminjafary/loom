@@ -254,3 +254,32 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  'resolved and which, if any, you refused and why.',
  }),
 ]
+
+/**
+ * Where a persona stands relative to the version this build ships.
+ *
+ * - `null` — not a built-in name; a persona somebody wrote.
+ * - `'current'` — its markdown is exactly what this build ships.
+ * - `'stale'` — its markdown differs, and the recorded seed does not explain the
+ * difference. Either a human edited it, or it predates `builtinSource` and there is
+ * no way to tell. `seedBuiltinPersonas` never touches these; the editor offers to
+ * reset one, because the human choosing is the only honest resolution.
+ *
+ * There is deliberately no `'outdated'` state. An untouched row that the platform has
+ * moved past is brought forward on the next workspace resolution, so it can only be
+ * observed mid-flight — a status a UI could render but never act on is a status worth
+ * not having.
+ */
+export type BuiltinPersonaStatus = 'current' | 'stale'
+
+export const builtinPersonaStatus = (persona: {
+ readonly name: string
+ readonly markdownSource: string
+}): BuiltinPersonaStatus | null => {
+ const shipped = BUILTIN_PERSONAS.find((builtin) => builtin.name === persona.name)
+ if (!shipped) return null
+ return shipped.markdownSource === persona.markdownSource ? 'current': 'stale'
+}
+
+export const shippedBuiltin = (name: string): BuiltinPersona | null =>
+ BUILTIN_PERSONAS.find((builtin) => builtin.name === name) ?? null

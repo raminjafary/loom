@@ -43,9 +43,12 @@ export const useAgentStore = defineStore('agent', () => {
     }) => session.createRepository(input),
     createPersona: (markdownSource: string) => session.createPersona(markdownSource),
     parsePersona: (markdownSource: string) => session.parsePersona(markdownSource),
+    previewDelegation: (input: Parameters<typeof session.previewDelegation>[0]) =>
+      session.previewDelegation(input),
     updatePersona: (input: { personaId: string; markdownSource: string }) =>
       session.updatePersona(input),
     deletePersona: (personaId: string) => session.deletePersona(personaId),
+    resetPersonaToBuiltin: (personaId: string) => session.resetPersonaToBuiltin(personaId),
     unbindRepository: (input: { repositoryId: string; acknowledge?: boolean }) =>
       session.unbindRepository(input),
     removeRunner: (runnerId: string) => session.removeRunner(runnerId),

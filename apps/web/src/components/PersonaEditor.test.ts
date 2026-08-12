@@ -26,6 +26,7 @@ const persona = (overrides: Partial<AgentPersona> = {}): AgentPersona => ({
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: null,
+ builtinStatus: null,
  createdAt: new Date(0),
  updatedAt: new Date(0),
 ...overrides,

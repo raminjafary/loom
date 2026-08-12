@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AgentPersona, Repository, ResponseStyle } from '@loom/api-contract'
+import type { AgentPersona, DelegationPreview, Repository, ResponseStyle } from '@loom/api-contract'
 import { findSelectableModel, SELECTABLE_MODELS } from '@loom/client-core'
 import { computed, ref, watch } from 'vue'
 
@@ -40,6 +40,14 @@ const emit = defineEmits<{
  },
  ]
  'open-settings': []
+ /**
+ * Asks the server who this planner could delegate to under the overrides
+ * currently selected.
+ */
+ 'preview-delegation': [
+ input: { personaId: string; model?: string; budgetCapUsd?: number | null },
+ done: (preview: DelegationPreview) => void,
+ ]
 }>
 
 const repositoryId = ref('')
@@ -156,6 +164,84 @@ const capLabel = computed( => {
 : `stops at $${persona.harnessBudgetCapUsd.toFixed(2)}`
 })
 
+/**
+ * What choosing this model and cap does to a planner's roster.
+ *
+ * A planner cannot start a worker on a higher model tier, so moving a planner down
+ * to save money can leave it with nobody to delegate to — every persona correct,
+ * the whole roster empty, and nothing saying so anywhere. That was measured by
+ * paying for a live run which planned nothing and replied that "the only available
+ * persona is sweep-probe". The roadmap calls showing the attenuation envelope at design time
+ * the composition canvas's highest-value job; this is the same insight one control
+ * earlier, where the choice that causes it is actually made.
+ *
+ * Server-side, like every other answer about attenuation: a client that computed
+ * this itself could reassure a human about a run the gate then refuses.
+ */
+const preview = ref<DelegationPreview | null>(null)
+let previewToken = 0
+
+watch(
+ [personaId, model, budgetCap],
+ => {
+ preview.value = null
+ if (!selected.value?.harnessPlanner) return
+ const token = (previewToken += 1)
+ emit(
+ 'preview-delegation',
+ {
+ personaId: personaId.value,
+...(model.value === '' ? {}: { model: model.value }),
+...(budgetCapUsd.value === undefined ? {}: { budgetCapUsd: budgetCapUsd.value }),
+ },
+ (result) => {
+ // Dropped if the human has changed something since — a late answer about a
+ // model nobody has selected any more is worse than none.
+ if (token === previewToken) preview.value = result
+ },
+)
+ },
+ { immediate: true },
+)
+
+const rosterLabel = computed( => {
+ const current = preview.value
+ if (!current?.planner) return null
+ const total = current.delegatable.length + current.refused.length
+ if (total === 0) return 'No other personas exist to delegate to.'
+ if (current.delegatable.length === 0) {
+ return `This planner cannot delegate to any of the ${total} other personas — every one is refused.`
+ }
+ return `${current.delegatable.length} of ${total} personas are delegatable at this model and cap.`
+})
+
+/** The single most common cause, named rather than left to the inspector. */
+const rosterReason = computed( => {
+ const current = preview.value
+ if (!current?.planner || current.refused.length === 0) return null
+ const counts = new Map<string, number>
+ for (const entry of current.refused) {
+ for (const refusal of entry.refusals) {
+ counts.set(refusal.rule, (counts.get(refusal.rule) ?? 0) + 1)
+ }
+ }
+ const [rule, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? []
+ if (!rule || !count) return null
+ const because =
+ rule === 'model'
+ ? 'a higher model tier than this planner'
+: rule === 'budget'
+ ? 'a budget cap above this planner’s'
+: rule === 'autoApprove'
+ ? 'auto-approve, which this planner does not have'
+: rule === 'tools'
+ ? 'tools outside this planner’s delegation envelope'
+: rule === 'depth'
+ ? 'no delegation hops left below them'
+: `a ${rule} refusal`
+ return `${count} refused for ${because}.`
+})
+
 const submit = => {
  if (!canSubmit.value) return
  emit('start', {
@@ -242,6 +328,16 @@ const harnessSummary = (persona: AgentPersona): string => {
  </select>
  </label>
 
+ <!--
+ The roster this model choice leaves, said under the control that decides it.
+ A planner on a cheap model cannot start a worker on a higher tier, so this is
+ where "correct and completely unusable" becomes visible.
+ -->
+ <p v-if="rosterLabel" class="roster":class="{ empty: preview?.delegatable.length === 0 }">
+ {{ rosterLabel }}
+ <span v-if="rosterReason"> {{ rosterReason }}</span>
+ </p>
+
  <!-- the security model: caps are enforced, not advisory — so they belong where a run is started. -->
  <label class="field">
  <span>Spend cap</span>
@@ -292,6 +388,16 @@ const harnessSummary = (persona: AgentPersona): string => {
 </template>
 
 <style scoped>
+.roster {
+ margin: -0.2rem 0 0;
+ font-size: 0.72rem;
+ color: var(--text-faint);
+}
+
+.roster.empty {
+ color: var(--danger, #b42318);
+}
+
 .launcher {
  padding: 0.8rem 0.9rem;
  border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--border));

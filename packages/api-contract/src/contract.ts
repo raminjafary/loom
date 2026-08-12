@@ -17,6 +17,7 @@ import {
  NotificationTargetSchema,
  NotificationTransportSchema,
  DelegationEdgeSchema,
+ DelegationRefusalSchema,
  PersonaDraftSchema,
  PersonaGroupSchema,
  RepositorySchema,
@@ -290,6 +291,40 @@ export const contract = {
  get: oc.input(z.object({ personaId: z.string })).output(AgentPersonaSchema),
 
  /**
+ * Who this persona could delegate to **if launched with these overrides**
+ *.
+ *
+ * Separate from `personaGroup.delegationMatrix`, which answers the same question
+ * for personas as they are stored. A run launcher lets a human override the model
+ * and the cap for one run, and those are exactly the two fields that silently
+ * empty a roster: a planner moved to a cheaper model cannot start a worker on a
+ * higher tier, so a correct configuration produces a planner with nobody to
+ * delegate to. Measured once by paying for a live run that planned nothing and
+ * replied that "the only available persona is sweep-probe".
+ */
+ delegationPreview: oc
+.input(
+ z.object({
+ personaId: z.string,
+ model: z.string.optional,
+ budgetCapUsd: z.number.nullable.optional,
+ }),
+)
+.output(
+ z.object({
+ planner: z.boolean,
+ delegatable: z.array(z.object({ id: z.string, name: z.string })),
+ refused: z.array(
+ z.object({
+ id: z.string,
+ name: z.string,
+ refusals: z.array(DelegationRefusalSchema),
+ }),
+),
+ }),
+),
+
+ /**
  * Parses a candidate markdown without saving it, so the persona form and its
  * raw-markdown toggle can show the *same* reading of a draft that a save would
  * store. Read-only and workspace-free — it touches nothing.
@@ -313,6 +348,17 @@ export const contract = {
  delete: oc
 .input(z.object({ personaId: z.string }))
 .output(z.object({ ok: z.literal(true) })),
+
+ /**
+ * Replaces a built-in's markdown with the version this build ships.
+ *
+ * The resolution for a `'stale'` built-in, and human-only for the reason every
+ * other persona write is: it discards whatever the row said. Refused on a persona
+ * that is not a built-in — there would be nothing to reset it to.
+ */
+ resetToBuiltin: oc
+.input(z.object({ personaId: z.string }))
+.output(AgentPersonaSchema),
  },
 
  /**

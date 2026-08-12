@@ -9,6 +9,7 @@ import type {
  MergeQueueEntry,
  NotificationConfig,
  DelegationEdge,
+ DelegationPreview,
  PersonaDraft,
  PersonaGroup,
  Repository,
@@ -248,6 +249,17 @@ export interface AgentSession {
  */
  parsePersona(markdownSource: string): Promise<PersonaDraft>
  /**
+ * Who this planner could delegate to under a launcher's overrides.
+ * Server-side for the same reason `parsePersona` is: these are the rules that refuse
+ * a child start, and a client that guessed could reassure a human about a run the
+ * gate then refuses.
+ */
+ previewDelegation(input: {
+ personaId: string
+ model?: string
+ budgetCapUsd?: number | null
+ }): Promise<DelegationPreview>
+ /**
  * Edits an existing persona, **including a built-in**.
  *
  * Built-ins are ordinary rows, not a protected class: `seedBuiltinPersonas` inserts
@@ -262,6 +274,8 @@ export interface AgentSession {
  * the server only refuses while a run of that persona is in flight.
  */
  deletePersona(personaId: string): Promise<void>
+ /** Takes the shipped version of a built-in, discarding what the row said. */
+ resetPersonaToBuiltin(personaId: string): Promise<void>
  /**
  * Unbinds a repository, deleting its runs and their recorded spend with it.
  * Resolves `{ ok: false, reason }` when the server wants that loss acknowledged,
@@ -875,6 +889,26 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  return await options.api.persona.parse({ markdownSource })
  } catch (error) {
  return { ok: false, problems: [errorMessage(error)], parsed: null }
+ }
+ },
+
+ async resetPersonaToBuiltin(personaId) {
+ patch({ error: null })
+ try {
+ await options.api.persona.resetToBuiltin({ personaId })
+ patch(await readPersonasAndMatrix)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async previewDelegation(input) {
+ try {
+ return await options.api.persona.delegationPreview(input)
+ } catch {
+ // Never routed to the session error banner: this is an aside under a select,
+ // and a failed aside must not put a red bar across the app.
+ return { planner: false, delegatable: [], refused: [] }
  }
  },
 

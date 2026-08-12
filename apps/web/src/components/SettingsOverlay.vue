@@ -59,6 +59,7 @@ const emit = defineEmits<{
  'create-persona': [markdownSource: string]
  'update-persona': [input: { personaId: string; markdownSource: string }]
  'parse-persona': [markdownSource: string, done: (draft: PersonaDraft) => void]
+ 'reset-persona': [personaId: string]
  register: [
  input: {
  kind: 'mcp' | 'skill'
@@ -170,6 +171,7 @@ onMounted( => scrim.value?.focus)
  @attach="(input) => emit('attach', input)"
  @detach="(input) => emit('detach', input)"
  @parse="(source, done) => emit('parse-persona', source, done)"
+ @reset-persona="(personaId) => emit('reset-persona', personaId)"
  />
  <PersonaGroupPanel
 :personas="personas"

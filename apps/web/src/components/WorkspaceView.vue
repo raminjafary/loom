@@ -631,6 +631,7 @@ onBeforeUnmount( => {
 :disabled="!snapshot.activeThread"
  @start="startRun"
  @open-settings="settingsOpen = true"
+ @preview-delegation="(input, done) => void agent.previewDelegation(input).then(done)"
  />
 
  <SidebarSection
@@ -784,6 +785,7 @@ onBeforeUnmount( => {
  @create-persona="(markdownSource) => agent.createPersona(markdownSource)"
  @update-persona="(input) => agent.updatePersona(input)"
  @parse-persona="(source, done) => void agent.parsePersona(source).then(done)"
+ @reset-persona="(personaId) => agent.resetPersonaToBuiltin(personaId)"
  @register="(input) => agent.registerCapability(input)"
  @remove="(capabilityId) => agent.removeCapability(capabilityId)"
  @attach="(input) => agent.attachCapability(input)"

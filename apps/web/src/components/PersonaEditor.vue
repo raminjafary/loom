@@ -46,6 +46,13 @@ const emit = defineEmits<{
  'create-persona': [markdownSource: string]
  'update-persona': [input: { personaId: string; markdownSource: string }]
  'delete-persona': [personaId: string]
+ /**
+ * Replaces a built-in's markdown with the version this build ships.
+ * The one action that resolves a `'stale'` built-in — `seedBuiltinPersonas` will not
+ * touch one, because it cannot tell a tuned prompt from a row that predates the
+ * recorded seed.
+ */
+ 'reset-persona': [personaId: string]
  attach: [input: { personaId: string; capabilityId: string }]
  detach: [input: { personaId: string; capabilityId: string }]
  /** Parses a draft server-side. */
@@ -271,9 +278,24 @@ const harnessSummary = (persona: AgentPersona): string => {
  <span v-if="attachedTo(persona.id).length > 0" class="caps">
  {{ attachedTo(persona.id).length }} capability(s)
  </span>
+ <!--
+ Said out loud, because the consequence is not cosmetic: the shipped
+ `planner` once carried `tools: []`, and a workspace holding that version
+ stalls every sub-planner on the approval SLA.
+ -->
+ <span v-if="persona.builtinStatus === 'stale'" class="stale">
+ differs from the shipped version
+ </span>
  </div>
  <div class="row-actions">
  <button type="button" class="link" @click="startEditing(persona)">Edit</button>
+ <ConfirmButton
+ v-if="persona.builtinStatus === 'stale'"
+ variant="link"
+ label="Reset"
+ confirm-label="Discard this version and take the shipped one"
+ @confirm="emit('reset-persona', persona.id)"
+ />
  <!-- Loses no history: a run snapshots its persona, so past runs keep theirs. -->
  <ConfirmButton
  variant="link"
@@ -568,6 +590,11 @@ const harnessSummary = (persona: AgentPersona): string => {
 
 .model {
  font-family: ui-monospace, monospace;
+}
+
+.stale {
+ font-size: 0.7rem;
+ color: var(--danger, #b42318);
 }
 
 .row-actions {

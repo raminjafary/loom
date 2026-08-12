@@ -550,10 +550,12 @@ describe('contract completeness', => {
  expect(Object.keys(contract.persona)).toEqual([
  'list',
  'get',
+ 'delegationPreview',
  'parse',
  'create',
  'update',
  'delete',
+ 'resetToBuiltin',
  ])
  expect(Object.keys(contract.personaGroup)).toEqual([
  'list',
