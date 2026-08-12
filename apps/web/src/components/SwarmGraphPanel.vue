@@ -137,6 +137,11 @@ const liveRuns = computed( => {
  return map
 })
 
+/** The lit edges themselves, for drawing a packet along each. */
+const liveEdgeList = computed( =>
+ graph.value.edges.filter((edge) => liveEdges.value.has(`${edge.from}->${edge.to}`)),
+)
+
 /** Edges lit because work just crossed them — a delegation, or a child reporting up. */
 const liveEdges = computed( => {
  const now = tick.value.getTime
@@ -257,6 +262,30 @@ const openNode = (agentRunId: string) => {
  open.value = false
 }
 
+/**
+ * The activity line, budgeted as one string rather than two.
+ *
+ * It used to truncate the label and the target independently, so a long tool name and
+ * a long path each passed their own check and the concatenation overflowed the node.
+ * The clip in `<defs>` is what makes overflow impossible; this is what makes the text
+ * end in an ellipsis instead of being sliced mid-word by it.
+ */
+const ACTIVITY_BUDGET = 30
+
+const activityLine = (node: SwarmGraphNode): string => {
+ const label = activityLabel(node.activity)
+ const target = node.activity.target ?? ''
+ const full = target ? `${label} ${target}`: label
+ if (full.length <= ACTIVITY_BUDGET) return full
+ // Trimmed from the *front* of a path, because the tail is the part that identifies
+ // a file — `…/src/cart.js` is useful, `/work/very/long/pa…` is not.
+ if (target && target.length > 8) {
+ const room = Math.max(ACTIVITY_BUDGET - label.length - 2, 8)
+ return `${label} …${target.slice(-room)}`
+ }
+ return `${full.slice(0, ACTIVITY_BUDGET - 1)}…`
+}
+
 const money = (usd: number | null) => (usd === null ? null: `$${usd.toFixed(4)}`)
 
 const collisionCount = computed(
@@ -323,6 +352,20 @@ const collisionCount = computed(
  @wheel="onWheel"
  >
  <svg:width="'100%'":height="'100%'" role="img" aria-label="Runs and their relationships">
+ <defs>
+ <!--
+ Nothing may leave the box. The text budgets below are guesses about
+ glyph width — a line of capitals is far wider than the same count of
+ `i`s — so a tool line like `Bash +1 more git -C /work/branch -a`
+ escaped the node and drew over its neighbour. A clip is a boundary
+ rather than a guess, which is the same preference this codebase makes
+ everywhere else; the budgets stay so text ends in an ellipsis rather
+ than mid-glyph.
+ -->
+ <clipPath id="loom-node-clip" clipPathUnits="userSpaceOnUse">
+ <rect x="0" y="0":width="NODE_W":height="NODE_H" rx="10" />
+ </clipPath>
+ </defs>
  <g:transform="`translate(${pan.x} ${pan.y}) scale(${zoom})`">
  <!-- Edges first, so a node always sits on top of the lines touching it. -->
  <path
@@ -334,6 +377,25 @@ const collisionCount = computed(
  >
  <title>{{ edge.kind }}: {{ edge.detail }}</title>
  </path>
+
+ <!--
+ A packet, travelling. The dash flow on a live edge says "this edge is
+ busy"; a thing moving along it says which way the work is going, which
+ is the question a tree of agents actually raises. Rendered between the
+ edges and the nodes so it passes under a node rather than over its text.
+ -->
+ <circle
+ v-for="edge in liveEdgeList"
+:key="`p${edge.from}->${edge.to}`"
+ class="packet"
+ r="4"
+ >
+ <animateMotion
+:path="edgePath(edge.from, edge.to, edge.kind)"
+ dur="1.1s"
+ repeatCount="indefinite"
+ />
+ </circle>
 
  <g
  v-for="node in graph.nodes"
@@ -348,6 +410,7 @@ const collisionCount = computed(
  },
  ]"
 :transform="`translate(${left(node)} ${top(node)})`"
+ clip-path="url(#loom-node-clip)"
  role="button"
  tabindex="0"
 :aria-current="node.card.runId === props.activeRunId ? 'true': undefined"
@@ -376,14 +439,7 @@ const collisionCount = computed(
  {{ node.card.title.length > 28 ? `${node.card.title.slice(0, 27)}…`: node.card.title }}
  </text>
  <text v-if="node.activity.kind !== 'finished'" class="activity" x="12" y="55">
- {{ activityLabel(node.activity) }}
- <template v-if="node.activity.target">
- {{
- node.activity.target.length > 22
- ? `…${node.activity.target.slice(-21)}`
-: node.activity.target
- }}
- </template>
+ {{ activityLine(node) }}
  </text>
  <text v-else-if="node.card.branchName" class="activity" x="12" y="55">
  {{ shortBranchName(node.card.branchName) }}
@@ -682,9 +738,48 @@ header button:disabled {
  }
 }
 
+.packet {
+ fill: var(--accent);
+ filter: drop-shadow(0 0 4px color-mix(in oklab, var(--accent) 80%, transparent));
+}
+
+/*
+ A node that is executing, breathing. Distinct from `.live`, which is a *pulse* on an
+ event: this is the continuous state, so a human scanning a wide tree can see where
+ work is without waiting for the next frame to arrive.
+*/
+.node.working.box {
+ animation: breathe 2.2s ease-in-out infinite;
+}
+
+@keyframes breathe {
+ 0%,
+ 100% {
+ filter: none;
+ }
+ 50% {
+ filter: drop-shadow(0 0 5px color-mix(in oklab, var(--accent) 45%, transparent));
+ }
+}
+
+/*
+ Motion is the whole point of the three rules above, so honouring this preference has
+ to remove the motion without removing the *information*: the live edge keeps its
+ colour and weight, the packet stops travelling but stays visible at the source, and a
+ working node keeps a static halo.
+*/
 @media (prefers-reduced-motion: reduce) {
 .edge.live {
  animation: none;
+ }
+
+.packet {
+ display: none;
+ }
+
+.node.working.box {
+ animation: none;
+ filter: drop-shadow(0 0 5px color-mix(in oklab, var(--accent) 45%, transparent));
  }
 }
 
