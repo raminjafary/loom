@@ -169,3 +169,54 @@ describe('noteRealtimeActivity', => {
  expect(calls.get).not.toHaveBeenCalled
  })
 })
+
+/**
+ * Bylines for runs the thread has outlived.
+ *
+ * A thread outlives the runs in it, so history is full of authors this client has no
+ * name for. Resolution is cheap and deduped; what matters is what happens when it
+ * cannot succeed — a run whose row was cascaded away by a deleted repository or
+ * runner. Left unrecorded, the byline shows a bare id, the client re-asks on every
+ * render of that page, and a human cannot tell "still loading" from "gone".
+ */
+describe('resolvePersonaNames', => {
+ it('names a run it can read', async => {
+ vi.useRealTimers
+ const { api, calls } = stubApi
+ const session = createAgentSession({ api })
+ await session.resolvePersonaNames(['run-1'])
+ expect(session.snapshot.personaNameByRunId['run-1']).toBe('swe')
+ expect(calls.get).toHaveBeenCalledTimes(1)
+ session.dispose
+ })
+
+ it('records a run it cannot read, rather than leaving a bare id in the byline', async => {
+ vi.useRealTimers
+ const get = vi.fn(async => {
+ throw new Error('not found')
+ })
+ const session = createAgentSession({
+ api: {
+ agentRun: { get, listActive: vi.fn(async => []) },
+ approval: { listPending: vi.fn(async => []) },
+ workerNote: { board: vi.fn(async => null), listByTree: vi.fn(async => []) },
+ } as unknown as LoomApi,
+ })
+ await session.resolvePersonaNames(['d353eac8-0000-4000-8000-000000000000'])
+ const label = session.snapshot.personaNameByRunId['d353eac8-0000-4000-8000-000000000000']
+ // Reads as prose, and keeps the id — the only handle a human has for correlating
+ // the line with anything else.
+ expect(label).toBe('former run d353eac8')
+ session.dispose
+ })
+
+ it('asks once per run, however often a thread re-renders', async => {
+ vi.useRealTimers
+ const { api, calls } = stubApi
+ const session = createAgentSession({ api })
+ await session.resolvePersonaNames(['run-1'])
+ await session.resolvePersonaNames(['run-1', 'run-1'])
+ expect(calls.get).toHaveBeenCalledTimes(1)
+ session.dispose
+ })
+})

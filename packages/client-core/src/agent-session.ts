@@ -1059,9 +1059,18 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  const run = await options.api.agentRun.get({ agentRunId })
  return { id: run.id, name: run.persona.name }
  } catch {
- // A run this client cannot read is not an error worth a banner; the
- // thread falls back to the short id, which is what it did before.
- return null
+ /**
+ * A run this client cannot read is not an error worth a banner — but it is
+ * also not a name. Left unresolved, the byline reads `agent d353eac8`,
+ * which presents an opaque id as if it were a persona: one such line has
+ * been sitting in the dev workspace across three handoffs, and nobody could
+ * tell from it whether the name was still loading or gone for good.
+ *
+ * Recorded as a name so the map has an entry and the run is never asked for
+ * again. The id stays in the label because it is the only handle a human
+ * has for correlating the line with anything else.
+ */
+ return { id: agentRunId, name: `former run ${agentRunId.slice(0, 8)}` }
  }
  }),
 )
