@@ -148,7 +148,18 @@ describe('buildPrompt', => {
  */
 describe('buildQueryOptions: the agent tool allowlist', => {
  const fakeNotes = { type: 'sdk' as const, name: 'loom_notes', instance: {} as never }
- const fakePlanner = { type: 'sdk' as const, name: 'loom_plan', instance: {} as never }
+ const fakePlanner = {
+ server: { type: 'sdk' as const, name: 'loom_plan', instance: {} as never },
+ toolName: 'mcp__loom_plan__submit_plan',
+ }
+ /**
+ * A re-planning turn mounts the same server under a different tool name. Asserted because the name travelling with the server
+ * is the whole reason the two cannot silently disagree.
+ */
+ const fakeSteering = {
+ server: { type: 'sdk' as const, name: 'loom_plan', instance: {} as never },
+ toolName: 'mcp__loom_plan__submit_plan_delta',
+ }
 
  const agentTools = (options: ReturnType<typeof buildQueryOptions>) =>
  (options.agents as Record<string, { tools: string[] }>)[persona.name]?.tools ?? []
@@ -170,6 +181,12 @@ describe('buildQueryOptions: the agent tool allowlist', => {
  const planner = {...persona, tools: [] }
  const options = buildQueryOptions({ persona: planner, cwd: '/clone', plannerTool: fakePlanner })
  expect(agentTools(options)).toEqual(['mcp__loom_plan__submit_plan'])
+ })
+
+ it('offers a re-planning turn the delta tool and not the plan tool', => {
+ const planner = {...persona, tools: [] }
+ const options = buildQueryOptions({ persona: planner, cwd: '/clone', plannerTool: fakeSteering })
+ expect(agentTools(options)).toEqual(['mcp__loom_plan__submit_plan_delta'])
  })
 
  it('leaves a run with no platform channels exactly as declared', => {

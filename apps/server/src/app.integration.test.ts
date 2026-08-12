@@ -344,6 +344,7 @@ describe('contract completeness', => {
  'keep',
  'discard',
  'push',
+ 'steer',
  'listNeedsAttention',
  ])
  expect(Object.keys(contract.runControl)).toEqual(['get', 'pauseAll', 'resume'])

@@ -4,7 +4,12 @@ import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
-import { createPlannerTool } from './planner-tool.js'
+import {
+ PLANNER_TOOL_NAME,
+ PLAN_DELTA_TOOL_NAME,
+ createPlanDeltaTool,
+ createPlannerTool,
+} from './planner-tool.js'
 import { resolveWithinRoot } from './path-check.js'
 import {
  SandboxCommandSchema,
@@ -145,7 +150,10 @@ const main = async : Promise<void> => {
  const persona = command.persona as Parameters<typeof runAgent>[0]['persona']
  // A Planner's delegation tool is an in-process MCP server, so inside a sandbox
  // it lives here and its result crosses the stdio boundary like everything else.
- const plannerTool = persona.planner ? createPlannerTool: null
+ // A re-planning turn gets the delta tool *instead* — a run re-entered
+ // to adjust a plan must not be able to submit a whole new one.
+ const plannerTool = persona.planner && !command.steering ? createPlannerTool: null
+ const deltaTool = persona.planner && command.steering ? createPlanDeltaTool: null
 
  /**
  * The notes channel. Both halves round-trip to the host,
@@ -209,7 +217,12 @@ const main = async : Promise<void> => {
  // than the structured one, so it is the more likely of the two to outrun the
  // host's ability to drain.
  onRawMessage: (line) => emitEvent({ t: 'raw', line }),
-...(plannerTool ? { plannerTool: plannerTool.server }: {}),
+...(plannerTool
+ ? { plannerTool: { server: plannerTool.server, toolName: PLANNER_TOOL_NAME } }
+: {}),
+...(deltaTool
+ ? { plannerTool: { server: deltaTool.server, toolName: PLAN_DELTA_TOOL_NAME } }
+: {}),
  onSessionId: (sessionId) => emit({ t: 'session', sessionId }),
  onContextUsage: (usage) =>
  emit({ t: 'context_usage', totalTokens: usage.totalTokens, maxTokens: usage.maxTokens }),
@@ -223,6 +236,12 @@ const main = async : Promise<void> => {
 
  const subtasks = plannerTool?.taken
  if (subtasks && subtasks.length > 0) emit({ t: 'plan', subtasks })
+
+ // Emitted even with no ops: "nothing should change" is an answer the human is
+ // waiting on, and swallowing it would leave a steering turn that ran, cost money
+ // and said nothing.
+ const delta = deltaTool?.taken
+ if (delta) emit({ t: 'plan_delta', rationale: delta.rationale, ops: delta.ops })
 
  emit({ t: 'done' })
  lines.close

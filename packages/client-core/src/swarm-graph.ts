@@ -22,7 +22,7 @@ import { describeCardActivity, type BoardCard, type CardActivity } from './board
  * integration.
  */
 
-export type SwarmEdgeKind = 'delegation' | 'review' | 'reconcile' | 'collision'
+export type SwarmEdgeKind = 'delegation' | 'review' | 'reconcile' | 'steer' | 'collision'
 
 export interface SwarmGraphNode {
  readonly card: BoardCard
@@ -87,14 +87,17 @@ const depthOf = (card: BoardCard, byId: Map<string, BoardCard>): number => {
 }
 
 /**
- * `relation` describes what a child *is* to its parent, and the three are genuinely
- * different edges: a reconciler is not a worker the planner asked for, and a
- * reviewer's finding can gate a branch. Drawing them identically would hide the
- * only structural distinction the data carries.
+ * `relation` describes what a child *is* to its parent, and the four are genuinely
+ * different edges: a reconciler is not a worker the planner asked for, a
+ * reviewer's finding can gate a branch, and a steering run is a human's
+ * re-planning turn hanging off the Planner it re-enters rather than work that
+ * Planner handed down. Drawing them identically would hide the only structural
+ * distinction the data carries.
  */
 const edgeKindOf = (card: BoardCard): Exclude<SwarmEdgeKind, 'collision'> => {
  if (card.relation === 'review') return 'review'
  if (card.relation === 'reconcile') return 'reconcile'
+ if (card.relation === 'steer') return 'steer'
  return 'delegation'
 }
 

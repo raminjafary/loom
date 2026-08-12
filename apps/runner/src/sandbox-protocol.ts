@@ -32,6 +32,12 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  cwd: z.string,
  /** Resume an SDK session after a Runner restart. */
  resumeSessionId: z.string.optional,
+ /**
+ * This run is a re-planning turn, so a
+ * Planner's one channel is `submit_plan_delta` rather than `submit_plan`. The
+ * same substitution the `start_run` frame carries, for the sandboxed path.
+ */
+ steering: z.boolean.optional,
  }),
  z.object({
  t: z.literal('permission'),
@@ -90,8 +96,24 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  z.object({
  t: z.literal('plan'),
  subtasks: z.array(
- z.object({ title: z.string, task: z.string, personaName: z.string }),
+ z.object({
+ title: z.string,
+ task: z.string,
+ personaName: z.string,
+ paths: z.array(z.string).optional,
+ }),
 ),
+ }),
+ /**
+ * A re-planning turn's delta, emitted once
+ * after `runAgent` returns exactly like `plan`. The ops are carried unvalidated:
+ * the server re-checks them with the domain's parser, and a shape this boundary
+ * rejected would be a dropped frame with no reason the model could act on.
+ */
+ z.object({
+ t: z.literal('plan_delta'),
+ rationale: z.string,
+ ops: z.array(z.record(z.string, z.unknown)),
  }),
  z.object({
  t: z.literal('permission_request'),

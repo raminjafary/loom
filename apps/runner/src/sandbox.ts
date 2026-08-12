@@ -61,8 +61,18 @@ export interface SandboxOptions {
  readonly onRawMessage?: (line: string) => void | Promise<void>
  /** A Planner's decomposition, submitted inside the container. */
  readonly onPlan?: (
- subtasks: { title: string; task: string; personaName: string; paths?: string[] }[],
+ subtasks: { title: string; task: string; personaName: string; paths?: string[] | undefined }[],
 ) => void
+ /**
+ * This run is a re-planning turn: the Planner
+ * inside the container gets `submit_plan_delta` instead of `submit_plan`.
+ */
+ readonly steering?: boolean
+ /** The delta that turn submitted, relayed out the same way a plan is. */
+ readonly onPlanDelta?: (delta: {
+ rationale: string
+ ops: Record<string, unknown>[]
+ }) => void
  /**
  * One note the agent wrote, relayed as it is written. The
  * verdict travels back into the tool result, so a refused note is something the
@@ -442,6 +452,7 @@ export const runAgentInSandbox = async (
 ...(options.contextLedger === undefined ? {}: { contextLedger: options.contextLedger }),
  cwd: WORK_DIR,
 ...(options.resumeSessionId === undefined ? {}: { resumeSessionId: options.resumeSessionId }),
+...(options.steering ? { steering: true }: {}),
  })
  }
 
@@ -529,6 +540,9 @@ export const runAgentInSandbox = async (
  return
  case 'plan':
  options.onPlan?.(frame.subtasks)
+ return
+ case 'plan_delta':
+ options.onPlanDelta?.({ rationale: frame.rationale, ops: frame.ops })
  return
  case 'note':
  // Not through `forwardEvent`'s queue: a note is not part of the event

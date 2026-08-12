@@ -1,5 +1,6 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
 import {
+ applyPlanDelta,
  applySubmittedPlan,
  readContextLedger,
  reconcileRunnerRuns,
@@ -214,7 +215,17 @@ export const createRunnerGateway = (
  })
  },
 
- async startRun({ runnerId, runId, persona, cwd, defaultBranch, task, contextLedger, reconcile }) {
+ async startRun({
+ runnerId,
+ runId,
+ persona,
+ cwd,
+ defaultBranch,
+ task,
+ contextLedger,
+ reconcile,
+ steering,
+ }) {
  send(runnerId, {
  type: 'start_run',
  runId,
@@ -224,6 +235,7 @@ export const createRunnerGateway = (
 ...(task === undefined ? {}: { task }),
 ...(contextLedger === undefined ? {}: { contextLedger }),
 ...(reconcile === undefined ? {}: { reconcile }),
+...(steering ? { steering: true }: {}),
  })
  },
 
@@ -572,6 +584,20 @@ export const createRunnerGateway = (
  return
 
  /**
+ * A re-planning turn's delta. Re-validated
+ * in the domain like a plan, and applied against the Planner this run was
+ * started to re-enter — resolved from the run's own parent, never from the
+ * payload, so a delta cannot reach a tree it was not started against.
+ */
+ case 'plan_delta_submitted':
+ await applyPlanDelta(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ delta: { rationale: frame.rationale, ops: frame.ops },
+ })
+ return
+
+ /**
  * One note a run wrote. Answered either way, and that is
  * load-bearing: the Runner is holding the agent's tool call open on this
  * reply, so a silent drop would stall the run that wrote the note.
@@ -744,6 +770,22 @@ export const createRunnerGateway = (
  const conn = connections.get(runnerId)
  if (!conn) return
  await handleFrame(conn.workspaceId, runnerId, text)
+ }).catch((error: unknown) => {
+ /**
+ * A frame handler that throws must not become an unhandled rejection.
+ *
+ * Every frame here is input from a Runner, and some of them are refusals by
+ * design — a plan delta from a run that was never started to steer anything
+ *, a note for a run that has since been deleted. Those are
+ * *answers*, not faults in this process, and before this the socket's fire-
+ * and-forget `void` turned any of them into a rejection with nothing
+ * attached to it: no runner id, no frame, and under a strict process handler,
+ * an exit.
+ *
+ * Logged rather than closing the socket: one bad frame is not a reason to
+ * drop a Runner holding live runs.
+ */
+ fastify.log.error({ error, runnerId }, 'runner frame handler failed')
  })
  })
 

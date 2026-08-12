@@ -437,6 +437,7 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  persona: input.persona,
 ...(input.parentRunId === undefined ? {}: { parentRunId: input.parentRunId }),
 ...(input.relation === undefined ? {}: { relation: input.relation }),
+...(input.task === undefined ? {}: { task: input.task }),
  status: 'pending',
  })
 .returning

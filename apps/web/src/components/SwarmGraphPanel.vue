@@ -162,6 +162,7 @@ const collisionCount = computed(
  <li><span class="swatch delegation"></span>delegation</li>
  <li><span class="swatch review"></span>review</li>
  <li><span class="swatch reconcile"></span>reconcile</li>
+ <li><span class="swatch steer"></span>steer</li>
  <li><span class="swatch collision"></span>path collision</li>
  </ul>
  <button type="button" @click="emit('refresh')">Refresh</button>
@@ -428,6 +429,11 @@ header button:disabled {
  border-color: var(--ok);
 }
 
+.swatch.steer {
+ border-color: var(--warn, var(--accent));
+ border-top-style: dotted;
+}
+
 .swatch.collision {
  border-top-style: dashed;
  border-color: var(--danger);
@@ -469,6 +475,13 @@ header button:disabled {
 
 .edge.reconcile {
  stroke: var(--ok);
+}
+
+/* Dotted: a re-planning turn is a human's intervention on the tree, not work
+ the Planner handed down — the one edge that points at a run nobody delegated. */
+.edge.steer {
+ stroke: var(--warn, var(--accent));
+ stroke-dasharray: 2 3;
 }
 
 /* Dashed and red: the one edge that is a warning rather than a fact about structure. */

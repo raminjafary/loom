@@ -228,6 +228,12 @@ export interface AgentSession {
  decision: 'approve' | 'deny',
  answer?: string,
 ): Promise<void>
+ /**
+ * Re-enters a Planner with a message and lets it change its own plan. Switches the watched run to the steering turn, because
+ * that is the run a human then wants to read: it is where the delta and the
+ * refusals appear.
+ */
+ steer(agentRunId: string, message: string): Promise<void>
  loadDiff(agentRunId: string): Promise<void>
  keepRun(agentRunId: string): Promise<void>
  discardRun(agentRunId: string): Promise<void>
@@ -899,6 +905,21 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  await options.api.mergeQueue.cancel({ entryId })
  patch({ mergeQueue: await options.api.mergeQueue.list })
  await fetchInbox
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async steer(agentRunId, message) {
+ patch({ error: null })
+ try {
+ const run = await options.api.agentRun.steer({ agentRunId, message })
+ // The steering run is watched, and the *steered* tree's board is refreshed
+ // from it: a re-plan that cancels a subtask changes the board a human is
+ // looking at, and leaving it stale would show work that has already stopped.
+ patch({ activeRun: run, pendingApprovals: [], diff: null })
+ rememberPersonaNames([{ id: run.id, name: run.persona.name }])
+ await fetchBoard(run.id)
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

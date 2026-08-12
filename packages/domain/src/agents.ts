@@ -209,8 +209,12 @@ export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed' | 'merge
  * runs attach via a distinct relation field rather than pretending to be
  * delegation children" — the tree view renders delegation, while a review or a
  * reconcile is something done *to* a run's output, not work handed down.
+ *
+ * `steer` is the same distinction for a re-planning turn: the run hangs off the Planner it re-enters, because that is what it is
+ * *about*, but it is not work that Planner delegated and it must not be summed into
+ * the aggregation, counted as delegation depth, or drawn as another worker.
  */
-export type AgentRunRelation = 'delegation' | 'review' | 'reconcile'
+export type AgentRunRelation = 'delegation' | 'review' | 'reconcile' | 'steer'
 
 export interface AgentRun {
  readonly id: AgentRunId
@@ -227,6 +231,22 @@ export interface AgentRun {
  readonly parentRunId: AgentRunId | null
  /** Null exactly when `parentRunId` is null. */
  readonly relation: AgentRunRelation | null
+ /**
+ * What this run was asked to do — a human's `@mention`, or the subtask text its
+ * Planner wrote. Null for a run started from the sidebar picker with no task.
+ *
+ * Recorded because a re-planning turn needs
+ * "its original goal, its current plan" and neither existed anywhere queryable: the
+ * task was dispatched to the Runner and never persisted, so the closest thing on
+ * record was a `run_started` note title truncated to 120 characters.
+ *
+ * **Internal-only, and absent from `AgentRunSchema` by the same rule as the reaper's
+ * timestamps.** For a delegated child this string is model-authored, so exposing it
+ * through the contract would put untrusted prose into a client that has no fence
+ * around it. The steering brief is assembled server-side, which is where it
+ * needs to be read.
+ */
+ readonly task: string | null
  readonly status: AgentRunStatus
  readonly totalCostUsd: number | null
  readonly errorMessage: string | null

@@ -56,6 +56,7 @@ import {
  setRepositoryVerifyCommand,
  warmRepositoryCache,
  startAgentRun,
+ steerSwarm,
  unregisterNotificationTarget,
  updatePersona,
  updatePersonaGroup,
@@ -687,6 +688,17 @@ export const router = os.router({
 ...(input.acknowledgeCiChange === undefined
  ? {}
 : { acknowledgeCiChange: input.acknowledgeCiChange }),
+ }),
+),
+),
+
+ steer: os.agentRun.steer.handler(({ context, input }) =>
+ guard( =>
+ steerSwarm(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ agentRunId: asAgentRunId(input.agentRunId),
+ message: input.message,
  }),
 ),
 ),

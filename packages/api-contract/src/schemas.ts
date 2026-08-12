@@ -419,7 +419,7 @@ export const AgentRunStatusSchema = z.enum([
 export const AgentRunBranchDispositionSchema = z.enum(['kept', 'discarded', 'pushed', 'merged'])
 
 /** How a child run attaches to its parent — see AgentRunRelation. */
-export const AgentRunRelationSchema = z.enum(['delegation', 'review', 'reconcile'])
+export const AgentRunRelationSchema = z.enum(['delegation', 'review', 'reconcile', 'steer'])
 
 export const AgentRunSchema = z.object({
  id: z.string,

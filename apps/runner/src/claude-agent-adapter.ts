@@ -10,7 +10,7 @@ import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
-import { PLANNER_SERVER_NAME, PLANNER_TOOL_NAME } from './planner-tool.js'
+import { PLANNER_SERVER_NAME } from './planner-tool.js'
 
 /**
  * `AgentExecutionPort` implementation for the Claude Agent SDK —
@@ -145,8 +145,15 @@ export interface RunAgentOptions {
  /**
  * The Planner's in-process delegation server. Absent for
  * every ordinary run — a worker has no business submitting plans.
+ *
+ * The tool's *name* travels with the server rather than being derived here,
+ * because there are now two of them: an ordinary Planner gets `submit_plan`, and a
+ * re-planning turn gets `submit_plan_delta` instead. Deriving it would leave a second place that has to agree about which
+ * one is mounted, and a disagreement there is the silent failure this codebase has
+ * already shipped twice — a tool the model is never offered, with nothing to notice
+ * it but a live run.
  */
- readonly plannerTool?: McpSdkServerConfigWithInstance
+ readonly plannerTool?: { server: McpSdkServerConfigWithInstance; toolName: string }
  /**
  * The worker-notes server — `write_note` and `read_notes`.
  * Present for every run that has a ledger to share, which is every run the
@@ -252,7 +259,7 @@ export const buildQueryOptions = (
  // The Planner's one channel. Registered as an in-process
  // MCP server so the decomposition schema is enforced by the tool call, not by
  // parsing prose after the fact.
- if (options.plannerTool) mcpServers[PLANNER_SERVER_NAME] = options.plannerTool
+ if (options.plannerTool) mcpServers[PLANNER_SERVER_NAME] = options.plannerTool.server
  // The shared-context channel, in-process for the same reason.
  if (options.notesTool) mcpServers[NOTES_SERVER_NAME] = options.notesTool
  if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
@@ -284,7 +291,7 @@ export const buildQueryOptions = (
  * itself, and a note is data. Neither reads or writes the filesystem.
  */
  const platformTools = [
-...(options.plannerTool ? [PLANNER_TOOL_NAME]: []),
+...(options.plannerTool ? [options.plannerTool.toolName]: []),
 ...(options.notesTool ? NOTES_TOOL_NAMES: []),
 ...(options.questionTool ? [ASK_HUMAN_TOOL_NAME]: []),
  ]

@@ -2744,3 +2744,257 @@ Decompose and delegate.`
  socket.close
  })
 })
+
+/**
+ * The re-planning turn.
+ *
+ * These drive the whole road a delta travels: a human's message, a Planner re-entered
+ * with the four inputs mid-flight steering names, a delta on the wire, and the cancellations and child
+ * runs it turns into. What is asserted hardest is the *boundary* — a delta may only
+ * touch subtasks of the Planner its run was started against — because that is the one
+ * failure whose blast radius is other people's runs.
+ */
+describe('runner-gateway: mid-flight steering', => {
+ const STEER_PLANNER_MARKDOWN = `---
+name: steer-planner
+description: Decomposes and delegates.
+model: test-model
+tools: []
+harness:
+ planner: true
+ delegates: [Read]
+---
+
+Decompose and delegate.`
+
+ const startVia = async (
+ socket: WebSocket,
+ threadId: string,
+ repositoryId: string,
+ personaId: string,
+) => {
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({ threadId, repositoryId, personaId, task: 'Ship the export endpoint' })
+ const frame = await startRun
+ return { run: await runPromise, frame }
+ }
+
+ const awaitChildren = async (agentRunId: string, count: number) => {
+ let children = await client.agentRun.listChildren({ agentRunId })
+ for (let i = 0; i < 60 && children.length < count; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId })
+ }
+ return children
+ }
+
+ const awaitMessage = async (threadId: string, needle: string) => {
+ for (let i = 0; i < 60; i += 1) {
+ const page = await client.message.list({ threadId })
+ const found = page.messages.find((m) => m.body.text?.includes(needle))
+ if (found) return found
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ throw new Error(`no message containing "${needle}"`)
+ }
+
+ const planTwo = async (socket: WebSocket, runId: string) => {
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId,
+ subtasks: [
+ { title: 'Handler', task: 'Write the handler.', personaName: 'fake-worker' },
+ { title: 'Tests', task: 'Write the tests.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+ return awaitChildren(runId, 2)
+ }
+
+ it('re-enters the planner with the goal, the plan, the tree state and the message', async => {
+ const { socket, runnerId } = await pairFakeRunner('steer-brief')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'steer-brief' })
+ const planner = await client.persona.create({ markdownSource: STEER_PLANNER_MARKDOWN })
+
+ const { run } = await startVia(socket, created.rootThread.id, repo.id, planner.id)
+ const children = await planTwo(socket, run.id)
+ expect(children).toHaveLength(2)
+
+ const steerFrame = nextFrame(socket, (v) => v.type === 'start_run' && v.steering === true)
+ const steering = await client.agentRun.steer({
+ agentRunId: run.id,
+ message: 'Drop the CSV format, JSON only.',
+ })
+ const frame = await steerFrame
+
+ // The four inputs mid-flight steering names, in one brief.
+ const task = frame.task as string
+ expect(task).toContain('Ship the export endpoint')
+ expect(task).toContain('Write the handler.')
+ expect(task).toContain(children[0]!.id)
+ expect(task).toContain('Drop the CSV format, JSON only.')
+
+ // The channel substitution: a re-planning turn submits a delta, never a plan.
+ expect(frame.steering).toBe(true)
+
+ // The run hangs off the Planner it re-enters, and is not one of its subtasks.
+ expect(steering.parentRunId).toBe(run.id)
+ expect(steering.relation).toBe('steer')
+ expect(
+ (await client.agentRun.listChildren({ agentRunId: run.id })).filter(
+ (child) => child.relation === 'delegation',
+),
+).toHaveLength(2)
+
+ socket.close
+ })
+
+ /**
+ * The floor under the whole feature: even if the Planner never answers, the human's
+ * instruction is on the tree's ledger as a *trusted* note, where every run that
+ * starts or re-reads afterwards will see it.
+ */
+ it('records the human message as a trusted note before any model is paid', async => {
+ const { socket, runnerId } = await pairFakeRunner('steer-note')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'steer-note' })
+ const planner = await client.persona.create({ markdownSource: STEER_PLANNER_MARKDOWN })
+
+ const { run } = await startVia(socket, created.rootThread.id, repo.id, planner.id)
+ const steerFrame = nextFrame(socket, (v) => v.type === 'start_run' && v.steering === true)
+ await client.agentRun.steer({ agentRunId: run.id, message: 'JSON only, please.' })
+ await steerFrame
+
+ const notes = await client.workerNote.listByTree({ agentRunId: run.id })
+ const human = notes.find((note) => note.authorKind === 'human')
+ expect(human?.body).toContain('JSON only, please.')
+
+ // And it is in the conversation, so the record shows what was asked.
+ await awaitMessage(created.rootThread.id, 'JSON only, please.')
+
+ socket.close
+ })
+
+ it('refuses to steer a worker, and says what to do instead', async => {
+ const { socket, runnerId } = await pairFakeRunner('steer-worker')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'steer-worker' })
+ const planner = await client.persona.create({ markdownSource: STEER_PLANNER_MARKDOWN })
+
+ const { run } = await startVia(socket, created.rootThread.id, repo.id, planner.id)
+ const children = await planTwo(socket, run.id)
+
+ await expect(
+ client.agentRun.steer({ agentRunId: children[0]!.id, message: 'change course' }),
+).rejects.toThrow(/worker, not a Planner/)
+
+ socket.close
+ })
+
+ it('applies a delta: cancels one subtask, adds another, and reports what it could not do', async => {
+ const { socket, runnerId } = await pairFakeRunner('steer-apply')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'steer-apply' })
+ const planner = await client.persona.create({ markdownSource: STEER_PLANNER_MARKDOWN })
+
+ const { run } = await startVia(socket, created.rootThread.id, repo.id, planner.id)
+ const children = await planTwo(socket, run.id)
+ const doomed = children[0]!
+
+ const steerFrame = nextFrame(socket, (v) => v.type === 'start_run' && v.steering === true)
+ const steering = await client.agentRun.steer({
+ agentRunId: run.id,
+ message: 'Drop the handler work and document it instead.',
+ })
+ await steerFrame
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_delta_submitted',
+ runId: steering.id,
+ rationale: 'The handler is out of scope now; docs are what is left.',
+ ops: [
+ { op: 'cancel', runId: doomed.id, reason: 'out of scope after the message' },
+ {
+ op: 'add',
+ subtask: { title: 'Docs', task: 'Write the docs.', personaName: 'fake-worker' },
+ },
+ { op: 'revise', runId: '00000000-0000-4000-8000-000000000000', guidance: 'nope' },
+ ],
+ }),
+)
+
+ const summary = await awaitMessage(created.rootThread.id, 'Re-planned')
+ expect(summary.body.text).toContain('1 cancelled')
+ expect(summary.body.text).toContain('1 added')
+ // A run id that is not a subtask of this plan is refused by name, not silently skipped.
+ expect(summary.body.text).toContain('no subtask of this plan has that run id')
+
+ const cancelled = await client.agentRun.get({ agentRunId: doomed.id })
+ expect(cancelled.status).toBe('cancelled')
+
+ const after = await client.agentRun.listChildren({ agentRunId: run.id })
+ expect(after.filter((child) => child.relation === 'delegation')).toHaveLength(3)
+
+ socket.close
+ })
+
+ /**
+ * The boundary. A delta's run ids come from a model, so a steering turn that could
+ * name any run in the workspace could cancel anything by guessing — the same forgery
+ * surface identity-bound approval closes for approvals.
+ */
+ it('refuses a delta from a run that is not a steering run', async => {
+ const { socket, runnerId } = await pairFakeRunner('steer-forge')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'steer-forge' })
+ const planner = await client.persona.create({ markdownSource: STEER_PLANNER_MARKDOWN })
+
+ const { run } = await startVia(socket, created.rootThread.id, repo.id, planner.id)
+ const children = await planTwo(socket, run.id)
+
+ // The Planner itself submits a delta. It has a plan and children, but it was not
+ // started to steer anything.
+ socket.send(
+ JSON.stringify({
+ type: 'plan_delta_submitted',
+ runId: run.id,
+ rationale: 'Cancel everything.',
+ ops: [{ op: 'cancel', runId: children[0]!.id, reason: 'because' }],
+ }),
+)
+
+ await new Promise((r) => setTimeout(r, 400))
+ expect((await client.agentRun.get({ agentRunId: children[0]!.id })).status).not.toBe('cancelled')
+
+ socket.close
+ })
+
+ it('reports a delta that changes nothing rather than staying silent', async => {
+ const { socket, runnerId } = await pairFakeRunner('steer-nochange')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'steer-nochange' })
+ const planner = await client.persona.create({ markdownSource: STEER_PLANNER_MARKDOWN })
+
+ const { run } = await startVia(socket, created.rootThread.id, repo.id, planner.id)
+ const steerFrame = nextFrame(socket, (v) => v.type === 'start_run' && v.steering === true)
+ const steering = await client.agentRun.steer({ agentRunId: run.id, message: 'looks fine?' })
+ await steerFrame
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_delta_submitted',
+ runId: steering.id,
+ rationale: 'The plan already covers it.',
+ ops: [],
+ }),
+)
+
+ const message = await awaitMessage(created.rootThread.id, 'no change to the plan')
+ expect(message.body.text).toContain('Re-planned')
+
+ socket.close
+ })
+})

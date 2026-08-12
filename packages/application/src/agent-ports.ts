@@ -226,6 +226,8 @@ export interface AgentRunRepositoryPort {
  /** Set for a run another run spawned; absent for a human-started run. */
  parentRunId?: AgentRunId
  relation?: AgentRunRelation
+ /** What this run was asked to do — see `AgentRun.task`. */
+ task?: string
  }): Promise<AgentRun>
  /** Children of one run — the tree view's per-parent lookup. */
  listByParent(workspaceId: WorkspaceId, parentRunId: AgentRunId): Promise<AgentRun[]>
@@ -645,6 +647,12 @@ export interface RunDispatchPort {
  * paused rebase rather than a fresh branch — and how it ends it.
  */
  reconcile?: { parentRunId: AgentRunId; branchName: string }
+ /**
+ * Start this run as a **re-planning turn**.
+ * The Runner's only decision from it is which channel a Planner gets:
+ * `submit_plan_delta` instead of `submit_plan`.
+ */
+ steering?: boolean
  }): Promise<void>
  /**
  * Aborts a run mid-flight. Fire-and-forget and

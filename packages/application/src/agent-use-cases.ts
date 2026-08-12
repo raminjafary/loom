@@ -18,7 +18,13 @@ import {
  isPricedModel,
  isMergeQueueEntryTerminal,
  isRiskyTool,
+ isTerminalRunStatus,
+ validateMessageText,
+ MAX_NOTE_BODY_LENGTH,
+ buildSteeringBrief,
+ describeAppliedDelta,
  parseDecomposition,
+ parsePlanDelta,
  parsePersonaMarkdown,
  primaryToolArgument,
  selectNextMergeEntry,
@@ -52,6 +58,10 @@ import {
  type PersonaGroup,
  type PersonaGroupId,
  type PersonaSpec,
+ type AppliedDeltaOp,
+ type PlanDeltaOp,
+ type PlanSubtask,
+ type SteeringSubtask,
  type PlatformNoteKind,
  type Repository,
  type ResponseStyle,
@@ -863,8 +873,14 @@ export const startAgentRun = async (
  * Checked here rather than only where plans are applied, because `startAgentRun`
  * is the one door every child comes through — the same reason the pause and the
  * concurrency limit live here.
+ *
+ * A `steer` run is exempt for the same reason a reconciler is: a human starts it, it hangs off the Planner it re-enters
+ * only because that is what it is *about*, and it delegates nothing itself — the
+ * subtasks its delta adds are children of that Planner, at the depth they would
+ * have had in the original plan. Counting it as a hop would make a swarm
+ * un-steerable at exactly the depth where steering is worth most.
  */
- if (parent && input.relation !== 'reconcile') {
+ if (parent && input.relation !== 'reconcile' && input.relation !== 'steer') {
  const depth = await resolveDelegationDepth(deps, parent)
  if (depth + 1 > deps.limits.maxDelegationDepth) {
  throw new ValidationError(
@@ -969,8 +985,14 @@ export const startAgentRun = async (
  // children at `ownDepth + 1`, so a grandchild is possible only with a hop to
  // spare. Offering a sub-planner without one names a persona whose every
  // subtask the depth check would then refuse.
+ //
+ // A steering run is the exception, because its delta's subtasks are not its
+ // children — they are started under the Planner it is re-entering, which is
+ // its own parent. Measured from its own position it would be told one hop
+ // fewer than it has, and would drop sub-planners out of a roster that the
+ // original plan was allowed to use.
  deps.limits.maxDelegationDepth -
- (parent ? (await resolveDelegationDepth(deps, parent)) + 1: 0) -
+ (parent ? (await resolveDelegationDepth(deps, parent)) + (input.relation === 'steer' ? 0: 1): 0) -
  1,
 )
 : null
@@ -1016,6 +1038,9 @@ export const startAgentRun = async (
  runnerId: repository.runnerId,
  persona: personaSpec,
 ...(parent ? { parentRunId: parent.id, relation: input.relation ?? 'delegation' }: {}),
+ // Recorded so a re-planning turn can read back the goal and the plan. Stored before dispatch: a run that fails to start still answers "what was
+ // it asked to do", which is the question a human asks about exactly those runs.
+...(input.task === undefined ? {}: { task: input.task }),
  })
 
  await deps.audit.record({
@@ -1061,6 +1086,11 @@ export const startAgentRun = async (
 ...(input.reconcile && parent
  ? { reconcile: { parentRunId: parent.id, branchName: input.reconcile.branchName } }
 : {}),
+ // Derived from the relation rather than from a separate argument: the two would
+ // be one more pair that has to agree, and a run recorded as `steer` whose Runner
+ // was never told is a Planner offered the plan tool — which answers a steering
+ // message by starting a whole second fan-out.
+...(input.relation === 'steer' ? { steering: true }: {}),
  })
  } catch (error) {
  const errorMessage = error instanceof Error ? error.message: String(error)
@@ -1198,6 +1228,97 @@ export const recordRunWorkspace = async (
  * Failures are per-subtask and reported, never fatal: one unresolvable persona
  * name should not discard the rest of a plan a human is paying for.
  */
+/**
+ * Starts one subtask under its Planner — the whole road a decomposition's child
+ * travels, extracted so a re-planning turn's `add` travels exactly the same one.
+ *
+ * A second copy of this would drift, and the copy that drifted would be the rarely
+ * exercised one: the area-thread split, the path text appended to the task, the actor
+ * that ties attenuation to the right parent. Every one of those is load-bearing and
+ * none of them is obvious from the call site.
+ */
+const startPlannedChild = async (
+ deps: AgentDeps,
+ input: {
+ planner: AgentRun
+ /** The channel an area thread would be created in — the planner's own thread's channel. */
+ channelId: ChannelId
+ personas: readonly AgentPersona[]
+ subtask: PlanSubtask
+ },
+): Promise<{ ok: true; runId: AgentRunId } | { ok: false; reason: string }> => {
+ const { planner, subtask } = input
+ const persona = input.personas.find((candidate) => candidate.name === subtask.personaName)
+ if (!persona) return { ok: false, reason: `no persona named "${subtask.personaName}"` }
+
+ /**
+ * A sub-planner gets its own thread; a worker stays in its parent's
+ *.
+ *
+ * A depth-2 tree otherwise writes every plan, every tool call and every summary
+ * from every branch into one conversation, and stops being readable at exactly
+ * the size this feature exists to enable. The split is at planners rather than
+ * per subtask because that is where the volume actually branches: a planner
+ * brings a whole subtree with it, while a worker contributes one run's worth and
+ * belongs beside the siblings it must not collide with.
+ *
+ * The thread hangs off a message in the parent's conversation, so the parent
+ * thread keeps a line per area and a way in — the area is summarized where the
+ * decision was made, and its detail lives one level down. That message is posted
+ * before the child starts, so a thread never exists without the line that
+ * explains it.
+ *
+ * A failure here is not fatal to the subtask: falling back to the parent thread
+ * gives a noisier conversation, and refusing would give none at all.
+ */
+ let threadId = planner.threadId
+ if (persona.harnessPlanner) {
+ try {
+ const announcement = await postRunSystemMessage(
+ deps,
+ planner,
+ `${subtask.title} → ${subtask.personaName}: delegated as its own area. Its plan and workers are in this area's thread.`,
+)
+ const areaThread = await startThread(deps, {
+ workspaceId: planner.workspaceId,
+ actor: agentRunActor(planner.id),
+ channelId: input.channelId,
+ parentMessageId: announcement.id,
+ })
+ threadId = areaThread.id
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+ }
+
+ try {
+ const child = await startAgentRun(deps, {
+ workspaceId: planner.workspaceId,
+ // The Planner acts as itself. `startAgentRun` enforces that a run may only
+ // spawn children *of itself*, so this is also what ties attenuation to the
+ // right parent.
+ actor: agentRunActor(planner.id),
+ threadId,
+ repositoryId: planner.repositoryId,
+ personaId: persona.id,
+ // The paths this subtask owns are appended to the *task*, not left only in
+ // the ledger. The ledger carries every sibling's claim, so a worker reading
+ // it alone cannot tell which claim is its own — and the task is the one
+ // channel a worker is meant to treat as authoritative.
+ task:
+ subtask.paths.length === 0
+ ? subtask.task
+: `${subtask.task}\n\nYou own these paths for this task: ${subtask.paths.join(', ')}. Other workers own the rest; prefer leaving their paths alone and reporting what you need from them.`,
+ parentRunId: planner.id,
+ relation: 'delegation',
+ ownedPaths: subtask.paths,
+ })
+ return { ok: true, runId: child.id }
+ } catch (error) {
+ return { ok: false, reason: error instanceof Error ? error.message: String(error) }
+ }
+}
+
 export const applySubmittedPlan = async (
  deps: AgentDeps,
  input: {
@@ -1291,78 +1412,17 @@ export const applySubmittedPlan = async (
  }
 
  for (const subtask of verdict.decomposition.subtasks) {
- const persona = personas.find((candidate) => candidate.name === subtask.personaName)
- if (!persona) {
- refused.push(`${subtask.title}: no persona named "${subtask.personaName}"`)
- continue
- }
-
- /**
- * A sub-planner gets its own thread; a worker stays in its parent's
- *.
- *
- * A depth-2 tree otherwise writes every plan, every tool call and every summary
- * from every branch into one conversation, and stops being readable at exactly
- * the size this feature exists to enable. The split is at planners rather than
- * per subtask because that is where the volume actually branches: a planner
- * brings a whole subtree with it, while a worker contributes one run's worth and
- * belongs beside the siblings it must not collide with.
- *
- * The thread hangs off a message in the parent's conversation, so the parent
- * thread keeps a line per area and a way in — the area is summarized where the
- * decision was made, and its detail lives one level down. That message is posted
- * before the child starts, so a thread never exists without the line that
- * explains it.
- *
- * A failure here is not fatal to the subtask: falling back to the parent thread
- * gives a noisier conversation, and refusing would give none at all.
- */
- let threadId = planner.threadId
- if (persona.harnessPlanner) {
- try {
- const announcement = await postRunSystemMessage(
- deps,
+ const outcome = await startPlannedChild(deps, {
  planner,
- `${subtask.title} → ${subtask.personaName}: delegated as its own area. Its plan and workers are in this area's thread.`,
-)
- const areaThread = await startThread(deps, {
- workspaceId: input.workspaceId,
- actor: agentRunActor(planner.id),
  channelId: thread.channelId,
- parentMessageId: announcement.id,
+ personas,
+ subtask,
  })
- threadId = areaThread.id
- } catch {
- // Deliberately swallowed — see above.
- }
- }
-
- try {
- const child = await startAgentRun(deps, {
- workspaceId: input.workspaceId,
- // The Planner acts as itself. `startAgentRun` enforces that a run may only
- // spawn children *of itself*, so this is also what ties attenuation to the
- // right parent.
- actor: agentRunActor(planner.id),
- threadId,
- repositoryId: planner.repositoryId,
- personaId: persona.id,
- // The paths this subtask owns are appended to the *task*, not left only in
- // the ledger. The ledger carries every sibling's claim, so a worker reading
- // it alone cannot tell which claim is its own — and the task is the one
- // channel a worker is meant to treat as authoritative.
- task:
- subtask.paths.length === 0
- ? subtask.task
-: `${subtask.task}\n\nYou own these paths for this task: ${subtask.paths.join(', ')}. Other workers own the rest; prefer leaving their paths alone and reporting what you need from them.`,
- parentRunId: planner.id,
- relation: 'delegation',
- ownedPaths: subtask.paths,
- })
- started.push(child.id)
+ if (outcome.ok) {
+ started.push(outcome.runId)
  startedLines.push(`• ${subtask.title} → ${subtask.personaName}`)
- } catch (error) {
- refused.push(`${subtask.title}: ${error instanceof Error ? error.message: String(error)}`)
+ } else {
+ refused.push(`${subtask.title}: ${outcome.reason}`)
  }
  }
 
@@ -1421,6 +1481,319 @@ const aggregateForParent = async (deps: AgentDeps, child: AgentRun): Promise<voi
 ),
 )
  await notifyRun(deps, parent, 'run_finished')
+}
+
+/**
+ * The re-planning turn.
+ *
+ * A human's message re-enters the Planner with the four inputs — the original goal,
+ * the current plan, the tree's state, and the message — and what comes back is a
+ * delta. The Planner run itself is usually finished by now, and that is fine: the * "what this is not" is explicit that steering is not a chat with a running agent's
+ * context window, because runs are ephemeral and their transcripts are a tier
+ *. Steering acts on the plan and the ledger, which are the platform's own
+ * objects and outlive every run in the tree.
+ *
+ * **Explicit rather than triggered by any message in the thread.** the phrasing is
+ * "a human posts in the thread", and reading it as *every* post would put a frontier
+ * model run behind every "nice, thanks" — spending exactly the attention and money
+ * The riskiest assumption measured as the real cost. So the human asks for a re-plan, and this is the one
+ * door.
+ *
+ * Three things happen before any model is paid, in this order, and each is worth
+ * something on its own:
+ *
+ * 1. The message is posted to the thread, so the record shows what was asked.
+ * 2. It becomes a **human** note on the tree — trusted, rendered outside the
+ * untrusted fence, and reaching every run that starts or re-reads the ledger after
+ * it. This is the mechanism mid-flight steering describes as what a human has today, and it stays
+ * the floor: if the re-planning run fails, crashes or is refused, the instruction
+ * is still on the record where the swarm will read it.
+ * 3. Only then is a Planner re-entered to decide what should change.
+ */
+export const steerSwarm = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ /** The Planner being re-entered — not one of its workers. */
+ agentRunId: AgentRunId
+ message: string
+ },
+): Promise<AgentRun> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may steer a swarm')
+ }
+
+ const target = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!target) throw new NotFoundError('AgentRun')
+
+ /**
+ * A Planner, because a delta is a change to a *plan*. Pointing this at a worker is
+ * a reasonable thing for a human to try, so the refusal says what to do instead
+ * rather than restating the rule — the worker's parent is the run that can act.
+ */
+ if (!target.persona.planner) {
+ throw new ValidationError(
+ `${target.persona.name} is a worker, not a Planner — there is no plan here to change. Steer the Planner that started it, or write a note on this run.`,
+)
+ }
+
+ const message = validateMessageText(input.message)
+
+ const posted = await deps.messages.append({
+ workspaceId: input.workspaceId,
+ threadId: target.threadId,
+ author: input.actor,
+ body: { kind: 'text', text: message },
+ })
+ await deps.events.publish({
+ type: 'message.created',
+ workspaceId: input.workspaceId,
+ threadId: target.threadId,
+ message: posted,
+ })
+
+ // The floor described above. Swallowed like every other ledger write on this path:
+ // a note that fails must not stop the steering turn that would have carried the
+ // same instruction further.
+ try {
+ await deps.workerNotes.append({
+ workspaceId: input.workspaceId,
+ treeRunId: await resolveTreeRunId(deps, target),
+ // Null — a human's note is about the tree, not any one run (see `writeHumanNote`).
+ agentRunId: null,
+ authorKind: 'human',
+ kind: 'decision',
+ title: `Steering message to ${target.persona.name}`,
+ body: message.slice(0, MAX_NOTE_BODY_LENGTH),
+ paths: [],
+ })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+
+ /**
+ * The persona is resolved by the *name* on the run's snapshot, because a run does
+ * not record which persona row it came from. A renamed or deleted persona is
+ * therefore un-steerable, which is a real limitation and is reported as one — the
+ * alternative, picking some other Planner, would re-enter a model that never wrote
+ * this plan.
+ */
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const persona = personas.find((candidate) => candidate.name === target.persona.name)
+ if (!persona) {
+ throw new ValidationError(
+ `No persona named "${target.persona.name}" is registered any more, so it cannot be re-entered to re-plan. Write a note on this tree instead.`,
+)
+ }
+
+ const children = await deps.agentRuns.listByParent(input.workspaceId, target.id)
+ const delegated = children.filter((child) => child.relation === 'delegation')
+
+ /**
+ * A subtask's owned paths come from its own `run_started` note, which is where the
+ * board reads the same claim from — rather than from the Planner's `path_ownership`
+ * notes, which are keyed to the Planner and cannot say which child got which claim
+ * once two subtasks went to the same persona.
+ */
+ const ownedPaths = new Map<AgentRunId, readonly string[]>
+ try {
+ for (const note of await deps.workerNotes.listByTree(
+ input.workspaceId,
+ await resolveTreeRunId(deps, target),
+)) {
+ if (note.kind === 'run_started' && note.agentRunId && note.paths.length > 0) {
+ ownedPaths.set(note.agentRunId, note.paths)
+ }
+ }
+ } catch {
+ // Deliberately swallowed: a brief without path claims is worse, not broken.
+ }
+
+ const subtasks: SteeringSubtask[] = delegated.map((child) => ({
+ runId: child.id,
+ personaName: child.persona.name,
+ status: child.status,
+ task: child.task,
+ paths: ownedPaths.get(child.id) ?? [],
+ branchName: child.branchName,
+ totalCostUsd: child.totalCostUsd,
+ }))
+
+ const steeredBy = describeActor(input.actor)
+
+ return startAgentRun(deps, {
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ // The Planner's own thread, not a new one: a re-plan is part of the conversation
+ // that produced the plan, and burying it one level down would hide the one turn a
+ // human most wants to find again.
+ threadId: target.threadId,
+ repositoryId: target.repositoryId,
+ personaId: persona.id,
+ task: buildSteeringBrief({ goal: target.task, subtasks, message, steeredBy }),
+ parentRunId: target.id,
+ relation: 'steer',
+ })
+}
+
+/** How a steering turn names the person who asked for it, in a thread and in a note. */
+const describeActor = (actor: Actor): string =>
+ actor.kind === 'user' ? `user ${actor.userId}`: 'a human'
+
+/**
+ * Acts on a plan delta, called by
+ * runner-gateway.ts on a `plan_delta_submitted` frame — the mirror of
+ * `applySubmittedPlan`, with the same division of labour: the Runner relays, the
+ * server decides, and every change goes through the path it would have gone through
+ * had it been in the original plan.
+ *
+ * **The target is resolved from the steering run's own parent, never from the
+ * payload.** A delta names subtasks by run id, and those ids arrive from a model — so
+ * a run id that is not a delegation child of the Planner this run was started to
+ * re-enter is refused. Without that, one steering turn could cancel any run in the
+ * workspace by guessing an id, which is the same forgery surface identity-bound approval closes for
+ * approvals.
+ *
+ * Failures are per-op and reported, never fatal, for the same reason a plan's are:
+ * one stale run id should not discard the rest of a turn a human is paying for.
+ */
+export const applyPlanDelta = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; delta: unknown },
+): Promise<{ applied: AppliedDeltaOp[] }> => {
+ const steering = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!steering) throw new NotFoundError('AgentRun')
+ if (steering.relation !== 'steer' || !steering.parentRunId) {
+ throw new ValidationError('Only a steering run may submit a plan delta')
+ }
+
+ const target = await deps.agentRuns.findById(input.workspaceId, steering.parentRunId)
+ if (!target) throw new NotFoundError('AgentRun')
+
+ const verdict = parsePlanDelta(input.delta)
+ if (!verdict.ok) {
+ await postRunSystemMessage(deps, target, `Re-plan refused: ${verdict.reason}`)
+ return { applied: [] }
+ }
+
+ const children = await deps.agentRuns.listByParent(input.workspaceId, target.id)
+ const byId = new Map(
+ children.filter((child) => child.relation === 'delegation').map((child) => [child.id, child]),
+)
+
+ const thread = await deps.threads.findById(input.workspaceId, target.threadId)
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const applied: AppliedDeltaOp[] = []
+
+ for (const op of verdict.delta.ops) {
+ if (op.op === 'add') {
+ const outcome = thread
+ ? await startPlannedChild(deps, {
+ planner: target,
+ channelId: thread.channelId,
+ personas,
+ subtask: op.subtask,
+ })
+: { ok: false as const, reason: 'its thread no longer exists' }
+ applied.push({
+ op: 'add',
+ subject: op.subtask.title,
+ applied: outcome.ok,
+...(outcome.ok ? {}: { refusal: outcome.reason }),
+ })
+ continue
+ }
+
+ const child = byId.get(op.runId)
+ if (!child) {
+ applied.push({
+ op: op.op,
+ subject: op.runId,
+ applied: false,
+ refusal: 'no subtask of this plan has that run id',
+ })
+ continue
+ }
+ const subject = `${child.persona.name} (${child.id})`
+
+ if (op.op === 'cancel') {
+ if (isTerminalRunStatus(child.status)) {
+ applied.push({
+ op: 'cancel',
+ subject,
+ applied: false,
+ refusal: `already ${child.status}`,
+ })
+ continue
+ }
+ await cancelRun(deps, child, `re-planned: ${op.reason}`)
+ applied.push({ op: 'cancel', subject, applied: true })
+ continue
+ }
+
+ /**
+ * A revision reaches its worker through the ledger, and this is the honest bound
+ * on it: a run already mid-turn learns nothing until it re-reads. Mid-flight steering accepts
+ * that shape — steering "acts on the *plan and the ledger*" — and the tool's
+ * description says the same thing to the model rather than implying an interrupt
+ * that does not exist.
+ *
+ * Written as an **agent-authored `decision`**, which is exactly what it is: a
+ * Planner's choice, governing the runs below it, composed by a model and so
+ * rendered inside the untrusted fence. `decision` also has reserved slots against
+ * recency elision (`MAX_DECISIONS_IN_CONTEXT`), so a revision made early in a busy
+ * tree is not the first thing dropped from the worker's context.
+ */
+ if (isTerminalRunStatus(child.status)) {
+ applied.push({
+ op: 'revise',
+ subject,
+ applied: false,
+ refusal: `already ${child.status} — add a new subtask instead`,
+ })
+ continue
+ }
+ try {
+ await deps.workerNotes.append({
+ workspaceId: input.workspaceId,
+ treeRunId: await resolveTreeRunId(deps, target),
+ agentRunId: steering.id,
+ authorKind: 'agent_run',
+ kind: 'decision',
+ title: `Revised scope for ${child.persona.name}`,
+ body: op.guidance.slice(0, MAX_NOTE_BODY_LENGTH),
+ paths: [],
+ })
+ applied.push({ op: 'revise', subject, applied: true })
+ } catch (error) {
+ applied.push({
+ op: 'revise',
+ subject,
+ applied: false,
+ refusal: error instanceof Error ? error.message: String(error),
+ })
+ }
+ }
+
+ /**
+ * The audit trail mid-flight steering point 6 asks for: "a re-plan is a decision, and the ledger is
+ * where decisions live: the delta, its author, and what it changed become a platform
+ * note, so the tree explains itself afterwards."
+ *
+ * Platform-authored and therefore factual only — what the platform did, not why a
+ * model said it should. The rationale reaches a human as the steering run's own
+ * output in the thread, where it is rendered as agent text.
+ */
+ const summary = describeAppliedDelta(applied, `a human (run ${steering.id})`)
+ await postRunSystemMessage(deps, target, summary)
+ await recordRunPlatformNote(deps, target, {
+ kind: 'summary',
+ title: `Re-planned: ${applied.filter((entry) => entry.applied).length} change(s)`,
+ body: summary,
+ })
+
+ return { applied }
 }
 
 /**

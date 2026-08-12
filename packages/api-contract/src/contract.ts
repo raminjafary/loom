@@ -454,6 +454,22 @@ export const contract = {
 .input(z.object({ agentRunId: z.string, acknowledgeCiChange: z.boolean.optional }))
 .output(AgentRunSchema),
 
+ /**
+ * Re-enters a Planner with a human's message and lets it change its own plan
+ *.
+ *
+ * Explicit rather than implied by posting in the thread: every call is a frontier
+ * model run, and putting one behind every message would spend exactly the
+ * attention and money the riskiest assumption measures as the cost this feature exists to reduce. The
+ * message is posted to the thread and written to the ledger as a human note before
+ * any model is paid, so the instruction lands even if the re-planning turn does not.
+ *
+ * Returns the steering run, so a client can watch it like any other.
+ */
+ steer: oc
+.input(z.object({ agentRunId: z.string, message: z.string.min(1).max(4_000) }))
+.output(AgentRunSchema),
+
  /** Runs needing a human decision — the inbox's data source. */
  listNeedsAttention: oc.output(z.array(AgentRunSchema)),
  },

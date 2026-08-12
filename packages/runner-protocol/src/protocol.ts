@@ -208,6 +208,24 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  subtasks: z.array(PlanSubtaskSchema),
  }),
  /**
+ * A re-planning turn's delta, relayed on the
+ * same terms as `plan_submitted`: once, at the end, and re-validated server-side
+ * with `parsePlanDelta` before anything is cancelled or started.
+ *
+ * `ops` is deliberately loose here — an array of records. The wire's job is to
+ * carry the shape a model produced without a second opinion about it: a delta that
+ * fails the domain's validation should be reported to the model with a reason it
+ * can act on, and a Zod failure at this layer is a dropped frame with no such
+ * reason. `plan_submitted` gets a typed schema because its shape predates this and
+ * is stable; a delta's ops are three variants that will grow.
+ */
+ z.object({
+ type: z.literal('plan_delta_submitted'),
+ runId: z.string,
+ rationale: z.string,
+ ops: z.array(z.record(z.string, z.unknown)),
+ }),
+ /**
  * One note a run wrote to its tree's ledger, sent **as it is
  * written** rather than collected for the end of the run.
  *
@@ -422,6 +440,20 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  reconcile: z
 .object({ parentRunId: z.string, branchName: z.string })
 .optional,
+ /**
+ * Start this run as a **re-planning turn**.
+ *
+ * The Runner's only decision from this flag is which channel to give a Planner:
+ * `submit_plan_delta` instead of `submit_plan`. Instead, not as well — a run that
+ * could still submit a whole decomposition could answer a steering message by
+ * starting a second fan-out beside the one already running, which is the failure
+ * The whole "a delta, emphatically" is written to prevent.
+ *
+ * The target it is steering is not sent, because the Runner has no use for it: the
+ * server resolves it from the run's own parent, so a delta cannot name a tree it
+ * was not started against.
+ */
+ steering: z.boolean.optional,
  }),
  /**
  * Warm this repository's dependency cache. Operator-triggered, and

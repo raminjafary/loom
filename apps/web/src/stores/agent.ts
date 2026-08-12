@@ -66,6 +66,7 @@ export const useAgentStore = defineStore('agent', () => {
     watchRun: (agentRunId: string) => session.watchRun(agentRunId),
     decide: (approvalRequestId: string, decision: 'approve' | 'deny', answer?: string) =>
       session.decide(approvalRequestId, decision, answer),
+    steer: (agentRunId: string, message: string) => session.steer(agentRunId, message),
     loadDiff: (agentRunId: string) => session.loadDiff(agentRunId),
     keepRun: (agentRunId: string) => session.keepRun(agentRunId),
     discardRun: (agentRunId: string) => session.discardRun(agentRunId),

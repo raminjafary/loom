@@ -245,6 +245,44 @@ export const describePathOverlaps = (overlaps: readonly PathOverlap[]): string |
  ].join('\n')
 }
 
+export type SubtaskVerdict =
+ | { readonly ok: true; readonly subtask: PlanSubtask }
+ | { readonly ok: false; readonly reason: string }
+
+/**
+ * Validates one subtask, wherever it came from.
+ *
+ * Extracted from `parseDecomposition` so that a subtask added by a re-planning turn
+ * cannot be shaped differently from one that
+ * arrived in the original decomposition. Two validators would drift, and the one that
+ * drifted would be the rarely-exercised one.
+ */
+export const parsePlanSubtask = (value: unknown, index: number): SubtaskVerdict => {
+ if (!isRecord(value)) return { ok: false, reason: `Subtask ${index} is not an object` }
+ if (!nonEmptyString(value.title, 200)) {
+ return { ok: false, reason: `Subtask ${index} needs a title (1–200 characters)` }
+ }
+ if (!nonEmptyString(value.task, 4_000)) {
+ return { ok: false, reason: `Subtask ${index} ("${String(value.title)}") needs a task description` }
+ }
+ if (!nonEmptyString(value.personaName, 100)) {
+ return { ok: false, reason: `Subtask ${index} ("${String(value.title)}") needs a personaName` }
+ }
+
+ const pathsVerdict = parseSubtaskPaths(value.paths, index, value.title)
+ if (!pathsVerdict.ok) return pathsVerdict
+
+ return {
+ ok: true,
+ subtask: {
+ title: value.title.trim,
+ task: value.task.trim,
+ personaName: value.personaName.trim,
+ paths: pathsVerdict.paths,
+ },
+ }
+}
+
 /**
  * Validates a decomposition a Planner submitted.
  *
@@ -264,26 +302,9 @@ export const parseDecomposition = (value: unknown): DecompositionVerdict => {
 
  const subtasks: PlanSubtask[] = []
  for (const [index, entry] of raw.entries) {
- if (!isRecord(entry)) return { ok: false, reason: `Subtask ${index} is not an object` }
- if (!nonEmptyString(entry.title, 200)) {
- return { ok: false, reason: `Subtask ${index} needs a title (1–200 characters)` }
- }
- if (!nonEmptyString(entry.task, 4_000)) {
- return { ok: false, reason: `Subtask ${index} ("${String(entry.title)}") needs a task description` }
- }
- if (!nonEmptyString(entry.personaName, 100)) {
- return { ok: false, reason: `Subtask ${index} ("${String(entry.title)}") needs a personaName` }
- }
-
- const pathsVerdict = parseSubtaskPaths(entry.paths, index, entry.title)
- if (!pathsVerdict.ok) return pathsVerdict
-
- subtasks.push({
- title: entry.title.trim,
- task: entry.task.trim,
- personaName: entry.personaName.trim,
- paths: pathsVerdict.paths,
- })
+ const verdict = parsePlanSubtask(entry, index)
+ if (!verdict.ok) return verdict
+ subtasks.push(verdict.subtask)
  }
 
  // Two subtasks with the same title are almost always the model repeating

@@ -23,6 +23,7 @@ import SidebarSection from './SidebarSection.vue'
 import CostDashboardPanel from './CostDashboardPanel.vue'
 import RunTreePanel from './RunTreePanel.vue'
 import SwarmBoardPanel from './SwarmBoardPanel.vue'
+import SteerPanel from './SteerPanel.vue'
 import SwarmGraphPanel from './SwarmGraphPanel.vue'
 import WorkerNotesPanel from './WorkerNotesPanel.vue'
 import { useAgentStore } from '../stores/agent'
@@ -514,6 +515,16 @@ onBeforeUnmount( => {
 :board="agentSnapshot.swarmBoard"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
+ />
+ <!--
+ Steering lives under the board rather than beside the composer, because it
+ reads the board: the run ids and statuses a re-plan acts on are the ones
+ drawn directly above it.
+ -->
+ <SteerPanel
+:board="agentSnapshot.swarmBoard"
+:busy="false"
+ @steer="(agentRunId, message) => agent.steer(agentRunId, message)"
  />
  </SidebarSection>
 

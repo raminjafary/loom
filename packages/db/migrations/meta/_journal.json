@@ -169,6 +169,13 @@
       "when": 1786515764167,
       "tag": "0023_young_ricochet",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786519537922,
+      "tag": "0024_loud_the_executioner",
+      "breakpoints": true
     }
   ]
 }

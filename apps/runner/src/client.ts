@@ -24,7 +24,12 @@ import {
 } from './egress-client.js'
 import { readHostClaudeOAuth } from './host-claude-auth.js'
 import { provisionSkills } from './capabilities.js'
-import { createPlannerTool } from './planner-tool.js'
+import {
+ PLANNER_TOOL_NAME,
+ PLAN_DELTA_TOOL_NAME,
+ createPlanDeltaTool,
+ createPlannerTool,
+} from './planner-tool.js'
 import { mergeRunBranch } from './merge.js'
 import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
@@ -408,6 +413,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  resumeSessionId?: string
  /** The tree's ledger, rendered server-side. */
  contextLedger?: string
+ /** A re-planning turn: the delta channel replaces the plan channel. */
+ steering?: boolean
  }): Promise<void> => {
  // Async, and awaited by whoever produces events (the SDK loop in-process, the
  // container's stdout reader when sandboxed) — that await is the backpressure.
@@ -499,7 +506,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // run-scoped and destroyed with the run, so nothing outlives it.
  // A Planner gets exactly one channel it can act through; everything else it
  // might want happens because the server decided to, not because it asked.
- const plannerTool = input.persona.planner ? createPlannerTool: null
+ // A re-planning turn gets the delta channel *instead of* the plan channel
+ //: a run re-entered to adjust a plan must not
+ // be able to answer by submitting a whole new one beside the work still running.
+ const plannerTool = input.persona.planner && !input.steering ? createPlannerTool: null
+ const deltaTool = input.persona.planner && input.steering ? createPlanDeltaTool: null
  // The notes channel is given to every run, planner included: a note is not a
  // capability, so it does not weaken `tools: []` (see notes-tool.ts).
  const notesTool = createNotesTool({ writeNote: onNote, readNotes: onNotesRequest })
@@ -519,12 +530,27 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  // Sandboxed, the tool lives inside the container and its result arrives as a
  // frame; unsandboxed, it is the in-process handle above. One holder either way.
- let sandboxPlan: { title: string; task: string; personaName: string; paths?: string[] }[] | null =
- null
+ let sandboxPlan:
+ | { title: string; task: string; personaName: string; paths?: string[] | undefined }[]
+ | null = null
+ let sandboxDelta: { rationale: string; ops: Record<string, unknown>[] } | null = null
  const flushPlan = => {
  const subtasks = sandboxPlan ?? plannerTool?.taken
- if (!subtasks || subtasks.length === 0) return
+ if (subtasks && subtasks.length > 0) {
  send({ type: 'plan_submitted', runId: input.runId, subtasks })
+ }
+ // Sent even with no ops: "nothing should change" is the answer a human is
+ // waiting on, and dropping it would leave a steering turn that ran, cost money
+ // and reported nothing.
+ const delta = sandboxDelta ?? deltaTool?.taken
+ if (delta) {
+ send({
+ type: 'plan_delta_submitted',
+ runId: input.runId,
+ rationale: delta.rationale,
+ ops: delta.ops,
+ })
+ }
  }
 
  const skillNames = await provisionSkills(input.homePath, input.persona.capabilities ?? [])
@@ -551,7 +577,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  await runAgent({
  persona: input.persona,
  cwd: input.clonePath,
-...(plannerTool ? { plannerTool: plannerTool.server }: {}),
+...(plannerTool
+ ? { plannerTool: { server: plannerTool.server, toolName: PLANNER_TOOL_NAME } }
+: {}),
+...(deltaTool
+ ? { plannerTool: { server: deltaTool.server, toolName: PLAN_DELTA_TOOL_NAME } }
+: {}),
  notesTool,
  questionTool: questionTool.server,
 ...(input.task === undefined ? {}: { task: input.task }),
@@ -617,7 +648,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  abortController: input.abort,
  onEvent,
  onRawMessage,
-...(input.persona.planner ? { onPlan: (subtasks) => (sandboxPlan = subtasks) }: {}),
+...(input.persona.planner && !input.steering
+ ? { onPlan: (subtasks) => (sandboxPlan = subtasks) }
+: {}),
+...(input.persona.planner && input.steering
+ ? { steering: true, onPlanDelta: (delta) => (sandboxDelta = delta) }
+: {}),
  onNote,
  onNotesRequest,
  onQuestion: (question) =>
@@ -831,6 +867,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // of other runs' notes, and a resumed run should read the ledger as
  // it is *now* (via read_notes), not replay a stale copy of it.
 ...(frame.contextLedger === undefined ? {}: { contextLedger: frame.contextLedger }),
+...(frame.steering ? { steering: true }: {}),
  clonePath,
  homePath,
  abort,

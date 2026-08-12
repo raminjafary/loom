@@ -370,6 +370,7 @@ export interface AgentRunRow {
  persona: unknown
  parentRunId: string | null
  relation: string | null
+ task: string | null
  status: string
  totalCostUsd: number | null
  errorMessage: string | null
@@ -413,7 +414,12 @@ const toAgentRunBranchDisposition = (value: string | null): AgentRunBranchDispos
  throw new Error(`unknown agent_run branch_disposition: ${value}`)
 }
 
-const AGENT_RUN_RELATIONS: readonly AgentRunRelation[] = ['delegation', 'review', 'reconcile']
+const AGENT_RUN_RELATIONS: readonly AgentRunRelation[] = [
+ 'delegation',
+ 'review',
+ 'reconcile',
+ 'steer',
+]
 
 const toAgentRunRelation = (value: string | null): AgentRunRelation | null => {
  if (value === null) return null
@@ -430,6 +436,7 @@ export const toAgentRun = (row: AgentRunRow): AgentRun => ({
  persona: toPersonaSpec(row.persona),
  parentRunId: row.parentRunId === null ? null: asAgentRunId(row.parentRunId),
  relation: toAgentRunRelation(row.relation),
+ task: row.task,
  status: toAgentRunStatus(row.status),
  totalCostUsd: row.totalCostUsd,
  errorMessage: row.errorMessage,

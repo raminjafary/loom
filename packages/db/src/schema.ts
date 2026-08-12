@@ -175,6 +175,12 @@ export const agentRun = pgTable(
  onDelete: 'cascade',
  }),
  relation: text('relation'),
+ // What this run was asked to do. Persisted
+ // because a re-planning turn needs the original goal and the current plan, and
+ // the task had until now only ever been dispatched to the Runner. Nullable: a run
+ // started from the sidebar picker has no task, and every row written before this
+ // column existed has none either.
+ task: text('task'),
  status: text('status').notNull.default('pending'),
  totalCostUsd: doublePrecision('total_cost_usd'),
  errorMessage: text('error_message'),
