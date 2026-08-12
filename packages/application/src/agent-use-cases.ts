@@ -1156,6 +1156,7 @@ export const startAgentRun = async (
  persona: personaSpec,
  cwd: repository.absolutePath,
  defaultBranch: repository.defaultBranch,
+ repositoryId: repository.id,
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(contextLedger === '' ? {}: { contextLedger }),
 ...(input.reconcile && parent
@@ -2776,6 +2777,7 @@ export const warmRepositoryCache = async (
 
  const result = await deps.dispatch.warmCache({
  runnerId: repository.runnerId,
+ repositoryId: repository.id,
  repositoryPath: repository.absolutePath,
  defaultBranch: repository.defaultBranch,
  installCommand: repository.installCommand,
@@ -2790,7 +2792,10 @@ export const warmRepositoryCache = async (
  metadata: { ok: result.ok },
  })
 
- return { ok: result.ok, detail: result.ok ? null: result.detail }
+ // Carried on success as well as on failure: a warm that filled the cache but
+ // captured no prepared tree is a success with
+ // something worth saying, and "Cache warmed." alone would hide it.
+ return { ok: result.ok, detail: result.detail ?? null }
 }
 
 /**

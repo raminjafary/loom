@@ -168,7 +168,17 @@ const submit = => {
  class="warm-result"
 :class="{ bad: !warmResult.ok }"
  >
- {{ warmResult.ok ? 'Cache warmed.': `Warm failed: ${warmResult.detail ?? 'no detail'}` }}
+ <!--
+ The success detail says whether a prepared tree came out of the warm
+. A bare "Cache warmed." cannot
+ distinguish "runs now start with node_modules in place" from "the install
+ produced nothing a run can be given".
+ -->
+ {{
+ warmResult.ok
+ ? (warmResult.detail ?? 'Cache warmed.')
+: `Warm failed: ${warmResult.detail ?? 'no detail'}`
+ }}
  </p>
  </li>
  <li v-if="props.repositories.length === 0" class="empty">No repositories bound yet</li>

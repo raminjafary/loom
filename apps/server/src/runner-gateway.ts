@@ -221,6 +221,7 @@ export const createRunnerGateway = (
  persona,
  cwd,
  defaultBranch,
+ repositoryId,
  task,
  contextLedger,
  reconcile,
@@ -232,6 +233,7 @@ export const createRunnerGateway = (
  persona: {...persona, tools: [...persona.tools] },
  cwd,
  defaultBranch,
+...(repositoryId === undefined ? {}: { repositoryId }),
 ...(task === undefined ? {}: { task }),
 ...(contextLedger === undefined ? {}: { contextLedger }),
 ...(reconcile === undefined ? {}: { reconcile }),
@@ -339,7 +341,7 @@ export const createRunnerGateway = (
  })
  },
 
- async warmCache({ runnerId, repositoryPath, defaultBranch, installCommand }) {
+ async warmCache({ runnerId, repositoryId, repositoryPath, defaultBranch, installCommand }) {
  if (!connections.has(runnerId)) {
  return { ok: false, detail: 'Runner is not currently connected' }
  }
@@ -362,6 +364,7 @@ export const createRunnerGateway = (
  send(runnerId, {
  type: 'warm_cache',
  requestId,
+ repositoryId,
  repositoryPath,
  defaultBranch,
  installCommand,
@@ -553,7 +556,12 @@ export const createRunnerGateway = (
  if (!pending) return
  pendingWarms.delete(frame.requestId)
  pending.resolve(
- frame.ok ? { ok: true }: { ok: false, detail: frame.detail ?? 'the warm step failed' },
+ frame.ok
+ ? // Carried on success too: a warm that
+ // filled the cache but captured no prepared tree is a success with
+ // something to say, and dropping the detail here made it unsayable.
+ { ok: true,...(frame.detail ? { detail: frame.detail }: {}) }
+: { ok: false, detail: frame.detail ?? 'the warm step failed' },
 )
  return
  }

@@ -100,6 +100,35 @@ docker compose up -d
 npx tsx tools/merge-queue-check.mts # real Runner, real git, no tokens spent
 ```
 
+### Dependency cache and prepared trees
+
+Off by default. `LOOM_DEP_CACHE_ENABLED=1` on the **Runner** gives runs a shared
+package-manager cache; a repository with an install command
+(`repository.setInstallCommand`) can then be warmed from Settings, which fills the cache
+*and* captures that repository's install output as a **prepared tree** — so later runs
+open with `node_modules` (or `.venv`, or `target`) already in place instead of spending
+a model turn installing.
+
+Only directories the repository's own `.gitignore` covers are captured, which is what
+makes it invisible to review: a run's `git status`, its commit, and the diff a human
+reads are exactly what they would have been. Each run gets a copy-on-write **copy**, never
+a shared mount — a directory shared between sandboxes is a channel between them.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOM_DEP_CACHE_ENABLED` | off | Master switch; nothing below applies without it |
+| `LOOM_DEP_CACHE_ROOT` | `$TMPDIR/loom-dep-cache` | Where the warmed cache lives |
+| `LOOM_DEP_CACHE_MODE` | `copy` | `shared` is faster and unsound — see `dep-cache.ts` |
+| `LOOM_PREPARED_TREE_ENABLED` | on with the cache | Set `0` for the cache without prepared trees |
+| `LOOM_PREPARED_TREE_ROOT` | beside the cache | One directory per repository |
+| `LOOM_PREPARED_TREE_MAX_BYTES` | 8 GB | Over this, runs install for themselves and the warm says so |
+
+```bash
+set -a &&../.env && set +a
+LOOM_USE_HOST_CLAUDE_AUTH=1 LOOM_DEP_CACHE_ENABLED=1 \
+ npx tsx tools/prepared-tree-check.mts # real warm + one real run, ~$0.01
+```
+
 ### Running a real agent
 
 All of this is reachable from the web UI's sidebar now (mint a pairing token, bind a repo, write or pick a persona, start a run, approve/deny gates, view the diff). To drive it directly over RPC instead:

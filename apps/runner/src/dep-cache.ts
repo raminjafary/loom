@@ -63,8 +63,12 @@ export const depCacheFromEnv = (env: NodeJS.ProcessEnv = process.env): DepCacheC
  *
  * A slow copy is the correct failure here — the alternative is silently sharing the
  * directory, which is the mode this function exists to avoid.
+ *
+ * Exported because the prepared tree (`prepared-tree.ts`, the base-image half) hands
+ * runs a copy under exactly the same rule, and a second implementation would be a
+ * second place for the fallback to be forgotten.
  */
-const cloneDirectory = async (source: string, destination: string): Promise<void> => {
+export const cloneDirectory = async (source: string, destination: string): Promise<void> => {
  const attempts =
  process.platform === 'darwin'
  ? [['-Rc', `${source}/.`, destination], ['-R', `${source}/.`, destination]]

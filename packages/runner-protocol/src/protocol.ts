@@ -418,6 +418,13 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  // clones this into a scratch workspace per run.
  cwd: z.string,
  defaultBranch: z.string,
+ /**
+ * Which repository this run is against, so the Runner can hand it that
+ * repository's prepared dependency tree.
+ * Optional because a Runner that predates the field still starts runs; it simply
+ * installs for itself, which is what every run did before.
+ */
+ repositoryId: z.string.optional,
  /** What a human asked for via `@mention`; absent for the sidebar picker. */
  task: z.string.optional,
  /**
@@ -470,6 +477,13 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  z.object({
  type: z.literal('warm_cache'),
  requestId: z.string,
+ /**
+ * Which repository this warms, so the prepared tree it captures can be handed to
+ * that repository's runs. Keyed by id rather
+ * than by path: two `repository` rows can legitimately point at one directory on
+ * different Runners, and a path is not a stable name for a cache entry.
+ */
+ repositoryId: z.string,
  repositoryPath: z.string,
  defaultBranch: z.string,
  installCommand: z.string,

@@ -16,6 +16,12 @@ import WebSocket from 'ws'
 import { runAgent } from './claude-agent-adapter.js'
 import { depCacheEnv, depCacheFromEnv, warmDepCache } from './dep-cache.js'
 import {
+ capturePreparedTree,
+ lockDigest,
+ materializePreparedTree,
+ preparedTreeFromEnv,
+} from './prepared-tree.js'
+import {
  drainUsage,
  egressConfigFromEnv,
  leaseEgressToken,
@@ -142,6 +148,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const sandbox = sandboxConfigFromEnv
  const useSandbox = sandboxEnabled
  const egress = egressConfigFromEnv
+ /**
+ * The base-image half. Derived from the dependency cache rather than switched
+ * separately — a prepared tree without the cache behind it would hand a run
+ * `node_modules` and then let it resolve a fresh install against nothing.
+ */
+ const preparedTree = preparedTreeFromEnv(sandbox.depCache)
  const USAGE_POLL_MS = Number(process.env.LOOM_USAGE_POLL_MS ?? 5_000)
  // Bounded above the server's own warm timeout so the Runner is not the one that
  // gives up first and leaves a container running.
@@ -845,6 +857,41 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 : prepareRunWorkspace(frame.cwd, runId)
 
  void prepare
+.then(async (workspace) => {
+ /**
+ * The prepared dependency tree, copy-on-write into the fresh clone
+ *. Before this a run opened on a
+ * bare clone and had to spend a model turn installing; now `npm test`
+ * is the first command that has to work.
+ *
+ * Never fatal. A run that installs for itself is what every run did
+ * before this existed, so a missing, stale or unreadable tree degrades
+ * to that rather than failing a run over a cache.
+ */
+ if (preparedTree && frame.repositoryId) {
+ try {
+ const materialized = await materializePreparedTree(preparedTree, {
+ repositoryId: frame.repositoryId,
+ clonePath: workspace.clonePath,
+ })
+ if (materialized && materialized.directories.length > 0) {
+ log(
+ `run ${runId} starts prepared: ${materialized.directories.join(', ')}` +
+ (materialized.stale
+ ? ' (stale — this repository\'s lockfiles changed since it was warmed)'
+: ''),
+)
+ }
+ } catch (error) {
+ log(
+ `could not hand run ${runId} a prepared tree, installing from the cache instead: ${
+ error instanceof Error ? error.message: String(error)
+ }`,
+)
+ }
+ }
+ return workspace
+ })
 .then(({ clonePath, branchName, homePath }) => {
  // A cancel that landed while the clone was still running has no
  // agent loop to abort yet — honor it here instead of starting one.
@@ -1145,9 +1192,16 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  * schema being clearer about this than the intuition was.
  */
  const token = await leaseEgressToken(egress, { runId: warmId, budgetCapUsd: null })
+ /**
+ * Taken before the install, because the install writes lockfiles. A
+ * generated `package-lock.json` compared against a run's clone — which
+ * has whatever the repository committed — makes every prepared tree
+ * report itself stale on its first use. Found by the live driver.
+ */
+ const lockBefore = await lockDigest(workspace.clonePath)
  try {
  const proxy = proxyUrlWithToken(egress.dataUrl, token)
- return await warmDepCache({
+ const warmed = await warmDepCache({
  runtime: sandbox.runtime,
  image: sandbox.image,
  network: sandbox.network,
@@ -1157,6 +1211,44 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  env: { HTTP_PROXY: proxy, HTTPS_PROXY: proxy,...depCacheEnv },
  timeoutMs: WARM_TIMEOUT_MS,
  })
+ if (!warmed.ok || !preparedTree) return warmed
+
+ /**
+ * The base-image half, captured from the warm clone before it is
+ * discarded. This is the only writer of a prepared tree, and it runs
+ * the *operator's* command with no agent in the loop — the same
+ * argument the cache's `copy` mode rests on.
+ *
+ * A failed capture does not fail the warm: the cache is filled either
+ * way, which is what the operator asked for, and runs fall back to
+ * installing from it. Reported in the detail so it is not silent.
+ */
+ const captured = await capturePreparedTree(preparedTree, {
+ repositoryId: frame.repositoryId,
+ clonePath: workspace.clonePath,
+ lockDigestBeforeInstall: lockBefore,
+ })
+ if (!captured.ok) {
+ log(`prepared tree not captured for ${frame.repositoryPath}: ${captured.detail}`)
+ return {
+ ok: true as const,
+ detail: `Cache warmed. No prepared tree: ${captured.detail}`,
+ }
+ }
+ const bytes = captured.manifest.bytes
+ log(
+ `prepared tree captured for ${frame.repositoryPath}: ` +
+ `${captured.manifest.directories.join(', ')} ` +
+ // A small install rounded to "0 MB", which reads as a capture that
+ // found nothing — the one thing this line exists to rule out.
+ `(${bytes < 1e6 ? `${(bytes / 1024).toFixed(0)} KB`: `${(bytes / 1e6).toFixed(0)} MB`})`,
+)
+ return {
+ ok: true as const,
+ detail:
+ `Cache warmed, and runs now start with ${captured.manifest.directories.join(', ')} ` +
+ 'already in place.',
+ }
  } finally {
  // Revoked whatever happened: a lease outliving the step that needed it
  // is a credential nobody is watching.
@@ -1170,7 +1262,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  type: 'warm_cache_result',
  requestId: frame.requestId,
  ok: result.ok,
-...(result.ok ? {}: { detail: result.detail }),
+ // Carried on success too: "what a run now starts with" is the whole
+ // point of the base-image half, and a bare "warmed" says nothing
+ // about whether a prepared tree came out of it.
+...('detail' in result && result.detail ? { detail: result.detail }: {}),
  })
  })
 .catch((error: unknown) =>

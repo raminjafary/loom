@@ -700,10 +700,21 @@ export interface RunDispatchPort {
  */
  warmCache(input: {
  runnerId: RunnerId
+ /**
+ * Which repository is being warmed, so the Runner can key the prepared dependency
+ * tree it captures to the repository rather
+ * than to a path two Runners could both hold.
+ */
+ repositoryId: RepositoryId
  repositoryPath: string
  defaultBranch: string
  installCommand: string
- }): Promise<{ ok: true } | { ok: false; detail: string }>
+ /**
+ * `detail` is present on success too: the base-image half means a warm can
+ * succeed and still have nothing to hand a run, and "warmed" alone cannot say
+ * which happened.
+ */
+ }): Promise<{ ok: true; detail?: string } | { ok: false; detail: string }>
  /** Fire-and-forget: instructs the connected Runner to start executing. Throws if not connected. */
  startRun(input: {
  runnerId: RunnerId
@@ -711,6 +722,8 @@ export interface RunDispatchPort {
  persona: PersonaSpec
  cwd: string
  defaultBranch: string
+ /** Which repository this run is against, so the Runner can hand it that repository's prepared tree. */
+ repositoryId?: RepositoryId
  /** What a human asked for via `@mention`; absent for the sidebar-picker path. */
  task?: string
  /**
