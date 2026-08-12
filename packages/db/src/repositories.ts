@@ -113,6 +113,16 @@ export const threadRepository = (db: Database): ThreadRepositoryPort => ({
     return row ? toThread(row) : null
   },
 
+  async listByChannel(workspaceId, channelId) {
+    return (
+      await db
+        .select()
+        .from(thread)
+        .where(and(eq(thread.workspaceId, workspaceId), eq(thread.channelId, channelId)))
+        .orderBy(thread.createdAt)
+    ).map(toThread)
+  },
+
   async findRootByChannel(workspaceId, channelId) {
     const [row] = await db
       .select()

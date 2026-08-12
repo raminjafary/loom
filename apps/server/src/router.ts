@@ -24,6 +24,7 @@ import {
  getAgentRun,
  getAgentRunDiff,
  getChannelRootThread,
+ listChannelThreads,
  getNotificationConfig,
  getPersona,
  getRawTranscript,
@@ -151,6 +152,15 @@ export const router = os.router({
  name: input.name,
  topic: input.topic ?? null,
 ...(input.isPrivate === undefined ? {}: { isPrivate: input.isPrivate }),
+ }),
+),
+),
+
+ threads: os.channel.threads.handler(({ context, input }) =>
+ guard( =>
+ listChannelThreads(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ channelId: asChannelId(input.channelId),
  }),
 ),
 ),

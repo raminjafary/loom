@@ -64,6 +64,19 @@ export const contract = {
 .output(ThreadSchema),
 
  /**
+ * Every thread in a channel, root and replies.
+ *
+ * Reply threads have existed in the data model and the use cases since Phase 0 and
+ * were never reachable from here, because nothing created one: a channel had a root
+ * thread and that was the whole conversation. A sub-planner now gets its own, so
+ * the client needs to know which messages have one hanging off them — which is what
+ * `parentMessageId` answers, in one call rather than per message.
+ */
+ threads: oc
+.input(z.object({ channelId: z.string }))
+.output(z.array(ThreadSchema)),
+
+ /**
  * Removes a channel and everything said in it. The heaviest cascade there is —
  * threads, messages, and every run started in them with its recorded spend — so
  * the server refuses while work is live and refuses again unless the caller has

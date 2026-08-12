@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import type { ResponseStyle } from '@loom/api-contract'
-import { parseMention } from '@loom/client-core'
+import {
+ areaLabelFromAnnouncement,
+ buildThreadTrail,
+ parseMention,
+ threadsByParentMessage,
+} from '@loom/client-core'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ActiveRunsPanel from './ActiveRunsPanel.vue'
 import ApprovalCard from './ApprovalCard.vue'
@@ -47,6 +52,26 @@ const startRun = (input: {
  if (!threadId) return
  void agent.startRun({ threadId,...input })
 }
+
+/**
+ * Area threads. Both derivations live in
+ * `client-core` so they are tested; these are the two bindings.
+ */
+const areaThreadByMessageId = computed( => {
+ const byParent = threadsByParentMessage(snapshot.value.channelThreads)
+ return Object.fromEntries([...byParent].map(([messageId, thread]) => [messageId, thread.id]))
+})
+
+const threadTrail = computed( =>
+ buildThreadTrail(
+ snapshot.value.channelThreads,
+ snapshot.value.activeThread?.id ?? null,
+ (parentMessageId) => {
+ const announcement = snapshot.value.messages.find((m) => m.id === parentMessageId)
+ return announcement ? areaLabelFromAnnouncement(announcement.body.text): null
+ },
+),
+)
 
 const settingsOpen = ref(false)
 
@@ -276,6 +301,20 @@ onBeforeUnmount( => {
  <template v-if="view === 'workspace'">
  <h2 v-if="activeChannel">#{{ activeChannel.name }}</h2>
  <h2 v-else class="muted">No channel selected</h2>
+ <!--
+ The way out of an area. Absent on an ordinary channel:
+ `buildThreadTrail` returns nothing when the active thread is the root, so
+ this costs a channel that has never run a swarm exactly nothing.
+ -->
+ <nav v-if="threadTrail.length > 0" class="trail" aria-label="Thread">
+ <template v-for="(step, index) in threadTrail":key="step.threadId">
+ <span v-if="index > 0" class="trail-sep" aria-hidden="true">/</span>
+ <span v-if="step.current" class="trail-here">{{ step.label }}</span>
+ <button v-else type="button" class="trail-link" @click="store.openThread(step.threadId)">
+ {{ step.label }}
+ </button>
+ </template>
+ </nav>
  </template>
  <h2 v-else>Inbox</h2>
 
@@ -362,8 +401,10 @@ onBeforeUnmount( => {
 :current-actor="snapshot.currentActor"
 :has-more-history="snapshot.hasMoreHistory"
 :loading-history="snapshot.loadingHistory"
+:area-thread-by-message-id="areaThreadByMessageId"
  @load-earlier="store.loadOlderMessages"
  @unknown-authors="(ids) => agent.resolvePersonaNames(ids)"
+ @open-thread="(threadId) => store.openThread(threadId)"
  />
 
  <ApprovalCard
@@ -580,6 +621,36 @@ onBeforeUnmount( => {
  gap: 1rem;
  padding: 0.85rem 1.25rem;
  border-bottom: 1px solid var(--border);
+}
+
+.trail {
+ display: flex;
+ align-items: center;
+ gap: 0.35rem;
+ font-size: 0.85rem;
+ color: var(--text-muted);
+}
+
+.trail-sep {
+ opacity: 0.5;
+}
+
+.trail-link {
+ padding: 0;
+ font: inherit;
+ color: var(--text-muted);
+ background: none;
+ border: none;
+ cursor: pointer;
+ text-decoration: underline;
+}
+
+.trail-link:hover {
+ color: var(--text);
+}
+
+.trail-here {
+ color: var(--text);
 }
 
 .topbar h2 {

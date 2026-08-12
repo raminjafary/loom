@@ -114,6 +114,9 @@ export const fakeThreads = (s: FakeStore): ThreadRepositoryPort => ({
  async findById(workspaceId, id) {
  return s.threads.find((t) => t.workspaceId === workspaceId && t.id === id) ?? null
  },
+ async listByChannel(workspaceId, channelId) {
+ return s.threads.filter((t) => t.workspaceId === workspaceId && t.channelId === channelId)
+ },
  async findRootByChannel(workspaceId, channelId) {
  return (
  s.threads.find(

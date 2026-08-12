@@ -31,6 +31,7 @@ import {
  type AgentPersona,
  type AgentPersonaId,
  type AgentRun,
+ type Message,
  type AgentRunId,
  type AgentRunRelation,
  type AgentRunStatus,
@@ -83,7 +84,7 @@ import {
  resolveTreeRunId,
  type NoteDeps,
 } from './note-use-cases.js'
-import type { Deps } from './use-cases.js'
+import { startThread, type Deps } from './use-cases.js'
 
 export interface AgentDeps extends Deps, NotificationDeps, NoteDeps {
  readonly runners: RunnerRepositoryPort
@@ -1208,6 +1209,10 @@ export const applySubmittedPlan = async (
  }
 
  const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ // The channel an area thread is created in — a reply thread belongs to the same
+ // channel as the conversation it hangs off.
+ const thread = await deps.threads.findById(input.workspaceId, planner.threadId)
+ if (!thread) throw new NotFoundError('Thread')
  const started: AgentRunId[] = []
  const startedLines: string[] = []
  const refused: string[] = []
@@ -1280,6 +1285,46 @@ export const applySubmittedPlan = async (
  continue
  }
 
+ /**
+ * A sub-planner gets its own thread; a worker stays in its parent's
+ *.
+ *
+ * A depth-2 tree otherwise writes every plan, every tool call and every summary
+ * from every branch into one conversation, and stops being readable at exactly
+ * the size this feature exists to enable. The split is at planners rather than
+ * per subtask because that is where the volume actually branches: a planner
+ * brings a whole subtree with it, while a worker contributes one run's worth and
+ * belongs beside the siblings it must not collide with.
+ *
+ * The thread hangs off a message in the parent's conversation, so the parent
+ * thread keeps a line per area and a way in — the area is summarized where the
+ * decision was made, and its detail lives one level down. That message is posted
+ * before the child starts, so a thread never exists without the line that
+ * explains it.
+ *
+ * A failure here is not fatal to the subtask: falling back to the parent thread
+ * gives a noisier conversation, and refusing would give none at all.
+ */
+ let threadId = planner.threadId
+ if (persona.harnessPlanner) {
+ try {
+ const announcement = await postRunSystemMessage(
+ deps,
+ planner,
+ `${subtask.title} → ${subtask.personaName}: delegated as its own area. Its plan and workers are in this area's thread.`,
+)
+ const areaThread = await startThread(deps, {
+ workspaceId: input.workspaceId,
+ actor: agentRunActor(planner.id),
+ channelId: thread.channelId,
+ parentMessageId: announcement.id,
+ })
+ threadId = areaThread.id
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+ }
+
  try {
  const child = await startAgentRun(deps, {
  workspaceId: input.workspaceId,
@@ -1287,7 +1332,7 @@ export const applySubmittedPlan = async (
  // spawn children *of itself*, so this is also what ties attenuation to the
  // right parent.
  actor: agentRunActor(planner.id),
- threadId: planner.threadId,
+ threadId,
  repositoryId: planner.repositoryId,
  personaId: persona.id,
  // The paths this subtask owns are appended to the *task*, not left only in
@@ -1557,7 +1602,7 @@ const postRunSystemMessage = async (
  deps: AgentDeps,
  run: AgentRun,
  text: string,
-): Promise<void> => {
+): Promise<Message> => {
  const message = await deps.messages.append({
  workspaceId: run.workspaceId,
  threadId: run.threadId,
@@ -1570,6 +1615,9 @@ const postRunSystemMessage = async (
  threadId: run.threadId,
  message,
  })
+ // Returned so a caller can hang a thread off it.
+ // Every other caller ignores it.
+ return message
 }
 
 /**

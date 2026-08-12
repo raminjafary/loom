@@ -1756,10 +1756,13 @@ Decompose and delegate.`
  }),
 )
 
+ // Read from the *sub-planner's own* thread: a planner child now runs in an area
+ // thread of its own, so its plan's summary is posted there and
+ // not in the root conversation. That split is the feature, so the test follows it.
  let refusal: string | undefined
  for (let i = 0; i < 40 && !refusal; i += 1) {
  await new Promise((r) => setTimeout(r, 50))
- const page = await client.message.list({ threadId: created.rootThread.id })
+ const page = await client.message.list({ threadId: level2!.threadId })
  refusal = page.messages.find((m) => m.body.text?.includes('Unit:'))?.body.text
  }
 
@@ -2159,6 +2162,68 @@ Decompose and delegate.`
  })
 
  /**
+ * The readability split: a sub-planner runs in its own thread, a worker stays
+ * in its parent's. A depth-2 tree otherwise writes every plan, tool call and summary
+ * from every branch into one conversation and stops being readable at exactly the
+ * size the corporation exists to enable.
+ *
+ * The announcement is asserted too, because a thread with no line pointing at it is
+ * work hidden rather than work organized — it is the only way back into the area from
+ * the conversation where the decision was made.
+ */
+ it('gives a sub-planner its own thread and leaves a worker in its parent', async => {
+ const { socket, runnerId } = await pairFakeRunner('notes-areathread')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'notes-areathread' })
+ const root = await client.persona.create({ markdownSource: NOTES_PLANNER_MARKDOWN })
+ await client.persona.create({
+ markdownSource: `---\nname: area-sub\ndescription: A sub-planner.\nmodel: test-model\ntools: []\nharness:\n planner: true\n delegates: [Read]\n---\n\nDecompose further.`,
+ })
+
+ const { run } = await startRunVia(socket, created.rootThread.id, repo.id, root.id)
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'The docs area', task: 'Decompose it.', personaName: 'area-sub' },
+ { title: 'A single unit', task: 'Do it.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+
+ let kids = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 40 && kids.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ kids = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+ expect(kids).toHaveLength(2)
+
+ const sub = kids.find((kid) => kid.persona.planner === true)
+ const worker = kids.find((kid) => kid.persona.planner !== true)
+ expect(sub).toBeDefined
+ expect(worker).toBeDefined
+
+ expect(sub!.threadId).not.toBe(created.rootThread.id)
+ // A worker belongs beside the siblings it must not collide with.
+ expect(worker!.threadId).toBe(created.rootThread.id)
+
+ // The area thread is a real reply thread in the same channel, hung off a message.
+ const threads = await client.channel.threads({ channelId: created.channel.id })
+ const area = threads.find((thread) => thread.id === sub!.threadId)
+ expect(area).toBeDefined
+ expect(area!.isRoot).toBe(false)
+ expect(area!.parentMessageId).not.toBeNull
+
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ const announcement = page.messages.find((m) => m.id === area!.parentMessageId)
+ expect(announcement?.body.text).toContain('The docs area')
+
+ await awaitPlanApplied(created.rootThread.id)
+ socket.close
+ })
+
+ /**
  * The collision no single plan can see. Two sub-planners decompose different areas
  * that happen to share a file; each plan is internally consistent, so the
  * within-plan check finds nothing and the "warn *before* tokens are spent"
@@ -2230,7 +2295,8 @@ Decompose and delegate.`
  let warning: string | undefined
  for (let i = 0; i < 40 && !warning; i += 1) {
  await new Promise((r) => setTimeout(r, 50))
- const page = await client.message.list({ threadId: created.rootThread.id })
+ // Area B is a planner, so its plan is applied in its own thread.
+ const page = await client.message.list({ threadId: areaB.threadId })
  warning = page.messages.find((m) => m.body.text?.includes('already claimed'))?.body.text
  }
 

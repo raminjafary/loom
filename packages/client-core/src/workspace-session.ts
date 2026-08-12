@@ -26,6 +26,15 @@ export interface WorkspaceSnapshot {
  readonly channels: Channel[]
  readonly activeChannelId: string | null
  readonly activeThread: Thread | null
+ /**
+ * Every thread in the active channel, so a message can show that a conversation
+ * hangs off it.
+ *
+ * Fetched with the channel rather than per message: threads are keyed by
+ * `parentMessageId`, so one call answers it for the whole page, and a swarm has a
+ * handful of areas rather than a thread per line.
+ */
+ readonly channelThreads: Thread[]
  readonly messages: Message[]
  /**
  * Whether older messages exist behind the ones loaded.
@@ -53,6 +62,14 @@ export interface WorkspaceSession {
  onServerEvent(listener: (event: ServerEvent) => void): => void
  init: Promise<void>
  selectChannel(channelId: string): Promise<void>
+ /**
+ * Moves the conversation to one of this channel's threads — an area thread, or back
+ * to the root.
+ *
+ * Deliberately not a channel switch: an area belongs to the goal it was split from,
+ * and `channelThreads` stays as it is so the way back is still on screen.
+ */
+ openThread(threadId: string): Promise<void>
  createChannel(name: string): Promise<void>
  /**
  * Deletes a channel and everything said in it. Returns the server's refusal rather
@@ -92,6 +109,7 @@ export const createWorkspaceSession = (options: {
  channels: [],
  activeChannelId: null,
  activeThread: null,
+ channelThreads: [],
  messages: [],
  hasMoreHistory: false,
  loadingHistory: false,
@@ -254,11 +272,28 @@ export const createWorkspaceSession = (options: {
  error: null,
  activeChannelId: channelId,
  messages: [],
+ channelThreads: [],
  hasMoreHistory: false,
  })
  try {
- const thread = await options.api.channel.rootThread({ channelId })
- patch({ activeThread: thread })
+ const [thread, channelThreads] = await Promise.all([
+ options.api.channel.rootThread({ channelId }),
+ options.api.channel.threads({ channelId }),
+ ])
+ patch({ activeThread: thread, channelThreads })
+ await loadMessages(thread.id)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ } finally {
+ patch({ loading: false })
+ }
+ },
+
+ async openThread(threadId) {
+ const thread = state.channelThreads.find((candidate) => candidate.id === threadId)
+ if (!thread || thread.id === state.activeThread?.id) return
+ patch({ loading: true, error: null, activeThread: thread, messages: [], hasMoreHistory: false })
+ try {
  await loadMessages(thread.id)
  } catch (error) {
  patch({ error: errorMessage(error) })

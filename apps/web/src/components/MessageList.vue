@@ -19,12 +19,20 @@ const props = defineProps<{
  currentActor?: Actor | null
  hasMoreHistory?: boolean
  loadingHistory?: boolean
+ /**
+ * Message id → the area thread hanging off it.
+ *
+ * A sub-planner runs in its own thread, announced by a message here. This is what
+ * turns that announcement from a dead end into the way in.
+ */
+ areaThreadByMessageId?: Record<string, string>
 }>
 
 const emit = defineEmits<{
  (e: 'load-earlier'): void
  /** Authors this thread shows that the client cannot yet name. */
  (e: 'unknown-authors', agentRunIds: string[]): void
+ (e: 'open-thread', threadId: string): void
 }>
 
 const scroller = ref<HTMLElement | null>(null)
@@ -240,6 +248,7 @@ const isTool = (row: ThreadRow): row is ToolRow => row.kind === 'tool'
  isTool(row) && open(row),
  isTool(row) && showingAll.has(row.id),
  grouped,
+ props.areaThreadByMessageId?.[row.id] ?? '',
  ]"
  class="row"
 :class="[row.kind, { grouped }]"
@@ -300,6 +309,21 @@ const isTool = (row: ThreadRow): row is ToolRow => row.kind === 'tool'
  <span class="badge">{{ PLAIN_BADGE[row.kind] ?? '' }}</span>
  <p class="detail">{{ row.text }}</p>
  </div>
+
+ <!--
+ The way into an area. A sub-planner's whole subtree lives
+ in its own thread; this line is the only thing in the parent conversation
+ that leads there, so without it the split hides work rather than organizing
+ it.
+ -->
+ <button
+ v-if="props.areaThreadByMessageId?.[row.id]"
+ type="button"
+ class="open-area"
+ @click="emit('open-thread', props.areaThreadByMessageId[row.id]!)"
+ >
+ Open this area's thread →
+ </button>
  </div>
  </article>
  </div>
@@ -350,6 +374,24 @@ const isTool = (row: ThreadRow): row is ToolRow => row.kind === 'tool'
  font: inherit;
  font-size: 0.78rem;
  cursor: pointer;
+}
+
+.open-area {
+ align-self: flex-start;
+ margin-top: 0.3rem;
+ padding: 0.25rem 0.55rem;
+ font: inherit;
+ font-size: 0.82rem;
+ color: var(--text-muted);
+ background: transparent;
+ border: 1px solid var(--border);
+ border-radius: 6px;
+ cursor: pointer;
+}
+
+.open-area:hover {
+ color: var(--text);
+ border-color: var(--accent);
 }
 
 .row {

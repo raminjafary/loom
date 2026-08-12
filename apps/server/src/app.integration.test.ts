@@ -312,7 +312,7 @@ describe('contract completeness', => {
  'notification',
  'approval',
  ])
- expect(Object.keys(contract.channel)).toEqual(['list', 'create', 'rootThread', 'delete'])
+ expect(Object.keys(contract.channel)).toEqual(['list', 'create', 'rootThread', 'threads', 'delete'])
  expect(Object.keys(contract.message)).toEqual(['list', 'post', 'backfill'])
  expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken', 'remove'])
  expect(Object.keys(contract.cost)).toEqual(['summary'])

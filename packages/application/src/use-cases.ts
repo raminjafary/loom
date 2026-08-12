@@ -199,6 +199,16 @@ export const startThread = async (
   return thread
 }
 
+/** Every thread in a channel — see the contract's `channel.threads` for why. */
+export const listChannelThreads = async (
+  deps: Deps,
+  input: { workspaceId: WorkspaceId; channelId: ChannelId },
+): Promise<Thread[]> => {
+  const channel = await deps.channels.findById(input.workspaceId, input.channelId)
+  if (!channel) throw new NotFoundError('Channel')
+  return deps.threads.listByChannel(input.workspaceId, input.channelId)
+}
+
 export const getChannelRootThread = async (
   deps: Deps,
   input: { workspaceId: WorkspaceId; channelId: ChannelId },

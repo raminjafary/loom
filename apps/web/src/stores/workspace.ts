@@ -38,6 +38,7 @@ export const useWorkspaceStore = defineStore('workspace', => {
  snapshot,
  start,
  selectChannel: (channelId: string) => session.selectChannel(channelId),
+ openThread: (threadId: string) => session.openThread(threadId),
  createChannel: (name: string) => session.createChannel(name),
  deleteChannel: (input: { channelId: string; acknowledge?: boolean }) =>
  session.deleteChannel(input),

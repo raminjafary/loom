@@ -75,6 +75,8 @@ export interface ThreadRepositoryPort {
  }): Promise<Thread>
  findById(workspaceId: WorkspaceId, id: ThreadId): Promise<Thread | null>
  findRootByChannel(workspaceId: WorkspaceId, channelId: ChannelId): Promise<Thread | null>
+ /** Root and replies, oldest first — see the contract's `channel.threads`. */
+ listByChannel(workspaceId: WorkspaceId, channelId: ChannelId): Promise<Thread[]>
 }
 
 export interface MessagePage {
