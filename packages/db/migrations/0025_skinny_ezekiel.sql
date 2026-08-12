@@ -1,0 +1,1 @@
+ALTER TABLE "agent_run" ADD COLUMN "aggregated_at" timestamp with time zone;

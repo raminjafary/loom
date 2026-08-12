@@ -1466,6 +1466,21 @@ const aggregateForParent = async (deps: AgentDeps, child: AgentRun): Promise<voi
  // child finishing, which is noise at exactly the wrong moment.
  if (!delegated.every((sibling) => TERMINAL_RUN_STATUSES.includes(sibling.status))) return
 
+ /**
+ *...and "the last one" has to be *claimed*, not observed.
+ *
+ * The check above is a read. Two children reaching a terminal status concurrently
+ * both perform it, both see every sibling terminal, and both post — which is how a
+ * real workspace ended up with the same "Plan finished: 0/2 subtasks completed"
+ * message twice, byte-identical down to the run ids. The claim is one conditional
+ * UPDATE on the parent, so exactly one caller proceeds no matter how many raced.
+ *
+ * Placed after the terminal check rather than before it: claiming first would burn
+ * the parent's one claim on the first child to finish, and the summary would then
+ * report a plan that was still running.
+ */
+ if (!(await deps.agentRuns.claimAggregation(child.workspaceId, parent.id))) return
+
  await postRunSystemMessage(
  deps,
  parent,

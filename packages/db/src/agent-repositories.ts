@@ -454,6 +454,27 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  return row ? toAgentRun(row as AgentRunRow): null
  },
 
+ /**
+ * One conditional UPDATE, and that is the entire mechanism: the `IS NULL` predicate
+ * is evaluated under the row lock the UPDATE takes, so of two concurrent callers
+ * exactly one sees a row returned. A `SELECT` followed by an `UPDATE` would be the
+ * bug this exists to fix, one layer down.
+ */
+ async claimAggregation(workspaceId, id) {
+ const rows = await db
+.update(agentRun)
+.set({ aggregatedAt: new Date })
+.where(
+ and(
+ eq(agentRun.workspaceId, workspaceId),
+ eq(agentRun.id, id),
+ isNull(agentRun.aggregatedAt),
+),
+)
+.returning({ id: agentRun.id })
+ return rows.length === 1
+ },
+
  async updateStatus(workspaceId, id, patch) {
  const [row] = await db
 .update(agentRun)

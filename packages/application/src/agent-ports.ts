@@ -232,6 +232,17 @@ export interface AgentRunRepositoryPort {
  /** Children of one run — the tree view's per-parent lookup. */
  listByParent(workspaceId: WorkspaceId, parentRunId: AgentRunId): Promise<AgentRun[]>
  /**
+ * Claims the right to report this run's plan.
+ * Returns true exactly once per run, for the caller that won.
+ *
+ * A claim rather than a check, and it is the whole fix: "only the last sibling
+ * reports" was a read-then-write, so two children reaching a terminal status
+ * concurrently both saw "all terminal" and both posted a summary. Byte-identical
+ * duplicates, observed in a real workspace. Implementations must make this one
+ * conditional write, not a read followed by a write.
+ */
+ claimAggregation(workspaceId: WorkspaceId, id: AgentRunId): Promise<boolean>
+ /**
  * Every run at or below `rootRunId`, in creation order — the whole tree, not one
  * generation of it.
  *

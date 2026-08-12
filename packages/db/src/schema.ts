@@ -207,6 +207,11 @@ export const agentRun = pgTable(
  // Both null until a Runner samples one — which never happens before the first turn.
  contextTokens: integer('context_tokens'),
  contextMaxTokens: integer('context_max_tokens'),
+ // Claimed by whichever sibling reports this run's plan. The claim is the point, not the timestamp: "only the last sibling
+ // reports" was a read-then-write with no claim, so two children reaching a
+ // terminal status at the same moment both read "all terminal" and both posted.
+ // Observed in the dev workspace as a byte-identical duplicate summary.
+ aggregatedAt: timestamp('aggregated_at', { withTimezone: true }),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  completedAt: timestamp('completed_at', { withTimezone: true }),
  },

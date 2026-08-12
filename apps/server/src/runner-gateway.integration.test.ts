@@ -3179,3 +3179,87 @@ Decompose and delegate.`
  socket.close
  })
 })
+
+/**
+ * The aggregation claim.
+ *
+ * The bug this exists to hold shut was found by reading a real thread, not by a test:
+ * "Plan finished: 0/2 subtasks completed, $0.6598 total…" appeared twice,
+ * byte-identical including the run ids. "Only the last sibling reports" was a
+ * read-then-write, and two children reaching a terminal status at the same moment
+ * both read "all terminal".
+ */
+describe('runner-gateway: plan aggregation is claimed, not observed', => {
+ const AGG_PLANNER = `---
+name: agg-planner
+description: Decomposes and delegates.
+model: test-model
+tools: []
+harness:
+ planner: true
+ delegates: [Read]
+---
+
+Decompose and delegate.`
+
+ it('posts exactly one summary when two siblings finish at the same moment', async => {
+ const { socket, runnerId } = await pairFakeRunner('agg-race')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'agg-race' })
+ const planner = await client.persona.create({ markdownSource: AGG_PLANNER })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: planner.id,
+ })
+ await startRun
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'A', task: 'Do A.', personaName: 'fake-worker' },
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+ let children = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 60 && children.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+ expect(children).toHaveLength(2)
+
+ /**
+ * Both terminal events in one write, with no await between them — the frames are
+ * handled concurrently, which is the interleaving that produced the duplicate.
+ * Sending one and awaiting its effect would test the sequential case, which was
+ * never broken.
+ */
+ for (const [index, child] of children.entries) {
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: child.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: `done ${index}` },
+ }),
+)
+ }
+
+ let summaries = 0
+ for (let i = 0; i < 80; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ summaries = page.messages.filter((m) => m.body.text?.includes('Plan finished:')).length
+ if (summaries > 0 && i > 40) break
+ }
+ expect(summaries).toBe(1)
+
+ socket.close
+ })
+})
