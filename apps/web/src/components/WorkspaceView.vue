@@ -612,7 +612,7 @@ onBeforeUnmount( => {
  @keep="(agentRunId) => agent.keepRun(agentRunId)"
  @discard="(agentRunId) => agent.discardRun(agentRunId)"
  @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
- @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
+ @merge="(agentRunId, override, done) => void agent.enqueueMerge(agentRunId, override).then(done)"
  @load-raw="(agentRunId, done) => agent.getRawTranscript(agentRunId).then(done)"
  @watch="(agentRunId) => watchFromInbox(agentRunId)"
  />
@@ -655,7 +655,7 @@ onBeforeUnmount( => {
  @keep="(agentRunId) => agent.keepRun(agentRunId)"
  @discard="(agentRunId) => agent.discardRun(agentRunId)"
  @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
- @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
+ @merge="(agentRunId, override, done) => void agent.enqueueMerge(agentRunId, override).then(done)"
  @load-raw="(agentRunId, done) => agent.getRawTranscript(agentRunId).then(done)"
  />
  </SidebarSection>

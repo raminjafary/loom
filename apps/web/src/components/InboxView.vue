@@ -30,7 +30,11 @@ const emit = defineEmits<{
  keep: [agentRunId: string]
  discard: [agentRunId: string]
  push: [agentRunId: string, acknowledgeCiChange: boolean]
- merge: [agentRunId: string]
+ merge: [
+ agentRunId: string,
+ override: boolean,
+ done: (result: { ok: boolean; reason: string | null }) => void,
+ ]
  'load-raw': [agentRunId: string, done: (result: { lines: string[]; chunks: number }) => void]
  /**
  * Hands this run to the board and the graph.
@@ -147,7 +151,7 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
  @keep="(agentRunId) => emit('keep', agentRunId)"
  @discard="(agentRunId) => emit('discard', agentRunId)"
  @push="(agentRunId, ack) => emit('push', agentRunId, ack)"
- @merge="(agentRunId) => emit('merge', agentRunId)"
+ @merge="(agentRunId, override, done) => emit('merge', agentRunId, override, done)"
  @load-raw="(agentRunId, done) => emit('load-raw', agentRunId, done)"
  />
  </template>

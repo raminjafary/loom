@@ -1,0 +1,1 @@
+ALTER TABLE "plan_subtask" ADD COLUMN "reviews" integer;

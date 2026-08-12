@@ -160,6 +160,7 @@ describe('detectPathOverlaps', => {
  personaName: 'swe',
  paths,
  dependsOn: [],
+ reviews: null,
  })
 
  it('finds the same path claimed twice', => {
@@ -237,6 +238,7 @@ describe('detectClaimsAgainstExisting', => {
  personaName: 'swe',
  paths,
  dependsOn: [],
+ reviews: null,
  })
 
  it('finds a new subtask colliding with a claim from another plan', => {
@@ -507,5 +509,93 @@ describe('describePlanStages', => {
  // inherits the mistake. The disclosure is part of the feature.
  const text = describePlanStages([[0], [1]], [cost('a', 5), cost('b', 5)])
  expect(text).toContain('stops the stages after it')
+ })
+})
+
+/**
+ * The reviewing role — the reviewing relation, and specifically the three ways it differs from
+ * `dependsOn`. Two of those differences are enforced right here (no paths, and not a
+ * review of a review); the third — read access to the reviewed branch — is the Runner's
+ * (`prepareReviewWorkspace`) and the application layer's.
+ *
+ * The property most worth pinning is the derived edge: the reviewed index has to end up
+ * in `dependsOn`, because that is what makes one scheduler run the whole plan. If it
+ * ever stops being derived, a reviewer starts before the work it reviews.
+ */
+describe('reviews', => {
+ const plan = (subtasks: unknown[]) => parseDecomposition({ subtasks })
+ const sub = (title: string, extra: Record<string, unknown> = {}) => ({
+ title,
+ task: 'do the thing',
+ personaName: 'swe',
+...extra,
+ })
+
+ it('defaults to null, so every existing plan is unchanged', => {
+ const verdict = plan([sub('a'), sub('b')])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks.map((s) => s.reviews)).toEqual([null, null])
+ })
+
+ it('derives the scheduling edge, so one scheduler runs the whole plan', => {
+ const verdict = plan([sub('build'), sub('check', { reviews: 0 })])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks[1]?.reviews).toBe(0)
+ expect(verdict.decomposition.subtasks[1]?.dependsOn).toEqual([0])
+ //...and therefore the stage accounting sees it as the second stage it is.
+ expect(planStages(verdict.decomposition.subtasks)).toEqual([[0], [1]])
+ })
+
+ it('keeps a dependency the planner also asked for', => {
+ // "Review the API once both halves of it are in" is a real plan, and dropping the
+ // second edge would run the review against half the work.
+ const verdict = plan([sub('a'), sub('b'), sub('check', { reviews: 0, dependsOn: [1] })])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks[2]?.dependsOn).toEqual([1, 0])
+ })
+
+ it('does not duplicate an edge the planner wrote twice', => {
+ const verdict = plan([sub('a'), sub('check', { reviews: 0, dependsOn: [0] })])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks[1]?.dependsOn).toEqual([0])
+ })
+
+ it('refuses a reviewer that also claims paths, and says which role to pick', => {
+ // The collaboration topology: "no path ownership of its own". Refused rather than trimmed — a trimmed
+ // reviewer still believes it owns files, and the sibling that really owns them
+ // would be reviewed by something editing them underneath it.
+ const verdict = plan([sub('a'), sub('check', { reviews: 0, paths: ['src/api'] })])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('src/api')
+ expect(verdict.reason).toContain('A reviewer owns no paths')
+ })
+
+ it('refuses a review of a review', => {
+ // A reviewer produces no branch, so there is nothing for the outer one to read.
+ const verdict = plan([sub('a'), sub('check', { reviews: 0 }), sub('meta', { reviews: 1 })])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('itself a review')
+ })
+
+ it('refuses an out-of-range target and a self-review', => {
+ expect(plan([sub('a'), sub('b', { reviews: 9 })]).ok).toBe(false)
+ expect(plan([sub('a', { reviews: 0 })]).ok).toBe(false)
+ expect(plan([sub('a'), sub('b', { reviews: 1.5 })]).ok).toBe(false)
+ })
+
+ it('refuses the cycle a review edge can form on its own', => {
+ // The derived edge is a real edge, so it is subject to the same refusal: A reviews
+ // B while B waits for A is unrunnable, and the derivation is what makes the cycle
+ // detector able to see it at all.
+ const verdict = plan([sub('a', { dependsOn: [1] }), sub('check', { reviews: 0 })])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('cycle')
  })
 })

@@ -341,6 +341,7 @@ export const planSubtaskRepository = (db: Database): PlanSubtaskRepositoryPort =
  personaName: subtask.personaName,
  paths: subtask.paths,
  dependsOn: subtask.dependsOn,
+ reviews: subtask.reviews,
  status: subtask.status,
  agentRunId: subtask.agentRunId,
  detail: subtask.detail,
@@ -392,6 +393,27 @@ export const planSubtaskRepository = (db: Database): PlanSubtaskRepositoryPort =
  eq(planSubtask.workspaceId, input.workspaceId),
  eq(planSubtask.id, input.id),
  eq(planSubtask.status, 'waiting'),
+),
+)
+.returning
+ return row ? toPlanSubtask(row as PlanSubtaskRow): null
+ },
+
+ /** See the port: the claim already made this caller exclusive, so this is a plain write. */
+ async settleClaimed(input) {
+ const [row] = await db
+.update(planSubtask)
+.set({
+ status: input.status,
+ agentRunId: input.agentRunId,
+ detail: input.detail,
+ updatedAt: new Date,
+ })
+.where(
+ and(
+ eq(planSubtask.workspaceId, input.workspaceId),
+ eq(planSubtask.id, input.id),
+ eq(planSubtask.status, 'started'),
 ),
 )
 .returning

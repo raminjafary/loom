@@ -65,6 +65,36 @@ export interface PlanSubtask {
  * trust — and the attenuation still measures it against the planner alone.
  */
  readonly dependsOn: readonly number[]
+ /**
+ * Which sibling subtask this one *reviews*, by index — the reviewing role, and
+ * the only worker-to-worker edge the runtime can be made to execute.
+ *
+ * A reviewing role is deliberately not "a later task": the collaboration topology names three ways it
+ * differs, and all three are enforced rather than described.
+ *
+ * 1. **It reads the reviewed branch.** A review run's clone is taken from the
+ * reviewed run's clone with that branch checked out, so the reviewer sees the
+ * real tree and can grep it, open it and run it — not a diff pasted into a
+ * prompt.
+ * 2. **It owns no paths.** A subtask that claims paths *and* reviews another is
+ * refused rather than trimmed: a reviewer with a write scope is a second
+ * author of the same area, and the merge queue would then serialize a branch
+ * against its own review.
+ * 3. **Its verdict is recordable as something other than "completed".** The
+ * output is a `finding` or `blocker` note, and a blocker stops the reviewed
+ * branch reaching the merge queue (`describeReviewBlockers`).
+ *
+ * `null` for every ordinary subtask, which is what every subtask was before this
+ * field existed.
+ *
+ * **The scheduling edge is derived, not asked for.** A reviewer must obviously
+ * wait for what it reviews, and `parsePlanSubtask` adds the reviewed index to
+ * `dependsOn` itself rather than requiring the model to write it twice. One
+ * scheduler then runs the whole plan: cycle detection, stage accounting, the
+ * claim-before-start release and the skip cascade all see a review edge as the
+ * dependency it is, and none of them needed a second case.
+ */
+ readonly reviews: number | null
 }
 
 export interface Decomposition {
@@ -302,6 +332,34 @@ const parseSubtaskDependsOn = (
 }
 
 /**
+ * Parses one subtask's `reviews`.
+ *
+ * Range and self-reference are checked here for the same reason `dependsOn`'s are.
+ * What is *not* checked here is whether the target is itself a reviewer — that is a
+ * fact about two subtasks, so `parseDecomposition` checks it once the array exists.
+ */
+const parseSubtaskReviews = (
+ value: unknown,
+ index: number,
+ title: unknown,
+ subtaskCount: number,
+): { ok: true; reviews: number | null } | { ok: false; reason: string } => {
+ const where = `Subtask ${index} ("${String(title)}")`
+ if (value === undefined || value === null) return { ok: true, reviews: null }
+ if (typeof value !== 'number' || !Number.isInteger(value)) {
+ return { ok: false, reason: `${where} has a \`reviews\` that is not a subtask index` }
+ }
+ if (value < 0 || value >= subtaskCount) {
+ return {
+ ok: false,
+ reason: `${where} reviews subtask ${value}, but this plan has ${subtaskCount} subtask(s) (0–${subtaskCount - 1})`,
+ }
+ }
+ if (value === index) return { ok: false, reason: `${where} reviews itself` }
+ return { ok: true, reviews: value }
+}
+
+/**
  * The cycle check.
  *
  * Returns the cycle it found as a list of indices, so the refusal can name the loop
@@ -496,6 +554,24 @@ export const parsePlanSubtask = (
  const dependsVerdict = parseSubtaskDependsOn(value.dependsOn, index, value.title, subtaskCount)
  if (!dependsVerdict.ok) return dependsVerdict
 
+ const reviewsVerdict = parseSubtaskReviews(value.reviews, index, value.title, subtaskCount)
+ if (!reviewsVerdict.ok) return reviewsVerdict
+
+ /**
+ * The "no path ownership of its own", as a refusal rather than a silent trim.
+ *
+ * Trimming would be worse than refusing: the model would go on believing it owns
+ * those files, the ledger would say nobody does, and the sibling that actually owns
+ * them would be reviewed by something editing them underneath it. Refusing says
+ * which of the two roles the subtask has to pick.
+ */
+ if (reviewsVerdict.reviews !== null && pathsVerdict.paths.length > 0) {
+ return {
+ ok: false,
+ reason: `Subtask ${index} ("${value.title.trim}") both reviews another subtask and claims paths (${pathsVerdict.paths.join(', ')}). A reviewer owns no paths — it reads the branch it reviews and reports findings. Drop the paths, or make it an ordinary subtask.`,
+ }
+ }
+
  return {
  ok: true,
  subtask: {
@@ -503,7 +579,17 @@ export const parsePlanSubtask = (
  task: value.task.trim,
  personaName: value.personaName.trim,
  paths: pathsVerdict.paths,
- dependsOn: dependsVerdict.dependsOn,
+ /**
+ * The derived edge (see `PlanSubtask.reviews`). Unioned rather than replaced: a
+ * planner may legitimately want its reviewer to wait for a second subtask too —
+ * "review the API once both halves of it are in" — and dropping that would run
+ * the review against half the work.
+ */
+ dependsOn:
+ reviewsVerdict.reviews !== null && !dependsVerdict.dependsOn.includes(reviewsVerdict.reviews)
+ ? [...dependsVerdict.dependsOn, reviewsVerdict.reviews]
+: dependsVerdict.dependsOn,
+ reviews: reviewsVerdict.reviews,
  },
  }
 }
@@ -542,6 +628,27 @@ export const parseDecomposition = (value: unknown): DecompositionVerdict => {
  const duplicateIndex = lowered.findIndex((title, index) => lowered.indexOf(title) !== index)
  if (duplicateIndex !== -1) {
  return { ok: false, reason: `Two subtasks share the title "${subtasks[duplicateIndex]?.title}"` }
+ }
+
+ /**
+ * A reviewer may not review a reviewer.
+ *
+ * Not pedantry: a reviewer produces no branch of its own — it owns no paths and its
+ * output is a note — so there is nothing for a second reviewer to read. The pair
+ * would start, cost two runs, and the outer one would report on an empty tree. This
+ * is checked across the plan rather than per subtask because it is a fact about the
+ * target, which the single-subtask validator has not seen yet.
+ */
+ const reviewOfReview = subtasks.findIndex(
+ (subtask) => subtask.reviews !== null && subtasks[subtask.reviews]?.reviews !== null,
+)
+ if (reviewOfReview !== -1) {
+ const subtask = subtasks[reviewOfReview]
+ const target = subtasks[subtask?.reviews ?? 0]
+ return {
+ ok: false,
+ reason: `Subtask ${reviewOfReview} ("${subtask?.title}") reviews "${target?.title}", which is itself a review. A reviewer owns no paths and produces no branch, so there is nothing for a second reviewer to read — review the subtask that does the work instead.`,
+ }
  }
 
  /**

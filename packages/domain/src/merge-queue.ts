@@ -150,6 +150,60 @@ export const planMergeVerification = (input: {
  }
 }
 
+/**
+ * A blocker a reviewer raised against the branch being queued.
+ *
+ * The reviewer's own words, carried verbatim: the human deciding whether to merge
+ * anyway needs to read what was actually objected to, and a platform paraphrase of a
+ * model's objection is the one summary that must not exist here.
+ */
+export interface ReviewBlocker {
+ readonly reviewerRunId: AgentRunId
+ readonly reviewerPersonaName: string
+ readonly title: string
+}
+
+/**
+ * **The first time the notes ledger gates an action rather than informing one**
+ *.
+ *
+ * This is that decision, and it has two halves.
+ *
+ * **The default is refuse.** A reviewer that read the branch and said "do not merge
+ * this" is the highest-value signal the ledger carries, and every other note in the
+ * ledger only ever *informs* a reader who may ignore it. If a blocker did not stop
+ * the merge, the reviewing role would be advisory, which is what the collaboration topology says it must
+ * not be — "its verdict has to be recordable as something other than 'completed'".
+ *
+ * **But a human can always merge anyway**, and the override is not a compromise —
+ * it is the boundary that makes the gate acceptable at all. The blocker is *model
+ * output*: a reviewer that misread the diff, or was talked into an objection by the
+ * code it was reading, would otherwise hold a branch shut with no key, and a
+ * model deciding what a human may not merge inverts every trust rule in the security model. So the
+ * platform refuses by default, names the objections, and lets a human overrule them
+ * explicitly — never silently, and the override is audited.
+ *
+ * Returns null when nothing blocks, which is the ordinary case: an unreviewed branch
+ * and a reviewed-and-cleared branch are indistinguishable here, deliberately.
+ * Requiring a review would be a different feature — this one only enforces the
+ * reviews a plan actually asked for.
+ */
+export const describeReviewBlockers = (
+ branchName: string,
+ blockers: readonly ReviewBlocker[],
+): string | null => {
+ if (blockers.length === 0) return null
+ return [
+ blockers.length === 1
+ ? `${branchName} has a blocker from its reviewer:`
+: `${branchName} has ${blockers.length} blockers from its reviewers:`,
+...blockers.map((blocker) => `• ${blocker.reviewerPersonaName}: ${blocker.title}`),
+ 'Read them in the swarm ledger. Send the branch back to its run to fix them, or ' +
+ 'queue it again overriding the blockers if you disagree — a reviewer is a model, ' +
+ 'and overriding is yours to do.',
+ ].join('\n')
+}
+
 /** One sentence for the thread and the notification body — never a raw git error dump. */
 export const describeMergeFailure = (
  reason: MergeFailureReason,

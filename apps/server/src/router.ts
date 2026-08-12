@@ -391,6 +391,7 @@ export const router = os.router({
  workspaceId: context.principal.workspaceId,
  actor: context.principal.actor,
  agentRunId: asAgentRunId(input.agentRunId),
+...(input.overrideBlockers ? { overrideBlockers: true }: {}),
  }),
 ),
 ),

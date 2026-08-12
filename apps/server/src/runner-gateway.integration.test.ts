@@ -3614,4 +3614,345 @@ Decompose and delegate.`
 
  socket.close
  })
+
+ it('releases a third stage — a released subtask has to be findable by its own run', async => {
+ /**
+ * The chain past stage two, which nothing exercised: every existing test here is
+ * two stages, and a two-stage plan only needs the *first* stage's rows to carry
+ * their run ids (those are written by `recordPlan`). A stage-two row is written by
+ * the release, and if that release does not record which run it started, then when
+ * that run finishes `findByAgentRun` answers null and `releaseDependents` returns
+ * before it can release stage three — which sits in `waiting` forever with no error
+ * anywhere. Found by building the `reviews` on top of the same lookup.
+ */
+ const { socket, run, thread } = await startDagPlanner('dag-three-stages')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'A', task: 'Do A.', personaName: 'fake-worker' },
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker', dependsOn: [0] },
+ { title: 'C', task: 'Do C.', personaName: 'fake-worker', dependsOn: [1] },
+ ],
+ }),
+)
+
+ const first = await waitForChildren(run.id, 1)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: first[0]!.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'a done' },
+ }),
+)
+
+ const second = await waitForChildren(run.id, 2)
+ const b = second.find((child) => child.id !== first[0]!.id)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: b!.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'b done' },
+ }),
+)
+
+ expect(await waitForChildren(run.id, 3)).toHaveLength(3)
+ expect(await waitForMessage(thread.id, 'C → fake-worker')).toBeDefined
+
+ socket.close
+ })
+})
+
+/**
+ * The reviewing role — the `reviews` relation, over the real protocol.
+ *
+ * The domain tests cover what one plan may say. What only this level can show is the
+ * three things that span two runs: the reviewer is dispatched **onto the reviewed
+ * branch** and recorded as a `review` rather than a delegation, it owns no paths, and
+ * its `blocker` note **stops that branch reaching the merge queue** — the first time the
+ * notes ledger gates an action rather than informing one.
+ */
+describe('runner-gateway: plan reviews', => {
+ const REVIEW_PLANNER = `---
+name: review-planner
+description: Decomposes, delegates and asks for reviews.
+model: test-model
+tools: []
+harness:
+ planner: true
+ delegates: [Read]
+---
+
+Decompose and delegate.`
+
+ const startReviewPlanner = async (name: string) => {
+ const { socket, runnerId } = await pairFakeRunner(name)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name })
+ const planner = await client.persona.create({ markdownSource: REVIEW_PLANNER })
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: planner.id,
+ })
+ await startRun
+ return { socket, run: await runPromise, thread: created.rootThread }
+ }
+
+ const waitForChildren = async (runId: string, want: number) => {
+ let children = await client.agentRun.listChildren({ agentRunId: runId })
+ for (let i = 0; i < 60 && children.length < want; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: runId })
+ }
+ return children
+ }
+
+ const waitForMessage = async (threadId: string, needle: string) => {
+ for (let i = 0; i < 60; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId })
+ const hit = page.messages.find((m) => m.body.text?.includes(needle))
+ if (hit) return hit.body.text
+ }
+ return undefined
+ }
+
+ /** The worker half: give the reviewed run a branch and complete it. */
+ const finishWorker = (socket: WebSocket, runId: string, branchName: string) => {
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId,
+ clonePath: `/tmp/${branchName}`,
+ branchName,
+ }),
+)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'built' },
+ }),
+)
+ }
+
+ it('dispatches the reviewer onto the branch it reviews, as a review relation', async => {
+ const { socket, run, thread } = await startReviewPlanner('review-dispatch')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker', paths: ['src/api'] },
+ { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+ ],
+ }),
+)
+
+ // Held back without the planner having to write `dependsOn` — the edge is derived,
+ // and the summary says why the subtask is waiting rather than only that it is.
+ const summary = await waitForMessage(thread.id, 'Plan accepted')
+ expect(summary).toContain('⌕ Check → fake-worker (reviews "Build")')
+
+ const [worker] = await waitForChildren(run.id, 1)
+ const reviewerStart = nextFrame(socket, (v) => v.type === 'start_run' && v.runId !== worker!.id)
+ finishWorker(socket, worker!.id, 'loom/run-build-1')
+
+ const frame = (await reviewerStart) as {
+ runId: string
+ task?: string
+ review?: { targetRunId: string; branchName: string }
+ }
+ // The whole point of the relation: the Runner is told to open on the reviewed
+ // branch, by run id, because the branch exists only in that run's clone.
+ expect(frame.review).toEqual({ targetRunId: worker!.id, branchName: 'loom/run-build-1' })
+ // And the reviewer is told the facts the planner could not know — where the code is
+ // and what its author was asked to own.
+ expect(frame.task).toContain('loom/run-build-1')
+ expect(frame.task).toContain('src/api')
+ expect(frame.task).toContain('blocker')
+
+ const children = await waitForChildren(run.id, 2)
+ const reviewer = children.find((child) => child.id === frame.runId)
+ expect(reviewer?.relation).toBe('review')
+ // The distinction, not cosmetic: a reviewer recorded as a delegation would be
+ // indistinguishable at the merge gate from the run whose branch it reviewed.
+ expect(children.find((child) => child.id === worker!.id)?.relation).toBe('delegation')
+
+ socket.close
+ })
+
+ it('gives the reviewer no path ownership', async => {
+ // The collaboration topology: "no path ownership of its own". The ledger is where a sibling reads a claim
+ // from, so a reviewer claiming its target's paths would tell every other worker that
+ // the reviewer owns them.
+ const { socket, run } = await startReviewPlanner('review-no-paths')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker', paths: ['src/api'] },
+ { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+ ],
+ }),
+)
+
+ const [worker] = await waitForChildren(run.id, 1)
+ finishWorker(socket, worker!.id, 'loom/run-build-2')
+ const children = await waitForChildren(run.id, 2)
+ const reviewer = children.find((child) => child.id !== worker!.id)
+
+ const notes = await client.workerNote.listByTree({ agentRunId: run.id })
+ const started = notes.filter(
+ (note) => note.agentRunId === reviewer?.id && note.kind === 'run_started',
+)
+ expect(started).toHaveLength(1)
+ expect(started[0]?.paths).toEqual([])
+
+ socket.close
+ })
+
+ it('refuses a review whose target produced no branch, instead of reviewing nothing', async => {
+ // Completing and producing a branch are different facts: a run can complete having
+ // changed nothing, and a reviewer started then would report a clean review of work
+ // that does not exist.
+ const { socket, run, thread } = await startReviewPlanner('review-no-branch')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+ ],
+ }),
+)
+
+ const [worker] = await waitForChildren(run.id, 1)
+ // Completed, with no `run_workspace_ready` — so no branch.
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: worker!.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'nothing to do' },
+ }),
+)
+
+ expect(await waitForMessage(thread.id, 'Plan stage advanced')).toContain('✗ Check')
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toHaveLength(1)
+
+ socket.close
+ })
+
+ it("stops the reviewed branch reaching the merge queue, and lets a human overrule it", async => {
+ /**
+ * The own sentence, end to end: "A blocker from a reviewer is what should
+ * stop a branch reaching the merge queue — which is the first time the notes ledger
+ * would gate an action rather than only inform one."
+ *
+ * And the other half of the decision: the gate opens for a human. A blocker is model
+ * output, so a gate with no key would let a reviewer that misread a diff hold a
+ * branch shut forever.
+ */
+ const { socket, run } = await startReviewPlanner('review-gate')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+ ],
+ }),
+)
+
+ const [worker] = await waitForChildren(run.id, 1)
+ finishWorker(socket, worker!.id, 'loom/run-build-3')
+ const children = await waitForChildren(run.id, 2)
+ const reviewer = children.find((child) => child.id !== worker!.id)
+
+ // Before the blocker, the branch is queueable — the gate is not "reviewed at all",
+ // it is "objected to".
+ const requestId = `req-${Math.random.toString(36).slice(2)}`
+ const noteLanded = nextFrame(
+ socket,
+ (v) => v.type === 'note_result' && v.requestId === requestId,
+)
+ socket.send(
+ JSON.stringify({
+ type: 'note_written',
+ runId: reviewer!.id,
+ requestId,
+ note: {
+ kind: 'blocker',
+ title: 'The token is logged in plaintext',
+ body: 'src/api/auth.ts:41 writes the bearer token to the log.',
+ },
+ }),
+)
+ await noteLanded
+
+ await expect(client.mergeQueue.enqueue({ agentRunId: worker!.id })).rejects.toThrow(
+ /token is logged in plaintext/,
+)
+ // Refused *before* an entry exists, not as a failed entry discovered later.
+ expect(await client.mergeQueue.list).toEqual([])
+
+ const entry = await client.mergeQueue.enqueue({
+ agentRunId: worker!.id,
+ overrideBlockers: true,
+ })
+ expect(entry.agentRunId).toBe(worker!.id)
+
+ socket.close
+ })
+
+ it("refuses to queue the reviewer's own branch", async => {
+ // A reviewer's clone is taken from the branch it reviewed, so its branch carries
+ // that branch's commits. Merging it would land the reviewed work twice under a name
+ // nobody chose.
+ const { socket, run } = await startReviewPlanner('review-not-mergeable')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+ ],
+ }),
+)
+
+ const [worker] = await waitForChildren(run.id, 1)
+ finishWorker(socket, worker!.id, 'loom/run-build-4')
+ const children = await waitForChildren(run.id, 2)
+ const reviewer = children.find((child) => child.id !== worker!.id)
+
+ finishWorker(socket, reviewer!.id, 'loom/run-review-4')
+ for (let i = 0; i < 40; i += 1) {
+ const current = await client.agentRun.get({ agentRunId: reviewer!.id })
+ if (current.status === 'completed' && current.branchName) break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+
+ await expect(client.mergeQueue.enqueue({ agentRunId: reviewer!.id })).rejects.toThrow(
+ /review run/,
+)
+
+ socket.close
+ })
 })

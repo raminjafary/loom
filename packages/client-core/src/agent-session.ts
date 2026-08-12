@@ -346,8 +346,13 @@ export interface AgentSession {
  * Queues a finished run's branch. Deliberately not
  * `mergeRun`: nothing merges here, and naming it for the outcome would hide that
  * the merge happens later, in order, behind other branches.
+ *
+ * Returns the server's refusal rather than parking it in `error`, for the same reason
+ * `unbindRepository` does: a reviewer's blocker is a *question*
+ * for the human — "your reviewer says do not merge this; do you disagree?" — and
+ * `override` is their answer to it. A banner is the wrong place for a question.
  */
- enqueueMerge(agentRunId: string): Promise<void>
+ enqueueMerge(agentRunId: string, override?: boolean): Promise<{ ok: boolean; reason: string | null }>
  cancelMerge(entryId: string): Promise<void>
  refreshMergeQueue: Promise<void>
  /**
@@ -1111,10 +1116,13 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  }
  },
 
- async enqueueMerge(agentRunId) {
+ async enqueueMerge(agentRunId, override) {
  patch({ error: null })
  try {
- await options.api.mergeQueue.enqueue({ agentRunId })
+ await options.api.mergeQueue.enqueue({
+ agentRunId,
+...(override ? { overrideBlockers: true }: {}),
+ })
  // The run itself is re-read, not patched from the entry: queueing does not
  // set a disposition, but it *does* change what the run's buttons may do,
  // and that state lives on the run.
@@ -1123,8 +1131,9 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  if (state.inspectedRun?.id === run.id) patch({ inspectedRun: run })
  patch({ mergeQueue: await options.api.mergeQueue.list })
  await fetchInbox
+ return { ok: true, reason: null }
  } catch (error) {
- patch({ error: errorMessage(error) })
+ return { ok: false, reason: errorMessage(error) }
  }
  },
 

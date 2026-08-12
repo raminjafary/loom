@@ -225,6 +225,7 @@ export const createRunnerGateway = (
  task,
  contextLedger,
  reconcile,
+ review,
  steering,
  }) {
  send(runnerId, {
@@ -237,6 +238,7 @@ export const createRunnerGateway = (
 ...(task === undefined ? {}: { task }),
 ...(contextLedger === undefined ? {}: { contextLedger }),
 ...(reconcile === undefined ? {}: { reconcile }),
+...(review === undefined ? {}: { review }),
 ...(steering ? { steering: true }: {}),
  })
  },

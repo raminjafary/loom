@@ -67,6 +67,15 @@ export const PlanSubtaskSchema = z.object({
  * that would turn an upgrade into a lost run.
  */
  dependsOn: z.array(z.number).optional,
+ /**
+ * Which sibling subtask this one reviews, by index. Optional
+ * on the wire for the same reason the two fields above are.
+ *
+ * Nullable as well as optional: the SDK renders an optional number as a field a
+ * model may send as `null` to mean "not reviewing anything", and a Zod failure here
+ * is a dropped plan frame with no reason the model could act on.
+ */
+ reviews: z.number.nullish,
 })
 
 /**
@@ -454,6 +463,26 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  reconcile: z
 .object({ parentRunId: z.string, branchName: z.string })
 .optional,
+ /**
+ * Start this run as a **reviewer** of another run's branch.
+ *
+ * Present, the Runner clones the reviewed run's clone and checks that branch out
+ * before cutting this run's own branch from it — so the reviewer opens on the real
+ * tree it is reviewing and can grep it, read it and run it, rather than being
+ * handed a diff in its prompt. The words are "read access to the reviewed
+ * branch"; a diff in a prompt is not read access, it is a quotation.
+ *
+ * `targetRunId` rather than `parentRunId`, and that difference is the point: a
+ * reconciler's parent *is* the run whose branch it fixes, while a reviewer's parent
+ * is the planner and the branch belongs to a **sibling**. Reusing `reconcile`'s
+ * field would have made the reviewed run the reviewer's parent, which would put a
+ * worker in the delegation chain above another worker and measure the attenuation
+ * against the wrong run.
+ *
+ * The same Runner-holds-the-clone limitation as `reconcile`, `getDiff`, `push` and
+ * the merge itself: the branch exists only in that run's clone until it merges.
+ */
+ review: z.object({ targetRunId: z.string, branchName: z.string }).optional,
  /**
  * Start this run as a **re-planning turn**.
  *

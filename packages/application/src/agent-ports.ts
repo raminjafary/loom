@@ -197,6 +197,8 @@ export interface PlanSubtaskRecord {
  readonly personaName: string
  readonly paths: string[]
  readonly dependsOn: number[]
+ /** Which sibling `position` this subtask reviews, or null. */
+ readonly reviews: number | null
  readonly status: 'waiting' | 'started' | 'skipped' | 'refused'
  readonly agentRunId: AgentRunId | null
  readonly detail: string | null
@@ -218,6 +220,7 @@ export interface PlanSubtaskRepositoryPort {
  personaName: string
  paths: string[]
  dependsOn: number[]
+ reviews: number | null
  status: 'waiting' | 'started' | 'skipped' | 'refused'
  agentRunId: AgentRunId | null
  detail: string | null
@@ -243,6 +246,32 @@ export interface PlanSubtaskRepositoryPort {
  workspaceId: WorkspaceId
  id: string
  status: 'started' | 'skipped' | 'refused'
+ agentRunId: AgentRunId | null
+ detail: string | null
+ }): Promise<PlanSubtaskRecord | null>
+ /**
+ * Writes what became of a row this caller already claimed as `started`.
+ *
+ * Needed because `claimWaiting` — correctly — only ever matches a `waiting` row, and
+ * the release has to claim *before* it starts a run or two siblings finishing at once
+ * would start the same subtask twice. That leaves the run id to be written afterwards,
+ * and `claimWaiting` cannot do it.
+ *
+ * **The missing half of that was a real bug, not a tidiness issue.** A released
+ * subtask whose row never recorded its run id is a subtask `findByAgentRun` cannot
+ * find, so when that run finished nothing released *its* dependents: every plan of
+ * three or more stages stopped after the second, with the rest sitting in `waiting`
+ * forever and no error anywhere. Every test of the feature had been two stages.
+ *
+ * Safe without a claim of its own: the caller holds this row by having won
+ * `claimWaiting`. The `started` predicate is belt and braces — it guarantees this can
+ * never resurrect a `skipped` row or overwrite a `waiting` one another caller is
+ * about to claim.
+ */
+ settleClaimed(input: {
+ workspaceId: WorkspaceId
+ id: string
+ status: 'started' | 'refused'
  agentRunId: AgentRunId | null
  detail: string | null
  }): Promise<PlanSubtaskRecord | null>
@@ -752,6 +781,15 @@ export interface RunDispatchPort {
  * paused rebase rather than a fresh branch — and how it ends it.
  */
  reconcile?: { parentRunId: AgentRunId; branchName: string }
+ /**
+ * Start this run as a **reviewer** of a sibling's branch.
+ * Changes how the Runner prepares the workspace: the reviewed run's clone with
+ * that branch checked out, then this run's own branch cut from its tip.
+ *
+ * `targetRunId`, not `parentRunId` — a reviewer's parent is the planner, and the
+ * branch belongs to a sibling.
+ */
+ review?: { targetRunId: AgentRunId; branchName: string }
  /**
  * Start this run as a **re-planning turn**.
  * The Runner's only decision from it is which channel a Planner gets:

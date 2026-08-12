@@ -12,6 +12,7 @@ import {
  canPlannerRead,
  buildNotification,
  describeMergeFailure,
+ describeReviewBlockers,
  describeCrossPlanOverlaps,
  delegationDesign,
  delegationMatrix,
@@ -62,6 +63,7 @@ import {
  type MergeFailureReason,
  type MergeQueueEntry,
  type MergeQueueEntryId,
+ type ReviewBlocker,
  type NotificationKind,
  type PersonaCapability,
  type PersonaGroup,
@@ -1154,6 +1156,14 @@ export const startAgentRun = async (
  * masquerade as a delegation child.
  */
  reconcile?: { branchName: string }
+ /**
+ * Start this run as a reviewer of `targetRunId`'s branch.
+ * Only `startPlannedChild` sets this, and it always pairs with
+ * `relation: 'review'` — the data model is explicit that a review must not masquerade as a
+ * delegation child, and the reviewing role cites that same distinction as the reason the
+ * relation already existed.
+ */
+ review?: { targetRunId: AgentRunId; branchName: string }
  },
 ): Promise<AgentRun> => {
  const parent = input.parentRunId
@@ -1409,6 +1419,7 @@ export const startAgentRun = async (
 ...(input.reconcile && parent
  ? { reconcile: { parentRunId: parent.id, branchName: input.reconcile.branchName } }
 : {}),
+...(input.review ? { review: input.review }: {}),
  // Derived from the relation rather than from a separate argument: the two would
  // be one more pair that has to agree, and a run recorded as `steer` whose Runner
  // was never told is a Planner offered the plan tool — which answers a steering
@@ -1552,6 +1563,44 @@ export const recordRunWorkspace = async (
  * name should not discard the rest of a plan a human is paying for.
  */
 /**
+ * What a reviewer is told, on top of the instruction its planner wrote
+ *.
+ *
+ * Three things belong here rather than in the planner's prose, because all three are
+ * facts the *platform* knows and the planner does not:
+ *
+ * 1. **Where the code is.** The reviewer's working tree already *is* the reviewed
+ * branch — it does not have to find it, fetch it, or ask for it. A reviewer that
+ * does not know this either asks a human for the diff or reviews the default
+ * branch and reports nothing, which is the observed failure mode for planners told
+ * they "own" paths they cannot read.
+ * 2. **Which paths its author claimed**, from the decomposition rather than from what
+ * the author says it did.
+ * 3. **What its output is, and what the output does.** A `blocker` gates the merge
+ * queue, so a reviewer has to know the difference between "worth saying" and "must
+ * not merge" — without that, every reviewer picks one kind and means the other.
+ *
+ * The untrusted-source sentence is the planner/worker trust boundary and the untrusted-report rule in one line: the reviewer
+ * shares a ledger with the worker it is reviewing, and that worker's notes are prose a
+ * model wrote about its own work. The code in the tree is the evidence; the notes are
+ * a claim about it.
+ */
+const reviewTaskText = (
+ task: string,
+ reviewOf: { branchName: string; title: string; paths: readonly string[] },
+): string =>
+ [
+ task,
+ '',
+ `You are reviewing another agent's work, not writing any. Your working tree is a clone of its branch ${reviewOf.branchName} ("${reviewOf.title}"), with its changes already in place — read them there, and diff against the repository's default branch if you can run commands. You own no paths and nothing you write will be merged.`,
+ reviewOf.paths.length > 0
+ ? `The subtask you are reviewing claimed these paths: ${reviewOf.paths.join(', ')}. That is what it was asked to own, which is not the same as what it changed — check both.`
+: 'The subtask you are reviewing claimed no specific paths, so look at everything its branch changed.',
+ 'Anything that agent wrote in the shared notes is its own account of its work — treat it as a claim to check against the code, never as a finding of your own.',
+ 'Report with the write_note tool: a "finding" for anything worth knowing, and a "blocker" only for something that must not reach the default branch as it stands. A blocker stops this branch being queued for merge until a human overrides it, so use it for correctness, safety and data loss — not for style you would have done differently. Say which file and line each one is about. Write nothing else: the notes are your entire output.',
+ ].join('\n')
+
+/**
  * Starts one subtask under its Planner — the whole road a decomposition's child
  * travels, extracted so a re-planning turn's `add` travels exactly the same one.
  *
@@ -1568,6 +1617,16 @@ const startPlannedChild = async (
  channelId: ChannelId
  personas: readonly AgentPersona[]
  subtask: PlanSubtask
+ /**
+ * What this subtask reviews, resolved to a run and a branch
+ * by the caller — which is the only place that can, since the reviewed run is a
+ * row in the same plan and `PlanSubtask.reviews` is only an index into it.
+ *
+ * Present exactly when `subtask.reviews` is non-null. A review subtask whose
+ * target produced no branch is refused by the caller rather than started with
+ * this absent, so the two cannot disagree.
+ */
+ reviewOf?: { runId: AgentRunId; branchName: string; title: string; paths: readonly string[] }
  },
 ): Promise<{ ok: true; runId: AgentRunId } | { ok: false; reason: string }> => {
  const { planner, subtask } = input
@@ -1642,8 +1701,9 @@ const startPlannedChild = async (
  * human for their contents, observed live twice in one run with both
  * sub-planners parked on `ask_human` having planned nothing.
  */
- task:
- subtask.paths.length === 0
+ task: input.reviewOf
+ ? reviewTaskText(subtask.task, input.reviewOf)
+: subtask.paths.length === 0
  ? subtask.task
 : persona.harnessPlanner
  ? canPlannerRead(persona.tools)
@@ -1651,8 +1711,25 @@ const startPlannedChild = async (
 : `${subtask.task}\n\nYour area covers these paths: ${subtask.paths.join(', ')}. You cannot read files yourself — decompose the work and let the workers you delegate to read them, claiming paths within your area for each subtask. Other areas own the rest.`
 : `${subtask.task}\n\nYou own these paths for this task: ${subtask.paths.join(', ')}. Other workers own the rest; prefer leaving their paths alone and reporting what you need from them.`,
  parentRunId: planner.id,
- relation: 'delegation',
- ownedPaths: subtask.paths,
+ /**
+ * The own distinction, and the reviewing role names it as the reason the relation
+ * already existed: "`AgentRunRelation` already distinguishes `reconcile` from
+ * `delegate` for exactly this kind of reason". A reviewer recorded as a
+ * delegation would draw as one on the graph, count as one in the plan's
+ * outcomes, and — worst — be indistinguishable at the merge gate from the run
+ * whose branch it is reviewing.
+ */
+ relation: input.reviewOf ? 'review': 'delegation',
+ /**
+ * The reviewing role: a reviewer has "no path ownership of its own". `parsePlanSubtask`
+ * refuses a review subtask that claimed paths, so this is empty either way — it
+ * is written as a literal so that the rule is visible where the run is created
+ * and not only where the plan was validated.
+ */
+ ownedPaths: input.reviewOf ? []: subtask.paths,
+...(input.reviewOf
+ ? { review: { targetRunId: input.reviewOf.runId, branchName: input.reviewOf.branchName } }
+: {}),
  })
  // The edge, at the moment it is created. This is the one frame a client cannot
  // derive from the child's own events: by the time the child emits anything, the
@@ -1674,6 +1751,13 @@ export const applySubmittedPlan = async (
  task: string
  personaName: string
  paths?: readonly string[] | undefined
+ /**
+ * Declared even though `parseDecomposition` is what reads them, because the
+ * caller relays a model's payload and an under-declared input is how `paths`
+ * came to be carried by every layer and asked for by none.
+ */
+ dependsOn?: readonly number[] | undefined
+ reviews?: number | null | undefined
  }[]
  },
 ): Promise<{ started: AgentRunId[]; refused: string[] }> => {
@@ -1792,6 +1876,7 @@ export const applySubmittedPlan = async (
  personaName: string
  paths: string[]
  dependsOn: number[]
+ reviews: number | null
  status: 'waiting' | 'started' | 'skipped' | 'refused'
  agentRunId: AgentRunId | null
  detail: string | null
@@ -1806,13 +1891,22 @@ export const applySubmittedPlan = async (
  personaName: subtask.personaName,
  paths: [...subtask.paths],
  dependsOn: [...subtask.dependsOn],
+ reviews: subtask.reviews,
  }
 
  if (subtask.dependsOn.length > 0) {
  deferred += 1
  records.push({...base, status: 'waiting', agentRunId: null, detail: null })
+ /**
+ * A review edge reads as what it is rather than as the dependency it also is.
+ * "Waits for X" is true of a reviewer and tells a human nothing about why the
+ * plan has an extra run in it — and the whole point is that a reviewing role
+ * is not just a later task.
+ */
  startedLines.push(
- `⏸ ${subtask.title} → ${subtask.personaName} (waits for ${subtask.dependsOn
+ subtask.reviews !== null
+ ? `⌕ ${subtask.title} → ${subtask.personaName} (reviews "${verdict.decomposition.subtasks[subtask.reviews]?.title ?? subtask.reviews}")`
+: `⏸ ${subtask.title} → ${subtask.personaName} (waits for ${subtask.dependsOn
 .map((index) => `"${verdict.decomposition.subtasks[index]?.title ?? index}"`)
 .join(', ')})`,
 )
@@ -2021,6 +2115,48 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  })
  if (!claimed) continue
 
+ /**
+ * A review subtask's target, resolved here because this is the only place that
+ * can: `PlanSubtask.reviews` is an index into the plan, and what the Runner needs
+ * is a run id and a branch name.
+ *
+ * **A target that produced no branch is a refusal, not a review of nothing.** The
+ * dependency check above only proves the reviewed run *completed*; a run can
+ * complete having changed nothing, and its `branchName` is null until the Runner
+ * reports a workspace. Starting a reviewer then would spend a model on an
+ * unchanged tree and, worse, report a clean review of work that does not exist.
+ */
+ let reviewOf: { runId: AgentRunId; branchName: string; title: string; paths: string[] } | null =
+ null
+ if (row.reviews !== null) {
+ const target = byPosition.get(row.reviews)
+ const targetRun = target?.agentRunId
+ ? await deps.agentRuns.findById(child.workspaceId, target.agentRunId)
+: null
+ if (!target || !targetRun || !targetRun.branchName) {
+ const why = `nothing to review: "${target?.title ?? row.reviews}" produced no branch`
+ byPosition.set(row.position, {...claimed, status: 'refused', agentRunId: null, detail: why })
+ skippedTitles.push(row.title)
+ // `settleClaimed`, not `claimWaiting` — the claim above already took this row
+ // out of `waiting`. See the write-back below.
+ await deps.planSubtasks.settleClaimed({
+ workspaceId: child.workspaceId,
+ id: row.id,
+ status: 'refused',
+ agentRunId: null,
+ detail: why,
+ })
+ progressed = true
+ continue
+ }
+ reviewOf = {
+ runId: targetRun.id,
+ branchName: targetRun.branchName,
+ title: target.title,
+ paths: target.paths,
+ }
+ }
+
  personas ??= await deps.personas.listByWorkspace(child.workspaceId)
  const outcome = await startPlannedChild(deps, {
  planner,
@@ -2032,14 +2168,26 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  personaName: row.personaName,
  paths: row.paths,
  dependsOn: row.dependsOn,
+ reviews: row.reviews,
  },
+...(reviewOf ? { reviewOf }: {}),
  })
 
  /**
- * The claim already moved this row out of `waiting`, so a refusal here has to
- * be written back rather than left as a `started` row with no run — which would
- * make every dependent of it wait forever on a run that does not exist. The
- * row is no longer `waiting`, so this is a direct correction, not a claim.
+ * The outcome of the claim, written back to the row.
+ *
+ * **Both branches are load-bearing, and the success branch was missing.** The
+ * claim above moved this row to `started` with no run id, because it has to be
+ * taken before the run exists. Recording the id is what makes this subtask
+ * findable by its own run later — and `findByAgentRun` is how *its* dependents get
+ * released, so without it a plan of three or more stages stopped dead after the
+ * second one. A refusal has to be written back for the mirror-image reason: a row
+ * left saying `started` with no run is a row whose dependents wait on a run that
+ * will never exist.
+ *
+ * `settleClaimed` rather than `claimWaiting`: this row is no longer `waiting`, so
+ * the claim predicate cannot match it. That is exactly why the write silently did
+ * nothing before.
  */
  byPosition.set(row.position, {
 ...claimed,
@@ -2047,18 +2195,15 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  agentRunId: outcome.ok ? outcome.runId: null,
  detail: outcome.ok ? null: outcome.reason,
  })
- if (outcome.ok) {
- startedTitles.push(`${row.title} → ${row.personaName}`)
- } else {
- skippedTitles.push(row.title)
- await deps.planSubtasks.claimWaiting({
+ await deps.planSubtasks.settleClaimed({
  workspaceId: child.workspaceId,
  id: row.id,
- status: 'refused',
- agentRunId: null,
- detail: outcome.reason,
+ status: outcome.ok ? 'started': 'refused',
+ agentRunId: outcome.ok ? outcome.runId: null,
+ detail: outcome.ok ? null: outcome.reason,
  })
- }
+ if (outcome.ok) startedTitles.push(`${row.title} → ${row.personaName}`)
+ else skippedTitles.push(row.title)
  progressed = true
  }
  }
@@ -2124,7 +2269,23 @@ const aggregateForParent = async (deps: AgentDeps, child: AgentRun): Promise<voi
  if (!parent) return
 
  const siblings = await deps.agentRuns.listByParent(child.workspaceId, parent.id)
- const delegated = siblings.filter((sibling) => sibling.relation === 'delegation')
+ /**
+ * A plan's children are its delegations **and its reviews**.
+ *
+ * Reviews have to be in this set, and not because the summary reads better for it:
+ * the last delegation to finish is what triggers the summary, and a reviewer of that
+ * delegation is by construction still to come. Counting only delegations posted
+ * "every branch is ready to review; queue them for merge" while the review that
+ * might block one of them had not started — advice the plan itself contradicted one
+ * run later.
+ *
+ * `reconcile` and `steer` children stay out. Neither is part of the decomposition: a
+ * reconciler is started by the merge queue after a plan is long finished, and a steer
+ * run is a human re-entering the planner.
+ */
+ const delegated = siblings.filter(
+ (sibling) => sibling.relation === 'delegation' || sibling.relation === 'review',
+)
  if (delegated.length === 0) return
  // Only the last one reports. Anything else would post a partial summary per
  // child finishing, which is noise at exactly the wrong moment.
@@ -3056,13 +3217,99 @@ export const warmRepositoryCache = async (
  *
  * Human-only and terminal-only, same gate as keep/discard/push.
  */
+/**
+ * The blockers a run's own reviewers raised against it.
+ *
+ * The chain is short but every hop is load-bearing. A run's `plan_subtask` row gives
+ * its `position`; the rows of that same plan whose `reviews` is that position are its
+ * reviewers; a `blocker` note authored by one of those runs is an objection to *this*
+ * branch. Nothing else counts — not a blocker written by a sibling worker about its own
+ * work, and not one written by a reviewer of a different subtask, both of which sit in
+ * the same tree ledger.
+ *
+ * Empty for every run that did not come from a plan, which is every human-started run
+ * and every run that predates the collaboration topology.
+ */
+const findReviewBlockers = async (deps: AgentDeps, run: AgentRun): Promise<ReviewBlocker[]> => {
+ const own = await deps.planSubtasks.findByAgentRun(run.workspaceId, run.id)
+ if (!own) return []
+
+ const rows = await deps.planSubtasks.listByPlanner(run.workspaceId, own.plannerRunId)
+ const reviewers = new Map<AgentRunId, string>
+ for (const row of rows) {
+ if (row.reviews !== own.position || row.agentRunId === null) continue
+ const reviewer = await deps.agentRuns.findById(run.workspaceId, row.agentRunId)
+ // Named by its persona rather than by the subtask title: the human is deciding
+ // whether to trust a *reviewer*, and "security-reviewer says X" carries the weight
+ // that "Check the new endpoint says X" does not.
+ if (reviewer) reviewers.set(reviewer.id, reviewer.persona.name)
+ }
+ if (reviewers.size === 0) return []
+
+ const notes = await deps.workerNotes.listByTree(
+ run.workspaceId,
+ await resolveTreeRunId(deps, run),
+)
+ return notes
+.filter(
+ (note) =>
+ note.kind === 'blocker' &&
+ note.authorKind === 'agent_run' &&
+ note.agentRunId !== null &&
+ reviewers.has(note.agentRunId),
+)
+.map((note) => ({
+ reviewerRunId: note.agentRunId as AgentRunId,
+ reviewerPersonaName: reviewers.get(note.agentRunId as AgentRunId) ?? 'a reviewer',
+ title: note.title,
+ }))
+}
+
 export const enqueueMergeRun = async (
  deps: AgentDeps,
- input: { workspaceId: WorkspaceId; actor: Actor; agentRunId: AgentRunId },
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ agentRunId: AgentRunId
+ /**
+ * Queue the branch despite its reviewers' blockers.
+ *
+ * See `describeReviewBlockers` for why this exists at all: a blocker is model
+ * output, and a gate a human cannot open is a model deciding what a human may
+ * merge. Explicit and audited, never a default.
+ */
+ overrideBlockers?: boolean
+ },
 ): Promise<MergeQueueEntry> => {
  const run = await requireDisposableRun(deps, input)
  if (!run.branchName) throw new ValidationError('Run has no branch to merge')
  if (!run.clonePath) throw new ValidationError('Run has no workspace to merge from')
+ /**
+ * A review run's branch is not its own work. Its clone is taken
+ * from the branch it reviewed, so `loom/run-<reviewer>` carries that branch's commits
+ * — merging it would land the reviewed work a second time under a name nobody chose,
+ * and a reviewer that edited a file in passing would smuggle that edit in with it.
+ * A reviewer's output is its notes.
+ */
+ if (run.relation === 'review') {
+ throw new ValidationError(
+ 'This is a review run — its branch is the branch it reviewed, and its findings are in the swarm notes. Queue the run that did the work instead.',
+)
+ }
+
+ /**
+ * **The ledger gating an action rather than informing one**.
+ *
+ * Checked here, at enqueue, rather than in the sweep that performs the merge: the
+ * refusal is for a human who is deciding right now, and a rejection that surfaced
+ * minutes later as a failed queue entry would read as the branch's fault.
+ */
+ const blockers = await findReviewBlockers(deps, run)
+ if (blockers.length > 0 && input.overrideBlockers !== true) {
+ throw new ValidationError(
+ describeReviewBlockers(run.branchName, blockers) ?? 'This branch has review blockers',
+)
+ }
 
  const entry = await deps.mergeQueue.enqueue({
  workspaceId: input.workspaceId,
@@ -3078,10 +3325,34 @@ export const enqueueMergeRun = async (
  action: 'merge_queue.enqueued',
  subjectType: 'merge_queue_entry',
  subjectId: entry.id,
- metadata: { agentRunId: run.id, branchName: run.branchName },
+ metadata: {
+ agentRunId: run.id,
+ branchName: run.branchName,
+ // Recorded whenever blockers existed, not only when they were overridden: "this
+ // merge was queued past two objections" is the audit line worth having, and it
+ // cannot be reconstructed later from a ledger that says only that they were raised.
+...(blockers.length > 0 ? { overriddenBlockers: blockers.length }: {}),
+ },
  })
 
- await postRunSystemMessage(deps, run, `${run.branchName} queued for merge.`)
+ /**
+ * The override is stated in the thread, not only in the audit log. The reviewer's
+ * blocker stays in the ledger as the true fact that it was raised; without this line
+ * the next reader sees an objection and no sign of who answered it.
+ *
+ * Deliberately not written as a note of its own: the ledger's platform kinds record
+ * what the platform *did*, and the merge has not happened yet — the queue writes its
+ * own `merge_result` when it does.
+ */
+ await postRunSystemMessage(
+ deps,
+ run,
+ blockers.length > 0
+ ? `${run.branchName} queued for merge, overriding ${blockers.length} reviewer blocker(s): ${blockers
+.map((blocker) => `${blocker.reviewerPersonaName} — ${blocker.title}`)
+.join('; ')}.`
+: `${run.branchName} queued for merge.`,
+)
  return entry
 }
 

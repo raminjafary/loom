@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
  describeMergeFailure,
+ describeReviewBlockers,
  isMergeQueueEntryTerminal,
  planMergeVerification,
  selectNextMergeEntry,
@@ -204,5 +205,51 @@ describe('describeMergeFailure', => {
  for (const reason of reasons) {
  expect(describeMergeFailure(reason, 'loom/run-7', 'detail')).toContain('loom/run-7')
  }
+ })
+})
+
+/**
+ * The gate. The two properties worth pinning are the two halves of the
+ * decision: nothing blocks by default, and what does block is quoted rather than
+ * summarized — the human is deciding whether to overrule a *reviewer*, and they need
+ * its words and its name.
+ */
+describe('describeReviewBlockers', => {
+ const blocker = (reviewerPersonaName: string, title: string) => ({
+ reviewerRunId: asAgentRunId('00000000-0000-0000-0000-00000000000a'),
+ reviewerPersonaName,
+ title,
+ })
+
+ it('is null with no blockers, so an unreviewed branch is unaffected', => {
+ // An unreviewed branch and a reviewed-and-cleared branch are deliberately
+ // indistinguishable here: requiring a review would be a different feature.
+ expect(describeReviewBlockers('loom/run-1', [])).toBeNull
+ })
+
+ it('names the reviewer and quotes its objection', => {
+ const text = describeReviewBlockers('loom/run-1', [
+ blocker('security-reviewer', 'The token is logged in plaintext'),
+ ])
+ expect(text).toContain('loom/run-1')
+ expect(text).toContain('security-reviewer')
+ expect(text).toContain('The token is logged in plaintext')
+ })
+
+ it('says the override is the human\'s to make', => {
+ // The gate has to be openable, or a model decides what a human may merge — see the
+ // function's own comment. A refusal that does not say so reads as a dead end.
+ const text = describeReviewBlockers('loom/run-1', [blocker('qa', 'Tests fail')])
+ expect(text).toContain('overriding the blockers')
+ expect(text).toContain('yours to do')
+ })
+
+ it('counts them when there is more than one', => {
+ const text = describeReviewBlockers('loom/run-1', [
+ blocker('qa', 'Tests fail'),
+ blocker('solution-architect', 'Wrong layer'),
+ ])
+ expect(text).toContain('2 blockers')
+ expect(text).toContain('Wrong layer')
  })
 })

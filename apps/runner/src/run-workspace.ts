@@ -49,6 +49,47 @@ export const prepareRunWorkspace = async (
  return { clonePath, branchName, homePath }
 }
 
+/**
+ * A workspace for a **review** run, opened on the branch it is
+ * reviewing.
+ *
+ * The source is the reviewed run's own clone, for the same reason a reconciler's is:
+ * the branch exists nowhere else until it merges. Cloning rather than working in it is
+ * what keeps a reviewer from touching the branch a human may still want to review by
+ * hand — and unlike a reconciler, a reviewer is *never* expected to write to it.
+ *
+ * **The reviewer still gets its own branch, cut from the reviewed tip.** It would have
+ * been shorter to leave the reviewed branch checked out, and it would have been wrong:
+ * `commitRunWork` commits whatever the agent left behind at any terminal outcome, so a
+ * reviewer that edited a file would land a commit *on the reviewed branch's name* and
+ * the run row would claim that branch as its own. Then two runs would answer to one
+ * branch name, and `mergeRunBranch` would take the reviewer's copy. A separate branch
+ * makes a stray edit visible and harmless: it is on `loom/run-<reviewer>`, and
+ * `enqueueMergeRun` refuses a review run outright.
+ *
+ * No `git fetch` of the default branch and no rebase: what a reviewer needs is the tree
+ * as its author left it, not as the merge queue will land it. The queue's own rebase is
+ * where the target's movement is accounted for.
+ */
+export const prepareReviewWorkspace = async (
+ targetClonePath: string,
+ reviewedBranchName: string,
+ runId: string,
+): Promise<RunWorkspace> => {
+ const branchName = `loom/run-${runId}`
+ const clonePath = await mkdtemp(join(scratchRoot, `loom-review-${runId}-`))
+ const homePath = await mkdtemp(join(scratchRoot, `loom-home-${runId}-`))
+ await chmod(homePath, 0o777)
+
+ await execFileAsync('git', ['clone', '--quiet', targetClonePath, clonePath])
+ await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
+ await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
+ await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', reviewedBranchName])
+ await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', '-b', branchName])
+
+ return { clonePath, branchName, homePath }
+}
+
 export interface ReconcileWorkspace extends RunWorkspace {
  /** Repository-relative paths left with conflict markers, for the agent's task text. */
  readonly conflictedPaths: string[]

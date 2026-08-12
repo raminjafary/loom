@@ -121,6 +121,17 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  * paragraph here and a rewrite anywhere downstream, so it is made once, at the
  * only node that can see both subtasks.
  */
+ /**
+ * The reviewing role, offered rather than assumed. A planner that does not know the
+ * `reviews` field exists expresses "QA checks this" as an ordinary `dependsOn`
+ * subtask — which starts a worker with a write scope over someone else's paths
+ * and no access to their branch, and produces a second implementation instead of
+ * a review. Naming the reviewing built-ins matters for the same reason the roster
+ * does: the field is useless if the model cannot name a persona for it.
+ */
+ 'Where work needs checking rather than continuing, use the reviews field instead of dependsOn: it starts ' +
+ 'the reviewer on the reviewed branch itself and its findings can block that branch from merging. ' +
+ 'qa, security-reviewer and solution-architect are the built-ins for it. A reviewer claims no paths. ' +
  'Make the design decisions yourself rather than delegating them: decide the shared shapes, names and ' +
  'formats that more than one subtask depends on, state them in the subtask text, and record each one ' +
  'with the write_note tool as a "decision". A subtask that has to invent a shared convention will invent ' +

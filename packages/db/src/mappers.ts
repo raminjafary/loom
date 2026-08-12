@@ -616,6 +616,7 @@ export interface PlanSubtaskRow {
  personaName: string
  paths: unknown
  dependsOn: unknown
+ reviews: number | null
  status: string
  agentRunId: string | null
  detail: string | null
@@ -643,6 +644,7 @@ export const toPlanSubtask = (row: PlanSubtaskRow): PlanSubtaskRecord => {
  personaName: row.personaName,
  paths: Array.isArray(row.paths) ? (row.paths as string[]): [],
  dependsOn: Array.isArray(row.dependsOn) ? (row.dependsOn as number[]): [],
+ reviews: row.reviews,
  status,
  agentRunId: row.agentRunId === null ? null: asAgentRunId(row.agentRunId),
  detail: row.detail,

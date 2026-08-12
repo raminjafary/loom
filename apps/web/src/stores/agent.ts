@@ -81,7 +81,8 @@ export const useAgentStore = defineStore('agent', () => {
     discardRun: (agentRunId: string) => session.discardRun(agentRunId),
     pushRun: (agentRunId: string, acknowledgeCiChange?: boolean) =>
       session.pushRun(agentRunId, acknowledgeCiChange),
-    enqueueMerge: (agentRunId: string) => session.enqueueMerge(agentRunId),
+    enqueueMerge: (agentRunId: string, override?: boolean) =>
+      session.enqueueMerge(agentRunId, override),
     cancelMerge: (entryId: string) => session.cancelMerge(entryId),
     refreshMergeQueue: () => session.refreshMergeQueue(),
     refreshBoard: (agentRunId: string) => session.refreshBoard(agentRunId),

@@ -229,8 +229,21 @@ export const contract = {
  mergeQueue: {
  list: oc.output(z.array(MergeQueueEntrySchema)),
 
- /** Queues a finished run's branch. The run's own `agentRun.merge` is the same action from the diff view. */
- enqueue: oc.input(z.object({ agentRunId: z.string })).output(MergeQueueEntrySchema),
+ /**
+ * Queues a finished run's branch. The run's own `agentRun.merge` is the same action
+ * from the diff view.
+ *
+ * `overrideBlockers` answers a reviewer's `blocker` note — the
+ * one place the notes ledger gates an action rather than informing one. Without it a
+ * blocked branch is refused and the refusal names the objections; with it the merge
+ * is queued and the override is audited. It is a separate flag rather than a
+ * silent retry for the same reason `acknowledgeRunHistoryLoss` and
+ * `acknowledgeCiChange` are: the second call has to be a different statement from
+ * the first, or the refusal is decoration.
+ */
+ enqueue: oc
+.input(z.object({ agentRunId: z.string, overrideBlockers: z.boolean.optional }))
+.output(MergeQueueEntrySchema),
 
  /** Only while still `queued` — a merge already running cannot be called back. */
  cancel: oc.input(z.object({ entryId: z.string })).output(MergeQueueEntrySchema),

@@ -98,6 +98,32 @@ export const createPlannerTool = : PlannerToolHandle => {
  'dependency fails is skipped rather than run. Dependencies must not ' +
  'form a cycle — a plan containing one is refused whole.',
 ),
+ /**
+ * The reviewing role. The description has to carry what makes this different from
+ * `dependsOn`, because to a model the two look interchangeable — both mean
+ * "after that one" — and only this one gets the reviewed branch checked out,
+ * drops path ownership, and can stop a merge.
+ *
+ * It states the no-paths rule explicitly rather than letting the plan be
+ * refused for it: the refusal is clear, but it costs a whole submission, and
+ * a planner told "reviewers own no paths" up front does not make the mistake.
+ */
+ reviews: z
+.number
+.int
+.optional
+.describe(
+ 'The index of another subtask in this array (0-based) that this ' +
+ 'subtask *reviews*, rather than merely follows. Use it for a checking ' +
+ 'role — "QA tests what the engineer built", "the security reviewer ' +
+ 'reads the new endpoint". A reviewer starts with the reviewed ' +
+ "worker's branch checked out, so it reads the real code; it must " +
+ 'claim no paths of its own, and it reports with the write_note tool ' +
+ 'as a "finding" or, if the work must not merge as it stands, a ' +
+ '"blocker" — which stops that branch reaching the merge queue until a ' +
+ 'human overrides it. Do not use it for work that writes code; that is ' +
+ 'an ordinary subtask with dependsOn.',
+),
  }),
 )
 .min(1)

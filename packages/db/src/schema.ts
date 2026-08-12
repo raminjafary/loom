@@ -721,6 +721,13 @@ export const planSubtask = pgTable(
  personaName: text('persona_name').notNull,
  paths: jsonb('paths').$type<string[]>.notNull.default([]),
  dependsOn: jsonb('depends_on').$type<number[]>.notNull.default([]),
+ /**
+ * Which sibling subtask this one reviews, by `position`.
+ * Null for every ordinary subtask. The reviewed position is also present in
+ * `dependsOn` — the scheduler reads that, and this says *why* the edge is there,
+ * which is what decides the child's `relation`, its clone and its path ownership.
+ */
+ reviews: integer('reviews'),
  /** 'waiting' | 'started' | 'skipped' | 'refused'. */
  status: text('status').notNull.default('waiting'),
  /** Set when `status` becomes 'started'. */

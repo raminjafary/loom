@@ -17,9 +17,34 @@ const emit = defineEmits<{
  keep: [agentRunId: string]
  discard: [agentRunId: string]
  push: [agentRunId: string, acknowledgeCiChange: boolean]
- merge: [agentRunId: string]
+ /**
+ * Queues the branch. `override` answers a reviewer's blocker,
+ * and `done` carries the server's refusal back *here* rather than into the app's
+ * error banner: the refusal is a question — "your reviewer says do not merge this" —
+ * and it has to be readable next to the button that asked it.
+ */
+ merge: [
+ agentRunId: string,
+ override: boolean,
+ done: (result: { ok: boolean; reason: string | null }) => void,
+ ]
  'load-raw': [agentRunId: string, done: (result: { lines: string[]; chunks: number }) => void]
 }>
+
+/**
+ * Why the last queue attempt was refused — a reviewer's blockers, in the reviewer's own
+ * words. Cleared on any new attempt and when the run changes, so a
+ * previous run's objection can never be read as this one's.
+ */
+const mergeRefusal = ref<string | null>(null)
+
+const queueForMerge = (override: boolean) => {
+ if (!props.run) return
+ mergeRefusal.value = null
+ emit('merge', props.run.id, override, (result) => {
+ mergeRefusal.value = result.ok ? null: result.reason
+ })
+}
 
 /**
  * The raw transcript is fetched only when asked for. It is the verbatim provider stream — far
@@ -44,6 +69,7 @@ watch(
  => props.run?.id,
  => {
  raw.value = null
+ mergeRefusal.value = null
  },
 )
 
@@ -198,7 +224,7 @@ const canDecideDisposition = =>
  branch behind others, so a label promising a merge
  here would describe something that has not happened.
  -->
- <button type="button" class="primary" @click="emit('merge', props.run.id)">
+ <button type="button" class="primary" @click="queueForMerge(false)">
  Queue for merge
  </button>
  <button type="button" @click="emit('push', props.run.id, false)">Push &amp; open PR</button>
@@ -206,6 +232,22 @@ const canDecideDisposition = =>
  Push anyway (CI/workflow changes)
  </button>
  </footer>
+ <!--
+ A reviewer's blocker refusing the queue — the one place
+ the swarm's notes ledger gates an action rather than informing one. Rendered
+ where the refused button is, with the override beside it: the blocker is a
+ model's judgement, so overriding it is the human's to do, and it is stated
+ here rather than buried in a banner. Plain interpolation, never markup — the
+ text quotes an agent's own note.
+ -->
+ <p v-if="mergeRefusal" class="blocked">
+ {{ mergeRefusal }}
+ <ConfirmButton
+ label="Queue anyway"
+ confirm-label="Merge past the reviewer's objection"
+ @confirm="queueForMerge(true)"
+ />
+ </p>
  <p v-else-if="props.run.branchDisposition" class="review-foot note">
  Branch {{ props.run.branchDisposition }}.
  </p>
@@ -406,6 +448,25 @@ button:disabled {
  margin: 0;
  font-size: 0.85rem;
  color: var(--text-faint);
+}
+
+/**
+ * `pre-wrap`, because the refusal is a list of a reviewer's objections and its newlines
+ * are its structure — collapsed, three blockers read as one sentence.
+ */
+.blocked {
+ display: flex;
+ flex-direction: column;
+ align-items: flex-start;
+ gap: 0.5rem;
+ margin: 0;
+ padding: 0.7rem 0.9rem;
+ border-top: 1px solid var(--border);
+ font-size: 0.85rem;
+ line-height: 1.45;
+ white-space: pre-wrap;
+ color: var(--text);
+ background: color-mix(in oklab, var(--warn) 8%, transparent);
 }
 
 button.primary {
