@@ -47,6 +47,7 @@ import {
  listRunners,
  listRunsNeedingAttention,
  listTreeNotes,
+ parsePersonaDraft,
  pauseAllRuns,
  postMessage,
  pushAgentRun,
@@ -459,6 +460,10 @@ export const router = os.router({
  personaId: asAgentPersonaId(input.personaId),
  }),
 ),
+),
+
+ parse: os.persona.parse.handler(({ input }) =>
+ guard(async => parsePersonaDraft({ markdownSource: input.markdownSource })),
 ),
 
  create: os.persona.create.handler(({ context, input }) =>

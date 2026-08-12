@@ -758,6 +758,7 @@ onBeforeUnmount( => {
  @warm-cache="(repositoryId, done) => void agent.warmCache(repositoryId).then(done)"
  @create-persona="(markdownSource) => agent.createPersona(markdownSource)"
  @update-persona="(input) => agent.updatePersona(input)"
+ @parse-persona="(source, done) => void agent.parsePersona(source).then(done)"
  @register="(input) => agent.registerCapability(input)"
  @remove="(capabilityId) => agent.removeCapability(capabilityId)"
  @attach="(input) => agent.attachCapability(input)"

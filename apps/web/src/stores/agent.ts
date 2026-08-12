@@ -42,6 +42,7 @@ export const useAgentStore = defineStore('agent', () => {
       displayName: string
     }) => session.createRepository(input),
     createPersona: (markdownSource: string) => session.createPersona(markdownSource),
+    parsePersona: (markdownSource: string) => session.parsePersona(markdownSource),
     updatePersona: (input: { personaId: string; markdownSource: string }) =>
       session.updatePersona(input),
     deletePersona: (personaId: string) => session.deletePersona(personaId),

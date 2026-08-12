@@ -248,6 +248,102 @@ describe('removal over HTTP', => {
  expect(personas.map((p) => p.name)).not.toContain('disposable')
  })
 
+ /**
+ * The persona form reads the format through this procedure rather than owning a
+ * parser. What it must never do is answer differently
+ * from a save — a form populated by a lenient preview would show settings the write
+ * path then stores otherwise.
+ */
+ describe('persona.parse', => {
+ const markdown = (frontmatter: string[], body = 'Do a thing.') =>
+ ['---',...frontmatter, '---', '', body].join('\n')
+
+ it('reads a valid draft into the same fields a save would store', async => {
+ const source = markdown([
+ 'name: previewed',
+ 'description: a draft',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read, Bash]',
+ 'harness:',
+ ' autoApprove: true',
+ ' budgetCapUsd: 3',
+ ])
+ const draft = await client.persona.parse({ markdownSource: source })
+ expect(draft.ok).toBe(true)
+ expect(draft.problems).toEqual([])
+ expect(draft.parsed?.tools).toEqual(['Read', 'Bash'])
+ expect(draft.parsed?.harnessAutoApprove).toBe(true)
+ expect(draft.parsed?.harnessBudgetCapUsd).toBe(3)
+
+ const created = await client.persona.create({ markdownSource: source })
+ expect(created.tools).toEqual(draft.parsed?.tools)
+ expect(created.harnessAutoApprove).toBe(draft.parsed?.harnessAutoApprove)
+ expect(created.harnessBudgetCapUsd).toBe(draft.parsed?.harnessBudgetCapUsd)
+ await client.persona.delete({ personaId: created.id })
+ })
+
+ it('reports an unparseable draft rather than throwing at a human mid-keystroke', async => {
+ const draft = await client.persona.parse({ markdownSource: 'no frontmatter here' })
+ expect(draft.ok).toBe(false)
+ expect(draft.parsed).toBeNull
+ expect(draft.problems[0]).toContain('frontmatter')
+ })
+
+ it('reports the same planner refusal a save raises', async => {
+ const source = markdown([
+ 'name: bad-planner',
+ 'description: a planner that can act',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read, Bash]',
+ 'harness:',
+ ' planner: true',
+ ])
+ const draft = await client.persona.parse({ markdownSource: source })
+ expect(draft.ok).toBe(false)
+ expect(draft.problems[0]).toContain('Bash')
+ // The preview and the write path must agree about this, not merely both refuse.
+ await expect(client.persona.create({ markdownSource: source })).rejects.toThrow
+ })
+ })
+
+ /**
+ * `personas.update` has never carried `name`, so a changed `name:` line used to
+ * store a markdown whose frontmatter disagreed with every surface that addresses
+ * the persona by name — silently.
+ */
+ it('refuses a rename rather than storing a markdown the row disagrees with', async => {
+ const created = await client.persona.create({
+ markdownSource: [
+ '---',
+ 'name: renameable',
+ 'description: about to be renamed',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'Do nothing.',
+ ].join('\n'),
+ })
+
+ await expect(
+ client.persona.update({
+ personaId: created.id,
+ markdownSource: created.markdownSource.replace('name: renameable', 'name: renamed'),
+ }),
+).rejects.toThrow
+
+ const stored = await client.persona.get({ personaId: created.id })
+ expect(stored.name).toBe('renameable')
+ expect(stored.markdownSource).toContain('name: renameable')
+
+ // An edit that leaves the name alone still works.
+ const edited = await client.persona.update({
+ personaId: created.id,
+ markdownSource: created.markdownSource.replace('about to be renamed', 'left alone'),
+ })
+ expect(edited.description).toBe('left alone')
+ await client.persona.delete({ personaId: created.id })
+ })
+
  it('refuses to remove a Runner that still has a repository bound', async => {
  const pairing = await client.runner.createPairingToken({ name: 'removable' })
  // Nothing bound yet, so this one goes.
@@ -331,7 +427,14 @@ describe('contract completeness', => {
  // and a client that could set it could launder its own text into the trusted
  // section of every later worker's prompt.
  expect(Object.keys(contract.workerNote)).toEqual(['listByTree', 'write', 'board'])
- expect(Object.keys(contract.persona)).toEqual(['list', 'get', 'create', 'update', 'delete'])
+ expect(Object.keys(contract.persona)).toEqual([
+ 'list',
+ 'get',
+ 'parse',
+ 'create',
+ 'update',
+ 'delete',
+ ])
  expect(Object.keys(contract.personaGroup)).toEqual(['list', 'create', 'update', 'delete'])
  expect(Object.keys(contract.agentRun)).toEqual([
  'start',

@@ -16,6 +16,7 @@ import {
  NotificationConfigSchema,
  NotificationTargetSchema,
  NotificationTransportSchema,
+ PersonaDraftSchema,
  PersonaGroupSchema,
  RepositorySchema,
  RunControlSchema,
@@ -286,6 +287,15 @@ export const contract = {
  list: oc.output(z.array(AgentPersonaSchema)),
 
  get: oc.input(z.object({ personaId: z.string })).output(AgentPersonaSchema),
+
+ /**
+ * Parses a candidate markdown without saving it, so the persona form and its
+ * raw-markdown toggle can show the *same* reading of a draft that a save would
+ * store. Read-only and workspace-free — it touches nothing.
+ */
+ parse: oc
+.input(z.object({ markdownSource: z.string.max(40_000) }))
+.output(PersonaDraftSchema),
 
  create: oc
 .input(z.object({ markdownSource: z.string.min(1).max(40_000) }))

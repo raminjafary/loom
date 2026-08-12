@@ -4,6 +4,7 @@ import type {
  Capability,
  DirectoryListing,
  PersonaCapability,
+ PersonaDraft,
  PersonaGroup,
  Repository,
  Runner,
@@ -57,6 +58,7 @@ const emit = defineEmits<{
  'delete-persona': [personaId: string]
  'create-persona': [markdownSource: string]
  'update-persona': [input: { personaId: string; markdownSource: string }]
+ 'parse-persona': [markdownSource: string, done: (draft: PersonaDraft) => void]
  register: [
  input: {
  kind: 'mcp' | 'skill'
@@ -158,9 +160,14 @@ onMounted( => scrim.value?.focus)
  <template v-else-if="tab === 'personas'">
  <PersonaEditor
 :personas="personas"
+:capabilities="capabilities"
+:attachments="capabilityAttachments"
  @create-persona="(source) => emit('create-persona', source)"
  @update-persona="(input) => emit('update-persona', input)"
  @delete-persona="(personaId) => emit('delete-persona', personaId)"
+ @attach="(input) => emit('attach', input)"
+ @detach="(input) => emit('detach', input)"
+ @parse="(source, done) => emit('parse-persona', source, done)"
  />
  <PersonaGroupPanel
 :personas="personas"

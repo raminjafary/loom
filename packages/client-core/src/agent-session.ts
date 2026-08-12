@@ -8,6 +8,7 @@ import type {
  PersonaCapability,
  MergeQueueEntry,
  NotificationConfig,
+ PersonaDraft,
  PersonaGroup,
  Repository,
  ResponseStyle,
@@ -231,6 +232,12 @@ export interface AgentSession {
  displayName: string
  }): Promise<void>
  createPersona(markdownSource: string): Promise<void>
+ /**
+ * Parses a draft without saving it. This is how a
+ * client reads the persona format: the same parser the write path uses, reached
+ * through the contract, so the form can never show fields a save would not store.
+ */
+ parsePersona(markdownSource: string): Promise<PersonaDraft>
  /**
  * Edits an existing persona, **including a built-in**.
  *
@@ -812,6 +819,20 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ personas })
  } catch (error) {
  patch({ error: errorMessage(error) })
+ }
+ },
+
+ /**
+ * Reads a draft with the server's own parser. Never patches `error`: an unparseable draft is what a
+ * human is *in the middle of typing*, and routing it to the session-wide error
+ * banner would put a red bar across the app on every keystroke. The problems
+ * come back to the caller, which renders them beside the textarea.
+ */
+ async parsePersona(markdownSource) {
+ try {
+ return await options.api.persona.parse({ markdownSource })
+ } catch (error) {
+ return { ok: false, problems: [errorMessage(error)], parsed: null }
  }
  },
 

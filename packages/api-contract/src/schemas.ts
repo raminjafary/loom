@@ -437,6 +437,42 @@ export const AgentPersonaSchema = z.object({
  updatedAt: z.date,
 })
 
+/**
+ * What the authoritative parser made of a candidate persona markdown, without
+ * saving it.
+ *
+ * This procedure exists so that **no client ever parses the persona format.** The
+ * form is populated from the same `parsePersonaMarkdown` the write path uses, so a
+ * human toggling between the form and the raw text cannot be shown fields that
+ * disagree with what a save would store. `models.ts` states the same rule for the
+ * model list and resolves it by duplication; a parser is too large a thing to
+ * duplicate, so it is reached through the contract instead.
+ *
+ * `problems` carries the refusals a save would raise — a missing required key, a
+ * planner holding an acting tool — as text rather than as a thrown error, because
+ * the point is to show them while the human is still typing.
+ */
+export const PersonaDraftSchema = z.object({
+ ok: z.boolean,
+ problems: z.array(z.string),
+ /** Null exactly when the frontmatter could not be parsed at all. */
+ parsed: z
+.object({
+ name: z.string,
+ description: z.string,
+ model: z.string,
+ tools: z.array(z.string),
+ systemPrompt: z.string,
+ harnessEffort: z.string.nullable,
+ harnessMaxTurns: z.number.nullable,
+ harnessAutoApprove: z.boolean,
+ harnessPlanner: z.boolean,
+ harnessDelegates: z.array(z.string),
+ harnessBudgetCapUsd: z.number.nullable,
+ })
+.nullable,
+})
+
 /** The persona model — organizational grouping of personas, not a Team/roster. */
 export const PersonaGroupSchema = z.object({
  id: z.string,
@@ -563,6 +599,7 @@ export type DirectoryEntry = z.infer<typeof DirectoryEntrySchema>
 export type DirectoryListing = z.infer<typeof DirectoryListingSchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
+export type PersonaDraft = z.infer<typeof PersonaDraftSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>
 export type RunControl = z.infer<typeof RunControlSchema>

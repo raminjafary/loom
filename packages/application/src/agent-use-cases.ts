@@ -333,14 +333,15 @@ export const listRunners = (
  * would make every attenuation check downstream meaningless, since its children
  * could then legitimately inherit it.
  */
-const assertPlannerToolsAreReadOnly = (parsed: {
+const plannerToolProblems = (parsed: {
  harnessPlanner: boolean
  tools: string[]
  harnessDelegates: string[]
-}): void => {
+}): string[] => {
+ const problems: string[] = []
  const acting = parsed.harnessPlanner ? actingTools(parsed.tools): []
  if (acting.length > 0) {
- throw new ValidationError(
+ problems.push(
  `A planner persona may only hold read-only tools (${PLANNER_READABLE_TOOLS.join(', ')}) — it decomposes rather than acting. Remove: ${acting.join(', ')}`,
 )
  }
@@ -348,10 +349,55 @@ const assertPlannerToolsAreReadOnly = (parsed: {
  // general way to hand children more than the parent holds, which is the exact
  // escalation the attenuation exists to prevent.
  if (!parsed.harnessPlanner && parsed.harnessDelegates.length > 0) {
- throw new ValidationError(
+ problems.push(
  'Only a planner persona may declare "harness.delegates" — it is the envelope its children are attenuated against.',
 )
  }
+ return problems
+}
+
+const assertPlannerToolsAreReadOnly = (parsed: {
+ harnessPlanner: boolean
+ tools: string[]
+ harnessDelegates: string[]
+}): void => {
+ const problems = plannerToolProblems(parsed)
+ if (problems[0]) throw new ValidationError(problems[0])
+}
+
+/**
+ * Reads a candidate persona markdown the way a save would, and reports rather than
+ * throws.
+ *
+ * The point of this existing at all is that **the client does not own a second
+ * parser**. `models.ts` in `client-core` states the rule a client follows — depend on
+ * the contract, never on the domain — and duplicates a four-entry price list to keep
+ * it; a frontmatter parser cannot be duplicated the same way without the form and the
+ * stored row eventually disagreeing about what a human wrote.
+ *
+ * Not actor-gated the way `createPersona` is: it neither reads nor writes workspace
+ * state, so there is nothing here for an actor check to protect. It is still only
+ * reachable by an authenticated principal, like every other procedure.
+ */
+export const parsePersonaDraft = (input: {
+ markdownSource: string
+}): {
+ ok: boolean
+ problems: string[]
+ parsed: ReturnType<typeof parsePersonaMarkdown> | null
+} => {
+ let parsed: ReturnType<typeof parsePersonaMarkdown>
+ try {
+ parsed = parsePersonaMarkdown(input.markdownSource)
+ } catch (error) {
+ return {
+ ok: false,
+ problems: [error instanceof Error ? error.message: 'Persona markdown could not be parsed'],
+ parsed: null,
+ }
+ }
+ const problems = plannerToolProblems(parsed)
+ return { ok: problems.length === 0, problems, parsed }
 }
 
 /** Human-only, same reasoning as bindRepository — a persona is an administrative artifact, not something a run edits about itself. */
@@ -454,6 +500,24 @@ export const updatePersona = async (
  }
  const parsed = parsePersonaMarkdown(input.markdownSource)
  assertPlannerToolsAreReadOnly(parsed)
+ /**
+ * A rename is refused rather than silently dropped. `personas.update` has never
+ * carried `name`, so editing the `name:` line stored a markdown whose frontmatter
+ * disagreed with the row every other surface reads — and nothing said so.
+ *
+ * Refusing rather than implementing it, because a persona's name *is* its address:
+ * `@mention` resolves it, the delegation roster names it to a Planner, the merge
+ * queue looks the reconciler up by name, and `seedBuiltinPersonas` skips by name —
+ * so a renamed built-in comes back on the next workspace resolution alongside its
+ * rename. Creating a second persona is the honest way to get a different name.
+ */
+ const existing = await deps.personas.findById(input.workspaceId, input.personaId)
+ if (!existing) throw new NotFoundError('AgentPersona')
+ if (parsed.name !== existing.name) {
+ throw new ValidationError(
+ `A persona's name cannot be changed — "${existing.name}" is how @mention, the delegation roster and the merge queue address it. Create a new persona instead.`,
+)
+ }
  return deps.personas.update(input.workspaceId, input.personaId, {
  description: parsed.description,
  markdownSource: input.markdownSource,
