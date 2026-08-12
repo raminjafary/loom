@@ -22,6 +22,7 @@ import type {
  AgentRunCostRollup,
  AgentRunEventRepositoryPort,
  AgentRunRepositoryPort,
+ NoteReadRepositoryPort,
  RunDispatchPort,
  WorkerNoteRepositoryPort,
 } from './agent-ports.js'
@@ -50,6 +51,15 @@ export interface NoteDeps {
  * (a test, a read-only context) writes notes exactly as before.
  */
  readonly dispatch?: RunDispatchPort
+ /**
+ * Who read whose notes.
+ *
+ * Optional for the same reason `dispatch` is: a ledger is assembled whether or not the
+ * edge can be recorded, and a caller without this (a test, a read-only context) builds
+ * context exactly as before. Bookkeeping about a read must never be able to fail the
+ * read.
+ */
+ readonly noteReads?: NoteReadRepositoryPort
 }
 
 /**
@@ -62,6 +72,48 @@ export interface NoteDeps {
  * request rather than degrade it.
  */
 const MAX_TREE_DEPTH = 16
+
+/**
+ * Records that a run was shown notes written by others.
+ *
+ * Only `agent_run` authors, and never the reader itself. A platform note has no author
+ * run to draw an edge to, a human's note is about the tree rather than any one run, and a
+ * run reading its own note back is not an interaction between two runs — drawing any of
+ * those would fill the graph with edges that say nothing about who learned from whom.
+ *
+ * Every failure is swallowed. An edge that could not be recorded costs a line on a graph;
+ * a read that failed because of it would cost the run its context.
+ */
+const recordNoteReads = async (
+ deps: NoteDeps,
+ input: {
+ workspaceId: WorkspaceId
+ treeRunId: AgentRunId
+ readerRunId: AgentRunId
+ notes: readonly WorkerNote[]
+ },
+): Promise<void> => {
+ if (!deps.noteReads) return
+ const authorRunIds = [
+...new Set(
+ input.notes
+.filter((note) => note.authorKind === 'agent_run' && note.agentRunId !== null)
+.map((note) => note.agentRunId!)
+.filter((authorRunId) => authorRunId !== input.readerRunId),
+),
+ ]
+ if (authorRunIds.length === 0) return
+ try {
+ await deps.noteReads.recordReads({
+ workspaceId: input.workspaceId,
+ treeRunId: input.treeRunId,
+ readerRunId: input.readerRunId,
+ authorRunIds,
+ })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+}
 
 /**
  * The root of the tree a run belongs to — a Planner, or a parentless run being its
@@ -426,6 +478,23 @@ export const buildContextLedger = async (
  if (all.length === 0) return ''
 
  const { selected, elided } = selectNotesForContext(all)
+
+ /**
+ * The edge is recorded from what was *selected*, not from what the tree holds.
+ *
+ * Those differ, and the difference is the whole point: `selectNotesForContext` elides
+ * under the per-tree cap, so a note that was dropped was never shown to this run and an
+ * edge claiming otherwise would be a false record of what it knew. This is also the one
+ * funnel every read passes through — the ledger handed over at start and every
+ * mid-flight `read_notes` — so recording here covers both without a second call site.
+ */
+ await recordNoteReads(deps, {
+ workspaceId: input.workspaceId,
+ treeRunId,
+ readerRunId: input.run.id,
+ notes: selected,
+ })
+
  const rendered = renderNotesForPrompt(selected, elided)
  if (elided === 0) return rendered
 
@@ -533,6 +602,18 @@ export interface SwarmBoard {
  readonly cards: SwarmBoardCard[]
  /** Pairs of cards whose owned paths collide — the merge conflicts to expect. */
  readonly pathCollisions: { readonly titles: [string, string]; readonly paths: string[] }[]
+ /**
+ * Who read whose notes.
+ *
+ * On the board's payload rather than a second endpoint, because it is the same
+ * question the board already answers — what is this swarm doing — and a separate fetch
+ * would be a second source of truth for one tree's shape.
+ */
+ readonly noteReads: {
+ readonly readerRunId: AgentRunId
+ readonly authorRunId: AgentRunId
+ readonly readCount: number
+ }[]
 }
 
 export const getSwarmBoard = async (
@@ -618,7 +699,22 @@ export const getSwarmBoard = async (
  }
  })
 
- return { treeRunId, cards, pathCollisions: collidingCards(cards) }
+ /**
+ * Swallowed, and last: a board that failed to load because an interaction edge could
+ * not be read would trade the surface a human is watching for a line on it.
+ */
+ let noteReads: SwarmBoard['noteReads'] = []
+ try {
+ noteReads = (await deps.noteReads?.listByTree(input.workspaceId, treeRunId))?.map((edge) => ({
+ readerRunId: edge.readerRunId,
+ authorRunId: edge.authorRunId,
+ readCount: edge.readCount,
+ })) ?? []
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+
+ return { treeRunId, cards, pathCollisions: collidingCards(cards), noteReads }
 }
 
 /**

@@ -48,6 +48,7 @@ describe('buildSwarmGraph roles', => {
  card({ runId: 'unit', parentRunId: 'area', relation: 'delegation' }),
  ],
  pathCollisions: [],
+ noteReads: [],
  }, [])
  const roleOf = (id: string) => graph.nodes.find((node) => node.card.runId === id)?.role
  expect(roleOf('root')).toBe('planner')
@@ -64,6 +65,7 @@ describe('buildSwarmGraph roles', => {
  treeRunId: 'root',
  cards: [card({ runId: 'root' })],
  pathCollisions: [],
+ noteReads: [],
  }, [])
  expect(graph.nodes[0]?.role).toBe('worker')
  })
@@ -371,5 +373,36 @@ describe('buildSwarmGraph merge queue', => {
  expect(graph.width).toBeGreaterThanOrEqual(2)
  // Two run layers, plus the entry band, plus the verification band under it.
  expect(graph.depth).toBe(4)
+ })
+})
+
+describe('buildSwarmGraph: note-read edges', => {
+ const twoRuns = (noteReads: { readerRunId: string; authorRunId: string; readCount: number }[]) =>
+ buildSwarmGraph(
+ {
+ treeRunId: 'root',
+ cards: [card({ runId: 'root', parentRunId: null }), card({ runId: 'child', parentRunId: 'root' })],
+ pathCollisions: [],
+ noteReads,
+ },
+ [],
+)
+
+ it('draws reader → author, so the arrow reads "got this from"', => {
+ const graph = twoRuns([{ readerRunId: 'child', authorRunId: 'root', readCount: 1 }])
+ const edge = graph.edges.find((e) => e.kind === 'note_read')
+
+ expect(edge?.from).toBe('child')
+ expect(edge?.to).toBe('root')
+ })
+
+ it('says how many times, because once and repeatedly are different facts', => {
+ const graph = twoRuns([{ readerRunId: 'child', authorRunId: 'root', readCount: 4 }])
+ expect(graph.edges.find((e) => e.kind === 'note_read')?.detail).toContain('4 times')
+ })
+
+ it('skips an edge whose end is not on the board rather than drawing to nowhere', => {
+ const graph = twoRuns([{ readerRunId: 'child', authorRunId: 'cascaded-away', readCount: 1 }])
+ expect(graph.edges.some((e) => e.kind === 'note_read')).toBe(false)
  })
 })

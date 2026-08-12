@@ -10,6 +10,7 @@ import type {
  PlanSubtaskRepositoryPort,
  RepositoryRepositoryPort,
  RunLiveActivity,
+ NoteReadRepositoryPort,
  RunnerRepositoryPort,
  SubjectMapRepositoryPort,
  WorkerNoteRepositoryPort,
@@ -67,6 +68,7 @@ import {
  runner,
  thread,
  masteryCheckpoint,
+ noteReadEdge,
  subjectMap,
  subjectMapEdge,
  subjectMapNode,
@@ -1655,6 +1657,49 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  nodeCount: row.nodeCount,
  edgeCount: row.edgeCount,
  spendUsd: row.spendUsd,
+ }))
+ },
+})
+
+/**
+ * Note-read edges. See the `note_read_edge` table for why this is an edge
+ * per pair rather than a row per read.
+ */
+export const noteReadRepository = (db: Database): NoteReadRepositoryPort => ({
+ async recordReads(input) {
+ if (input.authorRunIds.length === 0) return
+ const now = new Date
+ await db
+.insert(noteReadEdge)
+.values(
+ [...new Set(input.authorRunIds)].map((authorRunId) => ({
+ workspaceId: input.workspaceId,
+ treeRunId: input.treeRunId,
+ readerRunId: input.readerRunId,
+ authorRunId,
+ lastReadAt: now,
+ })),
+)
+.onConflictDoUpdate({
+ target: [noteReadEdge.workspaceId, noteReadEdge.readerRunId, noteReadEdge.authorRunId],
+ // `firstReadAt` is deliberately untouched: "when did this run first learn from
+ // that one" is the answer the edge exists to keep, and an upsert that moved it
+ // would replace it with "most recently".
+ set: { readCount: sql`${noteReadEdge.readCount} + 1`, lastReadAt: now },
+ })
+ },
+
+ async listByTree(workspaceId, treeRunId) {
+ const rows = await db
+.select
+.from(noteReadEdge)
+.where(and(eq(noteReadEdge.workspaceId, workspaceId), eq(noteReadEdge.treeRunId, treeRunId)))
+.orderBy(noteReadEdge.firstReadAt)
+ return rows.map((row) => ({
+ readerRunId: asAgentRunId(row.readerRunId),
+ authorRunId: asAgentRunId(row.authorRunId),
+ readCount: row.readCount,
+ lastReadAt: row.lastReadAt,
  }))
  },
 })

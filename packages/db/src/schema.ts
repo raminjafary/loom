@@ -922,3 +922,46 @@ export const masteryCheckpoint = pgTable(
  },
  (t) => [index('mastery_checkpoint_map_idx').on(t.workspaceId, t.mapId, t.seq)],
 )
+
+/**
+ * Who read whose notes.
+ *
+ * Live swarm observability names this gap exactly: "The tree renders parentage; what it does not render is
+ * *interaction* — who read whose notes, whose branch a reconciler is merging, which
+ * cards claim colliding paths." Collisions became edges; this is the other half.
+ *
+ * **An edge per pair, not a row per read.** A worker calls `read_notes` repeatedly and a
+ * ledger carries dozens of notes, so recording each read would produce thousands of rows
+ * describing one relationship — and the graph wants the relationship. `readCount` counts
+ * the reads behind the edge, which is the only part of the volume worth keeping: "read
+ * this sibling's notes once" and "kept coming back to them" are different facts about a
+ * swarm.
+ *
+ * Both ends cascade with their run, because an edge to a run that no longer exists
+ * cannot be drawn and would only ever be filtered out at read time.
+ */
+export const noteReadEdge = pgTable(
+ 'note_read_edge',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ treeRunId: uuid('tree_run_id')
+.notNull
+.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+ readerRunId: uuid('reader_run_id')
+.notNull
+.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+ authorRunId: uuid('author_run_id')
+.notNull
+.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+ readCount: integer('read_count').notNull.default(1),
+ firstReadAt: timestamp('first_read_at', { withTimezone: true }).notNull.defaultNow,
+ lastReadAt: timestamp('last_read_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ uniqueIndex('note_read_edge_pair_idx').on(t.workspaceId, t.readerRunId, t.authorRunId),
+ index('note_read_edge_tree_idx').on(t.workspaceId, t.treeRunId),
+ ],
+)

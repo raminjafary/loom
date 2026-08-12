@@ -2280,6 +2280,39 @@ Decompose and delegate.`
  * The worker-notes design mitigation, end to end: agent-authored prose reaches a *reader*
  * inside an untrusted fence, with the platform's own facts in a separate section.
  */
+ /**
+ * The "Edges, not just nodes": the tree renders parentage, not interaction. This is
+ * the recording half — an edge exists only because one run was actually shown another's
+ * notes, and it is recorded from what the ledger *selected*, never from what the tree
+ * holds.
+ */
+ it('never records a run reading its own notes as an interaction', async => {
+ const { socket, runnerId } = await pairFakeRunner('note-read-edge')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'note-read-edge' })
+
+ const { run: author } = await startRunVia(socket, created.rootThread.id, repo.id, testPersonaId)
+ await writeNoteAsAgent(socket, author.id, {
+ kind: 'finding',
+ title: 'Migrations are generated',
+ body: 'Never hand-written.',
+ })
+
+ const requestId = 'own-read'
+ const answered = nextFrame(
+ socket,
+ (v) => v.type === 'notes_result' && v.requestId === requestId,
+)
+ socket.send(JSON.stringify({ type: 'notes_requested', runId: author.id, requestId }))
+ await answered
+
+ // A run reading its own note back is not an interaction between two runs, and an
+ // edge for it would put a self-loop on every card on the graph.
+ const board = await client.workerNote.board({ agentRunId: author.id })
+ expect(board.noteReads).toEqual([])
+ socket.close
+ })
+
  it('renders the ledger for a mid-run read, fencing agent prose', async => {
  const { socket, runnerId } = await pairFakeRunner('notes-read')
  const repo = await bindViaFakeRunner(socket, runnerId)

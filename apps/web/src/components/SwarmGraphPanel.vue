@@ -293,6 +293,20 @@ const edgePath = (fromId: string, toId: string, kind: SwarmEdgeKind): string => 
  const to = positions.value.get(toId)
  if (!from || !to) return ''
 
+ /**
+ * A note-read edge is routed *above* the nodes, mirroring the collision arc below.
+ *
+ * Both join runs that are not parent and child, so both would cut through the layer if
+ * drawn like a delegation — and putting them on opposite sides is what keeps them
+ * distinguishable at a glance: what a swarm already shared is drawn over it, what it is
+ * about to collide over is drawn under it.
+ */
+ if (kind === 'note_read') {
+ const [a, b] = from.cx <= to.cx ? [from, to]: [to, from]
+ const y = Math.min(a.cy - a.h / 2, b.cy - b.h / 2) - 22
+ return `M ${a.cx} ${a.cy - a.h / 2} C ${a.cx} ${y}, ${b.cx} ${y}, ${b.cx} ${b.cy - b.h / 2}`
+ }
+
  if (kind === 'collision') {
  const [a, b] = from.cx <= to.cx ? [from, to]: [to, from]
  const y = Math.max(a.cy + a.h / 2, b.cy + b.h / 2) + 22
@@ -536,6 +550,7 @@ const collisionCount = computed(
  <li><span class="swatch reconcile"></span>reconcile</li>
  <li><span class="swatch steer"></span>steer</li>
  <li><span class="swatch collision"></span>path collision</li>
+ <li><span class="swatch note_read"></span>read their notes</li>
  <!-- Only shown when there is a queue to explain: a legend entry for an
  absent band is a promise the canvas is not keeping. -->
  <li v-if="graph.queue.length > 0"><span class="swatch queue"></span>merge queue</li>
@@ -972,6 +987,11 @@ header button:disabled {
  border-color: var(--danger);
 }
 
+.swatch.note_read {
+ border-top-style: dashed;
+ border-color: var(--ok, var(--text-faint));
+}
+
 .swatch.queue {
  border-color: var(--text-faint);
 }
@@ -1019,6 +1039,16 @@ header button:disabled {
 .edge.steer {
  stroke: var(--warn, var(--accent));
  stroke-dasharray: 2 3;
+}
+
+/* Faint and dashed: a note-read says what a swarm already shared. It is deliberately
+ the quietest edge on the canvas — it is the most numerous once a swarm gets going, and
+ the tree's own shape has to stay the loudest thing here. */
+.edge.note_read {
+ stroke: var(--ok, var(--text-faint));
+ stroke-dasharray: 3 4;
+ stroke-width: 1.25;
+ opacity: 0.65;
 }
 
 /* Dashed and red: the one edge that is a warning rather than a fact about structure. */

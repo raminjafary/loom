@@ -425,6 +425,19 @@ export const SwarmBoardCardSchema = z.object({
  contextMaxTokens: z.number.int.nullable,
 })
 
+/**
+ * One run having been shown another's notes.
+ *
+ * The complaint is that the tree renders parentage but not *interaction*. Collisions
+ * became edges; this is who learned from whom.
+ */
+export const NoteReadEdgeSchema = z.object({
+ readerRunId: z.string,
+ authorRunId: z.string,
+ /** Reads behind the edge — "read it once" and "kept coming back" are different facts. */
+ readCount: z.number,
+})
+
 export const SwarmBoardSchema = z.object({
  treeRunId: z.string,
  cards: z.array(SwarmBoardCardSchema),
@@ -432,6 +445,7 @@ export const SwarmBoardSchema = z.object({
  pathCollisions: z.array(
  z.object({ titles: z.tuple([z.string, z.string]), paths: z.array(z.string) }),
 ),
+ noteReads: z.array(NoteReadEdgeSchema),
 })
 
 /**

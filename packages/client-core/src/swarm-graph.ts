@@ -28,6 +28,14 @@ export type SwarmEdgeKind =
  | 'reconcile'
  | 'steer'
  | 'collision'
+ /**
+ * One run was shown another's notes.
+ *
+ * The only edge here that points *backwards* in the flow of work: delegation runs
+ * parent→child and a collision is mutual, but a reader learns from someone who wrote
+ * earlier. Drawn reader→author, so the arrow reads "got this from".
+ */
+ | 'note_read'
  /** A run's branch to the merge-queue entry holding it. */
  | 'queue'
  /** That entry to its verification. */
@@ -288,6 +296,28 @@ export const buildSwarmGraph = (
  to: right[0]!,
  kind: 'collision',
  detail: collision.paths.join(', '),
+ })
+ }
+
+ /**
+ * Note-read edges. The board reports them by run id, which is already
+ * what a graph needs — unlike collisions, which arrive as titles and have to be
+ * resolved back.
+ *
+ * An edge whose reader or author is not on this board is skipped rather than drawn to
+ * a node that is not there. That happens legitimately: a run's row can be cascaded
+ * away while its edges survive on a tree that is still being watched.
+ */
+ for (const read of board?.noteReads ?? []) {
+ if (!byId.has(read.readerRunId) || !byId.has(read.authorRunId)) continue
+ edges.push({
+ from: read.readerRunId,
+ to: read.authorRunId,
+ kind: 'note_read',
+ detail:
+ read.readCount === 1
+ ? 'read their notes'
+: `read their notes ${read.readCount} times`,
  })
  }
 

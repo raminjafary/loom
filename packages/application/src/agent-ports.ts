@@ -997,3 +997,32 @@ export interface SubjectMapRepositoryPort {
  }): Promise<MasteryCheckpoint>
  listCheckpoints(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<MasteryCheckpoint[]>
 }
+
+/**
+ * Who read whose notes.
+ *
+ * Its own port rather than methods on `WorkerNoteRepositoryPort` because it records a
+ * *relationship between runs*, not a note: nothing here reads or writes note content,
+ * and the board draws it beside the collision edges rather than in the ledger.
+ */
+export interface NoteReadRepositoryPort {
+ /**
+ * Records that one run read notes authored by others. Idempotent per pair — a repeat
+ * increments the count rather than adding a row, because the graph wants the
+ * relationship and the count is the only part of the volume worth keeping.
+ */
+ recordReads(input: {
+ workspaceId: WorkspaceId
+ treeRunId: AgentRunId
+ readerRunId: AgentRunId
+ authorRunIds: readonly AgentRunId[]
+ }): Promise<void>
+ listByTree(workspaceId: WorkspaceId, treeRunId: AgentRunId): Promise<NoteReadEdge[]>
+}
+
+export interface NoteReadEdge {
+ readonly readerRunId: AgentRunId
+ readonly authorRunId: AgentRunId
+ readonly readCount: number
+ readonly lastReadAt: Date
+}
