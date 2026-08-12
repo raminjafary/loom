@@ -8,7 +8,7 @@
     "start": "tsx --env-file=../../.env src/main.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://loom:loom@localhost:5432/loom_test_gateway} vitest run"
   },
   "dependencies": {
     "@fastify/websocket": "^11.2.0",

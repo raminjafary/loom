@@ -21,12 +21,22 @@ pnpm db:migrate # apply schema
 
 Copy `.env.example` to `.env` and set a real `BETTER_AUTH_SECRET` (`openssl rand -base64 32`).
 
-Create a second database for the integration test suite — it truncates domain tables and must never point at the one above:
+Create the test databases. They truncate domain tables and must never point at the one above:
 
 ```bash
-docker compose exec postgres psql -U loom -d loom -c "CREATE DATABASE loom_test;"
-DATABASE_URL=postgres://loom:loom@localhost:5432/loom_test pnpm db:migrate
+pnpm db:test:prepare
 ```
+
+**One database per test package**, not one shared `loom_test`: `packages/db`, `apps/server`
+and `apps/ws-gateway` run concurrently under turbo and each truncates tables the others
+are mid-way through using — `packages/db` truncates `workspace`, which cascades to nearly
+every domain table. Sharing one database made `pnpm test` fail for reasons unrelated to
+whatever was being changed, which trains you to re-run rather than to read. `loom_test`
+is still created and migrated because the live drivers in `tools/` default to it.
+
+**Re-run `pnpm db:test:prepare` after generating a migration** — it applies to every test
+database as well as creating any that are missing. A migration applied only to `loom`
+shows up as integration tests timing out rather than as a missing-table error.
 
 Run the three core processes (separate terminals, or `pnpm dev` via Turborepo):
 
