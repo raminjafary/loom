@@ -6,6 +6,7 @@ import {
  composerNodes,
  connectVerdict,
  layoutForGroup,
+ plannerLikeMarkdown,
  withWiderEnvelope,
  type ComposerEdge,
  type ConnectVerdict,
@@ -57,6 +58,16 @@ const emit = defineEmits<{
  },
  ]
  'update-persona': [input: { personaId: string; markdownSource: string }]
+ /**
+ * Author a new persona from the canvas.
+ *
+ * The callback returns the created persona's id so the composer can put it on the team
+ * in the same gesture — creating one and then hunting for it in the Add list would be
+ * the trip to Settings with extra steps.
+ */
+ 'create-persona': [
+ input: { markdownSource: string; done: (personaId: string | null) => void },
+ ]
 }>
 
 const selectedGroupId = ref(props.groups[0]?.id ?? '')
@@ -319,6 +330,41 @@ const onFleetInput = (personaId: string, event: Event) => {
  setFleet(personaId, Math.min(size, MAX_FLEET_SIZE))
 }
 
+/**
+ * The planner a new one is modelled on: the team's own, so the copy inherits the envelope
+ * the rest of this team was designed against. Null on a team with no planner, where
+ * "another planner" is not the thing being asked for.
+ */
+const plannerTemplate = computed( => members.value.find((persona) => persona.harnessPlanner) ?? null)
+
+const plannerName = ref('')
+const creatingPlanner = ref(false)
+
+/**
+ * Creates the persona and puts it on the team in one gesture. Two steps rather than one
+ * contract call because they are two facts — a persona exists in the workspace, and this
+ * team uses it — and conflating them would make a persona that could not be authored
+ * without joining a team.
+ */
+const addPlanner = => {
+ const template = plannerTemplate.value
+ const name = plannerName.value.trim
+ if (!template || name === '' || creatingPlanner.value) return
+ creatingPlanner.value = true
+ emit('create-persona', {
+ markdownSource: plannerLikeMarkdown(template, {
+ name,
+ description: `Plans and delegates one area, modelled on ${template.name}.`,
+ }),
+ done: (personaId) => {
+ creatingPlanner.value = false
+ if (personaId === null) return
+ plannerName.value = ''
+ addMember(personaId)
+ },
+ })
+}
+
 const available = computed( =>
  props.personas.filter((persona) => !(group.value?.personaIds ?? []).includes(persona.id)),
 )
@@ -507,6 +553,34 @@ const onKeydown = (event: KeyboardEvent) => {
  </ul>
  </section>
 
+ <!--
+ The fleet design: several planners on a team are several planner *personas*, one per
+ area, and authoring the second one belongs here. Offered only when the team
+ already has a planner to copy, because the copy is the point — a planner
+ authored with a narrower envelope than its siblings produces refusals two hops
+ from the mistake, and this is the surface where that is visible.
+ -->
+ <section v-if="plannerTemplate">
+ <h3>Another planner</h3>
+ <p class="fine">
+ One planner per area. This copies
+ <strong>{{ plannerTemplate.name }}</strong>'s model, tools and delegation
+ envelope, so the new area can do what that one can — edit it afterwards like
+ any persona.
+ </p>
+ <form class="new-planner" @submit.prevent="addPlanner">
+ <input
+ v-model="plannerName"
+ type="text"
+ placeholder="e.g. backend-planner"
+ aria-label="Name for the new planner"
+ />
+ <button type="submit":disabled="!plannerName.trim || creatingPlanner">
+ {{ creatingPlanner ? 'Creating…': 'Add planner' }}
+ </button>
+ </form>
+ </section>
+
  <section>
  <h3>Add</h3>
  <ul class="chips">
@@ -685,7 +759,11 @@ header h2 {
  min-width: 0;
  min-height: 0;
  border-right: 1px solid var(--border);
+ /* A column, so the recursion legend can sit *under* the canvas rather than beside it.
+ It was a row — flex's default — which made the legend a sibling column that took
+ width from the graph and printed itself across the top of it. */
  display: flex;
+ flex-direction: column;
 }
 
 .canvas-empty {
@@ -710,7 +788,10 @@ header h2 {
  */
 .canvas:deep(.vue-flow) {
  width: 100%;
- height: 100%;
+ /* `flex: 1` rather than `height: 100%`: in a column the graph takes what the legend
+ under it does not, and `min-height: 0` is what lets it shrink instead of overflowing. */
+ flex: 1 1 auto;
+ min-height: 0;
 }
 
 /*
@@ -877,6 +958,29 @@ header h2 {
 
 /* Narrow on purpose: it holds at most two digits, and a full-width field beside a name
  reads as the more important of the two. */
+.new-planner {
+ display: flex;
+ gap: 0.4rem;
+ margin-top: 0.4rem;
+}
+
+.new-planner button {
+ flex: 0 0 auto;
+ white-space: nowrap;
+}
+
+.new-planner input {
+ flex: 1 1 auto;
+ min-width: 0;
+ padding: 0.25rem 0.4rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text);
+ font: inherit;
+ font-size: 0.75rem;
+}
+
 .fleet {
  width: 3.2rem;
  padding: 0.1rem 0.25rem;
@@ -891,7 +995,10 @@ header h2 {
 /* Under the canvas rather than floating over it: the canvas is the thing being read, and
  a legend that covers a node is worse than one a reader has to glance down for. */
 .recursion-note {
- margin: 0.4rem 0 0;
+ flex: 0 0 auto;
+ margin: 0;
+ padding: 0.45rem 0.7rem;
+ border-top: 1px solid var(--border);
  line-height: 1.5;
 }
 

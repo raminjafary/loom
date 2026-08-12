@@ -42,6 +42,7 @@ export const useAgentStore = defineStore('agent', () => {
       displayName: string
     }) => session.createRepository(input),
     createPersona: (markdownSource: string) => session.createPersona(markdownSource),
+
     parsePersona: (markdownSource: string) => session.parsePersona(markdownSource),
     previewDelegation: (input: Parameters<typeof session.previewDelegation>[0]) =>
       session.previewDelegation(input),

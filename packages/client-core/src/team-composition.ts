@@ -213,3 +213,39 @@ export const withWiderEnvelope = (planner: AgentPersona, tools: readonly string[
  const delegates = [...new Set([...form.delegates,...tools])]
  return personaFormToMarkdown({...form, delegates })
 }
+
+/**
+ * A second planner persona, authored from the canvas.
+ *
+ * The fleet design is explicit that "the answer to 'how do I put several planners on a team' is
+ * not a fleet count — it is several planner **personas**, one per area", and that "the
+ * canvas should make authoring the second one a first-class act rather than a trip to
+ * Settings."
+ *
+ * **Modelled on an existing planner rather than on a blank form**, and that is the whole
+ * value of doing it here: a planner is the persona with the most that can be got wrong —
+ * the envelope decides what its whole subtree may hold, and a planner authored with a
+ * narrower one than its siblings produces refusals two hops away from the mistake. Copying
+ * the team's existing planner means the second area starts able to do what the first can.
+ *
+ * The name is the only thing a human must supply, because it is the only thing that must
+ * be unique and the only thing the model will be told to use. Everything else is a copy,
+ * and every part of it stays editable through the ordinary persona form afterwards — this
+ * writes markdown through the same serializer that form does, so there is one write path
+ * (the product shape: "through the same contract calls a markdown edit uses").
+ */
+export const plannerLikeMarkdown = (
+ template: AgentPersona,
+ input: { name: string; description: string },
+): string => {
+ const form = personaFormFromPersona(template)
+ return personaFormToMarkdown({
+...form,
+ name: input.name,
+ description: input.description,
+ // Asserted rather than assumed: the caller offers this beside a planner, and a copy
+ // of a worker that claimed to be a planner would be refused by the server for holding
+ // acting tools — a confusing way to learn the template was wrong.
+ planner: true,
+ })
+}

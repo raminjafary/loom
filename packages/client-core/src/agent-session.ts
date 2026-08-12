@@ -241,7 +241,12 @@ export interface AgentSession {
  name: string
  displayName: string
  }): Promise<void>
- createPersona(markdownSource: string): Promise<void>
+ /**
+ * Authors a persona. Returns its id, or null when the server refused — the composition
+ * canvas adds a newly authored planner to the team in the same gesture, and
+ * doing that by name against a refreshed list would be guessing.
+ */
+ createPersona(markdownSource: string): Promise<string | null>
  /**
  * Parses a draft without saving it. This is how a
  * client reads the persona format: the same parser the write path uses, reached
@@ -900,10 +905,15 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  async createPersona(markdownSource) {
  patch({ error: null })
  try {
- await options.api.persona.create({ markdownSource })
+ const persona = await options.api.persona.create({ markdownSource })
  patch(await readPersonasAndMatrix)
+ // The id is returned as well as stored, so a caller that has something to do with
+ // the new persona — the composition canvas puts it straight on the team
+ // — does not have to find it again by name in a refreshed list.
+ return persona.id
  } catch (error) {
  patch({ error: errorMessage(error) })
+ return null
  }
  },
 

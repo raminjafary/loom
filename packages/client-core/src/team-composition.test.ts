@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
  composerEdges,
  composerNodes,
+ plannerLikeMarkdown,
  connectVerdict,
  layoutForGroup,
  summarizeRefusals,
@@ -257,5 +258,52 @@ describe('composerNodes recursion', => {
  it('keeps the position a human chose', => {
  const nodes = composerNodes([persona({ id: 'p1' })], { p1: { x: 12, y: 34 } })
  expect(nodes[0]?.position).toEqual({ x: 12, y: 34 })
+ })
+})
+
+/**
+ * The fleet design: "the answer to 'how do I put several planners on a team'... is several
+ * planner **personas**, one per area", and "the canvas should make authoring the second
+ * one a first-class act rather than a trip to Settings."
+ */
+describe('plannerLikeMarkdown', => {
+ const lead = persona({
+ id: 'lead',
+ name: 'lead-planner',
+ harnessPlanner: true,
+ tools: ['Read', 'Grep'],
+ harnessDelegates: ['Read', 'Edit', 'Bash'],
+ model: 'claude-opus-5',
+ harnessBudgetCapUsd: 5,
+ })
+
+ it('copies the envelope, which is the whole reason to model it on an existing planner', => {
+ /**
+ * A planner authored with a narrower envelope than its siblings produces refusals two
+ * hops away from the mistake — the second area simply cannot reach the workers the
+ * first one can, and the failure surfaces as a refused child start.
+ */
+ const markdown = plannerLikeMarkdown(lead, { name: 'backend-planner', description: 'Backend.' })
+ expect(markdown).toContain('delegates: [Read, Edit, Bash]')
+ expect(markdown).toContain('planner: true')
+ expect(markdown).toContain('model: claude-opus-5')
+ expect(markdown).toContain('tools: [Read, Grep]')
+ })
+
+ it('takes the name and description from the human, since those are what must differ', => {
+ const markdown = plannerLikeMarkdown(lead, { name: 'backend-planner', description: 'Backend.' })
+ expect(markdown).toContain('name: backend-planner')
+ expect(markdown).toContain('description: Backend.')
+ expect(markdown).not.toContain('name: lead-planner')
+ })
+
+ it('is a planner even when modelled on something that was not', => {
+ // A copy of a worker claiming to be a planner would be refused server-side for
+ // holding acting tools — a confusing way to learn the template was wrong.
+ const markdown = plannerLikeMarkdown(persona({ id: 'w', name: 'swe' }), {
+ name: 'x-planner',
+ description: 'X.',
+ })
+ expect(markdown).toContain('planner: true')
  })
 })
