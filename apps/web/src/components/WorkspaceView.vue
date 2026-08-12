@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ResponseStyle } from '@loom/api-contract'
+import type { MasteryView, ResponseStyle, SubjectMap } from '@loom/api-contract'
 import {
  areaLabelFromAnnouncement,
  buildThreadTrail,
@@ -78,6 +78,64 @@ const threadTrail = computed( =>
 )
 
 const settingsOpen = ref(false)
+
+/**
+ * The expertise tab. Held here rather than in the session snapshot because expertise
+ * is per persona and a workspace has many — folding every map into the snapshot would
+ * put an unbounded read on the path that opens the app, for a surface most sessions
+ * never open.
+ */
+const masteryPersonaId = ref<string | null>(null)
+const masteryMaps = ref<SubjectMap[]>([])
+const masteryView = ref<MasteryView | null>(null)
+const masteryLoading = ref(false)
+const masteryError = ref<string | null>(null)
+
+const selectExpertisePersona = async (personaId: string) => {
+ masteryPersonaId.value = personaId
+ masteryView.value = null
+ masteryLoading.value = true
+ masteryError.value = null
+ try {
+ masteryMaps.value = await agent.listPersonaMaps(personaId)
+ } catch (error) {
+ // Its own error, not the session banner: a panel that renders its empty state on a
+ // failed fetch says the opposite of what happened, which this app has shipped before.
+ masteryError.value = error instanceof Error ? error.message: String(error)
+ } finally {
+ masteryLoading.value = false
+ }
+}
+
+const loadMastery = async (mapId: string) => {
+ masteryLoading.value = true
+ masteryError.value = null
+ try {
+ masteryView.value = await agent.getMastery(mapId)
+ } catch (error) {
+ masteryError.value = error instanceof Error ? error.message: String(error)
+ } finally {
+ masteryLoading.value = false
+ }
+}
+
+const startMastery = async (repositoryId: string) => {
+ const personaId = masteryPersonaId.value
+ const threadId = snapshot.value.activeThread?.id
+ if (!personaId) return
+ // A run needs a thread to be watchable in, and there is deliberately no invented one:
+ // a mastery run posts its progress where a human is already looking.
+ if (!threadId) {
+ masteryError.value = 'Open a channel first — a mastery run reports into a thread.'
+ return
+ }
+ masteryError.value = null
+ const runId = await agent.startMastery({ threadId, personaId, repositoryId })
+ if (runId) {
+ settingsOpen.value = false
+ await selectExpertisePersona(personaId)
+ }
+}
 const composerOpen = ref(false)
 
 const CONNECTION_LABEL: Record<string, string> = {
@@ -785,7 +843,16 @@ onBeforeUnmount( => {
 :capabilities="agentSnapshot.capabilities"
 :capability-attachments="agentSnapshot.capabilityAttachments"
 :last-pairing="agentSnapshot.lastPairing"
+:mastery-persona-id="masteryPersonaId"
+:mastery-maps="masteryMaps"
+:mastery-view="masteryView"
+:mastery-loading="masteryLoading"
+:mastery-error="masteryError"
  @close="settingsOpen = false"
+ @select-expertise="selectExpertisePersona"
+ @select-map="loadMastery"
+ @refresh-maps=" => masteryPersonaId && selectExpertisePersona(masteryPersonaId)"
+ @master="startMastery"
  @create-pairing-token="(name) => agent.createPairingToken(name)"
  @remove-runner="(runnerId, done) => void agent.removeRunner(runnerId).then(done)"
  @unbind="(input, done) => void agent.unbindRepository(input).then(done)"

@@ -3,14 +3,17 @@ import type {
  AgentPersona,
  Capability,
  DirectoryListing,
+ MasteryView,
+ SubjectMap,
  PersonaCapability,
  PersonaDraft,
  PersonaGroup,
  Repository,
  Runner,
 } from '@loom/api-contract'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import CapabilityPanel from './CapabilityPanel.vue'
+import MasteryPanel from './MasteryPanel.vue'
 import PersonaEditor from './PersonaEditor.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
 import RepositoryPanel from './RepositoryPanel.vue'
@@ -26,7 +29,7 @@ import RunnerPanel from './RunnerPanel.vue'
  * ten-row textarea 240px wide.
  */
 
-defineProps<{
+const props = defineProps<{
  runners: Runner[]
  repositories: Repository[]
  personas: AgentPersona[]
@@ -34,10 +37,24 @@ defineProps<{
  capabilities: Capability[]
  capabilityAttachments: PersonaCapability[]
  lastPairing: { runnerId: string; name: string; rawToken: string } | null
+ /** The expertise tab — fetched on demand, so never part of the session snapshot. */
+ masteryPersonaId: string | null
+ masteryMaps: SubjectMap[]
+ masteryView: MasteryView | null
+ masteryLoading: boolean
+ masteryError: string | null
 }>
+
+const repositoryNames = computed( =>
+ Object.fromEntries(props.repositories.map((repository) => [repository.id, repository.displayName])),
+)
 
 const emit = defineEmits<{
  close: []
+ 'select-expertise': [personaId: string]
+ 'select-map': [mapId: string]
+ 'refresh-maps': []
+ master: [repositoryId: string]
  'create-pairing-token': [name: string]
  bind: [input: { runnerId: string; path: string; displayName: string }]
  'create-repository': [
@@ -82,11 +99,12 @@ const emit = defineEmits<{
  compose: []
 }>
 
-type Tab = 'infrastructure' | 'personas' | 'capabilities'
+type Tab = 'infrastructure' | 'personas' | 'expertise' | 'capabilities'
 
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
  { id: 'infrastructure', label: 'Runners & repositories' },
  { id: 'personas', label: 'Personas & groups' },
+ { id: 'expertise', label: 'Expertise' },
  { id: 'capabilities', label: 'Capabilities' },
 ]
 
@@ -180,6 +198,24 @@ onMounted( => scrim.value?.focus)
  @update="(input) => emit('update-group', input)"
  @delete="(id) => emit('delete-group', id)"
  @compose="emit('compose')"
+ />
+ </template>
+
+ <template v-else-if="tab === 'expertise'">
+ <MasteryPanel
+:personas="personas"
+:persona-id="masteryPersonaId"
+:repositories="repositories"
+:maps="masteryMaps"
+:view="masteryView"
+:loading="masteryLoading"
+:error="masteryError"
+:repository-names="repositoryNames"
+:active-repository-id="null"
+ @select-persona="(personaId) => emit('select-expertise', personaId)"
+ @select="(mapId) => emit('select-map', mapId)"
+ @refresh="emit('refresh-maps')"
+ @master="(repositoryId) => emit('master', repositoryId)"
  />
  </template>
 

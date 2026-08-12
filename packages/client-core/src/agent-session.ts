@@ -5,6 +5,8 @@ import type {
  Capability,
  CostSummary,
  DirectoryListing,
+ MasteryView,
+ SubjectMap,
  PersonaCapability,
  MergeQueueEntry,
  NotificationConfig,
@@ -253,6 +255,27 @@ export interface AgentSession {
  * through the contract, so the form can never show fields a save would not store.
  */
  parsePersona(markdownSource: string): Promise<PersonaDraft>
+ /**
+ * A persona's maps.
+ *
+ * Not part of the session snapshot, deliberately: expertise is per persona and a
+ * workspace has many, so folding every map into the snapshot would put an unbounded
+ * read on the path that opens the app. These are fetched when a human looks.
+ */
+ listPersonaMaps(personaId: string): Promise<SubjectMap[]>
+ getMastery(mapId: string): Promise<MasteryView | null>
+ /**
+ * Starts a mastery run, which
+ * means it is subject to the concurrency limit, the kill switch and the budget cap
+ * like anything else. Returns null and sets the session error on refusal, the same
+ * shape as `startRun`.
+ */
+ startMastery(input: {
+ threadId: string
+ personaId: string
+ repositoryId: string
+ task?: string
+ }): Promise<string | null>
  /**
  * Who this planner could delegate to under a launcher's overrides.
  * Server-side for the same reason `parsePersona` is: these are the rules that refuse
@@ -930,6 +953,41 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  return await options.api.persona.parse({ markdownSource })
  } catch (error) {
  return { ok: false, problems: [errorMessage(error)], parsed: null }
+ }
+ },
+
+ async listPersonaMaps(personaId) {
+ try {
+ return await options.api.mastery.listForPersona({ personaId })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return []
+ }
+ },
+
+ async getMastery(mapId) {
+ try {
+ return await options.api.mastery.get({ mapId })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return null
+ }
+ },
+
+ async startMastery(input) {
+ patch({ error: null })
+ try {
+ const run = await options.api.mastery.start(input)
+ // Watched exactly as `startRun`'s result is: a mastery run is an ordinary run
+ //, so a human
+ // must be able to see it working, steer it and stop it like any other.
+ patch({ activeRun: run, pendingApprovals: [], diff: null })
+ patchFetchError('diff', null)
+ pollActiveRun(run.id)
+ return run.id
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return null
  }
  },
 
