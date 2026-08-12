@@ -718,7 +718,6 @@ export const createRunnerGateway = (
  agentRunId: asAgentRunId(frame.runId),
  filesRead: frame.filesRead,
  filesInScope: frame.filesInScope,
- spendUsd: 0,
  })
  } catch {
  // Deliberately swallowed — see above.

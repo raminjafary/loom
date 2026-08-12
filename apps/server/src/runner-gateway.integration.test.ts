@@ -327,6 +327,100 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  expect(second.mastery).toBeUndefined
  socket.close
  })
+
+ /**
+ * The measured progress, at the frame — the one place both halves are visible at
+ * once.
+ *
+ * The checkpoint table, the progress computation and flat-yield detection were all
+ * built and tested, and coverage read "not measured" on every real run because the
+ * Runner never sent the numbers. That is the same shape as the `record_map` defect
+ * from the session before: a feature that exists everywhere except where it is
+ * produced, and no type error at either end.
+ */
+ it('turns a mastery_progress frame into measured coverage and the metered spend', async => {
+ const { socket, runnerId } = await pairFakeRunner('mastery-progress')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'mastery-progress' })
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const masteryRun = await client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startFrame
+
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: masteryRun.id,
+ clonePath: '/tmp/clone',
+ branchName: 'loom/mastery',
+ headSha: 'cafe1234beef',
+ }),
+)
+
+ // Spend is read from the run row rather than taken from the checkpoint's caller —
+ // the proxy's meter is authoritative, and the caller used to pass zero.
+ socket.send(
+ JSON.stringify({
+ type: 'cost_report',
+ runId: masteryRun.id,
+ spentUsd: 0.037,
+ capUsd: null,
+ exhausted: false,
+ }),
+)
+ const mapResult = nextFrame(socket, (v) => v.type === 'map_result')
+ socket.send(
+ JSON.stringify({
+ type: 'map_written',
+ runId: masteryRun.id,
+ requestId: 'progress-frag',
+ fragment: {
+ nodes: [{ key: 'conv', kind: 'convention', label: 'A convention', summary: '' }],
+ },
+ }),
+)
+ expect((await mapResult).ok).toBe(true)
+
+ /**
+ * Waited for rather than assumed. Both frames are handled asynchronously, so sending
+ * the progress frame straight after the cost one races the write it depends on — and
+ * the failure looks exactly like the bug being fixed, a checkpoint with a spend of
+ * zero.
+ */
+ let board = await client.workerNote.board({ agentRunId: masteryRun.id })
+ for (let i = 0; i < 20 && board.cards[0]?.totalCostUsd === null; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ board = await client.workerNote.board({ agentRunId: masteryRun.id })
+ }
+ expect(board.cards[0]?.totalCostUsd).toBeCloseTo(0.037, 5)
+
+ socket.send(
+ JSON.stringify({
+ type: 'mastery_progress',
+ runId: masteryRun.id,
+ filesRead: 12,
+ filesInScope: 48,
+ }),
+)
+
+ const maps = await client.mastery.listForPersona({ personaId: testPersonaId })
+ const map = maps.find((entry) => entry.subjectRef === 'test repo')!
+ let view = await client.mastery.get({ mapId: map.id })
+ for (let i = 0; i < 20 && view.progress === null; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ view = await client.mastery.get({ mapId: map.id })
+ }
+
+ expect(view.progress).not.toBeNull
+ expect(view.progress?.coverage).toBeCloseTo(0.25, 5)
+ expect(view.progress?.nodeCount).toBe(1)
+ expect(view.progress?.spendUsd).toBeCloseTo(0.037, 5)
+ socket.close
+ })
 })
 
 describe('runner-gateway: agent run event ingest', => {
@@ -3982,10 +4076,25 @@ Decompose and delegate.`
  const children = await waitForChildren(run.id, 2)
  const reviewer = children.find((child) => child.id !== worker!.id)
 
+ /**
+ * Polled, not read once. The reviewer's *run row* is what `waitForChildren` waits
+ * for, and its `run_started` note is a second write — so a single read here races a
+ * write still in flight, which is this suite's signature failure and is what made
+ * this test fail about one run in twenty.
+ */
+ const startedFor = async (runId: string) => {
+ for (let i = 0; i < 60; i += 1) {
  const notes = await client.workerNote.listByTree({ agentRunId: run.id })
- const started = notes.filter(
- (note) => note.agentRunId === reviewer?.id && note.kind === 'run_started',
+ const hits = notes.filter(
+ (note) => note.agentRunId === runId && note.kind === 'run_started',
 )
+ if (hits.length > 0) return hits
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ return []
+ }
+
+ const started = await startedFor(reviewer!.id)
  expect(started).toHaveLength(1)
  expect(started[0]?.paths).toEqual([])
 

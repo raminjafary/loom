@@ -215,11 +215,20 @@ export const recordMasteryCheckpoint = async (
  agentRunId: AgentRunId
  filesRead: number
  filesInScope: number
- spendUsd: number
  },
 ): Promise<MasteryProgress | null> => {
  const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
  if (!map) return null
+
+ /**
+ * Spend is read here rather than accepted as an argument, and the difference is a bug
+ * this had: the one caller passed `0`, so the "spend against cap, shown next to
+ * coverage" was a zero on every checkpoint of every run. The run row already carries
+ * what the **egress proxy** metered — the number that is authoritative
+ * precisely because it is not the model's account of itself — and a checkpoint that
+ * takes it from its caller is a checkpoint whose caller can be wrong.
+ */
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
 
  const live = await deps.subjectMaps.countLive(input.workspaceId, map.id)
  await deps.subjectMaps.appendCheckpoint({
@@ -230,7 +239,7 @@ export const recordMasteryCheckpoint = async (
  filesInScope: input.filesInScope,
  nodeCount: live.nodes,
  edgeCount: live.edges,
- spendUsd: input.spendUsd,
+ spendUsd: run?.totalCostUsd ?? 0,
  })
 
  return computeMasteryProgress(

@@ -41,6 +41,11 @@ import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
 import { createMapTool } from './map-tool.js'
+import {
+ CHECKPOINT_INTERVAL_MS,
+ countFilesInScope,
+ createCoverageTracker,
+} from './mastery-progress.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
@@ -455,7 +460,41 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }): Promise<void> => {
  // Async, and awaited by whoever produces events (the SDK loop in-process, the
  // container's stdout reader when sandboxed) — that await is the backpressure.
+ /**
+ * A mastery run's measured coverage. Present only on a mastery run,
+ * because there is nothing to measure coverage of otherwise — an ordinary run reads
+ * what its task forces it to read, and calling that a percentage of the repository
+ * would be a number with no meaning attached.
+ *
+ * The denominator is resolved once, before the loop: it is the tree at the revision
+ * being mastered, and a run that read half of it while it grew would report a
+ * coverage that fell as it worked.
+ */
+ const coverage = input.mastery === undefined ? null: createCoverageTracker(input.clonePath)
+ const filesInScope = coverage === null ? 0: await countFilesInScope(input.clonePath)
+ let lastCheckpointAt = 0
+
+ const sendCheckpoint = => {
+ if (coverage === null) return
+ lastCheckpointAt = Date.now
+ send({
+ type: 'mastery_progress',
+ runId: input.runId,
+ filesRead: coverage.filesRead,
+ filesInScope,
+ })
+ }
+
  const onEvent = async (event: WireAgentEvent) => {
+ /**
+ * Observed from the tool call the Runner is already relaying, rather than asked of
+ * the agent. Mastery: an agent's own estimate of its progress is model output, and may
+ * be a remark but never the number.
+ */
+ if (coverage !== null && event.kind === 'tool_call') {
+ const opened = coverage.observe(event.toolName, event.input)
+ if (opened && Date.now - lastCheckpointAt >= CHECKPOINT_INTERVAL_MS) sendCheckpoint
+ }
  if (event.kind === 'run_completed' || event.kind === 'run_failed') {
  pendingTerminalEvents.set(input.runId, event)
  return
@@ -684,6 +723,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onInputChannel: (channel) => registerDelivery(channel.deliver),
  })
  flushPlan
+ // Unconditional, and that is the point: a run that finished inside one checkpoint
+ // interval has sent nothing, and reporting no coverage for a run that read the
+ // whole tree is the failure this whole path exists to fix.
+ sendCheckpoint
  return
  }
 
@@ -766,6 +809,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // only the loop ending tells us which happened.
  flushPlan
  } finally {
+ // In the `finally` rather than beside `flushPlan`, unlike the plan: a plan from a
+ // run that died should not spawn children, and the coverage of a run that died is
+ // exactly what a human wants to see — mastery writes the map incrementally for the same
+ // reason, so that a killed run leaves what it had learned.
+ sendCheckpoint
  // Drained before revoking: the final turn's spend is usually still queued
  // when the container exits, and revoking first would not lose it but
  // reporting late would let a run look cheaper than it was.
