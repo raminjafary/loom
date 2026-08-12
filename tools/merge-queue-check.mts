@@ -84,6 +84,10 @@ const main = async => {
  // after its clone is prepared, which costs nothing and still leaves the
  // real workspace the merge queue needs.
  LOOM_SANDBOX_ENABLED: '0',
+ // Empty, and deliberately: this driver hardcodes the sandbox off above, and an
+ // empty value is not the acknowledgement — `unsandboxedAcknowledged` compares
+ // against the exact phrase — so a run that reached the agent loop would be
+ // refused rather than silently downgraded. Nothing here starts one.
  LOOM_ALLOW_UNSANDBOXED: '',
  LOOM_RUNNER_STATE_DIR: join(tmpdir, `merge-check-state-${Date.now}`),
  },

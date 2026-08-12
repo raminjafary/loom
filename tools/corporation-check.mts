@@ -132,8 +132,21 @@ const main = async => {
  LOOM_PAIRING_TOKEN: rawToken,
  LOOM_ALLOWED_ROOTS: tmpdir,
  LOOM_SANDBOX_ENABLED: process.env.LOOM_SANDBOX_ENABLED ?? '0',
+ /**
+ * **Withheld when the sandbox was asked for.** The Runner falls back to an
+ * unsandboxed run whenever the sandbox is unavailable *and* this acknowledgement
+ * is set — so a driver that supplies it unconditionally turns
+ * `LOOM_SANDBOX_ENABLED=1` into a silent downgrade and reports a clean pass about
+ * the path it was not testing. That happened once already, on question-check.mts:
+ * 5/5, with `WARNING: running UNSANDBOXED` two lines above it. Withheld here, the
+ * same situation is a loud refusal naming what is missing.
+ */
+...(process.env.LOOM_SANDBOX_ENABLED === '1'
+ ? {}
+: {
  LOOM_ALLOW_UNSANDBOXED:
  process.env.LOOM_ALLOW_UNSANDBOXED ?? 'i-understand-the-agent-gets-my-privileges',
+ }),
  LOOM_RUNNER_STATE_DIR: join(tmpdir, `corp-state-${Date.now}`),
  },
  stdio: ['ignore', 'pipe', 'pipe'],

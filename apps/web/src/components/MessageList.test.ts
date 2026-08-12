@@ -85,3 +85,41 @@ describe('MessageList', => {
  expect(list.findAll('.row')).toHaveLength(0)
  })
 })
+
+/**
+ * The way into an area.
+ *
+ * A sub-planner's whole subtree lives in its own thread, and this button is the only
+ * thing in the parent conversation that leads there. `client-core`'s `area-threads`
+ * decides *which* message opens which thread; nothing checked that the component
+ * renders a way in — and a split that hides work is worse than no split at all, which
+ * is precisely how "reply threads existed since Phase 0 and were unreachable" happened.
+ */
+describe('MessageList: the way into an area thread', => {
+ const announcement = message({
+ id: 'm-area',
+ body: { kind: 'system', text: 'API area → planner: delegated as its own area.' },
+ })
+
+ it('offers a way in on the message the area hangs off', async => {
+ const list = mount(MessageList, {
+ props: { messages: [announcement], areaThreadByMessageId: { 'm-area': 'th-area' } },
+ })
+ await list.get('button.open-area').trigger('click')
+ expect(list.emitted('open-thread')).toEqual([['th-area']])
+ })
+
+ it('offers nothing on a message with no area under it', => {
+ const list = mount(MessageList, {
+ props: { messages: [announcement], areaThreadByMessageId: {} },
+ })
+ expect(list.find('button.open-area').exists).toBe(false)
+ })
+
+ it('renders without the map at all, for a tree that has no areas', => {
+ // The prop is optional, and the flat fan-out — every Phase 2 swarm — never sets it.
+ const list = mount(MessageList, { props: { messages: [announcement] } })
+ expect(list.find('button.open-area').exists).toBe(false)
+ expect(list.text).toContain('delegated as its own area')
+ })
+})

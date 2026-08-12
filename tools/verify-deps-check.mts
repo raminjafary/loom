@@ -130,7 +130,14 @@ const main = async => {
  * refused after its clone exists, which is the only part the queue needs.
  */
  LOOM_SANDBOX_ENABLED: process.env.LOOM_SANDBOX_ENABLED ?? '0',
- LOOM_ALLOW_UNSANDBOXED: 'i-understand-the-agent-gets-my-privileges',
+ /**
+ * **Withheld when the sandbox was asked for** — see question-check.mts. Supplying
+ * it unconditionally turns `LOOM_SANDBOX_ENABLED=1` into a silent downgrade and
+ * reports a clean pass about the path it was not testing.
+ */
+...(process.env.LOOM_SANDBOX_ENABLED === '1'
+ ? {}
+: { LOOM_ALLOW_UNSANDBOXED: 'i-understand-the-agent-gets-my-privileges' }),
  LOOM_USE_HOST_CLAUDE_AUTH: '0',
  LOOM_DEP_CACHE_ENABLED: '1',
  LOOM_DEP_CACHE_ROOT: CACHE,
