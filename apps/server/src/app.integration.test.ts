@@ -465,6 +465,70 @@ describe('removal over HTTP', => {
  await client.persona.delete({ personaId: persona.id })
  })
 
+ /**
+ * The fleet, over the contract. The domain tests cover what a width means; this
+ * covers that the server *validates* it rather than storing what it was handed — the
+ * runtime reads this field, so a stored 0 would make a roster offer a persona whose
+ * every start is then refused.
+ */
+ it('stores a fleet width and refuses one that is not a width', async => {
+ const persona = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: fleet-member-${Date.now}`,
+ 'description: On a sized team',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'Do nothing.',
+ ].join('\n'),
+ })
+ const group = await client.personaGroup.create({
+ name: `fleet-${Date.now}`,
+ personaIds: [persona.id],
+ })
+ // Unsized out of the box: every team that existed before this column did.
+ expect(group.fleet).toEqual({})
+
+ const sized = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [persona.id],
+ fleet: { [persona.id]: 3 },
+ })
+ expect(sized.fleet[persona.id]).toBe(3)
+
+ // Omitting it leaves the stored width alone, like `layout`.
+ const renamed = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: `${group.name}-renamed`,
+ personaIds: [persona.id],
+ })
+ expect(renamed.fleet[persona.id]).toBe(3)
+
+ // Zero is a removal dressed as a width, and is refused with a reason.
+ await expect(
+ client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [persona.id],
+ fleet: { [persona.id]: 0 },
+ }),
+).rejects.toThrow(/remove the persona from the team/)
+
+ // A width for someone no longer on the team is dropped, not refused.
+ const emptied = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [],
+ fleet: { [persona.id]: 2 },
+ })
+ expect(emptied.fleet).toEqual({})
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ await client.persona.delete({ personaId: persona.id })
+ })
+
  it('refuses to remove a Runner that still has a repository bound', async => {
  const pairing = await client.runner.createPairingToken({ name: 'removable' })
  // Nothing bound yet, so this one goes.

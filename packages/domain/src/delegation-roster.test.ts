@@ -125,6 +125,38 @@ describe('selectDelegatablePersonas', => {
  })
 })
 
+/**
+ * The first place. The roster is where a width becomes an *instruction* rather than
+ * a limit a Planner discovers by being refused — and if it were only enforced, the model
+ * would fan out five ways and three of them would silently not happen.
+ */
+describe('describeDelegationRoster fleet widths', => {
+ it('says how wide the team is sized for, on the candidate\'s own line', => {
+ const text = describeDelegationRoster(planner, [candidate({ name: 'swe', fleet: 3 })], 1)
+ expect(text).toContain('at most 3 concurrent swe run(s)')
+ })
+
+ it('says nothing about an unsized candidate', => {
+ // Unsized means the Planner decides, which is the pre-fleet behaviour — a roster that
+ // mentioned it would be inventing a limit.
+ const text = describeDelegationRoster(planner, [candidate({ name: 'swe' })], 1)
+ expect(text).not.toContain('concurrent')
+ })
+
+ it('turns the width into an instruction, not only a parenthetical', => {
+ // A model that reads "sized for 3" as a description will still write five subtasks
+ // for it, and the extras are refused as they start.
+ const text = describeDelegationRoster(planner, [candidate({ name: 'swe', fleet: 2 })], 1)
+ expect(text).toContain('Do not give a persona more concurrent subtasks than its size')
+ expect(text).toContain('refused when they try to start')
+ })
+
+ it('omits the instruction entirely when nothing is sized', => {
+ const text = describeDelegationRoster(planner, [candidate({ name: 'swe' })], 1)
+ expect(text).not.toContain('Do not give a persona more concurrent subtasks')
+ })
+})
+
 describe('describeDelegationRoster', => {
  it('is null for a persona that is not a planner', => {
  expect(describeDelegationRoster(planner({ planner: false }), [candidate])).toBeNull

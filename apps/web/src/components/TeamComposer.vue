@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AgentPersona, DelegationEdge, PersonaGroup } from '@loom/api-contract'
+import { MAX_FLEET_SIZE } from '@loom/domain'
 import {
  composerEdges,
  composerNodes,
@@ -45,7 +46,16 @@ const emit = defineEmits<{
  close: []
  /** Creating a team from the canvas — the "visual creation", available before one exists. */
  'create-group': [input: { name: string; personaIds: string[] }]
- 'save-group': [input: { personaGroupId: string; name: string; personaIds: string[]; layout: Record<string, { x: number; y: number }> }]
+ 'save-group': [
+ input: {
+ personaGroupId: string
+ name: string
+ personaIds: string[]
+ layout: Record<string, { x: number; y: number }>
+ /** The widths, keyed by persona id. Always sent — see `setFleet`. */
+ fleet: Record<string, number>
+ },
+ ]
  'update-persona': [input: { personaId: string; markdownSource: string }]
 }>
 
@@ -109,6 +119,8 @@ const members = computed<AgentPersona[]>( => {
 })
 
 const layout = ref<Record<string, { x: number; y: number }>>({})
+/** The widths, mirrored locally so an edit renders before the save round-trips. */
+const fleet = ref<Record<string, number>>({})
 
 watch(
  [group, members],
@@ -116,6 +128,7 @@ watch(
  // Recomputed only for members with no stored position, so opening a group never
  // rearranges what someone put where they wanted it.
  layout.value = layoutForGroup(members.value, group.value?.layout ?? {})
+ fleet.value = {...(group.value?.fleet ?? {}) }
  },
  { immediate: true },
 )
@@ -144,7 +157,14 @@ const flowNodes = computed( =>
  ]
 .filter(Boolean)
 .join(' '),
- label: node.recurses ? `${node.name} ↻`: node.name,
+ /**
+ * The width on the node, because the fleet design says a fleet *is* one node carrying a
+ * number — not N copies of a persona, which would be two runs and belongs on the * board. Unsized members show nothing, so a team that never set a width looks exactly
+ * as it did before this existed.
+ */
+ label: [node.name, fleet.value[node.personaId] ? `×${fleet.value[node.personaId]}`: '', node.recurses ? '↻': '']
+.filter(Boolean)
+.join(' '),
  })),
 )
 
@@ -221,6 +241,7 @@ const saveLayout = => {
  name: current.name,
  personaIds: current.personaIds,
  layout: layout.value,
+ fleet: fleet.value,
  })
 }
 
@@ -241,6 +262,32 @@ const setMembers = (personaIds: string[]) => {
  name: current.name,
  personaIds,
  layout: layout.value,
+ fleet: fleet.value,
+ })
+}
+
+/**
+ * The fleet — how many of each member this team runs at once.
+ *
+ * Sent on every save rather than only when it changes, like `layout`: the server treats
+ * an absent `fleet` as "leave the stored widths alone", so a save that omitted it after a
+ * width was set would be indistinguishable from one that never had one.
+ */
+const setFleet = (personaId: string, size: number | null) => {
+ const current = group.value
+ if (!current) return
+ const next = {...fleet.value }
+ // Removing the entry rather than writing 0: unsized means "the Planner decides", and
+ // 0 is refused by the server as a width that is really a removal.
+ if (size === null) delete next[personaId]
+ else next[personaId] = size
+ fleet.value = next
+ emit('save-group', {
+ personaGroupId: current.id,
+ name: current.name,
+ personaIds: current.personaIds,
+ layout: layout.value,
+ fleet: next,
  })
 }
 
@@ -254,6 +301,22 @@ const removeMember = (personaId: string) => {
  const current = group.value
  if (!current) return
  setMembers(current.personaIds.filter((id) => id !== personaId))
+}
+
+/**
+ * A width from the number input. Anything that is not a usable width — empty, zero,
+ * negative, non-numeric — reads as **unsized** rather than as an error: the box is how a
+ * human says "let the Planner decide", and rejecting a cleared field would make the only
+ * way back from a width a page reload.
+ */
+const onFleetInput = (personaId: string, event: Event) => {
+ const raw = (event.target as HTMLInputElement).value.trim
+ const size = Number.parseInt(raw, 10)
+ if (raw === '' || !Number.isFinite(size) || size < 1) {
+ setFleet(personaId, null)
+ return
+ }
+ setFleet(personaId, Math.min(size, MAX_FLEET_SIZE))
 }
 
 const available = computed( =>
@@ -418,6 +481,26 @@ const onKeydown = (event: KeyboardEvent) => {
  <ul class="chips">
  <li v-for="persona in members":key="persona.id">
  <span:class="{ planner: persona.harnessPlanner }">{{ persona.name }}</span>
+ <!--
+ The width, edited where the roster is. The node carries the
+ number and this is where it is set: a number input on an SVG-ish canvas
+ node is a worse control than a number input in a list, and the canvas is
+ where the *consequence* is read.
+
+ Empty means unsized — "the Planner decides", which is what every team
+ did before this existed — so clearing the box is a real state and not a
+ broken value.
+ -->
+ <input
+ class="fleet"
+ type="number"
+ min="1"
+:max="MAX_FLEET_SIZE"
+:value="fleet[persona.id] ?? ''"
+:aria-label="`How many ${persona.name} at once`"
+ placeholder="any"
+ @change="onFleetInput(persona.id, $event)"
+ />
  <button type="button" class="link" @click="removeMember(persona.id)">remove</button>
  </li>
  <li v-if="members.length === 0" class="none">Nobody yet.</li>
@@ -789,6 +872,19 @@ header h2 {
 
 .fine {
  color: var(--text-faint);
+ font-size: 0.72rem;
+}
+
+/* Narrow on purpose: it holds at most two digits, and a full-width field beside a name
+ reads as the more important of the two. */
+.fleet {
+ width: 3.2rem;
+ padding: 0.1rem 0.25rem;
+ border: 1px solid var(--border);
+ border-radius: 0.25rem;
+ background: var(--bg);
+ color: var(--text);
+ font: inherit;
  font-size: 0.72rem;
 }
 

@@ -307,6 +307,12 @@ export interface AgentSession {
  personaIds: string[]
  /** Canvas positions. Omitted leaves the stored ones alone. */
  layout?: Record<string, { x: number; y: number }>
+ /**
+ * How many of each member the team runs at once. Omitted leaves the
+ * stored widths alone; the server refuses a width of 0 or one past the ceiling rather
+ * than storing a number that would then refuse every run of that persona.
+ */
+ fleet?: Record<string, number>
  }): Promise<void>
  deletePersonaGroup(personaGroupId: string): Promise<void>
  startRun(input: {

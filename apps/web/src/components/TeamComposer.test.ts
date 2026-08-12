@@ -60,6 +60,7 @@ const group = (overrides: Partial<PersonaGroup> = {}): PersonaGroup => ({
  workspaceId: 'w1',
  name: 'Team A',
  personaIds: ['lead', 'swe'],
+ fleet: {},
  layout: {},
  createdAt: new Date(0),
  updatedAt: new Date(0),

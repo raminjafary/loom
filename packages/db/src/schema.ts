@@ -477,6 +477,21 @@ export const personaGroup = pgTable(
 .$type<Record<string, { x: number; y: number }>>
 .notNull
 .default({}),
+ /**
+ * How many of each member the team is sized to run at once — the fleet, keyed
+ * by persona id like `layout`.
+ *
+ * A member with no entry is **unsized**, meaning the Planner decides, which is what
+ * every team did before this column existed. Deliberately not defaulted to 1 per
+ * member: that would have silently serialized every existing team on the migration
+ * that added it.
+ *
+ * Unlike `layout`, this is *read by the runtime* — the roster a Planner is given, the
+ * concurrency check at child start, and the plan-time warning. The caution about the
+ * composition canvas is the reason it has to be: a number a human tunes and a swarm
+ * ignores is worse than no number at all.
+ */
+ fleet: jsonb('fleet').$type<Record<string, number>>.notNull.default({}),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },

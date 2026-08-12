@@ -1256,6 +1256,8 @@ export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort
  personaIds: patch.personaIds,
  // Absent leaves the stored positions alone — see PersonaGroupRepositoryPort.
 ...(patch.layout === undefined ? {}: { layout: patch.layout }),
+ // Same for the fleet: a client that does not draw widths means "leave them".
+...(patch.fleet === undefined ? {}: { fleet: patch.fleet }),
  updatedAt: new Date,
  })
 .where(and(eq(personaGroup.workspaceId, workspaceId), eq(personaGroup.id, id)))

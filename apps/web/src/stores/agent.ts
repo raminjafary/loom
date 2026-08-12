@@ -66,6 +66,7 @@ export const useAgentStore = defineStore('agent', () => {
       name: string
       personaIds: string[]
       layout?: Record<string, { x: number; y: number }>
+      fleet?: Record<string, number>
     }) => session.updatePersonaGroup(input),
     deletePersonaGroup: (personaGroupId: string) => session.deletePersonaGroup(personaGroupId),
     // Typed from the session rather than restated: the local copy had already fallen

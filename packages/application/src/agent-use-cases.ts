@@ -13,6 +13,11 @@ import {
  buildNotification,
  describeMergeFailure,
  describeReviewBlockers,
+ boundedFleet,
+ describeFleetOverruns,
+ describeFleetRefusal,
+ detectFleetOverruns,
+ parseFleetSizes,
  describeCrossPlanOverlaps,
  delegationDesign,
  delegationMatrix,
@@ -866,6 +871,47 @@ export const listPersonaGroups = (
  input: { workspaceId: WorkspaceId },
 ): Promise<PersonaGroup[]> => deps.personaGroups.listByWorkspace(input.workspaceId)
 
+/**
+ * Which team's widths apply to a run of this persona.
+ *
+ * **Resolved from team membership, and that is a real limitation worth stating.** A run
+ * carries a persona, not a team, so the only honest answer available today is "the team
+ * this persona is on". When exactly one team contains it, that team's widths are its
+ * widths. When several do, the platform genuinely cannot know which one this run is for —
+ * so **nothing is applied**, rather than guessing at a limit that would then refuse real
+ * work. A persona on no team is unsized, as everything was before this existed.
+ *
+ * The eventual fix is a team chosen where a run starts, which is what the * canvas-driven start gives for free. Adding a `persona_group_id` to `agent_run` now
+ * would be a column nothing sets — the exact shape the fleet design warns against.
+ */
+/**
+ * A run's persona *id*, recovered from its snapshot by name.
+ *
+ * `agent_run.persona` is a snapshot — it carries the name, not the id — because a run
+ * must not change when its persona is edited. Team membership is keyed by id, so
+ * resolving a run's team means going back through the name. Null when the persona has
+ * been renamed or deleted since, in which case no team applies, which is the same
+ * unsized behaviour as a persona on no team.
+ */
+const plannerPersonaId = (
+ personas: readonly AgentPersona[],
+ run: AgentRun,
+): AgentPersonaId | null =>
+ personas.find((persona) => persona.name === run.persona.name)?.id ?? null
+
+const resolveFleetSizes = async (
+ deps: AgentDeps,
+ workspaceId: WorkspaceId,
+ /** Null when the persona could not be resolved at all — unsized, same as no team. */
+ personaId: AgentPersonaId | null,
+): Promise<{ fleet: Record<string, number>; ambiguous: boolean }> => {
+ if (personaId === null) return { fleet: {}, ambiguous: false }
+ const groups = await deps.personaGroups.listByWorkspace(workspaceId)
+ const owning = groups.filter((group) => group.personaIds.includes(personaId))
+ if (owning.length !== 1) return { fleet: {}, ambiguous: owning.length > 1 }
+ return { fleet: owning[0]?.fleet ?? {}, ambiguous: false }
+}
+
 export const updatePersonaGroup = async (
  deps: AgentDeps,
  input: {
@@ -880,15 +926,32 @@ export const updatePersonaGroup = async (
  * positions should be forgotten.
  */
  layout?: Record<string, { x: number; y: number }>
+ /**
+ * How many of each member this team runs at once. Omitted leaves
+ * the stored widths untouched, for the same reason `layout` does.
+ */
+ fleet?: Record<string, number>
  },
 ): Promise<PersonaGroup> => {
  if (!isHuman(input.actor)) {
  throw new ForbiddenError('Only a human may update a persona group')
  }
  await assertPersonaIdsExist(deps, input.workspaceId, input.personaIds)
+
+ /**
+ * Validated here rather than trusted from the wire, because the runtime reads it: a
+ * width of 0 would make a roster offer a persona the concurrency check then refuses
+ * every time, which is the "a listed name reads as permission" failure
+ * `delegation-roster.ts` exists to prevent. `parseFleetSizes` also drops entries for
+ * members that are no longer on the team, for the reason the layout filter below does.
+ */
+ const fleetVerdict = parseFleetSizes(input.fleet, input.personaIds)
+ if (!fleetVerdict.ok) throw new ValidationError(fleetVerdict.reason)
+
  return deps.personaGroups.update(input.workspaceId, input.personaGroupId, {
  name: input.name,
  personaIds: input.personaIds,
+...(input.fleet === undefined ? {}: { fleet: fleetVerdict.fleet }),
 ...(input.layout === undefined
  ? {}
 : {
@@ -1258,6 +1321,40 @@ export const startAgentRun = async (
  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
  if (!persona) throw new NotFoundError('AgentPersona')
 
+ /**
+ * The second place: **the concurrency limit, per team rather than per workspace.**
+ *
+ * Beside the workspace limit above rather than instead of it — the two are a ceiling and
+ * a narrowing under it, and `boundedFleet` clamps to the workspace number so a team can
+ * never widen an operator's limit. That is the one thing the fleet design says a design-time
+ * field must not become.
+ *
+ * **Only for a delegation.** A human starting a run by hand is not acting for a team's
+ * roster, and a width that refused the operator who wrote it would be absurd; a
+ * reconciler and a steering run are platform- and human-initiated for the same reason
+ * they are exempt from attenuation and depth.
+ *
+ * Resolved from the *child's* own membership: the count is a fact about a persona on a
+ * team, and the child's persona is the one being counted. Counted over the workspace's
+ * active runs, because "concurrent" has to mean the same thing here as in the ceiling
+ * this sits under.
+ */
+ if (parent && input.relation === 'delegation') {
+ const team = await resolveFleetSizes(deps, input.workspaceId, input.personaId)
+ const limit = boundedFleet(
+ team.fleet[input.personaId],
+ deps.limits.maxConcurrentRunsPerWorkspace,
+)
+ if (limit !== null) {
+ const running = active.filter((run) => run.persona.name === persona.name).length
+ if (running >= limit) {
+ throw new ValidationError(
+ describeFleetRefusal({ personaName: persona.name, limit, active: running }),
+)
+ }
+ }
+ }
+
  // A child inherits the style its parent was launched with, so one swarm speaks in
  // one voice; only a human's start actually chooses one.
  const responseStyle: ResponseStyle =
@@ -1300,6 +1397,19 @@ export const startAgentRun = async (
  * same personas when the plan comes back, so this is the same read moved to where
  * it can still change the outcome.
  */
+ /**
+ * The acting planner's team widths, read once and used for both
+ * The first place (this roster) and its third (the plan-time warning, which
+ * `applySubmittedPlan` resolves again from the same rule).
+ *
+ * Resolved from the *planner's* membership rather than each candidate's, because it is
+ * the planner that is acting for a team — a worker on three teams still gets the width
+ * the team that is delegating to it declared.
+ */
+ const teamFleet = baseSpec.planner
+ ? await resolveFleetSizes(deps, input.workspaceId, input.personaId)
+: { fleet: {}, ambiguous: false }
+
  const roster = baseSpec.planner
  ? describeDelegationRoster(
  baseSpec,
@@ -1312,6 +1422,23 @@ export const startAgentRun = async (
  budgetCapUsd: candidate.harnessBudgetCapUsd,
  planner: candidate.harnessPlanner,
  delegates: candidate.harnessDelegates,
+ /**
+ * The first place. Clamped to the workspace ceiling here rather than
+ * where it is enforced, so the number a Planner is told is the number that will
+ * actually bite — a roster promising 8 under a workspace limit of 3 would be
+ * the platform lying about its own limit.
+ */
+...(boundedFleet(
+ teamFleet.fleet[candidate.id],
+ deps.limits.maxConcurrentRunsPerWorkspace,
+) === null
+ ? {}
+: {
+ fleet: boundedFleet(
+ teamFleet.fleet[candidate.id],
+ deps.limits.maxConcurrentRunsPerWorkspace,
+) as number,
+ }),
  })),
  // Hops left *below this run's children*: this run sits at `ownDepth`, its
  // children at `ownDepth + 1`, so a grandchild is possible only with a hop to
@@ -1868,6 +1995,37 @@ export const applySubmittedPlan = async (
  // The collaboration topology requires per-stage accounting "visible before the plan is approved".
  await postRunSystemMessage(deps, planner, stageWarning)
  }
+
+ /**
+ * The third place: a decomposition asking for more of a persona than its team is
+ * sized for. **A warning, not a refusal**, for the reason path overlap warns — the count
+ * is a human's design and the plan is a model's judgement about one goal, so either can
+ * be the stale one.
+ *
+ * Posted before the first child starts, like the stage accounting, because that is the
+ * only moment a human can act on it: the runs past the width are refused as they start,
+ * so by the time the plan is running the choice has already been made for them.
+ *
+ * Resolved from the *planner's* persona, unlike the enforcement at child start, and the
+ * asymmetry is deliberate: this is a statement about the plan a team's planner produced,
+ * so the widths that belong to it are the ones its own team declared.
+ */
+ const plannerTeam = await resolveFleetSizes(deps, planner.workspaceId, plannerPersonaId(personas, planner))
+ const fleetByName: Record<string, number> = {}
+ for (const candidate of personas) {
+ const limit = boundedFleet(
+ plannerTeam.fleet[candidate.id],
+ deps.limits.maxConcurrentRunsPerWorkspace,
+)
+ if (limit !== null) fleetByName[candidate.name] = limit
+ }
+ const fleetWarning = describeFleetOverruns(
+ detectFleetOverruns(
+ verdict.decomposition.subtasks.map((subtask) => subtask.personaName),
+ fleetByName,
+),
+)
+ if (fleetWarning) await postRunSystemMessage(deps, planner, fleetWarning)
 
  const records: {
  position: number

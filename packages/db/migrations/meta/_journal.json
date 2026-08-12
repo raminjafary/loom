@@ -225,6 +225,13 @@
       "when": 1786547857182,
       "tag": "0031_dear_bloodaxe",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1786555665010,
+      "tag": "0032_colorful_vargas",
+      "breakpoints": true
     }
   ]
 }

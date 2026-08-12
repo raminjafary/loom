@@ -33,6 +33,17 @@ export interface DelegationCandidate {
  * would offer one whose envelope the child-start gate then refuses.
  */
  readonly delegates?: string[]
+ /**
+ * How many of this persona the team is sized to run at once, or
+ * undefined when it is unsized and the Planner decides.
+ *
+ * This is the first of the three places the count has to be read, and the
+ * cheapest: "this team is sized for up to three concurrent `swe` workers" is a real
+ * instruction to a real model, delivered where the model is choosing how wide to fan
+ * out. Without it the other two places are a limit the Planner discovers by being
+ * refused.
+ */
+ readonly fleet?: number | undefined
 }
 
 const asChildSpec = (candidate: DelegationCandidate): PersonaSpec => ({
@@ -108,14 +119,36 @@ export const describeDelegationRoster = (
 )
  }
 
- const lines = delegatable.map(
- (candidate) =>
- `- ${candidate.name} — ${candidate.description} (${
- candidate.planner
+ const lines = delegatable.map((candidate) => {
+ const what = candidate.planner
  ? 'a planner: give it a whole area, and it will decompose that area itself'
 : `tools: ${candidate.tools.length === 0 ? 'none': candidate.tools.join(', ')}`
- })`,
-)
+ /**
+ * The width clause. On the candidate's own line rather than in a
+ * paragraph below, because the decision it changes — how many subtasks to give this
+ * persona — is made while reading this line.
+ */
+ const width =
+ candidate.fleet === undefined
+ ? ''
+: `; this team is sized for at most ${candidate.fleet} concurrent ${candidate.name} run(s)`
+ return `- ${candidate.name} — ${candidate.description} (${what}${width})`
+ })
+
+ /**
+ * Said once more in the imperative, because a parenthetical is a fact and this needs to
+ * be an instruction: a model that reads "sized for 3" as a description will still write
+ * five subtasks for it, and the extras are refused as they start.
+ */
+ const sized = delegatable.some((candidate) => candidate.fleet !== undefined)
+ ? [
+ '',
+ 'Some of these have a team size in brackets. Do not give a persona more concurrent ' +
+ 'subtasks than its size: the ones past it are refused when they try to start, so ' +
+ 'the work in them is simply not done. If a role genuinely needs more, give it ' +
+ 'fewer, larger subtasks instead.',
+ ]
+: []
 
  /**
  * Whether *every* offered planner can scope its own area. Any that cannot is
@@ -170,6 +203,7 @@ export const describeDelegationRoster = (
  'These are the personas you may delegate to, and the only names the platform will accept:',
 ...lines,
 ...nesting,
+...sized,
  '',
  'Use one of these names exactly, in the personaName field. Any other name — including ' +
  'a persona that exists in this workspace but is not listed here — will be refused, and ' +

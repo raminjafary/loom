@@ -567,8 +567,16 @@ export interface PersonaGroupRepositoryPort {
  update(
  workspaceId: WorkspaceId,
  id: PersonaGroupId,
- /** `layout` absent leaves the stored positions alone. */
- patch: { name: string; personaIds: string[]; layout?: Record<string, { x: number; y: number }> },
+ /**
+ * `layout` absent leaves the stored positions alone, and `fleet` absent leaves the stored widths alone — a client
+ * that draws neither means "do not touch them", not "clear them".
+ */
+ patch: {
+ name: string
+ personaIds: string[]
+ layout?: Record<string, { x: number; y: number }>
+ fleet?: Record<string, number>
+ },
 ): Promise<PersonaGroup>
  delete(workspaceId: WorkspaceId, id: PersonaGroupId): Promise<void>
  /**

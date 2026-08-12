@@ -561,6 +561,7 @@ export interface PersonaGroupRow {
  name: string
  personaIds: unknown
  layout?: unknown
+ fleet?: unknown
  createdAt: Date
  updatedAt: Date
 }
@@ -576,6 +577,13 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
  layout:
  row.layout && typeof row.layout === 'object' && !Array.isArray(row.layout)
  ? (row.layout as Record<string, { x: number; y: number }>)
+: {},
+ // Defaulted for the same reason `layout` is, and it matters more here: an unsized team
+ // is the pre-fleet behaviour (the Planner decides), so a row that predates the column
+ // has to read as unsized rather than as sized-to-nothing.
+ fleet:
+ row.fleet && typeof row.fleet === 'object' && !Array.isArray(row.fleet)
+ ? (row.fleet as Record<string, number>)
 : {},
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,

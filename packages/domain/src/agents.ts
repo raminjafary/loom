@@ -184,6 +184,15 @@ export interface PersonaGroup {
  * observability graph, whose positions are computed and worth nothing.
  */
  readonly layout: Record<string, { x: number; y: number }>
+ /**
+ * How many of each member this team runs at once — the fleet, keyed by persona
+ * id. A member with no entry is unsized, which means the Planner decides.
+ *
+ * Unlike `layout`, the runtime reads this: the roster a Planner is given, the
+ * concurrency check at child start, and the plan-time warning. See `fleets.ts` — a
+ * width the runtime ignored would be worse than not offering one.
+ */
+ readonly fleet: Record<string, number>
  readonly createdAt: Date
  readonly updatedAt: Date
 }

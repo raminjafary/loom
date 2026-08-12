@@ -643,6 +643,7 @@ export const router = os.router({
  name: input.name,
  personaIds: input.personaIds,
 ...(input.layout === undefined ? {}: { layout: input.layout }),
+...(input.fleet === undefined ? {}: { fleet: input.fleet }),
  }),
 ),
 ),

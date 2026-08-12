@@ -445,6 +445,16 @@ export const contract = {
  layout: z
 .record(z.string, z.object({ x: z.number, y: z.number }))
 .optional,
+ /**
+ * How many of each member this team runs at once. Optional on
+ * the same terms as `layout` — omitted leaves the stored widths alone.
+ *
+ * Unlike `layout`, the server *validates* this rather than storing what it is
+ * given: the runtime reads it, so a width of 0 or one past the ceiling is a
+ * refusal with a reason, not a stored number that later refuses every run of
+ * that persona.
+ */
+ fleet: z.record(z.string, z.number).optional,
  }),
 )
 .output(PersonaGroupSchema),

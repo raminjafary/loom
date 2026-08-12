@@ -3956,3 +3956,171 @@ Decompose and delegate.`
  socket.close
  })
 })
+
+/**
+ * The fleets, over the real protocol.
+ *
+ * The domain tests cover what a width means and the contract test covers that it is
+ * validated. What only this level can show is the thing the fleet design is actually worried
+ * about — "a fleet size that the runtime never reads is a number a human tunes and a
+ * swarm ignores": a plan asking for more than the width has to be *warned about* before
+ * anything starts, and the runs past it have to be *refused* when they try.
+ */
+describe('runner-gateway: fleets', => {
+ const FLEET_PLANNER = `---
+name: fleet-planner
+description: Decomposes and delegates.
+model: test-model
+tools: []
+harness:
+ planner: true
+ delegates: [Read]
+---
+
+Decompose and delegate.`
+
+ const waitForMessage = async (threadId: string, needle: string) => {
+ for (let i = 0; i < 60; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId })
+ const hit = page.messages.find((m) => m.body.text?.includes(needle))
+ if (hit) return hit.body.text
+ }
+ return undefined
+ }
+
+ /** A planner and the worker persona it delegates to, both on one sized team. */
+ const startSizedTeam = async (name: string, width: number) => {
+ const { socket, runnerId } = await pairFakeRunner(name)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name })
+ const planner = await client.persona.create({ markdownSource: FLEET_PLANNER })
+ const worker = (await client.persona.list).find((p) => p.name === 'fake-worker')
+ if (!worker) throw new Error('fake-worker persona missing')
+
+ // One team holding both, so `resolveFleetSizes` is unambiguous — a persona on two
+ // teams is deliberately unsized, since nothing says which team a run is for.
+ const group = await client.personaGroup.create({
+ name: `${name}-team`,
+ personaIds: [planner.id, worker.id],
+ })
+ // A width of 0 is refused by the server (it is a removal, not a width), so 0 here
+ // means "leave the team unsized" — which is what the regression test wants.
+ await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [planner.id, worker.id],
+...(width > 0 ? { fleet: { [worker.id]: width } }: {}),
+ })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: planner.id,
+ })
+ const frame = (await startRun) as { persona: { systemPrompt: string } }
+ return { socket, run: await runPromise, thread: created.rootThread, frame, group }
+ }
+
+ it("tells the Planner how wide its team is, in the roster it is given", async => {
+ // The first place, and the cheapest half: a real instruction to a real model,
+ // delivered while it is deciding how wide to fan out.
+ const { socket, frame, group } = await startSizedTeam('fleet-roster', 2)
+
+ expect(frame.persona.systemPrompt).toContain('at most 2 concurrent fake-worker run(s)')
+ expect(frame.persona.systemPrompt).toContain(
+ 'Do not give a persona more concurrent subtasks than its size',
+)
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ it('warns before anything starts when a plan asks for more than the width', async => {
+ // The third place. A warning rather than a refusal, for the reason path overlap
+ // warns — but posted before the first child starts, because that is the only moment a
+ // human can act on it.
+ const { socket, run, thread, group } = await startSizedTeam('fleet-warn', 2)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'A', task: 'Do A.', personaName: 'fake-worker' },
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker' },
+ { title: 'C', task: 'Do C.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+
+ const warning = await waitForMessage(thread.id, 'more concurrent workers than the team')
+ expect(warning).toContain('3 × fake-worker')
+ expect(warning).toContain('sized for 2')
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ it('refuses the run past the width, and says the team is what refused it', async => {
+ /**
+ * The second place, and the one that makes the number real. The plan warned;
+ * this is what happens when it goes ahead anyway — the third subtask is refused, with
+ * a reason naming the team's own size rather than a platform ceiling.
+ */
+ const { socket, run, thread, group } = await startSizedTeam('fleet-refuse', 2)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'A', task: 'Do A.', personaName: 'fake-worker' },
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker' },
+ { title: 'C', task: 'Do C.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+
+ const summary = await waitForMessage(thread.id, 'Plan accepted')
+ expect(summary).toContain('2 subtask(s) started')
+ expect(summary).toContain('sized for 2 concurrent fake-worker')
+
+ // Exactly two runs exist — the width, not the plan, decided that.
+ const children = await client.agentRun.listChildren({ agentRunId: run.id })
+ expect(children).toHaveLength(2)
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ it('leaves an unsized team exactly as it was before fleets existed', async => {
+ // The regression that matters most: every team in every existing workspace is
+ // unsized, and none of them may change behaviour.
+ const { socket, run, thread, frame, group } = await startSizedTeam('fleet-unsized', 0)
+ // width 0 is refused by the server, so the team above is unsized — asserted rather
+ // than assumed, since the whole test depends on it.
+ const stored = (await client.personaGroup.list).find((g) => g.id === group.id)
+ expect(stored?.fleet).toEqual({})
+ expect(frame.persona.systemPrompt).not.toContain('concurrent')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'A', task: 'Do A.', personaName: 'fake-worker' },
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker' },
+ { title: 'C', task: 'Do C.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+
+ const summary = await waitForMessage(thread.id, 'Plan accepted')
+ expect(summary).toContain('3 subtask(s) started')
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+})

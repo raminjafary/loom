@@ -511,6 +511,14 @@ export const PersonaGroupSchema = z.object({
  * the line Phase 2 draws between this canvas and the observability graph.
  */
  layout: z.record(z.string, z.object({ x: z.number, y: z.number })),
+ /**
+ * How many of each member this team runs at once — the fleet, keyed by persona
+ * id. A member with no entry is unsized, meaning the Planner decides.
+ *
+ * Unlike `layout`, the runtime reads it: the roster a Planner is given, the concurrency
+ * check at child start, and the plan-time warning.
+ */
+ fleet: z.record(z.string, z.number),
  createdAt: z.date,
  updatedAt: z.date,
 })
