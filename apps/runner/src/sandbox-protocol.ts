@@ -44,6 +44,8 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  toolUseId: z.string,
  decision: z.enum(['allow', 'deny']),
  }),
+ /** Context delivered to a run already working, pre-fenced server-side. */
+ z.object({ t: z.literal('deliver'), text: z.string }),
  /** The server's verdict on a note the agent wrote. */
  z.object({
  t: z.literal('note_result'),

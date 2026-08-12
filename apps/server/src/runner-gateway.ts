@@ -247,6 +247,13 @@ export const createRunnerGateway = (
  send(runnerId, { type: 'cancel_run', runId })
  },
 
+ async deliverToRun({ runnerId, runId, text }) {
+ // Silent when the Runner is gone, for the same reason cancelRun is: there is no
+ // live agent loop to deliver into, and the ledger already holds the note.
+ if (!connections.has(runnerId)) return
+ send(runnerId, { type: 'deliver_context', runId, text })
+ },
+
  async sendApprovalDecision({ runnerId, toolUseId, decision }) {
  send(runnerId, { type: 'permission_response', toolUseId, decision })
  },

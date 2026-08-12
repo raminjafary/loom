@@ -112,6 +112,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  * and a sample that is superseded before the next beat is simply overwritten.
  */
  const contextUsage = new Map<string, { totalTokens: number; maxTokens: number }>
+ /**
+ * Per-run delivery channels, so context decided
+ * *after* a run started can still reach it. Cleared with the run's other per-run
+ * state; a delivery for a run that has finished is dropped, which is the honest
+ * outcome — the note is on the ledger for whoever reads it next.
+ */
+ const deliveries = new Map<string, (text: string) => void>
 
  const heartbeatFor = (runId: string) => {
  const usage = contextUsage.get(runId)
@@ -553,6 +560,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }
  }
 
+ // The run's delivery channel, registered under
+ // its run id so a `deliver_context` frame can reach a loop already in flight.
+ const registerDelivery = (deliver: (text: string) => void) => {
+ deliveries.set(input.runId, deliver)
+ }
+
  const skillNames = await provisionSkills(input.homePath, input.persona.capabilities ?? [])
  if (skillNames.length > 0) log(`provisioned ${skillNames.length} skill(s) for run ${input.runId}`)
 
@@ -597,6 +610,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onSessionId,
  onPermissionRequest,
  onContextUsage: (usage) => contextUsage.set(input.runId, usage),
+ onInputChannel: (channel) => registerDelivery(channel.deliver),
  })
  flushPlan
  return
@@ -665,6 +679,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onSessionId,
  onPermissionRequest,
  onContextUsage: (usage) => contextUsage.set(input.runId, usage),
+ onDeliveryChannel: registerDelivery,
  log,
  })
  // Sent after the loop, not from inside the tool handler: a plan submitted by
@@ -897,6 +912,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }
  aborts.delete(runId)
  contextUsage.delete(runId)
+ deliveries.delete(runId)
  // State is cleared only on a terminal outcome. Surviving a crash is the
  // whole point, so it must not be removed just because this process is
  // done with the run.
@@ -977,6 +993,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }
  aborts.delete(frame.runId)
  contextUsage.delete(frame.runId)
+ deliveries.delete(frame.runId)
  runStates.delete(frame.runId)
  pendingTerminalEvents.delete(frame.runId)
  eventSeqs.delete(frame.runId)
@@ -984,6 +1001,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  rawChunkIndexes.delete(frame.runId)
  void clearRunState(frame.runId).catch( => {})
  })
+ return
+ }
+
+ case 'deliver_context': {
+ deliveries.get(frame.runId)?.(frame.text)
  return
  }
 

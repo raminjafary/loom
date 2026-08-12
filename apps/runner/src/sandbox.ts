@@ -74,6 +74,12 @@ export interface SandboxOptions {
  ops: Record<string, unknown>[]
  }) => void
  /**
+ * Hands back a function that delivers pre-rendered context into the running
+ * container. Called once, as soon as the
+ * container is accepting commands.
+ */
+ readonly onDeliveryChannel?: (deliver: (text: string) => void) => void
+ /**
  * One note the agent wrote, relayed as it is written. The
  * verdict travels back into the tool result, so a refused note is something the
  * model can see and correct.
@@ -440,6 +446,13 @@ export const runAgentInSandbox = async (
  const send = (frame: Parameters<typeof encodeFrame>[0]) => {
  if (child.stdin.writable) child.stdin.write(encodeFrame(frame))
  }
+
+ /**
+ * Offered as soon as the container exists rather than after `ready`, because the
+ * caller registers it once and a delivery arriving before the agent loop starts is
+ * already in the opening ledger — see the `deliver` case in agent-host.ts.
+ */
+ options.onDeliveryChannel?.((text) => send({ t: 'deliver', text }))
 
  // Held until the container reports `ready`. Writing it now would lose it —
  // `docker run -i` discards stdin written before the container's process attaches,

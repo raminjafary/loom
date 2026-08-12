@@ -7,6 +7,7 @@ import {
  isTerminalRunStatus,
  parseNoteInput,
  pathsOverlap,
+ renderDeliveredNote,
  renderNotesForPrompt,
  selectNotesForContext,
  summarizeElidedNotes,
@@ -21,6 +22,7 @@ import type {
  AgentRunCostRollup,
  AgentRunEventRepositoryPort,
  AgentRunRepositoryPort,
+ RunDispatchPort,
  WorkerNoteRepositoryPort,
 } from './agent-ports.js'
 
@@ -40,6 +42,14 @@ export interface NoteDeps {
  readonly agentRuns: AgentRunRepositoryPort
  /** Only the board reads these, for the live fields — see `getSwarmBoard`. */
  readonly agentRunEvents: AgentRunEventRepositoryPort
+ /**
+ * Delivers a note into runs already working.
+ *
+ * Optional, and the one dependency here that reaches outside the database: a note is
+ * recorded whether or not it can be delivered, so a caller that has no dispatch
+ * (a test, a read-only context) writes notes exactly as before.
+ */
+ readonly dispatch?: RunDispatchPort
 }
 
 /**
@@ -127,9 +137,10 @@ export const recordAgentNote = async (
  }
  }
 
+ const treeRunId = await resolveTreeRunId(deps, run)
  const note = await deps.workerNotes.append({
  workspaceId: input.workspaceId,
- treeRunId: await resolveTreeRunId(deps, run),
+ treeRunId,
  agentRunId: run.id,
  authorKind: 'agent_run',
  kind: verdict.kind,
@@ -137,6 +148,19 @@ export const recordAgentNote = async (
  body: verdict.body,
  paths: verdict.paths,
  })
+
+ /**
+ * Only a `decision` propagates to runs already in flight, and the restraint is the
+ * design. A decision is the one authored kind that is a *standing* fact governing
+ * everyone who comes after (see `MAX_DECISIONS_IN_CONTEXT`); a finding is one
+ * worker's observation and a blocker is one worker's reason for stopping, and
+ * pushing either into every sibling's context mid-turn would spend the attention
+ * this feature exists to protect. Findings still reach the ledger, and the ledger is
+ * still read.
+ */
+ if (verdict.kind === 'decision') {
+ await deliverNoteToActiveRuns(deps, { workspaceId: input.workspaceId, treeRunId, note })
+ }
 
  return { ok: true, note }
 }
@@ -201,9 +225,10 @@ export const writeHumanNote = async (
  // contract's error channel is what they see.
  if (!verdict.ok) throw new ValidationError(verdict.reason)
 
- return deps.workerNotes.append({
+ const treeRunId = await resolveTreeRunId(deps, run)
+ const note = await deps.workerNotes.append({
  workspaceId: input.workspaceId,
- treeRunId: await resolveTreeRunId(deps, run),
+ treeRunId,
  // Null: a human's note is about the tree, not about any one run.
  agentRunId: null,
  authorKind: 'human',
@@ -212,6 +237,75 @@ export const writeHumanNote = async (
  body: verdict.body,
  paths: verdict.paths,
  })
+
+ /**
+ * Every kind, unlike an agent's — and this is the asymmetry that makes the feature
+ * worth having. The account of what a human can do today is "leave a
+ * message for the swarm and hope"; a person who writes a blocker while three
+ * workers are running means it for those three workers, now. A human's note is also
+ * always in scope (`agentRunId: null`), so it reaches every active run in the tree.
+ */
+ await deliverNoteToActiveRuns(deps, { workspaceId: input.workspaceId, treeRunId, note })
+ return note
+}
+
+/**
+ * Delivers a note into the runs that are working **right now**.
+ *
+ * The gap this closes: a note reaches a run that starts after it, or one that happens
+ * to call `read_notes` again. A worker mid-turn learns nothing — so a decision made
+ * one minute after a worker began was, until now, a decision that worker would never
+ * see, and two subtrees implementing the same concept differently is the failure that
+ * produces most reliably.
+ *
+ * Three bounds, and each is load-bearing:
+ *
+ * - **Scope.** Only runs `inScopeRunIds` admits — ancestors, self, descendants and
+ * immediate siblings. The same rule as the opening ledger, for the same
+ * context-economy reason: delivering one area's chatter into another's workers is
+ * exactly the context pollution a swarm exists to avoid.
+ * - **Active only.** A terminal run has no loop to deliver into.
+ * - **Never the author.** A run does not need its own note read back to it, and
+ * delivering it would be the one case where a model's own output re-enters its
+ * context wearing the platform's framing.
+ *
+ * Every failure here is swallowed. Delivery makes runs *better informed*; a note that
+ * could not be delivered is still on the ledger, and letting that fail the write would
+ * trade the thing that matters for the thing that helps.
+ */
+export const deliverNoteToActiveRuns = async (
+ deps: NoteDeps,
+ input: { workspaceId: WorkspaceId; treeRunId: AgentRunId; note: WorkerNote },
+): Promise<{ delivered: AgentRunId[] }> => {
+ if (!deps.dispatch) return { delivered: [] }
+
+ const delivered: AgentRunId[] = []
+ try {
+ const tree = await deps.agentRuns.listTree(input.workspaceId, input.treeRunId)
+ const active = tree.filter(
+ (run) => !isTerminalRunStatus(run.status) && run.id !== input.note.agentRunId,
+)
+ if (active.length === 0) return { delivered: [] }
+
+ const text = renderDeliveredNote(input.note)
+ for (const run of active) {
+ // Scope is computed per recipient, because it is a question about *that* run's
+ // position in the tree — a sibling of the author is in scope, a sibling's worker
+ // is not, and only the recipient's own view can tell those apart.
+ if (input.note.agentRunId && !inScopeRunIds(tree, run).has(input.note.agentRunId)) {
+ continue
+ }
+ try {
+ await deps.dispatch.deliverToRun({ runnerId: run.runnerId, runId: run.id, text })
+ delivered.push(run.id)
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+ }
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+ return { delivered }
 }
 
 /** One tree's whole ledger, oldest first — what a client renders and the board groups. */

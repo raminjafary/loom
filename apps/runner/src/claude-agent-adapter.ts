@@ -5,6 +5,7 @@ import {
  type McpServerConfig,
  type PermissionResult,
  type SDKMessage,
+ type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
@@ -175,6 +176,14 @@ export interface RunAgentOptions {
  * part of every later worker's own instructions.
  */
  readonly contextLedger?: string
+ /**
+ * Hands the caller the run's delivery channel.
+ *
+ * Called once, synchronously, before the agent loop starts. What comes through it
+ * is text the *server* has already rendered and fenced — the Runner never composes
+ * what a model reads, for the same reason `contextLedger` arrives pre-rendered.
+ */
+ readonly onInputChannel?: (channel: { deliver: (text: string) => void }) => void
  /**
  * Aborts the SDK's agent loop mid-flight. Owned by
  * the caller so a `cancel_run` frame arriving on the socket can reach a run
@@ -361,6 +370,75 @@ export const buildPrompt = (
  return ledger ? `${opening}\n\n${ledger}`: opening
 }
 
+/**
+ * The run's input channel — the opening prompt, plus anything the platform delivers
+ * while the run is still working.
+ *
+ * **This is why every run uses the SDK's streaming-input mode.** With a plain string
+ * prompt the agent loop has no input channel at all once it starts: a decision made
+ * after a worker began reaches that worker only if it happens to call `read_notes`
+ * again, at a moment of its own choosing. The SDK's `AsyncIterable<SDKUserMessage>`
+ * prompt is the channel that changes that, and it is also what enables the control
+ * requests (`interrupt`, `setPermissionMode`) the SDK documents as streaming-only.
+ *
+ * `shouldQuery: false` is the load-bearing field: the SDK appends such a message to
+ * the transcript "without triggering an assistant turn … merged into the next user
+ * message that does query". So a delivery lands in the worker's context on its next
+ * model call — its next tool result — rather than interrupting the turn in flight.
+ * Interrupting is what the kill switch is for; this is propagation, not preemption.
+ *
+ * The queue closes on the first `result` message, which is what ends the run: in
+ * streaming-input mode the SDK keeps the loop alive while the input iterable is open,
+ * so a queue nobody closes is a run that never finishes.
+ */
+const createInputChannel = (opening: string) => {
+ const pending: SDKUserMessage[] = []
+ let notify: ( => void) | null = null
+ let closed = false
+
+ const wake = => {
+ const resume = notify
+ notify = null
+ resume?.
+ }
+
+ const message = (text: string, first: boolean): SDKUserMessage => ({
+ type: 'user',
+ message: { role: 'user', content: text },
+ parent_tool_use_id: null,
+ // The opening prompt must start the turn; everything after it must not.
+...(first ? {}: { shouldQuery: false }),
+ })
+
+ pending.push(message(opening, true))
+
+ const stream = (async function* {
+ for (;;) {
+ while (pending.length > 0) {
+ const next = pending.shift
+ if (next) yield next
+ }
+ if (closed) return
+ await new Promise<void>((resolve) => {
+ notify = resolve
+ })
+ }
+ })
+
+ return {
+ stream,
+ deliver: (text: string) => {
+ if (closed) return
+ pending.push(message(text, false))
+ wake
+ },
+ close: => {
+ closed = true
+ wake
+ },
+ }
+}
+
 export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  const canUseTool: CanUseTool = async (toolName, input) => {
  if (!options.isRiskyTool(toolName)) {
@@ -407,10 +485,13 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  return result
  }
 
- const prompt = buildPrompt(options)
+ const input = createInputChannel(buildPrompt(options))
+ // Registered before the loop starts, so a delivery arriving in the same tick as
+ // the first tool call is queued rather than dropped on the floor.
+ options.onInputChannel?.({ deliver: input.deliver })
 
  const stream = query({
- prompt,
+ prompt: input.stream,
  options: {
 ...buildQueryOptions(options),
  canUseTool,
@@ -465,9 +546,19 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  for (const event of toWireEvents(message)) {
  await options.onEvent(event)
  }
+ /**
+ * The run's work is done, so the input channel closes and the SDK's loop ends.
+ *
+ * In streaming-input mode the agent loop stays alive while the iterable is
+ * open — which is the whole point mid-run, and a deadlock at the end of one.
+ * Closed here rather than in a `finally`, because `finally` runs only once the
+ * loop has already exited, which is the thing that will not happen.
+ */
+ if (message.type === 'result') input.close
  await sampleContextUsage
  }
  } catch (error) {
+ input.close
  // An abort is an expected outcome, not a crash: the server already recorded
  // the run as cancelled before sending `cancel_run`, so reporting a
  // `run_failed` here would overwrite that with a misleading `failed`.

@@ -484,6 +484,19 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  answer: z.string.nullable,
  }),
  /**
+ * Context delivered to a run that is **already working**.
+ *
+ * Pre-rendered and pre-fenced by the server, exactly like `start_run`'s
+ * `contextLedger` and for the same reason: the untrusted-block framing in
+ * `renderNotesForPrompt` is the mitigation, and a second formatter on the Runner
+ * would be a second place to get it wrong.
+ *
+ * Fire-and-forget. A run that has finished between the decision to deliver and the
+ * frame arriving has nothing to receive it, and that is not a failure — the note is
+ * on the ledger either way, which is where a later run reads it.
+ */
+ z.object({ type: z.literal('deliver_context'), runId: z.string, text: z.string }),
+ /**
  * Kill switch. Fire-and-forget with no result frame on purpose:
  * the server has already marked the run `cancelled` by the time this is sent,
  * so there is no decision left for the Runner's answer to influence.

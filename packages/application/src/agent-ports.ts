@@ -662,6 +662,15 @@ export interface RunDispatchPort {
  */
  cancelRun(input: { runnerId: RunnerId; runId: AgentRunId }): Promise<void>
  /**
+ * Delivers pre-rendered context into a run that is already working.
+ *
+ * Fire-and-forget and deliberately tolerant, like `cancelRun`: a run that finished
+ * between the decision to deliver and the frame arriving has nothing to receive it,
+ * and that is not a failure — the note is on the ledger, which is where the next
+ * run reads it.
+ */
+ deliverToRun(input: { runnerId: RunnerId; runId: AgentRunId; text: string }): Promise<void>
+ /**
  * Relays a human's decision back to the Runner that is blocked awaiting it.
  * Keyed by `toolUseId` (what the SDK's canUseTool callback actually holds),
  * not our internal approval_request id — the Runner doesn't need to know

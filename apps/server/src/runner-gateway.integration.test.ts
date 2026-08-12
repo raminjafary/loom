@@ -2998,3 +2998,184 @@ Decompose and delegate.`
  socket.close
  })
 })
+
+/**
+ * Note delivery into runs already working.
+ *
+ * What the fake Runner can prove is the *server's* half: which runs a note reaches,
+ * which it does not, and what text crosses the wire. Whether the model then sees it is
+ * a question only a live SDK run can answer — `tools/delivery-check.mts` is that check,
+ * and these two together are the whole claim.
+ */
+describe('runner-gateway: delivering notes to live runs', => {
+ const DELIVERY_PLANNER = `---
+name: delivery-planner
+description: Decomposes and delegates.
+model: test-model
+tools: []
+harness:
+ planner: true
+ delegates: [Read]
+---
+
+Decompose and delegate.`
+
+ const deliveries = (frames: Record<string, unknown>[]) =>
+ frames.filter((frame) => frame.type === 'deliver_context')
+
+ /** Collects every frame the fake Runner receives, so absence is assertable too. */
+ const collect = (socket: WebSocket): Record<string, unknown>[] => {
+ const seen: Record<string, unknown>[] = []
+ socket.on('message', (raw: Buffer) => {
+ try {
+ seen.push(JSON.parse(raw.toString) as Record<string, unknown>)
+ } catch {
+ // Not a frame; ignored.
+ }
+ })
+ return seen
+ }
+
+ it("delivers a human's note to every running worker, and never to a finished one", async => {
+ const { socket, runnerId } = await pairFakeRunner('deliver-human')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'deliver-human' })
+ const planner = await client.persona.create({ markdownSource: DELIVERY_PLANNER })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: planner.id,
+ })
+ await startRun
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'A', task: 'Do A.', personaName: 'fake-worker' },
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+ let children = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 60 && children.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+ expect(children).toHaveLength(2)
+
+ // One worker finishes; the other keeps running.
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: children[0]!.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'done' },
+ }),
+)
+ for (let i = 0; i < 60; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ if ((await client.agentRun.get({ agentRunId: children[0]!.id })).status === 'completed') break
+ }
+
+ const seen = collect(socket)
+ await client.workerNote.write({
+ agentRunId: run.id,
+ kind: 'blocker',
+ title: 'Stop touching the schema',
+ body: 'The migration is going out separately.',
+ paths: [],
+ })
+ for (let i = 0; i < 60 && deliveries(seen).length === 0; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ }
+
+ const sent = deliveries(seen)
+ const targets = sent.map((frame) => frame.runId)
+ // The still-running worker and its planner; never the completed one.
+ expect(targets).toContain(children[1]!.id)
+ expect(targets).not.toContain(children[0]!.id)
+ // A human's note is the operator speaking — outside the untrusted fence.
+ expect(String(sent[0]!.text)).toContain('Stop touching the schema')
+ expect(String(sent[0]!.text)).not.toContain(UNTRUSTED_NOTE_OPEN)
+
+ socket.close
+ })
+
+ /**
+ * The restraint that keeps this from becoming an interrupt channel: a `finding` is
+ * one worker's observation and does not go to everyone mid-turn. Only a `decision`
+ * — the standing kind — propagates.
+ */
+ it('delivers an agent decision but not an agent finding, and fences what it delivers', async => {
+ const { socket, runnerId } = await pairFakeRunner('deliver-agent')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'deliver-agent' })
+ const planner = await client.persona.create({ markdownSource: DELIVERY_PLANNER })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: planner.id,
+ })
+ await startRun
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'A', task: 'Do A.', personaName: 'fake-worker' },
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+ let children = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 60 && children.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+
+ const seen = collect(socket)
+ socket.send(
+ JSON.stringify({
+ type: 'note_written',
+ runId: children[0]!.id,
+ requestId: 'note-finding',
+ note: { kind: 'finding', title: 'Saw a thing', body: 'It was a thing.' },
+ }),
+)
+ await new Promise((r) => setTimeout(r, 400))
+ expect(deliveries(seen)).toHaveLength(0)
+
+ socket.send(
+ JSON.stringify({
+ type: 'note_written',
+ runId: children[0]!.id,
+ requestId: 'note-decision',
+ note: { kind: 'decision', title: 'Use zod', body: 'Not io-ts.' },
+ }),
+)
+ for (let i = 0; i < 60 && deliveries(seen).length === 0; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ }
+
+ const sent = deliveries(seen)
+ const targets = sent.map((frame) => frame.runId)
+ expect(targets).toContain(children[1]!.id)
+ // Never back to its own author.
+ expect(targets).not.toContain(children[0]!.id)
+ // Model-authored, arriving mid-turn: the single most attacker-shaped position
+ // in this system, and it is fenced.
+ expect(String(sent[0]!.text)).toContain(UNTRUSTED_NOTE_OPEN)
+ expect(String(sent[0]!.text)).toContain('DATA')
+
+ socket.close
+ })
+})

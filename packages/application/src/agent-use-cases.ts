@@ -91,6 +91,7 @@ import type { NotificationDeps } from './notification-use-cases.js'
 import {
  buildContextLedger,
  recordPlatformNote,
+ deliverNoteToActiveRuns,
  resolveTreeRunId,
  type NoteDeps,
 } from './note-use-cases.js'
@@ -1755,9 +1756,10 @@ export const applyPlanDelta = async (
  continue
  }
  try {
- await deps.workerNotes.append({
+ const treeRunId = await resolveTreeRunId(deps, target)
+ const note = await deps.workerNotes.append({
  workspaceId: input.workspaceId,
- treeRunId: await resolveTreeRunId(deps, target),
+ treeRunId,
  agentRunId: steering.id,
  authorKind: 'agent_run',
  kind: 'decision',
@@ -1765,6 +1767,10 @@ export const applyPlanDelta = async (
  body: op.guidance.slice(0, MAX_NOTE_BODY_LENGTH),
  paths: [],
  })
+ // Delivered, not merely recorded: a revision that only reached the ledger would
+ // take effect when the worker next chose to read it, which is the "leave a
+ // message and hope" mid-flight steering exists to replace.
+ await deliverNoteToActiveRuns(deps, { workspaceId: input.workspaceId, treeRunId, note })
  applied.push({ op: 'revise', subject, applied: true })
  } catch (error) {
  applied.push({

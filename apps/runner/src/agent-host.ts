@@ -70,6 +70,9 @@ const pendingNoteReads = new Map<
 /** `ask_human` round-trips, same shape as a notes read. */
 const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
 
+/** The running agent's delivery channel, once its loop has started. */
+let deliverToAgent: ((text: string) => void) | null = null
+
 let requestCounter = 0
 const nextRequestId = : string => {
  requestCounter += 1
@@ -102,6 +105,14 @@ const main = async : Promise<void> => {
 
  if (parsed.data.t === 'start') {
  resolve(parsed.data)
+ return
+ }
+
+ if (parsed.data.t === 'deliver') {
+ // Dropped rather than queued if the agent loop has not started yet: the
+ // ledger the run opens with is assembled after this frame could arrive, so
+ // anything delivered that early is already in the opening prompt.
+ deliverToAgent?.(parsed.data.text)
  return
  }
 
@@ -223,6 +234,9 @@ const main = async : Promise<void> => {
 ...(deltaTool
  ? { plannerTool: { server: deltaTool.server, toolName: PLAN_DELTA_TOOL_NAME } }
 : {}),
+ onInputChannel: (channel) => {
+ deliverToAgent = channel.deliver
+ },
  onSessionId: (sessionId) => emit({ t: 'session', sessionId }),
  onContextUsage: (usage) =>
  emit({ t: 'context_usage', totalTokens: usage.totalTokens, maxTokens: usage.maxTokens }),
