@@ -52,20 +52,41 @@ const selectedGroupId = ref(props.groups[0]?.id ?? '')
 const creating = ref(false)
 const draftName = ref('')
 
+/**
+ * The team this canvas just asked for, by name, until it arrives.
+ *
+ * By name because the id is the server's to mint. Found by creating one in the
+ * browser: the team was stored, and the canvas went on showing the previous one —
+ * so a create looked like nothing happening at all.
+ */
+const awaitingName = ref('')
+
 const createTeam = => {
- if (!draftName.value.trim) return
- emit('create-group', { name: draftName.value.trim, personaIds: [] })
+ const name = draftName.value.trim
+ if (!name) return
+ awaitingName.value = name
+ emit('create-group', { name, personaIds: [] })
  draftName.value = ''
  creating.value = false
 }
 
-/**
- * Selects a team as soon as one exists, and after one is created from here — without
- * it, creating the first team leaves the canvas looking exactly as empty as before.
- */
 watch(
  => props.groups,
  (groups) => {
+ /**
+ * Selecting the team that was just created. The rule below — reselect when the
+ * current selection is gone — cannot do this: the previous selection is still
+ * there, so nothing looked wrong and nothing changed.
+ */
+ if (awaitingName.value) {
+ const created = groups.find((entry) => entry.name === awaitingName.value)
+ if (created) {
+ selectedGroupId.value = created.id
+ awaitingName.value = ''
+ return
+ }
+ }
+ // Whatever was selected has been deleted, or nothing was selected yet.
  if (!groups.some((entry) => entry.id === selectedGroupId.value)) {
  selectedGroupId.value = groups[groups.length - 1]?.id ?? ''
  }
@@ -317,7 +338,20 @@ const onKeydown = (event: KeyboardEvent) => {
 
  <div v-if="props.groups.length > 0" class="body">
  <div class="canvas">
+ <!--
+ An empty team was a black void with no indication that anything was
+ expected of the human — the panel on the right says "Nobody yet" in
+ eleven-pixel grey, which is not where someone looking at a blank canvas
+ is looking.
+ -->
+ <p v-if="members.length === 0" class="canvas-empty">
+ <strong>{{ group?.name }} has nobody on it yet.</strong>
+ Add personas from the list on the right. Once a planner and a worker are
+ both here, the edge between them shows whether the platform would let that
+ planner delegate to that worker — and why not, when it would not.
+ </p>
  <VueFlow
+ v-else
 :nodes="flowNodes"
 :edges="flowEdges"
 :nodes-draggable="true"
@@ -522,6 +556,23 @@ header h2 {
  min-width: 0;
  min-height: 0;
  border-right: 1px solid var(--border);
+ display: flex;
+}
+
+.canvas-empty {
+ margin: auto;
+ max-width: 26rem;
+ padding: 1.5rem;
+ text-align: center;
+ font-size: 0.8rem;
+ line-height: 1.6;
+ color: var(--text-faint);
+}
+
+.canvas-empty strong {
+ display: block;
+ margin-bottom: 0.35rem;
+ color: var(--text-muted);
 }
 
 /*

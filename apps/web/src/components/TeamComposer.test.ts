@@ -115,6 +115,32 @@ describe('TeamComposer', => {
  expect(wrapper.find('.flow-stub').exists).toBe(true)
  })
 
+ /**
+ * Found in the browser: the team was stored and the canvas went on showing the
+ * previous one, so creating a team looked like nothing happening. The reselect rule
+ * could not catch it — the previous selection was still there.
+ */
+ it('switches to the team it just created, not the one already selected', async => {
+ const existing = group({ id: 'g1', name: 'Team A' })
+ const wrapper = composer({ groups: [existing] })
+
+ await wrapper.findAll('.link').find((b) => b.text === '+ New team')?.trigger('click')
+ await wrapper.get('.new-team input').setValue('Frontend squad')
+ await wrapper.get('.new-team').trigger('submit')
+
+ const created = group({ id: 'g2', name: 'Frontend squad', personaIds: ['lead'] })
+ await wrapper.setProps({ groups: [existing, created] })
+ await wrapper.vm.$nextTick
+
+ expect((wrapper.get('select').element as HTMLSelectElement).value).toBe('g2')
+ })
+
+ it('tells a human what to do with an empty team instead of showing a void', => {
+ const wrapper = composer({ groups: [group({ personaIds: [] })] })
+ expect(wrapper.find('.flow-stub').exists).toBe(false)
+ expect(wrapper.get('.canvas-empty').text).toContain('nobody on it yet')
+ })
+
  it('puts every member on the canvas, and marks the planner', => {
  const nodes = flow(composer).props('nodes') as { id: string; class: string }[]
  expect(nodes.map((node) => node.id).sort).toEqual(['lead', 'swe'])
