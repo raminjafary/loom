@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import type { AgentPersona, Capability, PersonaCapability, PersonaDraft } from '@loom/api-contract'
+import type {
+ AgentPersona,
+ ApprovalMode,
+ Capability,
+ PersonaCapability,
+ PersonaDraft,
+} from '@loom/api-contract'
 import {
  EMPTY_PERSONA_FORM,
  SELECTABLE_MODELS,
@@ -71,6 +77,26 @@ const rawProblems = ref<string[]>([])
 const savedDiscrepancies = ref<string[]>([])
 
 const EFFORTS = ['low', 'medium', 'high'] as const
+
+/**
+ * Labels and hints for the approval modes, duplicated from `@loom/domain`'s
+ * `describeApprovalMode` for the reason every other catalogue here is: this app
+ * depends on the contract, not the domain. What each mode *does* lives in the
+ * domain, next to the gate that applies it.
+ */
+const APPROVAL_MODES: readonly ApprovalMode[] = ['ask', 'accept-edits', 'auto']
+
+const APPROVAL_MODE_LABEL: Record<ApprovalMode, string> = {
+ ask: 'asks before risky calls',
+ 'accept-edits': 'takes file edits, asks before a shell',
+ auto: 'runs unattended',
+}
+
+const APPROVAL_MODE_HINT: Record<ApprovalMode, string> = {
+ ask: 'Every risky call waits for a human.',
+ 'accept-edits': 'Writes inside its own clone go through; Bash still asks. The path boundary applies either way.',
+ auto: 'Nothing is asked. Only for a persona you trust to run with nobody watching.',
+}
 
 const editingPersona = computed(
  => props.personas.find((persona) => persona.id === editingId.value) ?? null,
@@ -257,7 +283,7 @@ const doAttach = => {
 
 const harnessSummary = (persona: AgentPersona): string => {
  const parts = [
- persona.harnessAutoApprove ? 'auto-approves edits': 'asks before risky calls',
+ APPROVAL_MODE_LABEL[persona.harnessApprovalMode],
  persona.harnessBudgetCapUsd === null
  ? 'no budget cap'
 : `cap $${persona.harnessBudgetCapUsd.toFixed(2)}`,
@@ -412,9 +438,28 @@ const harnessSummary = (persona: AgentPersona): string => {
  <input v-model="form.planner" type="checkbox" />
  <span>Planner — decomposes rather than acting</span>
  </label>
- <label class="check">
- <input v-model="form.autoApprove" type="checkbox" />
- <span>Auto-approve risky calls (runs unattended)</span>
+ <!--
+ Three states, not a checkbox. The
+ boolean this replaced could only say "ask about everything" or "ask
+ about nothing", and the middle is what an operator running a
+ twenty-file edit actually wants.
+ -->
+ <label>
+ <span>Approvals</span>
+ <select
+:value="form.approvalMode"
+ @change="
+ form = {
+...form,
+ approvalMode: ($event.target as HTMLSelectElement).value as ApprovalMode,
+ }
+ "
+ >
+ <option v-for="mode in APPROVAL_MODES":key="mode":value="mode">
+ {{ APPROVAL_MODE_LABEL[mode] }}
+ </option>
+ </select>
+ <small>{{ APPROVAL_MODE_HINT[form.approvalMode] }}</small>
  </label>
  <label>
  <span>Budget cap (USD)</span>

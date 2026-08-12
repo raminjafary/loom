@@ -1,3 +1,4 @@
+import type { ApprovalMode } from './approval-modes.js'
 import { attenuateChildPersona } from './attenuation.js'
 import { canPlannerRead } from './planner-tools.js'
 import type { PersonaSpec } from './agents.js'
@@ -22,7 +23,7 @@ export interface DelegationCandidate {
  readonly description: string
  readonly model: string
  readonly tools: string[]
- readonly autoApprove: boolean
+ readonly approvalMode: ApprovalMode
  readonly budgetCapUsd: number | null
  readonly planner: boolean
  /**
@@ -39,7 +40,7 @@ const asChildSpec = (candidate: DelegationCandidate): PersonaSpec => ({
  systemPrompt: '',
  model: candidate.model,
  tools: candidate.tools,
- autoApprove: candidate.autoApprove,
+ approvalMode: candidate.approvalMode,
  budgetCapUsd: candidate.budgetCapUsd,
  planner: candidate.planner,
  delegates: candidate.delegates ?? [],

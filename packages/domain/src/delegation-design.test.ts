@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { APPROVAL_MODES } from './approval-modes.js'
 import { attenuateChildPersona } from './attenuation.js'
 import { delegationDesign, delegationMatrix } from './delegation-design.js'
 import type { PersonaSpec } from './agents.js'
@@ -8,7 +9,7 @@ const spec = (overrides: Partial<PersonaSpec> = {}): PersonaSpec => ({
  systemPrompt: '',
  model: 'claude-haiku-4-5-20251001',
  tools: ['Read'],
- autoApprove: false,
+ approvalMode: 'ask' as const,
  budgetCapUsd: null,
 ...overrides,
 })
@@ -45,7 +46,7 @@ describe('delegationDesign', => {
  planner({ budgetCapUsd: 1 }),
  spec({
  tools: ['Bash'],
- autoApprove: true,
+ approvalMode: 'auto' as const,
  budgetCapUsd: null,
  model: 'claude-opus-5',
  }),
@@ -59,7 +60,7 @@ describe('delegationDesign', => {
  })
 
  it('offers no envelope widening for a refusal widening cannot fix', => {
- const design = delegationDesign(planner, spec({ autoApprove: true }))
+ const design = delegationDesign(planner, spec({ approvalMode: 'auto' as const }))
  expect(design.refusals[0]?.widenEnvelopeWith).toBeUndefined
  })
 
@@ -95,7 +96,7 @@ describe('it agrees with the gate that actually refuses a child start', => {
  const MODELS = ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-5', 'llama-local']
  const CAPS = [null, 0.5, 5]
 
- it('over every combination of tools, model, cap, auto-approve and planner-ness', => {
+ it('over every combination of tools, model, cap, approval mode and planner-ness', => {
  let compared = 0
  for (const parentTools of TOOLS) {
  for (const childTools of TOOLS) {
@@ -103,8 +104,8 @@ describe('it agrees with the gate that actually refuses a child start', => {
  for (const childModel of MODELS) {
  for (const parentCap of CAPS) {
  for (const childCap of CAPS) {
- for (const parentAuto of [false, true]) {
- for (const childAuto of [false, true]) {
+ for (const parentMode of APPROVAL_MODES) {
+ for (const childMode of APPROVAL_MODES) {
  for (const childIsPlanner of [false, true]) {
  const parent: PersonaSpec = spec({
  name: 'parent',
@@ -113,14 +114,14 @@ describe('it agrees with the gate that actually refuses a child start', => {
  delegates: parentTools,
  model: parentModel,
  budgetCapUsd: parentCap,
- autoApprove: parentAuto,
+ approvalMode: parentMode,
  })
  const child: PersonaSpec = spec({
  name: 'child',
  tools: childTools,
  model: childModel,
  budgetCapUsd: childCap,
- autoApprove: childAuto,
+ approvalMode: childMode,
 ...(childIsPlanner ? { planner: true, delegates: childTools }: {}),
  })
  compared += 1

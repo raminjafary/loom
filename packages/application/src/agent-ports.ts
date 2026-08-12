@@ -1,4 +1,5 @@
 import type {
+ ApprovalMode,
  ChannelId,
  AgentPersona,
  AgentPersonaId,
@@ -492,7 +493,7 @@ export interface PersonaRepositoryPort {
  tools: string[]
  harnessEffort: string | null
  harnessMaxTurns: number | null
- harnessAutoApprove: boolean
+ harnessApprovalMode: ApprovalMode
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
@@ -516,7 +517,7 @@ export interface PersonaRepositoryPort {
  tools: string[]
  harnessEffort: string | null
  harnessMaxTurns: number | null
- harnessAutoApprove: boolean
+ harnessApprovalMode: ApprovalMode
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null

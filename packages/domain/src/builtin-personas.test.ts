@@ -11,7 +11,7 @@ const asSpec = (persona: BuiltinPersona): PersonaSpec => ({
  systemPrompt: persona.systemPrompt,
  model: persona.model,
  tools: persona.tools,
- autoApprove: persona.harnessAutoApprove,
+ approvalMode: persona.harnessApprovalMode,
  budgetCapUsd: persona.harnessBudgetCapUsd,
  planner: persona.harnessPlanner,
  delegates: persona.harnessDelegates,
@@ -64,7 +64,7 @@ describe('BUILTIN_PERSONAS', => {
  tools: persona.tools,
  harnessEffort: persona.harnessEffort,
  harnessMaxTurns: persona.harnessMaxTurns,
- harnessAutoApprove: persona.harnessAutoApprove,
+ harnessApprovalMode: persona.harnessApprovalMode,
  harnessPlanner: persona.harnessPlanner,
  harnessDelegates: persona.harnessDelegates,
  harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
@@ -140,8 +140,18 @@ describe('BUILTIN_PERSONAS', => {
  // `awaiting_approval` until the SLA auto-denies — found by a live run stalling
  // there. Every other built-in is @mentioned by someone who is present.
  for (const persona of BUILTIN_PERSONAS) {
- expect(persona.harnessAutoApprove).toBe(persona.name === 'reconciler')
+ expect(persona.harnessApprovalMode).toBe(persona.name === 'reconciler' ? 'auto': 'ask')
  }
+ })
+
+ /**
+ * Every other built-in ships on the narrowest mode. `accept-edits` is a real
+ * middle and a reasonable choice, but it is a choice an operator makes about their
+ * own tolerance for unattended writes — not one a shipped default should make for
+ * them (`approval-modes.ts`).
+ */
+ it('ships nothing on accept-edits', => {
+ expect(BUILTIN_PERSONAS.every((p) => p.harnessApprovalMode !== 'accept-edits')).toBe(true)
  })
 
  it('tells the reconciler it is queue-started, not @mentioned', => {

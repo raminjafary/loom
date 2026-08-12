@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import type { AgentPersona, DelegationPreview, Repository, ResponseStyle } from '@loom/api-contract'
+import type {
+ AgentPersona,
+ ApprovalMode,
+ DelegationPreview,
+ Repository,
+ ResponseStyle,
+} from '@loom/api-contract'
 import { findSelectableModel, SELECTABLE_MODELS } from '@loom/client-core'
 import { computed, ref, watch } from 'vue'
 
@@ -60,6 +66,13 @@ const task = ref('')
  * view concern either way — what a style *does* lives in the domain, next to the
  * directive it appends.
  */
+/** Duplicated from the domain for the same reason `STYLES` is — see below. */
+const APPROVAL_MODE_LABEL: Record<ApprovalMode, string> = {
+ ask: 'asks before risky calls',
+ 'accept-edits': 'takes file edits, asks before a shell',
+ auto: 'runs unattended',
+}
+
 const STYLES: ReadonlyArray<{ value: ResponseStyle; label: string; hint: string }> = [
  { value: 'default', label: 'Default', hint: 'The persona’s own voice.' },
  { value: 'concise', label: 'Concise', hint: 'Short answers, no preamble.' },
@@ -266,7 +279,7 @@ const startLabel = computed( => {
 /** What the harness will do, read off the saved persona — not off an unsaved draft. */
 const harnessSummary = (persona: AgentPersona): string => {
  // The cap is shown by `capLabel`, which knows about this run's override.
- const parts = [persona.harnessAutoApprove ? 'auto-approves edits': 'asks before risky calls']
+ const parts = [APPROVAL_MODE_LABEL[persona.harnessApprovalMode]]
  if (persona.harnessPlanner) parts.push('planner')
  return parts.join(' · ')
 }

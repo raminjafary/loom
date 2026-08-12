@@ -9,7 +9,7 @@ const planner = (over: Partial<PersonaSpec> = {}): PersonaSpec => ({
  systemPrompt: 'plan',
  model: 'claude-opus-5',
  tools: [],
- autoApprove: false,
+ approvalMode: 'ask' as const,
  budgetCapUsd: 5,
  planner: true,
  delegates: ['Read', 'Edit', 'Grep', 'Glob'],
@@ -22,7 +22,7 @@ const candidate = (over: Partial<DelegationCandidate> = {}): DelegationCandidate
  description: 'Implements a scoped change.',
  model: 'claude-sonnet-5',
  tools: ['Read', 'Edit'],
- autoApprove: false,
+ approvalMode: 'ask' as const,
  budgetCapUsd: 5,
  planner: false,
 ...over,
@@ -57,7 +57,7 @@ describe('selectDelegatablePersonas', => {
  // The reconciler's shape. It is reachable only from the merge queue, which skips
  // attenuation for `relation: 'reconcile'` — so it self-excludes here with no
  // special case, and a Planner is never told it can start one.
- const auto = candidate({ name: 'reconciler', autoApprove: true })
+ const auto = candidate({ name: 'reconciler', approvalMode: 'auto' as const })
  expect(selectDelegatablePersonas(planner, [auto])).toEqual([])
  })
 
@@ -193,7 +193,7 @@ describe('describeDelegationRoster', => {
  description: p.description,
  model: p.model,
  tools: p.tools,
- autoApprove: p.harnessAutoApprove,
+ approvalMode: p.harnessApprovalMode,
  budgetCapUsd: p.harnessBudgetCapUsd,
  planner: p.harnessPlanner,
  }))

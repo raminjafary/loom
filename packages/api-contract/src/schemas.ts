@@ -80,6 +80,16 @@ export const ThreadSchema = z.object({
  */
 export const ResponseStyleSchema = z.enum(['default', 'concise', 'explanatory', 'caveman'])
 
+/**
+ * How much a run may do without asking, narrowest first.
+ *
+ * The order is the security property — a child may never hold a wider mode than its
+ * parent — and it is enforced in `@loom/domain`, never here. Duplicated for the same
+ * reason `ResponseStyleSchema` is, and kept honest by a test in apps/server, which is
+ * the first place both are in scope.
+ */
+export const ApprovalModeSchema = z.enum(['ask', 'accept-edits', 'auto'])
+
 export const MessagePageSchema = z.object({
  messages: z.array(MessageSchema),
  nextCursor: z.string.nullable,
@@ -400,7 +410,12 @@ export const PersonaSpecSchema = z.object({
  systemPrompt: z.string.min(1).max(20_000),
  model: z.string.min(1),
  tools: z.array(z.string),
- autoApprove: z.boolean,
+ /**
+ * How much this run may do without asking. Duplicated from
+ * `@loom/domain`'s `APPROVAL_MODES` for the reason the response-style enum is —
+ * this package depends on nothing — and kept honest by a test in apps/server.
+ */
+ approvalMode: ApprovalModeSchema,
  budgetCapUsd: z.number.nullable,
  /**
  * Whether this run decomposes rather than acts.
@@ -429,7 +444,7 @@ export const AgentPersonaSchema = z.object({
  tools: z.array(z.string),
  harnessEffort: z.string.nullable,
  harnessMaxTurns: z.number.nullable,
- harnessAutoApprove: z.boolean,
+ harnessApprovalMode: ApprovalModeSchema,
  harnessPlanner: z.boolean,
  harnessDelegates: z.array(z.string),
  harnessBudgetCapUsd: z.number.nullable,
@@ -476,7 +491,7 @@ export const PersonaDraftSchema = z.object({
  systemPrompt: z.string,
  harnessEffort: z.string.nullable,
  harnessMaxTurns: z.number.nullable,
- harnessAutoApprove: z.boolean,
+ harnessApprovalMode: ApprovalModeSchema,
  harnessPlanner: z.boolean,
  harnessDelegates: z.array(z.string),
  harnessBudgetCapUsd: z.number.nullable,
@@ -644,6 +659,7 @@ export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type PersonaDraft = z.infer<typeof PersonaDraftSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
+export type ApprovalMode = z.infer<typeof ApprovalModeSchema>
 export type DelegationEdge = z.infer<typeof DelegationEdgeSchema>
 
 /** What a planner could delegate to under a launcher's overrides. */

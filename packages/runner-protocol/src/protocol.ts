@@ -35,7 +35,7 @@ export const PersonaSpecSchema = z.object({
  systemPrompt: z.string,
  model: z.string,
  tools: z.array(z.string),
- autoApprove: z.boolean,
+ approvalMode: z.enum(['ask', 'accept-edits', 'auto']),
  budgetCapUsd: z.number.nullable,
  // Optional on the wire: a Runner resumed from a state file written before the
  // registry existed has no capabilities recorded, and refusing to parse that

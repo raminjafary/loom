@@ -1,5 +1,6 @@
-import { contract, type Contract } from '@loom/api-contract'
+import { ApprovalModeSchema, contract, type Contract } from '@loom/api-contract'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
+import { APPROVAL_MODES } from '@loom/domain'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
 import type { ContractRouterClient } from '@orpc/contract'
@@ -265,19 +266,19 @@ describe('removal over HTTP', => {
  'model: claude-haiku-4-5-20251001',
  'tools: [Read, Bash]',
  'harness:',
- ' autoApprove: true',
+ ' approvalMode: auto',
  ' budgetCapUsd: 3',
  ])
  const draft = await client.persona.parse({ markdownSource: source })
  expect(draft.ok).toBe(true)
  expect(draft.problems).toEqual([])
  expect(draft.parsed?.tools).toEqual(['Read', 'Bash'])
- expect(draft.parsed?.harnessAutoApprove).toBe(true)
+ expect(draft.parsed?.harnessApprovalMode).toBe('auto')
  expect(draft.parsed?.harnessBudgetCapUsd).toBe(3)
 
  const created = await client.persona.create({ markdownSource: source })
  expect(created.tools).toEqual(draft.parsed?.tools)
- expect(created.harnessAutoApprove).toBe(draft.parsed?.harnessAutoApprove)
+ expect(created.harnessApprovalMode).toBe(draft.parsed?.harnessApprovalMode)
  expect(created.harnessBudgetCapUsd).toBe(draft.parsed?.harnessBudgetCapUsd)
  await client.persona.delete({ personaId: created.id })
  })
@@ -375,7 +376,7 @@ describe('removal over HTTP', => {
  'model: claude-opus-5',
  'tools: [Read, Bash]',
  'harness:',
- ' autoApprove: true',
+ ' approvalMode: auto',
  ])
 
  const matrix = await client.personaGroup.delegationMatrix
@@ -507,6 +508,15 @@ describe('cost summary over HTTP', => {
 })
 
 describe('contract completeness', => {
+ /**
+ * The contract duplicates the domain's approval modes, deliberately (that package
+ * depends on nothing). This is the first place both are in scope, so it is where
+ * the copy is kept honest — the same arrangement `ResponseStyleSchema` already has.
+ */
+ it('offers exactly the domain\'s approval modes, in the domain\'s order', => {
+ expect(ApprovalModeSchema.options).toEqual([...APPROVAL_MODES])
+ })
+
  it('exposes every declared procedure on the client', => {
  // Guards the contract-first rule: the contract is the only surface, so a procedure
  // declared but not implemented must be caught here rather than at runtime.

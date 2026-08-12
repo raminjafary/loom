@@ -23,7 +23,7 @@ describe('parsePersonaMarkdown', => {
  tools: ['Read', 'Edit', 'Bash', 'Grep'],
  harnessEffort: 'medium',
  harnessMaxTurns: 40,
- harnessAutoApprove: false,
+ harnessApprovalMode: 'ask' as const,
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: null,
@@ -31,11 +31,68 @@ describe('parsePersonaMarkdown', => {
  })
  })
 
- it('parses harness.autoApprove', => {
+ /**
+ * Both spellings, and the reason both exist: `autoApprove: true` is what this
+ * format shipped with and what personas on disk still say, so it is read as the
+ * mode it meant (`approval-modes.ts`).
+ */
+ it('reads harness.approvalMode', => {
  const parsed = parsePersonaMarkdown(
- '---\nname: unattended\ndescription: Runs without a human in the loop.\nmodel: claude-sonnet-5\nharness:\n autoApprove: true\n---\nGo.',
+ [
+ '---',
+ 'name: unattended',
+ 'description: Runs without a human in the loop.',
+ 'model: claude-sonnet-5',
+ 'harness:',
+ ' approvalMode: accept-edits',
+ '---',
+ 'Go.',
+ ].join('\n'),
 )
- expect(parsed.harnessAutoApprove).toBe(true)
+ expect(parsed.harnessApprovalMode).toBe('accept-edits')
+ })
+
+ it('reads the legacy harness.autoApprove as auto', => {
+ const parsed = parsePersonaMarkdown(
+ [
+ '---',
+ 'name: unattended',
+ 'description: Runs without a human in the loop.',
+ 'model: claude-sonnet-5',
+ 'harness:',
+ ' autoApprove: true',
+ '---',
+ 'Go.',
+ ].join('\n'),
+)
+ expect(parsed.harnessApprovalMode).toBe('auto')
+ })
+
+ it('defaults to ask, which is the narrowest mode', => {
+ const parsed = parsePersonaMarkdown(
+ ['---', 'name: plain', 'description: d', 'model: m', '---', 'Go.'].join('\n'),
+)
+ expect(parsed.harnessApprovalMode).toBe('ask')
+ })
+
+ /** A save writes one spelling, so an edited persona migrates by being edited. */
+ it('serializes the mode and never the boolean', => {
+ const source = serializePersonaMarkdown({
+ name: 'unattended',
+ description: 'd',
+ model: 'm',
+ tools: [],
+ harnessEffort: null,
+ harnessMaxTurns: null,
+ harnessApprovalMode: 'auto',
+ harnessPlanner: false,
+ harnessDelegates: [],
+ harnessBudgetCapUsd: null,
+ systemPrompt: 'Go.',
+ })
+ expect(source).toContain(' approvalMode: auto')
+ expect(source).not.toContain('autoApprove')
+ expect(parsePersonaMarkdown(source).harnessApprovalMode).toBe('auto')
  })
 
  it('defaults tools to empty and harness fields to null/false when absent', => {
@@ -45,7 +102,7 @@ describe('parsePersonaMarkdown', => {
  expect(parsed.tools).toEqual([])
  expect(parsed.harnessEffort).toBeNull
  expect(parsed.harnessMaxTurns).toBeNull
- expect(parsed.harnessAutoApprove).toBe(false)
+ expect(parsed.harnessApprovalMode).toBe('ask')
  })
 
  it('throws when frontmatter is missing a required field', => {
@@ -80,7 +137,7 @@ describe('serializePersonaMarkdown', => {
  tools: ['Read'],
  harnessEffort: null,
  harnessMaxTurns: null,
- harnessAutoApprove: false,
+ harnessApprovalMode: 'ask' as const,
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: null,
@@ -89,7 +146,7 @@ describe('serializePersonaMarkdown', => {
  expect(serialized).not.toMatch(/harness:/)
  })
 
- it('includes the harness block when only autoApprove is set', => {
+ it('includes the harness block when only the approval mode is set', => {
  const serialized = serializePersonaMarkdown({
  name: 'n',
  description: 'd',
@@ -97,13 +154,13 @@ describe('serializePersonaMarkdown', => {
  tools: ['Read'],
  harnessEffort: null,
  harnessMaxTurns: null,
- harnessAutoApprove: true,
+ harnessApprovalMode: 'auto' as const,
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: null,
  systemPrompt: 'body',
  })
- expect(serialized).toMatch(/harness:\n autoApprove: true/)
+ expect(serialized).toMatch(/harness:\n approvalMode: auto/)
  })
 
  it('includes the harness block when only a budget cap is set', => {
@@ -114,7 +171,7 @@ describe('serializePersonaMarkdown', => {
  tools: ['Read'],
  harnessEffort: null,
  harnessMaxTurns: null,
- harnessAutoApprove: false,
+ harnessApprovalMode: 'ask' as const,
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: 2.5,

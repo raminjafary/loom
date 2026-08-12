@@ -204,6 +204,20 @@
       "when": 1786542496592,
       "tag": "0028_windy_lethal_legion",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1786545385409,
+      "tag": "0029_eager_tyrannus",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1786545407262,
+      "tag": "0030_misty_rockslide",
+      "breakpoints": true
     }
   ]
 }

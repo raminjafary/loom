@@ -12,6 +12,10 @@ import {
  asRunnerId,
  asThreadId,
  asUserId,
+ isApprovalMode,
+ approvalModeFromSnapshot,
+ DEFAULT_APPROVAL_MODE,
+ type ApprovalMode,
  asWorkerNoteId,
  asWorkspaceId,
  AUTHORED_NOTE_KINDS,
@@ -51,6 +55,17 @@ import type { PlanSubtaskRecord } from '@loom/application'
  * The translation seam. Drizzle row shapes stop here and domain entities start
  * here — that is what keeps `PersistencePort` swappable.
  */
+
+/**
+ * A stored approval mode, defaulted rather than trusted.
+ *
+ * The column is `text`, so an unrecognised value is possible — a hand-edited row, or a
+ * mode a future build adds and this one does not know. It reads as `ask`, the
+ * narrowest, because the failure has to fall closed: guessing wide would hand a run
+ * permissions nobody granted it.
+ */
+const toApprovalMode = (value: string): ApprovalMode =>
+ isApprovalMode(value) ? value: DEFAULT_APPROVAL_MODE
 
 interface ActorColumns {
  actorKind: string
@@ -346,17 +361,31 @@ const isPersonaSpec = (value: unknown): value is PersonaSpec =>
 
 const toPersonaSpec = (value: unknown): PersonaSpec => {
  if (!isPersonaSpec(value)) throw new Error('malformed persona spec in agent_run row')
- // `autoApprove` and `budgetCapUsd` postdate some already-completed runs' stored
- // persona JSON (added after they ran) — defaulted rather than letting a legacy
- // row fail output validation the first time something re-fetches it in bulk.
- // `budgetCapUsd` defaults to null (uncapped) because that is what those runs
- // actually executed under; inventing a cap retroactively would misreport history.
- // `capabilities` postdates the registry landing, same story: a run that
- // completed before it existed held none, and defaulting to [] says so.
- const raw = value as { autoApprove?: unknown; budgetCapUsd?: unknown; capabilities?: unknown }
+ // `budgetCapUsd` postdates some already-completed runs' stored persona JSON (added
+ // after they ran) — defaulted rather than letting a legacy row fail output
+ // validation the first time something re-fetches it in bulk. It defaults to null
+ // (uncapped) because that is what those runs actually executed under; inventing a
+ // cap retroactively would misreport history. `capabilities` postdates the registry
+ // landing, same story: a run that completed before it existed held none.
+ const raw = value as {
+ approvalMode?: unknown
+ autoApprove?: unknown
+ budgetCapUsd?: unknown
+ capabilities?: unknown
+ }
  return {
 ...value,
- autoApprove: Boolean(raw.autoApprove),
+ /**
+ * The mode, read through the boolean it replaced (`approvalModeFromSnapshot`).
+ *
+ * A run that finished before approval modes existed has `autoApprove` in its
+ * persona JSON and nothing else, and it must still be readable — its cost, its
+ * diff and its transcript are all still wanted. This is a *historical* record
+ * being rendered, never a permission being granted: nothing re-runs from a
+ * snapshot, so reading `true` as `auto` reports what that run actually ran under
+ * rather than deciding anything.
+ */
+ approvalMode: approvalModeFromSnapshot(raw),
  budgetCapUsd: typeof raw.budgetCapUsd === 'number' ? raw.budgetCapUsd: null,
  capabilities: Array.isArray(raw.capabilities) ? (raw.capabilities as CapabilitySpec[]): [],
  }
@@ -498,7 +527,7 @@ export interface AgentPersonaRow {
  tools: unknown
  harnessEffort: string | null
  harnessMaxTurns: number | null
- harnessAutoApprove: boolean
+ harnessApprovalMode: string
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
@@ -517,7 +546,7 @@ export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
  tools: Array.isArray(row.tools) ? (row.tools as string[]): [],
  harnessEffort: row.harnessEffort,
  harnessMaxTurns: row.harnessMaxTurns,
- harnessAutoApprove: row.harnessAutoApprove,
+ harnessApprovalMode: toApprovalMode(row.harnessApprovalMode),
  harnessPlanner: row.harnessPlanner,
  harnessDelegates: row.harnessDelegates,
  harnessBudgetCapUsd: row.harnessBudgetCapUsd,

@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest'
  * `parsePersonaMarkdown`. Those are two implementations of one format, and the way
  * that goes wrong is silent: a form field that serializes into something the parser
  * reads differently stores a persona nobody authored — most dangerously `tools` and
- * `harness.autoApprove`, where a mis-read widens what a run may do.
+ * `harness.approvalMode`, where a mis-read widens what a run may do.
  *
  * So this test asserts the round trip *across the boundary*, with the real parser on
  * the far side. It lives in `apps/web` rather than in `client-core` for exactly the
@@ -38,7 +38,8 @@ const CASES: ReadonlyArray<{ label: string; form: PersonaFormState }> = [
  label: 'every acting tool',
  form: {...base, tools: ['Read', 'Edit', 'Write', 'Bash', 'NotebookEdit'] },
  },
- { label: 'auto-approve on', form: {...base, autoApprove: true } },
+ { label: 'auto approval mode', form: {...base, approvalMode: 'auto' as const } },
+ { label: 'the accept-edits middle', form: {...base, approvalMode: 'accept-edits' as const } },
  { label: 'a capped budget', form: {...base, budgetCapUsd: 12.5 } },
  { label: 'a fractional cap', form: {...base, budgetCapUsd: 0.05 } },
  { label: 'max turns', form: {...base, maxTurns: 40 } },
@@ -60,7 +61,7 @@ const CASES: ReadonlyArray<{ label: string; form: PersonaFormState }> = [
  name: 'planner',
  planner: true,
  delegates: ['Bash'],
- autoApprove: true,
+ approvalMode: 'auto' as const,
  effort: 'low',
  maxTurns: 3,
  budgetCapUsd: 1,
@@ -91,7 +92,7 @@ describe('the persona form writes what the server reads', => {
  expect(parsed.systemPrompt).toBe(form.systemPrompt)
  expect(parsed.harnessPlanner).toBe(form.planner)
  expect(parsed.harnessDelegates).toEqual([...form.delegates])
- expect(parsed.harnessAutoApprove).toBe(form.autoApprove)
+ expect(parsed.harnessApprovalMode).toBe(form.approvalMode)
  expect(parsed.harnessEffort).toBe(form.effort)
  expect(parsed.harnessMaxTurns).toBe(form.maxTurns)
  expect(parsed.harnessBudgetCapUsd).toBe(form.budgetCapUsd)
@@ -111,7 +112,7 @@ describe('the persona form writes what the server reads', => {
  systemPrompt: form.systemPrompt,
  harnessEffort: form.effort,
  harnessMaxTurns: form.maxTurns,
- harnessAutoApprove: form.autoApprove,
+ harnessApprovalMode: form.approvalMode,
  harnessPlanner: form.planner,
  harnessDelegates: [...form.delegates],
  harnessBudgetCapUsd: form.budgetCapUsd,

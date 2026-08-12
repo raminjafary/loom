@@ -266,7 +266,7 @@ export interface AgentSession {
  * one only when no persona of that name exists, so an edited built-in survives every
  * later seed rather than being silently reverted. That is what makes editing them
  * safe to offer — and editing them is the only way to change a shipped persona's
- * harness settings, `autoApprove` above all, without forking it under a new name.
+ * harness settings, `approvalMode` above all, without forking it under a new name.
  */
  updatePersona(input: { personaId: string; markdownSource: string }): Promise<void>
  /**

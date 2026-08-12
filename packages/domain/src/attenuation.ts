@@ -1,3 +1,4 @@
+import { isWiderApprovalMode } from './approval-modes.js'
 import { attenuateChildCapabilities } from './capabilities.js'
 import { modelTierRank } from './model-pricing.js'
 import type { PersonaSpec } from './agents.js'
@@ -64,9 +65,16 @@ export const attenuateChildPersona = (
  }
  }
 
- // A parent that must ask a human cannot hand down the right to skip asking.
- if (child.autoApprove && !parent.autoApprove) {
- return { ok: false, reason: 'Child run may not auto-approve when its parent does not' }
+ /**
+ * A parent that must ask a human cannot hand down the right to skip asking — now
+ * over an ordered mode rather than a boolean, so `accept-edits` under `ask` is
+ * refused for the same reason `auto` under `ask` always was (`approval-modes.ts`).
+ */
+ if (isWiderApprovalMode(child.approvalMode, parent.approvalMode)) {
+ return {
+ ok: false,
+ reason: `Child run's approval mode (${child.approvalMode}) is wider than its parent's (${parent.approvalMode})`,
+ }
  }
 
  // An uncapped parent constrains nothing — but an uncapped *child* of a capped

@@ -14,7 +14,7 @@ const spec = (over: Partial<PersonaSpec> = {}): PersonaSpec => ({
  systemPrompt: 'work',
  model: 'claude-sonnet-5',
  tools: ['Read', 'Edit', 'Bash'],
- autoApprove: false,
+ approvalMode: 'ask' as const,
  budgetCapUsd: 5,
 ...over,
 })
@@ -111,11 +111,11 @@ describe('attenuateChildPersona', => {
  planner: true,
  delegates: ['Read'],
  budgetCapUsd: 1,
- autoApprove: false,
+ approvalMode: 'ask' as const,
  })
  expect(attenuateChildPersona(planner, spec({ tools: ['Read'], budgetCapUsd: 5 })).ok).toBe(false)
  expect(
- attenuateChildPersona(planner, spec({ tools: ['Read'], budgetCapUsd: 1, autoApprove: true })).ok,
+ attenuateChildPersona(planner, spec({ tools: ['Read'], budgetCapUsd: 1, approvalMode: 'auto' as const })).ok,
 ).toBe(false)
  })
 
@@ -127,14 +127,14 @@ describe('attenuateChildPersona', => {
  })
 
  it('refuses a child that would skip the approval its parent cannot skip', => {
- const verdict = attenuateChildPersona(spec({ autoApprove: false }), spec({ autoApprove: true }))
+ const verdict = attenuateChildPersona(spec({ approvalMode: 'ask' as const }), spec({ approvalMode: 'auto' as const }))
  expect(verdict.ok).toBe(false)
- if (!verdict.ok) expect(verdict.reason).toMatch(/auto-approve/)
+ if (!verdict.ok) expect(verdict.reason).toMatch(/approval mode/)
  })
 
  it('lets an auto-approving parent hand that down', => {
  expect(
- attenuateChildPersona(spec({ autoApprove: true }), spec({ autoApprove: true })).ok,
+ attenuateChildPersona(spec({ approvalMode: 'auto' as const }), spec({ approvalMode: 'auto' as const })).ok,
 ).toBe(true)
  })
 

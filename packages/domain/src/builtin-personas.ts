@@ -1,3 +1,4 @@
+import { DEFAULT_APPROVAL_MODE, type ApprovalMode } from './approval-modes.js'
 import { serializePersonaMarkdown } from './persona-markdown.js'
 import { PLANNER_READABLE_TOOLS } from './planner-tools.js'
 
@@ -13,7 +14,7 @@ export interface BuiltinPersona {
  readonly tools: string[]
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
- readonly harnessAutoApprove: boolean
+ readonly harnessApprovalMode: ApprovalMode
  readonly harnessPlanner: boolean
  readonly harnessDelegates: string[]
  readonly harnessBudgetCapUsd: number | null
@@ -46,7 +47,7 @@ const define = (spec: {
  budgetCapUsd?: number
  planner?: boolean
  delegates?: string[]
- autoApprove?: boolean
+ approvalMode?: ApprovalMode
 }): BuiltinPersona => {
  const persona = {
  name: spec.name,
@@ -55,7 +56,7 @@ const define = (spec: {
  tools: spec.tools,
  harnessEffort: null,
  harnessMaxTurns: null,
- harnessAutoApprove: spec.autoApprove ?? false,
+ harnessApprovalMode: spec.approvalMode ?? DEFAULT_APPROVAL_MODE,
  harnessPlanner: spec.planner ?? false,
  harnessDelegates: spec.delegates ?? [],
  harnessBudgetCapUsd: spec.budgetCapUsd ?? DEFAULT_BUDGET_CAP_USD,
@@ -232,7 +233,7 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  * produces reaches the default branch without going back through the merge queue's
  * rebase and verification.
  */
- autoApprove: true,
+ approvalMode: 'auto',
  systemPrompt:
  'You are a Reconciler. The merge queue starts you when a branch fails to rebase — you are ' +
  'not meant to be invoked by hand, and if you were, say so and stop: there will be no ' +

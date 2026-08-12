@@ -19,7 +19,7 @@ const persona = (overrides: Partial<AgentPersona> = {}): AgentPersona => ({
   tools: ['Read'],
   harnessEffort: null,
   harnessMaxTurns: null,
-  harnessAutoApprove: false,
+  harnessApprovalMode: 'ask' as const,
   harnessPlanner: false,
   harnessDelegates: [],
   harnessBudgetCapUsd: null,

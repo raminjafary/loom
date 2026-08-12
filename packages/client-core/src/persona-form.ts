@@ -1,4 +1,4 @@
-import type { AgentPersona, PersonaDraft } from '@loom/api-contract'
+import type { AgentPersona, ApprovalMode, PersonaDraft } from '@loom/api-contract'
 
 /**
  * The persona form (the product shape — product shape: "Phase 1 ships a persona form
@@ -27,7 +27,7 @@ export interface PersonaFormState {
  readonly systemPrompt: string
  readonly planner: boolean
  readonly delegates: readonly string[]
- readonly autoApprove: boolean
+ readonly approvalMode: ApprovalMode
  readonly effort: string | null
  readonly maxTurns: number | null
  readonly budgetCapUsd: number | null
@@ -70,7 +70,7 @@ export const EMPTY_PERSONA_FORM: PersonaFormState = {
  systemPrompt: '',
  planner: false,
  delegates: [],
- autoApprove: false,
+ approvalMode: 'ask',
  effort: null,
  maxTurns: null,
  budgetCapUsd: null,
@@ -108,7 +108,7 @@ export const personaFormFromPersona = (persona: AgentPersona): PersonaFormState 
  systemPrompt: bodyOf(persona.markdownSource),
  planner: persona.harnessPlanner,
  delegates: persona.harnessDelegates,
- autoApprove: persona.harnessAutoApprove,
+ approvalMode: persona.harnessApprovalMode,
  effort: persona.harnessEffort,
  maxTurns: persona.harnessMaxTurns,
  budgetCapUsd: persona.harnessBudgetCapUsd,
@@ -126,7 +126,7 @@ export const personaFormFromDraft = (draft: PersonaDraft): PersonaFormState | nu
  systemPrompt: parsed.systemPrompt,
  planner: parsed.harnessPlanner,
  delegates: parsed.harnessDelegates,
- autoApprove: parsed.harnessAutoApprove,
+ approvalMode: parsed.harnessApprovalMode,
  effort: parsed.harnessEffort,
  maxTurns: parsed.harnessMaxTurns,
  budgetCapUsd: parsed.harnessBudgetCapUsd,
@@ -149,7 +149,7 @@ export const personaFormToMarkdown = (form: PersonaFormState): string => {
  const harness =
  form.effort !== null ||
  form.maxTurns !== null ||
- form.autoApprove ||
+ form.approvalMode !== 'ask' ||
  form.planner ||
  form.delegates.length > 0 ||
  form.budgetCapUsd !== null
@@ -157,7 +157,7 @@ export const personaFormToMarkdown = (form: PersonaFormState): string => {
  lines.push('harness:')
  if (form.effort !== null) lines.push(` effort: ${form.effort}`)
  if (form.maxTurns !== null) lines.push(` maxTurns: ${form.maxTurns}`)
- if (form.autoApprove) lines.push(' autoApprove: true')
+ if (form.approvalMode !== 'ask') lines.push(` approvalMode: ${form.approvalMode}`)
  if (form.planner) lines.push(' planner: true')
  if (form.delegates.length > 0) lines.push(` delegates: [${form.delegates.join(', ')}]`)
  if (form.budgetCapUsd !== null) lines.push(` budgetCapUsd: ${form.budgetCapUsd}`)
@@ -237,7 +237,7 @@ export const personaSaveDiscrepancies = (
  compare('tools', [...intended.tools], stored.tools)
  compare('planner', intended.planner, stored.harnessPlanner)
  compare('delegates', [...intended.delegates], stored.harnessDelegates)
- compare('auto-approve', intended.autoApprove, stored.harnessAutoApprove)
+ compare('approval mode', intended.approvalMode, stored.harnessApprovalMode)
  compare('effort', intended.effort, stored.harnessEffort)
  compare('max turns', intended.maxTurns, stored.harnessMaxTurns)
  compare('budget cap', intended.budgetCapUsd, stored.harnessBudgetCapUsd)

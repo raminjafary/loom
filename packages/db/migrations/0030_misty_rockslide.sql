@@ -1,0 +1,1 @@
+ALTER TABLE "agent_persona" DROP COLUMN "harness_auto_approve";

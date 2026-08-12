@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildPrompt, buildQueryOptions, settingSourcesFromEnv } from './claude-agent-adapter.js'
+import {
+ buildPrompt,
+ buildQueryOptions,
+ gateBehavior,
+ settingSourcesFromEnv,
+} from './claude-agent-adapter.js'
 
 /**
  * These assert the permission-relevant SDK options by name, the same way
@@ -13,7 +18,7 @@ const persona = {
  systemPrompt: 'do the work',
  model: 'claude-sonnet-5',
  tools: ['Read', 'Bash'],
- autoApprove: false,
+ approvalMode: 'ask' as const,
  budgetCapUsd: null,
 }
 
@@ -191,5 +196,56 @@ describe('buildQueryOptions: the agent tool allowlist', => {
 
  it('leaves a run with no platform channels exactly as declared', => {
  expect(agentTools(buildQueryOptions({ persona, cwd: '/clone' }))).toEqual(['Read', 'Bash'])
+ })
+})
+
+/**
+ * The approval mode's effect on the gate.
+ *
+ * Asserted through `gateBehavior`, which is the decision `canUseTool` makes, because
+ * the ordering *is* the security property: every boundary runs before a mode is
+ * consulted, so a mode can only ever skip a question, never a rule.
+ */
+describe('gateBehavior', => {
+ const risky = (name: string) => ['Bash', 'Write', 'Edit', 'NotebookEdit'].includes(name)
+
+ const decide = (mode: 'ask' | 'accept-edits' | 'auto', toolName: string, effect: {
+ ok: boolean
+ requiresApproval?: boolean
+ reason?: string
+ }) => gateBehavior({ approvalMode: mode, toolName, isRisky: risky(toolName), effect })
+
+ it('never asks about a tool that is not risky', => {
+ expect(decide('ask', 'Read', { ok: true, requiresApproval: true })).toBe('allow')
+ })
+
+ /**
+ * The ordering that matters. An out-of-clone write is denied in *every* mode —
+ * including `auto`, where the temptation to treat the mode as a blanket permission
+ * is strongest. It is a boundary, not a question.
+ */
+ it('denies a boundary violation in every mode', => {
+ for (const mode of ['ask', 'accept-edits', 'auto'] as const) {
+ expect(decide(mode, 'Write', { ok: false, reason: 'outside the workspace' })).toBe('deny')
+ }
+ })
+
+ it('allows a call the classifier proved harmless, without consulting the mode', => {
+ expect(decide('ask', 'Bash', { ok: true, requiresApproval: false })).toBe('allow')
+ })
+
+ it('gates everything risky under ask', => {
+ expect(decide('ask', 'Write', { ok: true, requiresApproval: true })).toBe('gate')
+ expect(decide('ask', 'Bash', { ok: true, requiresApproval: true })).toBe('gate')
+ })
+
+ it('takes the edits and keeps the shell under accept-edits', => {
+ expect(decide('accept-edits', 'Write', { ok: true, requiresApproval: true })).toBe('allow')
+ expect(decide('accept-edits', 'Edit', { ok: true, requiresApproval: true })).toBe('allow')
+ expect(decide('accept-edits', 'Bash', { ok: true, requiresApproval: true })).toBe('gate')
+ })
+
+ it('asks about nothing under auto', => {
+ expect(decide('auto', 'Bash', { ok: true, requiresApproval: true })).toBe('allow')
  })
 })

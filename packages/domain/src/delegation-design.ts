@@ -1,3 +1,4 @@
+import { isWiderApprovalMode } from './approval-modes.js'
 import { attenuateChildPersona } from './attenuation.js'
 import { attenuateChildCapabilities } from './capabilities.js'
 import { modelTierRank } from './model-pricing.js'
@@ -105,11 +106,11 @@ export const delegationDesign = (
  })
  }
 
- if (worker.autoApprove && !planner.autoApprove) {
+ if (isWiderApprovalMode(worker.approvalMode, planner.approvalMode)) {
  refusals.push({
  rule: 'autoApprove',
- detail: `${worker.name} auto-approves risky calls and ${planner.name} does not.`,
- fix: `Turn auto-approve off on ${worker.name}, or on for ${planner.name} — a parent that must ask cannot hand down the right to skip asking.`,
+ detail: `${worker.name} may skip more approvals (${worker.approvalMode}) than ${planner.name} (${planner.approvalMode}).`,
+ fix: `Narrow ${worker.name} to ${planner.approvalMode} or below, or widen ${planner.name} — a parent that must ask cannot hand down the right to skip asking.`,
  })
  }
 

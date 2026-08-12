@@ -30,7 +30,7 @@ const row = (overrides: Partial<AgentPersona> = {}): AgentPersona =>
  tools: planner.tools,
  harnessEffort: planner.harnessEffort,
  harnessMaxTurns: planner.harnessMaxTurns,
- harnessAutoApprove: planner.harnessAutoApprove,
+ harnessApprovalMode: planner.harnessApprovalMode,
  harnessPlanner: planner.harnessPlanner,
  harnessDelegates: planner.harnessDelegates,
  harnessBudgetCapUsd: planner.harnessBudgetCapUsd,

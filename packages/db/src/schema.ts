@@ -335,7 +335,12 @@ export const agentPersona = pgTable(
  tools: jsonb('tools').$type<string[]>.notNull.default([]),
  harnessEffort: text('harness_effort'),
  harnessMaxTurns: doublePrecision('harness_max_turns'),
- harnessAutoApprove: boolean('harness_auto_approve').notNull.default(false),
+ /**
+ * How much a run of this persona may do without asking. Replaces `harness_auto_approve`, whose
+ * two states were this column's outer two — a boolean cannot express the middle
+ * an operator actually wants, and three call sites compared it.
+ */
+ harnessApprovalMode: text('harness_approval_mode').notNull.default('ask'),
  // Phase 2. A planner persona gets the delegation tool and is
  // required to declare `tools: []` — enforced in the use-case, not here.
  harnessPlanner: boolean('harness_planner').notNull.default(false),

@@ -333,7 +333,7 @@ describe('agent run cost rollup', => {
  threadId: scaffolding.threadId,
  repositoryId: scaffolding.repositoryId,
  runnerId: scaffolding.runnerId,
- persona: {...persona, systemPrompt: 'x', tools: [], autoApprove: false },
+ persona: {...persona, systemPrompt: 'x', tools: [], approvalMode: 'ask' as const },
  status: 'completed',
  totalCostUsd,
 ...(createdAt ? { createdAt }: {}),

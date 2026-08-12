@@ -1,3 +1,4 @@
+import { approvalModeAllows, type ApprovalMode } from '@loom/domain'
 import {
  query,
  type CanUseTool,
@@ -439,9 +440,44 @@ const createInputChannel = (opening: string) => {
  }
 }
 
+/**
+ * What the gate decides, as a pure function of the four inputs it actually has.
+ *
+ * Extracted from `canUseTool` because **the order of these checks is the security
+ * property** and an ordering is exactly the kind of thing that can be quietly
+ * rearranged without anything failing to compile. `canUseTool` does the async work —
+ * classifying the effect, minting a correlation id, round-tripping a human — and this
+ * makes the decision, so the decision can be asserted directly.
+ *
+ * The order, and why each step is where it is:
+ *
+ * 1. **Not risky** → allow. Nothing to weigh.
+ * 2. **The classifier refused** → deny. An out-of-clone write or a denied Bash effect
+ * is a boundary, and a boundary must not become a question — least of all
+ * a question a mode can answer.
+ * 3. **Proved harmless** → allow. The approval-fatigue half, one-directional:
+ * anything unproven still asks.
+ * 4. **The persona's approval mode** → allow or gate. Reached only when a human
+ * *would* have been asked, so a mode can skip a question and never a rule.
+ */
+export type GateBehavior = 'allow' | 'deny' | 'gate'
+
+export const gateBehavior = (input: {
+ approvalMode: ApprovalMode
+ toolName: string
+ isRisky: boolean
+ effect: { ok: boolean; requiresApproval?: boolean }
+}): GateBehavior => {
+ if (!input.isRisky) return 'allow'
+ if (!input.effect.ok) return 'deny'
+ if (!input.effect.requiresApproval) return 'allow'
+ return approvalModeAllows(input.approvalMode, input.toolName) ? 'allow': 'gate'
+}
+
 export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  const canUseTool: CanUseTool = async (toolName, input) => {
- if (!options.isRiskyTool(toolName)) {
+ const isRisky = options.isRiskyTool(toolName)
+ if (!isRisky) {
  return { behavior: 'allow' }
  }
 
@@ -457,23 +493,22 @@ export const runAgent = async (options: RunAgentOptions): Promise<void> => {
  // to the model, which toWireEvents already renders as a visible
  // tool_result — a second manual emission would just duplicate that line.
  const effect = await options.classifyEffect(toolName, input)
- if (!effect.ok) {
- return { behavior: 'deny', message: effect.reason }
- }
 
- // Effect-based gating: a call the classifier *proved*
- // harmless skips the round-trip. This is the approval-fatigue half of effect-based classification's
- // complaint about name-based gating — and it is one-directional, since
- // anything unproven still asks.
- if (!effect.requiresApproval) {
- return { behavior: 'allow' }
+ /**
+ * The whole decision, in one place and in one order (see `gateBehavior`). Both
+ * the effect-based skip of effect-based classification and the persona's approval mode live in there,
+ * so neither can be reordered relative to the boundary check above it.
+ */
+ const behavior = gateBehavior({
+ approvalMode: options.persona.approvalMode,
+ toolName,
+ isRisky,
+ effect,
+ })
+ if (behavior === 'deny') {
+ return { behavior: 'deny', message: effect.ok ? 'Denied': effect.reason }
  }
-
- // Per-persona opt-in:
- // skips the human round-trip for this run. The hard path-scoped write
- // boundary above still applies unconditionally — this only ever skips a
- // judgment call, never a boundary.
- if (options.persona.autoApprove) {
+ if (behavior === 'allow') {
  return { behavior: 'allow' }
  }
 

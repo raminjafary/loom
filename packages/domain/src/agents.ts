@@ -1,3 +1,4 @@
+import type { ApprovalMode } from './approval-modes.js'
 import type { CapabilitySpec } from './capabilities.js'
 import type { ResponseStyle } from './response-styles.js'
 import type {
@@ -69,12 +70,13 @@ export interface PersonaSpec {
  // nothing in this codebase mutates a persona's tool list in place.
  readonly tools: string[]
  /**
- * Per-persona opt-in (default false): skips the human approval round-trip
- * for risky tools this run hits. The path-scoped write boundary
- * still applies unconditionally — that's a hard boundary, not a judgment
- * call, and autoApprove never touches it.
+ * How much this run may do without asking.
+ *
+ * The path-scoped write boundary and the denied Bash effects apply
+ * unconditionally in every mode — those are boundaries, not judgment calls, and
+ * no mode touches them.
  */
- readonly autoApprove: boolean
+ readonly approvalMode: ApprovalMode
  /**
  * Enforced spend ceiling in USD, or null for uncapped. Snapshotted onto the run like the rest of this
  * spec, so editing the persona mid-run cannot raise the ceiling of a run already
@@ -148,7 +150,7 @@ export interface AgentPersona {
  readonly tools: string[]
  readonly harnessEffort: string | null
  readonly harnessMaxTurns: number | null
- readonly harnessAutoApprove: boolean
+ readonly harnessApprovalMode: ApprovalMode
  /** Phase 2 — see PersonaSpec.planner. */
  readonly harnessPlanner: boolean
  readonly harnessDelegates: string[]
