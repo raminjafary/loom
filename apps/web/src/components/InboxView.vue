@@ -20,6 +20,20 @@ const emit = defineEmits<{
  push: [agentRunId: string, acknowledgeCiChange: boolean]
  merge: [agentRunId: string]
  'load-raw': [agentRunId: string, done: (result: { lines: string[]; chunks: number }) => void]
+ /**
+ * Hands this run to the board and the graph.
+ *
+ * Those panels hang off the *watched* run, and nothing could set one to a finished
+ * run: `agentRun.getActive` is null once nothing is running, and every other way in
+ * — the board, the tree, the graph — is a panel that needs a watched run before it
+ * renders at all. So a swarm became unreachable the moment it finished, which is
+ * exactly when a human wants to read its shape.
+ *
+ * Deliberately a button rather than a side effect of `select`: the two are kept
+ * independent so that reviewing a finished branch does not yank the board away from
+ * a swarm still running.
+ */
+ watch: [agentRunId: string]
 }>
 
 /**
@@ -87,6 +101,9 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
  <dd>{{ describeAge(finishedAt(props.selectedRun)) }}</dd>
  </div>
  </dl>
+ <button class="watch" type="button" @click="emit('watch', props.selectedRun.id)">
+ Open the swarm board
+ </button>
  </header>
 
  <!--
@@ -217,6 +234,28 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
 .titles h2 {
  margin: 0;
  font-size: 1.05rem;
+}
+
+/*
+ Secondary to Review, which is what this pane is for. This is the way *back* to the
+ swarm a run belonged to, wanted often enough to be one click and not often enough to
+ compete with the disposition.
+*/
+.watch {
+ align-self: center;
+ padding: 0.35rem 0.7rem;
+ font: inherit;
+ font-size: 0.85rem;
+ color: var(--text-muted);
+ background: transparent;
+ border: 1px solid var(--border);
+ border-radius: 6px;
+ cursor: pointer;
+}
+
+.watch:hover {
+ color: var(--text);
+ border-color: var(--accent);
 }
 
 .titles.reason {

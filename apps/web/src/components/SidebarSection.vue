@@ -23,6 +23,15 @@ const props = defineProps<{
  attention?: boolean
  /** Remembers open/closed across reloads under this key. */
  storageKey?: string
+ /**
+ * Bump to open this section because the user just asked for what is in it.
+ *
+ * A counter rather than a boolean: a flag that stays true fires its watcher once, so
+ * a second request after the user had closed the section again would do nothing.
+ * Distinct from `attention` on purpose — that means "something here needs a human"
+ * and carries visual emphasis to match, which is a claim this must not make.
+ */
+ reveal?: number
 }>
 
 const key = computed( => (props.storageKey ? `loom:section:${props.storageKey}`: null))
@@ -48,6 +57,13 @@ watch(
  if (needsHuman) open.value = true
  },
  { immediate: true },
+)
+
+watch(
+ => props.reveal,
+ (next, previous) => {
+ if (next !== undefined && next !== previous) open.value = true
+ },
 )
 
 const expandable = computed( => !props.empty)

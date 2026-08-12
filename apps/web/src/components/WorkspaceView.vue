@@ -156,6 +156,24 @@ const openInbox = => {
 }
 
 /**
+ * Post-mortem: hand a finished run to the board and graph, which live in the workspace
+ * sidebar.
+ *
+ * The view switch is the whole reason this is a function rather than a bare
+ * `agent.watchRun`. The panels being populated are not on screen in the Inbox, so
+ * watching without returning to the workspace looks exactly like the button doing
+ * nothing — and the Swarm section is collapsible, so it can hide the result a second
+ * time. Expanded here for the same reason.
+ */
+const revealSwarm = ref(0)
+
+const watchFromInbox = (agentRunId: string) => {
+ void agent.watchRun(agentRunId)
+ view.value = 'workspace'
+ revealSwarm.value += 1
+}
+
+/**
  * Where a clicked notification lands: the Inbox, with that run
  * already selected. A notification that dropped a human on the workspace view
  * and left them to find the run would put the search back on them, which is the
@@ -383,6 +401,7 @@ onBeforeUnmount( => {
  @push="(agentRunId, ack) => agent.pushRun(agentRunId, ack)"
  @merge="(agentRunId) => agent.enqueueMerge(agentRunId)"
  @load-raw="(agentRunId, done) => agent.getRawTranscript(agentRunId).then(done)"
+ @watch="(agentRunId) => watchFromInbox(agentRunId)"
  />
  </main>
 
@@ -433,6 +452,7 @@ onBeforeUnmount( => {
  empty-text="no swarm"
 :attention="blockerCount > 0"
  storage-key="swarm"
+:reveal="revealSwarm"
  >
  <SwarmBoardPanel
 :board="agentSnapshot.swarmBoard"
