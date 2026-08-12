@@ -637,3 +637,63 @@ export const auditEvent = pgTable(
  },
  (t) => [index('audit_workspace_seq_idx').on(t.workspaceId, t.seq)],
 )
+
+/**
+ * A subtask a Planner submitted that is waiting on another.
+ *
+ * **Its own table rather than an `agent_run` in a new status**, and that is the
+ * load-bearing decision. The worker-notes design says "a card *is* a run", which argues for
+ * modelling a waiting subtask as a blocked run — but a run row is what the
+ * concurrency limit counts, what the reaper sweeps, what the kill switch cancels and
+ * what a Runner declares resumable on reconnect. A row that is none of those things
+ * while looking like all of them would need every one of those invariants amended,
+ * and each amendment is a place a real run could later be skipped.
+ *
+ * So: a subtask is not a run until it starts. When it starts it goes through
+ * `startPlannedChild` unchanged, which is what keeps the attenuation, the depth
+ * limit and the concurrency limit on exactly one path.
+ *
+ * Rows are terminal once `status` leaves `waiting`; nothing updates a started or
+ * skipped subtask again, so this doubles as the record of *why* a subtask never ran.
+ */
+export const planSubtask = pgTable(
+ 'plan_subtask',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ /** The planner run whose decomposition this came from. */
+ plannerRunId: uuid('planner_run_id')
+.notNull
+.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+ /**
+ * Index within that decomposition. `dependsOn` holds these same numbers, so the
+ * edges stay meaningful without a second identifier the model would have to
+ * reproduce.
+ */
+ position: integer('position').notNull,
+ title: text('title').notNull,
+ task: text('task').notNull,
+ personaName: text('persona_name').notNull,
+ paths: jsonb('paths').$type<string[]>.notNull.default([]),
+ dependsOn: jsonb('depends_on').$type<number[]>.notNull.default([]),
+ /** 'waiting' | 'started' | 'skipped' | 'refused'. */
+ status: text('status').notNull.default('waiting'),
+ /** Set when `status` becomes 'started'. */
+ agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ /** Why it was skipped or refused — shown to the human, never re-derived. */
+ detail: text('detail'),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ // One row per position per plan. This is also what makes recording a
+ // decomposition idempotent: a replayed `plan_submitted` frame collides rather
+ // than duplicating the whole pipeline.
+ uniqueIndex('plan_subtask_position_idx').on(t.plannerRunId, t.position),
+ index('plan_subtask_planner_idx').on(t.workspaceId, t.plannerRunId, t.status),
+ ],
+)

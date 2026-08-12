@@ -7,6 +7,7 @@ import type {
  NotificationTargetRepositoryPort,
  PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
+ PlanSubtaskRepositoryPort,
  RepositoryRepositoryPort,
  RunLiveActivity,
  RunnerRepositoryPort,
@@ -26,6 +27,7 @@ import {
  toPersonaCapability,
  toNotificationTarget,
  toPersonaGroup,
+ toPlanSubtask,
  toRepository,
  toRunner,
  toWorkerNote,
@@ -37,6 +39,7 @@ import {
  type PersonaCapabilityRow,
  type NotificationTargetRow,
  type PersonaGroupRow,
+ type PlanSubtaskRow,
  type RepositoryRow,
  type RunnerRow,
  type WorkerNoteRow,
@@ -52,6 +55,7 @@ import {
  personaCapability,
  notificationTarget,
  personaGroup,
+ planSubtask,
  repository,
  runner,
  thread,
@@ -309,6 +313,89 @@ export const workerNoteRepository = (db: Database): WorkerNoteRepositoryPort => 
 .from(workerNote)
 .where(and(eq(workerNote.workspaceId, workspaceId), eq(workerNote.agentRunId, agentRunId)))
  return Number(row?.total ?? 0)
+ },
+})
+
+/**
+ * The DAG — the subtasks of a plan that have not started yet.
+ *
+ * See the `plan_subtask` table for why a waiting subtask is not an `agent_run`.
+ */
+export const planSubtaskRepository = (db: Database): PlanSubtaskRepositoryPort => ({
+ /**
+ * One statement, so a plan is either wholly recorded or not at all. A half-written
+ * pipeline is a plan whose later stages can never be released and which has no
+ * repair path — the planner that authored it has already stopped.
+ */
+ async recordPlan(input) {
+ if (input.subtasks.length === 0) return []
+ const rows = await db
+.insert(planSubtask)
+.values(
+ input.subtasks.map((subtask) => ({
+ workspaceId: input.workspaceId,
+ plannerRunId: input.plannerRunId,
+ position: subtask.position,
+ title: subtask.title,
+ task: subtask.task,
+ personaName: subtask.personaName,
+ paths: subtask.paths,
+ dependsOn: subtask.dependsOn,
+ status: subtask.status,
+ agentRunId: subtask.agentRunId,
+ detail: subtask.detail,
+ })),
+)
+.returning
+ return rows.map((row) => toPlanSubtask(row as PlanSubtaskRow))
+ },
+
+ /** In plan order, because `dependsOn` indexes into exactly this ordering. */
+ async listByPlanner(workspaceId, plannerRunId) {
+ const rows = await db
+.select
+.from(planSubtask)
+.where(
+ and(eq(planSubtask.workspaceId, workspaceId), eq(planSubtask.plannerRunId, plannerRunId)),
+)
+.orderBy(planSubtask.position)
+ return rows.map((row) => toPlanSubtask(row as PlanSubtaskRow))
+ },
+
+ async findByAgentRun(workspaceId, agentRunId) {
+ const [row] = await db
+.select
+.from(planSubtask)
+.where(and(eq(planSubtask.workspaceId, workspaceId), eq(planSubtask.agentRunId, agentRunId)))
+.limit(1)
+ return row ? toPlanSubtask(row as PlanSubtaskRow): null
+ },
+
+ /**
+ * One conditional UPDATE whose `status = 'waiting'` predicate is evaluated under
+ * the row lock it takes — the same shape as `claimAggregation`, and for the same
+ * reason. Two siblings finishing in the same instant both evaluate the same
+ * dependency set and both try to release the same successor; the loser gets no row
+ * back and starts nothing. A read-then-write here would start it twice.
+ */
+ async claimWaiting(input) {
+ const [row] = await db
+.update(planSubtask)
+.set({
+ status: input.status,
+ agentRunId: input.agentRunId,
+ detail: input.detail,
+ updatedAt: new Date,
+ })
+.where(
+ and(
+ eq(planSubtask.workspaceId, input.workspaceId),
+ eq(planSubtask.id, input.id),
+ eq(planSubtask.status, 'waiting'),
+),
+)
+.returning
+ return row ? toPlanSubtask(row as PlanSubtaskRow): null
  },
 })
 

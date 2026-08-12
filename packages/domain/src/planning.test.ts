@@ -5,9 +5,12 @@ import {
  MAX_SUBTASK_PATHS,
  describeCrossPlanOverlaps,
  describePathOverlaps,
+ describePlanStages,
  detectClaimsAgainstExisting,
+ detectDependencyCycle,
  detectPathOverlaps,
  parseDecomposition,
+ planStages,
  pathsOverlap,
  summarizeChildOutcomes,
  type ChildOutcome,
@@ -156,6 +159,7 @@ describe('detectPathOverlaps', => {
  task: 'do the thing',
  personaName: 'swe',
  paths,
+ dependsOn: [],
  })
 
  it('finds the same path claimed twice', => {
@@ -232,6 +236,7 @@ describe('detectClaimsAgainstExisting', => {
  task: 'do the thing',
  personaName: 'swe',
  paths,
+ dependsOn: [],
  })
 
  it('finds a new subtask colliding with a claim from another plan', => {
@@ -318,5 +323,189 @@ describe('summarizeChildOutcomes', => {
 
  it('says so when a plan produced nothing', => {
  expect(summarizeChildOutcomes([])).toContain('no child runs')
+ })
+})
+
+/**
+ * The DAG. The distinction the tests are built around is the one collaboration topology draws itself:
+ * path overlap **warns** because it is a guess about the future, and a cycle is
+ * **refused** because it is a statement about the plan — a plan that cannot be
+ * ordered cannot be run at all.
+ */
+describe('dependsOn', => {
+ const plan = (subtasks: unknown[]) => parseDecomposition({ subtasks })
+ const sub = (title: string, dependsOn?: unknown) => ({
+ title,
+ task: 'do the thing',
+ personaName: 'swe',
+...(dependsOn === undefined ? {}: { dependsOn }),
+ })
+
+ it('defaults to no dependencies, reproducing the fan-out exactly', => {
+ const verdict = plan([sub('a'), sub('b')])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks.map((s) => s.dependsOn)).toEqual([[], []])
+ })
+
+ it('accepts an edge to an earlier subtask', => {
+ const verdict = plan([sub('a'), sub('b', [0])])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks[1]?.dependsOn).toEqual([0])
+ })
+
+ it('accepts an edge to a later subtask — order in the array is not the DAG', => {
+ // A planner listing the reviewer first and the work second is writing a valid
+ // pipeline, not a mistake. Only a cycle is unrunnable.
+ const verdict = plan([sub('review', [1]), sub('build')])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(planStages(verdict.decomposition.subtasks)).toEqual([[1], [0]])
+ })
+
+ it('refuses an index outside the plan, and says what the range is', => {
+ const verdict = plan([sub('a'), sub('b', [7])])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('depends on subtask 7')
+ expect(verdict.reason).toContain('0–1')
+ })
+
+ it('refuses a self-dependency', => {
+ const verdict = plan([sub('a', [0])])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('depends on itself')
+ })
+
+ it('refuses a non-integer index rather than coercing it', => {
+ expect(plan([sub('a'), sub('b', ['0'])]).ok).toBe(false)
+ expect(plan([sub('a'), sub('b', [1.5])]).ok).toBe(false)
+ })
+
+ it('deduplicates a repeated predecessor instead of refusing it', => {
+ // Redundant, not wrong — refusing a whole plan over it would be pedantry.
+ const verdict = plan([sub('a'), sub('b', [0, 0])])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(verdict.decomposition.subtasks[1]?.dependsOn).toEqual([0])
+ })
+
+ it('refuses a two-node cycle and names the loop', => {
+ const verdict = plan([sub('a', [1]), sub('b', [0])])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('cycle')
+ // Named so it can be fixed in one edit, rather than asserted to exist.
+ expect(verdict.reason).toContain('"a"')
+ expect(verdict.reason).toContain('"b"')
+ })
+
+ it('refuses a three-node cycle', => {
+ const verdict = plan([sub('a', [2]), sub('b', [0]), sub('c', [1])])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('cycle')
+ })
+
+ it('accepts a diamond, which is not a cycle', => {
+ // The shape a naive "have I seen this node" check calls a cycle: d depends on
+ // both b and c, and both of those depend on a, so `a` is reached twice.
+ const verdict = plan([sub('a'), sub('b', [0]), sub('c', [0]), sub('d', [1, 2])])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(planStages(verdict.decomposition.subtasks)).toEqual([[0], [1, 2], [3]])
+ })
+})
+
+describe('detectDependencyCycle', => {
+ const nodes = (...edges: number[][]) => edges.map((dependsOn) => ({ dependsOn }))
+
+ it('is null for a plan with no edges', => {
+ expect(detectDependencyCycle(nodes([], []))).toBeNull
+ })
+
+ it('is null for a chain', => {
+ expect(detectDependencyCycle(nodes([], [0], [1]))).toBeNull
+ })
+
+ it('is null for a diamond', => {
+ expect(detectDependencyCycle(nodes([], [0], [0], [1, 2]))).toBeNull
+ })
+
+ it('finds a self-loop', => {
+ // Unreachable through `parseDecomposition`, which refuses self-edges earlier —
+ // asserted anyway so this function is correct on its own terms.
+ expect(detectDependencyCycle(nodes([0]))).toEqual([0])
+ })
+
+ it('returns the cycle members, not merely a boolean', => {
+ const cycle = detectDependencyCycle(nodes([1], [2], [0]))
+ expect(cycle).not.toBeNull
+ expect([...(cycle ?? [])].sort).toEqual([0, 1, 2])
+ })
+
+ it('finds a cycle that no acyclic prefix leads into', => {
+ // 0 and 1 are clean; the loop is 2 ↔ 3. A search that stopped at the first
+ // finished component would miss it.
+ expect(detectDependencyCycle(nodes([], [0], [3], [2]))).not.toBeNull
+ })
+})
+
+describe('planStages', => {
+ const nodes = (...edges: number[][]) => edges.map((dependsOn) => ({ dependsOn }))
+
+ it('puts an unconstrained plan in one stage', => {
+ expect(planStages(nodes([], [], []))).toEqual([[0, 1, 2]])
+ })
+
+ it('puts a chain in one stage per link', => {
+ expect(planStages(nodes([], [0], [1]))).toEqual([[0], [1], [2]])
+ })
+
+ it('places a node after its slowest predecessor, not its first', => {
+ // 3 depends on 0 and 2; 2 is itself two deep. Taking the minimum, or the first
+ // edge listed, would start 3 while 2 was still running.
+ expect(planStages(nodes([], [0], [1], [0, 2]))).toEqual([[0], [1], [2], [3]])
+ })
+})
+
+describe('describePlanStages', => {
+ const cost = (title: string, budgetCapUsd: number | null) => ({
+ title,
+ personaName: 'swe',
+ budgetCapUsd,
+ })
+
+ it('says nothing about a single-stage plan', => {
+ // A one-stage plan *is* the fan-out that already existed. Printing "Stage 1 of 1"
+ // on every plan trains people to skip the paragraph that matters at three.
+ expect(describePlanStages([[0, 1]], [cost('a', 5), cost('b', 5)])).toBeNull
+ })
+
+ it('gives a per-stage ceiling and a total', => {
+ const text = describePlanStages([[0], [1, 2]], [cost('a', 5), cost('b', 2), cost('c', 3)])
+ expect(text).toContain('2 stages')
+ expect(text).toContain('Stage 1: 1 subtask(s), up to $5.00')
+ expect(text).toContain('Stage 2: 2 subtask(s), up to $5.00')
+ expect(text).toContain('$10.00')
+ })
+
+ it('refuses to sum around an uncapped persona', => {
+ // The cost model will not carry a second arithmetic beside the one caps are enforced against,
+ // and the number's whole job is to let a human refuse a pipeline before it runs —
+ // which only a worst case can do.
+ const text = describePlanStages([[0], [1]], [cost('a', 5), cost('b', null)])
+ expect(text).toContain('uncapped')
+ expect(text).toContain('unbounded')
+ expect(text).not.toContain('Worst case across every stage is $5.00')
+ })
+
+ it('says a failed stage stops the ones after it', => {
+ // The stated risk: a pipeline fails expensively because everything downstream
+ // inherits the mistake. The disclosure is part of the feature.
+ const text = describePlanStages([[0], [1]], [cost('a', 5), cost('b', 5)])
+ expect(text).toContain('stops the stages after it')
  })
 })

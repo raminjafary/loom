@@ -60,6 +60,13 @@ export const PlanSubtaskSchema = z.object({
  * refusing to parse that would turn an upgrade into a lost run.
  */
  paths: z.array(z.string).optional,
+ /**
+ * Which other subtasks in this plan must finish first, by index.
+ * Optional on the wire for the same reason `paths` is: a Runner resumed from a
+ * state file written before this field existed has none, and refusing to parse
+ * that would turn an upgrade into a lost run.
+ */
+ dependsOn: z.array(z.number).optional,
 })
 
 /**

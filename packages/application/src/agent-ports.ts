@@ -178,6 +178,76 @@ export interface WorkerNoteRepositoryPort {
 }
 
 /**
+ * A subtask waiting on another.
+ *
+ * See `plan_subtask` in the schema for why a waiting subtask is not modelled as an
+ * `agent_run` in a new status. Briefly: a run row is what the concurrency limit
+ * counts, the reaper sweeps, the kill switch cancels and a Runner declares resumable,
+ * and a row that is none of those while looking like all of them would need every one
+ * of those invariants amended.
+ */
+export interface PlanSubtaskRecord {
+ readonly id: string
+ readonly workspaceId: WorkspaceId
+ readonly plannerRunId: AgentRunId
+ readonly position: number
+ readonly title: string
+ readonly task: string
+ readonly personaName: string
+ readonly paths: string[]
+ readonly dependsOn: number[]
+ readonly status: 'waiting' | 'started' | 'skipped' | 'refused'
+ readonly agentRunId: AgentRunId | null
+ readonly detail: string | null
+}
+
+export interface PlanSubtaskRepositoryPort {
+ /**
+ * Records a whole decomposition at once. All-or-nothing on purpose: a half-written
+ * pipeline is a plan whose later stages can never be released, and there is no
+ * repair path for one — the planner has already stopped.
+ */
+ recordPlan(input: {
+ workspaceId: WorkspaceId
+ plannerRunId: AgentRunId
+ subtasks: readonly {
+ position: number
+ title: string
+ task: string
+ personaName: string
+ paths: string[]
+ dependsOn: number[]
+ status: 'waiting' | 'started' | 'skipped' | 'refused'
+ agentRunId: AgentRunId | null
+ detail: string | null
+ }[]
+ }): Promise<PlanSubtaskRecord[]>
+ listByPlanner(workspaceId: WorkspaceId, plannerRunId: AgentRunId): Promise<PlanSubtaskRecord[]>
+ /**
+ * Finds the plan a started child belongs to, so a child reaching a terminal state
+ * can release or skip whatever was waiting on it. Null for a child that was not
+ * started from a recorded plan — every run that predates the collaboration topology, and every run started
+ * by a human.
+ */
+ findByAgentRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<PlanSubtaskRecord | null>
+ /**
+ * Moves one subtask out of `waiting`, and **only** out of `waiting`.
+ *
+ * The conditional is the concurrency control, not a sanity check: two siblings
+ * finishing at the same moment both evaluate the same dependency set and both try
+ * to release the same successor. Whoever loses gets null and starts nothing, which
+ * is the same shape as `claimAggregation`'s fix for the duplicated plan summary.
+ */
+ claimWaiting(input: {
+ workspaceId: WorkspaceId
+ id: string
+ status: 'started' | 'skipped' | 'refused'
+ agentRunId: AgentRunId | null
+ detail: string | null
+ }): Promise<PlanSubtaskRecord | null>
+}
+
+/**
  * Grouped spend, straight from the database.
  *
  * `personaName` and `model` are read out of the run's **persona snapshot**, not out of

@@ -47,6 +47,24 @@ export interface PlanSubtask {
  * its plan refused for omitting something the model may not know yet.
  */
  readonly paths: readonly string[]
+ /**
+ * Which other subtasks in this same plan must finish first, by index
+ *.
+ *
+ * Turns the decomposition from a fan-out into a DAG. Empty means "start
+ * immediately", which is what every subtask did before this field existed, so an
+ * omitted `dependsOn` reproduces the old behaviour exactly.
+ *
+ * **By index, not by title.** A title is model-authored prose that the model also
+ * has to reproduce byte-exactly to make an edge; an index is checkable against the
+ * array it arrived in. Titles are already deduplicated, so index and title are
+ * equally unambiguous — index is just the one a validator can be sure about.
+ *
+ * Note what this is *not*: dependency order is scheduling, not permission. A
+ * dependent inherits nothing from its predecessor — not tools, not paths, not
+ * trust — and the attenuation still measures it against the planner alone.
+ */
+ readonly dependsOn: readonly number[]
 }
 
 export interface Decomposition {
@@ -245,6 +263,199 @@ export const describePathOverlaps = (overlaps: readonly PathOverlap[]): string |
  ].join('\n')
 }
 
+/**
+ * Parses one subtask's `dependsOn`.
+ *
+ * Range and self-reference are checked here; **cycles are not**, because a cycle is
+ * a property of the whole plan and no single subtask can be shown to be the one at
+ * fault. `detectDependencyCycle` runs once the array is complete.
+ */
+const parseSubtaskDependsOn = (
+ value: unknown,
+ index: number,
+ title: unknown,
+ subtaskCount: number,
+): { ok: true; dependsOn: number[] } | { ok: false; reason: string } => {
+ const where = `Subtask ${index} ("${String(title)}")`
+ if (value === undefined || value === null) return { ok: true, dependsOn: [] }
+ if (!Array.isArray(value)) return { ok: false, reason: `${where} has a non-array \`dependsOn\`` }
+
+ const dependsOn: number[] = []
+ for (const entry of value) {
+ if (typeof entry !== 'number' || !Number.isInteger(entry)) {
+ return { ok: false, reason: `${where} depends on "${String(entry)}", which is not a subtask index` }
+ }
+ if (entry < 0 || entry >= subtaskCount) {
+ return {
+ ok: false,
+ reason: `${where} depends on subtask ${entry}, but this plan has ${subtaskCount} subtask(s) (0–${subtaskCount - 1})`,
+ }
+ }
+ if (entry === index) {
+ return { ok: false, reason: `${where} depends on itself` }
+ }
+ // Deduplicated rather than refused: naming the same predecessor twice is
+ // redundant, not wrong, and refusing a plan over it would be pedantry.
+ if (!dependsOn.includes(entry)) dependsOn.push(entry)
+ }
+ return { ok: true, dependsOn }
+}
+
+/**
+ * The cycle check.
+ *
+ * Returns the cycle it found as a list of indices, so the refusal can name the loop
+ * rather than assert that one exists. A Planner told "your plan has a cycle" learns
+ * nothing it can act on; one told "3 → 5 → 3" can fix it in one edit.
+ *
+ * Iterative DFS with an explicit stack: a plan is capped at `MAX_SUBTASKS`, so
+ * recursion would be safe, but the colour-marking version is the one whose
+ * "on the current path" set is visible rather than implied by the call stack.
+ */
+export const detectDependencyCycle = (
+ subtasks: readonly { readonly dependsOn: readonly number[] }[],
+): number[] | null => {
+ const UNVISITED = 0
+ const IN_PROGRESS = 1
+ const DONE = 2
+ const state = new Array<number>(subtasks.length).fill(UNVISITED)
+ const parent = new Array<number>(subtasks.length).fill(-1)
+
+ for (let root = 0; root < subtasks.length; root += 1) {
+ if (state[root] !== UNVISITED) continue
+ const stack: { node: number; next: number }[] = [{ node: root, next: 0 }]
+ state[root] = IN_PROGRESS
+
+ while (stack.length > 0) {
+ const frame = stack[stack.length - 1]
+ if (!frame) break
+ const edges = subtasks[frame.node]?.dependsOn ?? []
+ if (frame.next >= edges.length) {
+ state[frame.node] = DONE
+ stack.pop
+ continue
+ }
+ const child = edges[frame.next] as number
+ frame.next += 1
+
+ if (state[child] === IN_PROGRESS) {
+ // Walk back up the parent chain to render the loop the way a reader
+ // traverses it, rather than reporting only the edge that closed it.
+ const cycle = [child]
+ let cursor = frame.node
+ while (cursor !== child && cursor !== -1) {
+ cycle.push(cursor)
+ cursor = parent[cursor] ?? -1
+ }
+ cycle.reverse
+ return cycle
+ }
+ if (state[child] === UNVISITED) {
+ state[child] = IN_PROGRESS
+ parent[child] = frame.node
+ stack.push({ node: child, next: 0 })
+ }
+ }
+ }
+ return null
+}
+
+/**
+ * Groups subtasks into the waves they can actually run in — index 0 is everything
+ * that starts immediately, index 1 is everything unblocked once wave 0 is done, and
+ * so on.
+ *
+ * This is what makes the required "per-stage budget accounting visible before the
+ * plan is approved" possible: a human approving a pipeline needs to know it is a
+ * pipeline, and what each wave can cost, before the first token is spent. The collaboration topology is
+ * explicit about why — "fan-out fails cheaply; a pipeline fails expensively, because
+ * everything downstream inherits the mistake".
+ *
+ * Assumes an acyclic plan; `parseDecomposition` refuses cyclic ones before this runs.
+ */
+export const planStages = (
+ subtasks: readonly { readonly dependsOn: readonly number[] }[],
+): number[][] => {
+ const depth = new Array<number>(subtasks.length).fill(-1)
+
+ const resolve = (index: number, seen: Set<number>): number => {
+ const known = depth[index]
+ if (known !== undefined && known >= 0) return known
+ // Defensive only — a cycle cannot reach here through `parseDecomposition`.
+ if (seen.has(index)) return 0
+ seen.add(index)
+ const edges = subtasks[index]?.dependsOn ?? []
+ const value =
+ edges.length === 0 ? 0: Math.max(...edges.map((edge) => resolve(edge, seen))) + 1
+ depth[index] = value
+ seen.delete(index)
+ return value
+ }
+
+ for (let index = 0; index < subtasks.length; index += 1) resolve(index, new Set)
+
+ const stages: number[][] = []
+ for (let index = 0; index < subtasks.length; index += 1) {
+ const at = depth[index] ?? 0
+ while (stages.length <= at) stages.push([])
+ stages[at]?.push(index)
+ }
+ return stages
+}
+
+/** What one subtask could cost, for the pre-approval stage accounting. */
+export interface StageCostInput {
+ readonly title: string
+ readonly personaName: string
+ /** The persona's enforced cap, or null when that persona is uncapped. */
+ readonly budgetCapUsd: number | null
+}
+
+/**
+ * The required disclosure, in the plan summary a human reads.
+ *
+ * Null for a plan with no dependencies at all — a single-stage plan *is* the
+ * fan-out that already existed, and printing "Stage 1 of 1" on every plan would
+ * train people to skip the paragraph that matters when there are three.
+ *
+ * The figure is a **ceiling from the enforced caps**, never an estimate. The cost model refuses
+ * a second arithmetic alongside the one budget caps are enforced against, and a
+ * predicted cost that came in under would be worse than useless here: the number's
+ * job is to let a human refuse a pipeline before it runs, and only the worst case
+ * can do that. An uncapped persona in a stage makes that stage's ceiling unknown,
+ * and it says so rather than quietly summing the rest.
+ */
+export const describePlanStages = (
+ stages: readonly number[][],
+ subtasks: readonly StageCostInput[],
+): string | null => {
+ if (stages.length <= 1) return null
+
+ const lines = stages.map((indices, stage) => {
+ const entries = indices.map((index) => subtasks[index]).filter((entry) => entry !== undefined)
+ const uncapped = entries.filter((entry) => entry.budgetCapUsd === null)
+ const ceiling = entries.reduce((sum, entry) => sum + (entry.budgetCapUsd ?? 0), 0)
+ const cost =
+ uncapped.length > 0
+ ? `at least $${ceiling.toFixed(2)}, and ${uncapped.length} of them uncapped`
+: `up to $${ceiling.toFixed(2)}`
+ const titles = entries.map((entry) => entry.title).join(', ')
+ return `• Stage ${stage + 1}: ${entries.length} subtask(s), ${cost} — ${titles}`
+ })
+
+ const total = subtasks.reduce((sum, entry) => sum + (entry.budgetCapUsd ?? 0), 0)
+ const anyUncapped = subtasks.some((entry) => entry.budgetCapUsd === null)
+
+ return [
+ `This plan runs in ${stages.length} stages — each one starts only when the stage before it has finished.`,
+...lines,
+ anyUncapped
+ ? 'Worst case across every stage is unbounded, because at least one persona is uncapped.'
+: `Worst case across every stage is $${total.toFixed(2)}.`,
+ 'A stage that fails stops the stages after it rather than starting them against a broken base.',
+ ].join('\n')
+}
+
 export type SubtaskVerdict =
  | { readonly ok: true; readonly subtask: PlanSubtask }
  | { readonly ok: false; readonly reason: string }
@@ -257,7 +468,17 @@ export type SubtaskVerdict =
  * arrived in the original decomposition. Two validators would drift, and the one that
  * drifted would be the rarely-exercised one.
  */
-export const parsePlanSubtask = (value: unknown, index: number): SubtaskVerdict => {
+export const parsePlanSubtask = (
+ value: unknown,
+ index: number,
+ /**
+ * How many subtasks the surrounding plan has, so `dependsOn` indices can be
+ * range-checked. Defaults to 0, which makes any dependency out of range — correct
+ * for the mid-flight steering re-planning path, where a subtask added mid-flight has no array of
+ * peers to point into and edges are not expressible.
+ */
+ subtaskCount = 0,
+): SubtaskVerdict => {
  if (!isRecord(value)) return { ok: false, reason: `Subtask ${index} is not an object` }
  if (!nonEmptyString(value.title, 200)) {
  return { ok: false, reason: `Subtask ${index} needs a title (1–200 characters)` }
@@ -272,6 +493,9 @@ export const parsePlanSubtask = (value: unknown, index: number): SubtaskVerdict 
  const pathsVerdict = parseSubtaskPaths(value.paths, index, value.title)
  if (!pathsVerdict.ok) return pathsVerdict
 
+ const dependsVerdict = parseSubtaskDependsOn(value.dependsOn, index, value.title, subtaskCount)
+ if (!dependsVerdict.ok) return dependsVerdict
+
  return {
  ok: true,
  subtask: {
@@ -279,6 +503,7 @@ export const parsePlanSubtask = (value: unknown, index: number): SubtaskVerdict 
  task: value.task.trim,
  personaName: value.personaName.trim,
  paths: pathsVerdict.paths,
+ dependsOn: dependsVerdict.dependsOn,
  },
  }
 }
@@ -302,7 +527,7 @@ export const parseDecomposition = (value: unknown): DecompositionVerdict => {
 
  const subtasks: PlanSubtask[] = []
  for (const [index, entry] of raw.entries) {
- const verdict = parsePlanSubtask(entry, index)
+ const verdict = parsePlanSubtask(entry, index, raw.length)
  if (!verdict.ok) return verdict
  subtasks.push(verdict.subtask)
  }
@@ -317,6 +542,26 @@ export const parseDecomposition = (value: unknown): DecompositionVerdict => {
  const duplicateIndex = lowered.findIndex((title, index) => lowered.indexOf(title) !== index)
  if (duplicateIndex !== -1) {
  return { ok: false, reason: `Two subtasks share the title "${subtasks[duplicateIndex]?.title}"` }
+ }
+
+ /**
+ * The one refusal the collaboration topology asks for by name. Path overlap warns because it is a guess
+ * about the future; a cycle is a statement about the plan itself, and a plan that
+ * cannot be ordered cannot be run at all — so this is the one place a whole
+ * decomposition is thrown away, and the message names the loop so it can be fixed
+ * in one edit.
+ */
+ const cycle = detectDependencyCycle(subtasks)
+ if (cycle !== null) {
+ // Closed back to its start so the loop reads as one, rather than as a path that
+ // happens to end near where it began.
+ const loop = [...cycle, cycle[0] ?? 0]
+.map((index) => `${index} ("${subtasks[index]?.title ?? '?'}")`)
+.join(' → ')
+ return {
+ ok: false,
+ reason: `This plan's dependencies form a cycle, so no subtask in it could ever start: ${loop}. Break the loop and resubmit.`,
+ }
  }
 
  return { ok: true, decomposition: { subtasks } }

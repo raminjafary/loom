@@ -26,6 +26,7 @@ import {
  runnerRepository,
  threadRepository,
  workerNoteRepository,
+ planSubtaskRepository,
  workspaceRunControlRepository,
 } from '@loom/db'
 import { RPCHandler } from '@orpc/server/node'
@@ -98,6 +99,7 @@ export const buildApp = async (
  approvals: approvalRepository(db),
  mergeQueue: mergeQueueRepository(db),
  workerNotes: workerNoteRepository(db),
+ planSubtasks: planSubtaskRepository(db),
  capabilities: capabilityRepository(db),
  personas: personaRepository(db),
  personaGroups: personaGroupRepository(db),

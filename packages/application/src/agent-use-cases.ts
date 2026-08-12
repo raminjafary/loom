@@ -15,6 +15,7 @@ import {
  describeCrossPlanOverlaps,
  describeDelegationRoster,
  describePathOverlaps,
+ describePlanStages,
  detectClaimsAgainstExisting,
  detectPathOverlaps,
  isHuman,
@@ -29,6 +30,7 @@ import {
  parseDecomposition,
  parsePlanDelta,
  parsePersonaMarkdown,
+ planStages,
  primaryToolArgument,
  selectNextMergeEntry,
  summarizeChildOutcomes,
@@ -83,6 +85,7 @@ import type {
  MergeQueueRepositoryPort,
  PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
+ PlanSubtaskRepositoryPort,
  RepositoryRepositoryPort,
  ListDirectoryResult,
  RunDispatchPort,
@@ -111,6 +114,8 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps {
  readonly personas: PersonaRepositoryPort
  readonly personaGroups: PersonaGroupRepositoryPort
  readonly runControl: WorkspaceRunControlRepositoryPort
+ /** The DAG — the subtasks of a plan that have not started yet. */
+ readonly planSubtasks: PlanSubtaskRepositoryPort
  /** The raw transcript tier's store. */
  readonly blobs: BlobStoragePort
  readonly dispatch: RunDispatchPort
@@ -1435,7 +1440,69 @@ export const applySubmittedPlan = async (
  await postRunSystemMessage(deps, planner, crossWarning)
  }
 
- for (const subtask of verdict.decomposition.subtasks) {
+ /**
+ * The DAG. Only the subtasks with nothing to wait for start now; the rest are
+ * recorded as `waiting` and released by `releaseDependents` as their predecessors
+ * reach a terminal state.
+ *
+ * `planStages` is computed here rather than per-subtask so the human-facing
+ * accounting and the scheduling read the same decomposition — a plan described as
+ * three stages that then runs as two would be worse than no description at all.
+ */
+ const stages = planStages(verdict.decomposition.subtasks)
+ const stageWarning = describePlanStages(
+ stages,
+ verdict.decomposition.subtasks.map((subtask) => ({
+ title: subtask.title,
+ personaName: subtask.personaName,
+ // The persona's *enforced* cap, read off the roster the plan was validated
+ // against. A subtask naming a persona that does not exist is refused below, and
+ // shows here as uncapped rather than as free.
+ budgetCapUsd:
+ personas.find((persona) => persona.name === subtask.personaName)?.harnessBudgetCapUsd ??
+ null,
+ })),
+)
+ if (stageWarning) {
+ // Before the first child starts, which is the only moment it is actionable —
+ // The collaboration topology requires per-stage accounting "visible before the plan is approved".
+ await postRunSystemMessage(deps, planner, stageWarning)
+ }
+
+ const records: {
+ position: number
+ title: string
+ task: string
+ personaName: string
+ paths: string[]
+ dependsOn: number[]
+ status: 'waiting' | 'started' | 'skipped' | 'refused'
+ agentRunId: AgentRunId | null
+ detail: string | null
+ }[] = []
+ let deferred = 0
+
+ for (const [position, subtask] of verdict.decomposition.subtasks.entries) {
+ const base = {
+ position,
+ title: subtask.title,
+ task: subtask.task,
+ personaName: subtask.personaName,
+ paths: [...subtask.paths],
+ dependsOn: [...subtask.dependsOn],
+ }
+
+ if (subtask.dependsOn.length > 0) {
+ deferred += 1
+ records.push({...base, status: 'waiting', agentRunId: null, detail: null })
+ startedLines.push(
+ `⏸ ${subtask.title} → ${subtask.personaName} (waits for ${subtask.dependsOn
+.map((index) => `"${verdict.decomposition.subtasks[index]?.title ?? index}"`)
+.join(', ')})`,
+)
+ continue
+ }
+
  const outcome = await startPlannedChild(deps, {
  planner,
  channelId: thread.channelId,
@@ -1445,9 +1512,40 @@ export const applySubmittedPlan = async (
  if (outcome.ok) {
  started.push(outcome.runId)
  startedLines.push(`• ${subtask.title} → ${subtask.personaName}`)
+ records.push({...base, status: 'started', agentRunId: outcome.runId, detail: null })
  } else {
  refused.push(`${subtask.title}: ${outcome.reason}`)
+ records.push({...base, status: 'refused', agentRunId: null, detail: outcome.reason })
  }
+ }
+
+ /**
+ * Recorded even when nothing is waiting, so `findByAgentRun` can answer for every
+ * child of a plan rather than only for the ones in a pipeline. A dependent released
+ * later has to find its own row, and a plan half-present in this table would be
+ * worse than one wholly absent.
+ *
+ * Written *after* the immediate children started rather than before: the row for a
+ * started child carries its run id, and there is nothing to release until at least
+ * one child can finish.
+ */
+ await deps.planSubtasks.recordPlan({
+ workspaceId: planner.workspaceId,
+ plannerRunId: planner.id,
+ subtasks: records,
+ })
+
+ /**
+ * The case a stage-based scheduler gets wrong by omission: every immediate subtask
+ * was refused, so nothing will ever reach a terminal state to release the waiting
+ * ones. They would sit in `waiting` forever with no error anywhere.
+ */
+ if (deferred > 0 && started.length === 0) {
+ await skipAllWaiting(
+ deps,
+ planner,
+ 'nothing in the first stage started, so this could never be released',
+)
  }
 
  /**
@@ -1466,6 +1564,196 @@ export const applySubmittedPlan = async (
  await postRunSystemMessage(deps, planner, summary)
 
  return { started, refused }
+}
+
+/**
+ * Marks every still-waiting subtask of a plan as skipped, with a reason.
+ *
+ * Used for the two ways a pipeline stops: a predecessor that did not complete, and a
+ * first stage that started nothing. Both are the "a failed dependency stops its
+ * dependents rather than starting them against a broken base" — the alternative is
+ * a `waiting` row nothing will ever release, which is invisible rather than merely
+ * unfortunate.
+ */
+const skipAllWaiting = async (
+ deps: AgentDeps,
+ planner: AgentRun,
+ why: string,
+): Promise<string[]> => {
+ const skipped: string[] = []
+ const rows = await deps.planSubtasks.listByPlanner(planner.workspaceId, planner.id)
+ for (const row of rows) {
+ if (row.status !== 'waiting') continue
+ const claimed = await deps.planSubtasks.claimWaiting({
+ workspaceId: planner.workspaceId,
+ id: row.id,
+ status: 'skipped',
+ agentRunId: null,
+ detail: why,
+ })
+ if (claimed) skipped.push(row.title)
+ }
+ return skipped
+}
+
+/**
+ * The scheduling step: a child of a plan has reached a terminal state, so whatever
+ * was waiting on it may now be startable — or, if it failed, unstartable.
+ *
+ * Called on every terminal transition, and a no-op for a run that did not come from a
+ * recorded plan (`findByAgentRun` returns null) — which is every run started by a
+ * human and every run that predates the collaboration topology.
+ *
+ * **Failure propagates, and does so transitively.** the collaboration topology is explicit: "a failed
+ * dependency stops its dependents rather than starting them against a broken base."
+ * A subtask whose predecessor did not *complete* is skipped, and because a skipped
+ * subtask never reaches a terminal run state of its own, the skip has to cascade in
+ * the same pass rather than waiting for a run that will never exist.
+ */
+const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void> => {
+ const own = await deps.planSubtasks.findByAgentRun(child.workspaceId, child.id)
+ if (!own) return
+
+ const planner = await deps.agentRuns.findById(child.workspaceId, own.plannerRunId)
+ if (!planner) return
+ const thread = await deps.threads.findById(child.workspaceId, planner.threadId)
+ if (!thread) return
+
+ const rows = await deps.planSubtasks.listByPlanner(child.workspaceId, own.plannerRunId)
+ const byPosition = new Map(rows.map((row) => [row.position, row]))
+
+ /**
+ * A predecessor counts as satisfied only if it *completed*. `skipped` and `refused`
+ * are not terminal successes, and neither is a failed or cancelled run — starting a
+ * dependent against any of them is the broken base the collaboration topology names.
+ */
+ const outcomeOf = async (
+ row: (typeof rows)[number],
+): Promise<'ok' | 'bad' | 'pending'> => {
+ if (row.status === 'waiting') return 'pending'
+ if (row.status === 'skipped' || row.status === 'refused') return 'bad'
+ if (!row.agentRunId) return 'bad'
+ const run = await deps.agentRuns.findById(child.workspaceId, row.agentRunId)
+ if (!run) return 'bad'
+ if (!isTerminalRunStatus(run.status)) return 'pending'
+ return run.status === 'completed' ? 'ok': 'bad'
+ }
+
+ const startedTitles: string[] = []
+ const skippedTitles: string[] = []
+ let personas: AgentPersona[] | null = null
+
+ /**
+ * A loop rather than one pass, because releasing a subtask can only ever *add*
+ * work, but skipping one immediately unblocks the decision about its own
+ * dependents — and those dependents will never produce a terminal run to trigger
+ * another pass. Bounded by `MAX_SUBTASKS`: each iteration must claim at least one
+ * row or it stops.
+ */
+ let progressed = true
+ while (progressed) {
+ progressed = false
+
+ for (const row of rows) {
+ if (byPosition.get(row.position)?.status !== 'waiting') continue
+
+ const outcomes = await Promise.all(
+ row.dependsOn.map(async (position) => {
+ const predecessor = byPosition.get(position)
+ // A dependency pointing at nothing cannot be satisfied. Unreachable through
+ // `parseDecomposition`, which range-checks every index against the plan it
+ // arrived in — asserted rather than assumed, because the consequence of
+ // being wrong is a row nothing releases.
+ return predecessor ? await outcomeOf(predecessor): 'bad'
+ }),
+)
+
+ if (outcomes.includes('bad')) {
+ const bad = row.dependsOn
+.filter((_, index) => outcomes[index] === 'bad')
+.map((position) => `"${byPosition.get(position)?.title ?? position}"`)
+ const claimed = await deps.planSubtasks.claimWaiting({
+ workspaceId: child.workspaceId,
+ id: row.id,
+ status: 'skipped',
+ agentRunId: null,
+ detail: `did not run: ${bad.join(', ')} did not complete`,
+ })
+ if (claimed) {
+ byPosition.set(row.position, claimed)
+ skippedTitles.push(row.title)
+ progressed = true
+ }
+ continue
+ }
+
+ if (outcomes.includes('pending')) continue
+
+ /**
+ * Claimed *before* the run is started, not after. Two siblings finishing at the
+ * same instant both see this row's dependencies satisfied; the claim is what
+ * makes exactly one of them start it. Starting first and claiming after would
+ * produce two runs on the same subtask, which the merge queue would then have
+ * to serialize against itself.
+ */
+ const claimed = await deps.planSubtasks.claimWaiting({
+ workspaceId: child.workspaceId,
+ id: row.id,
+ status: 'started',
+ agentRunId: null,
+ detail: null,
+ })
+ if (!claimed) continue
+
+ personas ??= await deps.personas.listByWorkspace(child.workspaceId)
+ const outcome = await startPlannedChild(deps, {
+ planner,
+ channelId: thread.channelId,
+ personas,
+ subtask: {
+ title: row.title,
+ task: row.task,
+ personaName: row.personaName,
+ paths: row.paths,
+ dependsOn: row.dependsOn,
+ },
+ })
+
+ /**
+ * The claim already moved this row out of `waiting`, so a refusal here has to
+ * be written back rather than left as a `started` row with no run — which would
+ * make every dependent of it wait forever on a run that does not exist. The
+ * row is no longer `waiting`, so this is a direct correction, not a claim.
+ */
+ byPosition.set(row.position, {
+...claimed,
+ status: outcome.ok ? 'started': 'refused',
+ agentRunId: outcome.ok ? outcome.runId: null,
+ detail: outcome.ok ? null: outcome.reason,
+ })
+ if (outcome.ok) {
+ startedTitles.push(`${row.title} → ${row.personaName}`)
+ } else {
+ skippedTitles.push(row.title)
+ await deps.planSubtasks.claimWaiting({
+ workspaceId: child.workspaceId,
+ id: row.id,
+ status: 'refused',
+ agentRunId: null,
+ detail: outcome.reason,
+ })
+ }
+ progressed = true
+ }
+ }
+
+ if (startedTitles.length > 0 || skippedTitles.length > 0) {
+ const lines = [
+...startedTitles.map((title) => `• ${title} — started, its dependencies are done`),
+...skippedTitles.map((title) => `✗ ${title} — skipped, a dependency did not complete`),
+ ]
+ await postRunSystemMessage(deps, planner, ['Plan stage advanced:',...lines].join('\n'))
+ }
 }
 
 /**
@@ -3079,6 +3367,13 @@ export const recordAgentEvent = async (
  title: `${completed.persona.name} completed`,
  body: describeRunOutcomeForNote(completed),
  })
+ /**
+ * The DAG advances before the aggregation is considered, and the order matters:
+ * `aggregateForParent` posts the plan's final summary once every sibling is
+ * terminal, and a subtask released here is a new non-terminal sibling. Reversed,
+ * a two-stage plan would post "plan finished" at the end of stage one.
+ */
+ await releaseDependents(deps, completed)
  await aggregateForParent(deps, completed)
  } else if (input.event.kind === 'run_failed') {
  const failed = await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
@@ -3096,6 +3391,10 @@ export const recordAgentEvent = async (
  title: `${failed.persona.name} failed`,
  body: `${describeRunOutcomeForNote(failed)} Reported: ${truncateForNote(input.event.message)}`,
  })
+ // A failure releases nothing, but it is what *skips* the dependents that were
+ // waiting on it — and those skips have to be recorded before the aggregation
+ // decides the plan is over.
+ await releaseDependents(deps, failed)
  await aggregateForParent(deps, failed)
  }
 }

@@ -3278,3 +3278,340 @@ Decompose and delegate.`
  socket.close
  })
 })
+
+/**
+ * The DAG — `dependsOn`, over the real protocol.
+ *
+ * The domain tests cover cycle refusal and stage grouping as pure logic. What only
+ * this level can show is the half that spans two runs finishing: a subtask held back,
+ * released when its predecessor completes, and *skipped* when its predecessor does
+ * not — which is the "a failed dependency stops its dependents rather than starting
+ * them against a broken base".
+ */
+describe('runner-gateway: plan dependencies', => {
+ const DAG_PLANNER = `---
+name: dag-planner
+description: Decomposes and delegates.
+model: test-model
+tools: []
+harness:
+ planner: true
+ delegates: [Read]
+---
+
+Decompose and delegate.`
+
+ const startDagPlanner = async (name: string) => {
+ const { socket, runnerId } = await pairFakeRunner(name)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name })
+ const planner = await client.persona.create({ markdownSource: DAG_PLANNER })
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: planner.id,
+ })
+ await startRun
+ return { socket, run: await runPromise, thread: created.rootThread }
+ }
+
+ const waitForChildren = async (runId: string, want: number) => {
+ let children = await client.agentRun.listChildren({ agentRunId: runId })
+ for (let i = 0; i < 60 && children.length < want; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: runId })
+ }
+ return children
+ }
+
+ const waitForMessage = async (threadId: string, needle: string) => {
+ for (let i = 0; i < 60; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId })
+ const hit = page.messages.find((m) => m.body.text?.includes(needle))
+ if (hit) return hit.body.text
+ }
+ return undefined
+ }
+
+ it('starts only the subtasks with nothing to wait for', async => {
+ const { socket, run, thread } = await startDagPlanner('dag-first-stage')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Test', task: 'Test it.', personaName: 'fake-worker', dependsOn: [0] },
+ ],
+ }),
+)
+
+ const summary = await waitForMessage(thread.id, 'Plan accepted')
+ expect(summary).toContain('1 subtask(s) started')
+ expect(summary).toContain('• Build → fake-worker')
+ // Named and visibly held, not silently absent: a human reading this has to be
+ // able to tell "waiting" from "the planner forgot".
+ expect(summary).toContain('⏸ Test → fake-worker (waits for "Build")')
+
+ // And only one run actually exists — the point of the whole feature.
+ const children = await waitForChildren(run.id, 1)
+ expect(children).toHaveLength(1)
+ expect(children[0]?.persona.name).toBe('fake-worker')
+
+ socket.close
+ })
+
+ it('releases a dependent once its predecessor completes', async => {
+ const { socket, run, thread } = await startDagPlanner('dag-release')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Test', task: 'Test it.', personaName: 'fake-worker', dependsOn: [0] },
+ ],
+ }),
+)
+
+ const first = await waitForChildren(run.id, 1)
+ expect(first).toHaveLength(1)
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: first[0]!.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'built' },
+ }),
+)
+
+ const second = await waitForChildren(run.id, 2)
+ expect(second).toHaveLength(2)
+ expect(await waitForMessage(thread.id, 'Plan stage advanced')).toContain(
+ 'Test → fake-worker — started',
+)
+
+ socket.close
+ })
+
+ it('skips a dependent when its predecessor fails, rather than running it on a broken base', async => {
+ // The collaboration topology states this as a requirement, and it is the whole reason a pipeline is
+ // riskier than a fan-out: "everything downstream inherits the mistake".
+ const { socket, run, thread } = await startDagPlanner('dag-skip')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Test', task: 'Test it.', personaName: 'fake-worker', dependsOn: [0] },
+ ],
+ }),
+)
+
+ const first = await waitForChildren(run.id, 1)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: first[0]!.id,
+ seq: 1,
+ event: { kind: 'run_failed', message: 'the build broke' },
+ }),
+)
+
+ expect(await waitForMessage(thread.id, 'Plan stage advanced')).toContain(
+ '✗ Test — skipped, a dependency did not complete',
+)
+
+ // No second run was started. Asserted after the message rather than instead of
+ // it: "no child appeared yet" is also what a *slow* release looks like.
+ const children = await client.agentRun.listChildren({ agentRunId: run.id })
+ expect(children).toHaveLength(1)
+
+ socket.close
+ })
+
+ it('cascades a skip through a chain, since a skipped subtask emits no terminal event', async => {
+ /**
+ * The bug a naive one-pass release has. C waits on B, B waits on A. A fails, so B
+ * is skipped — but B never becomes a *run*, so nothing will ever fire the pass
+ * that would skip C. Without the cascade, C sits in `waiting` forever with no
+ * error anywhere.
+ *
+ * **The chain is deliberately written backwards in the array** — C first, A last.
+ * A single forward pass over the rows already cascades when every edge points at
+ * an earlier index, because the predecessor's verdict is settled before the
+ * dependent is examined. Ordered this way, C is examined before B is skipped, so
+ * only a repeated pass reaches it. An earlier version of this test used the
+ * natural A, B, C ordering and passed against a deliberately single-pass
+ * implementation — which is to say it tested nothing.
+ */
+ const { socket, run, thread } = await startDagPlanner('dag-cascade')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'C', task: 'Do C.', personaName: 'fake-worker', dependsOn: [1] },
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker', dependsOn: [2] },
+ { title: 'A', task: 'Do A.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+
+ const first = await waitForChildren(run.id, 1)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: first[0]!.id,
+ seq: 1,
+ event: { kind: 'run_failed', message: 'A broke' },
+ }),
+)
+
+ const advanced = await waitForMessage(thread.id, 'Plan stage advanced')
+ expect(advanced).toContain('✗ B — skipped')
+ expect(advanced).toContain('✗ C — skipped')
+
+ socket.close
+ })
+
+ it('refuses a cyclic plan whole, and names the loop', async => {
+ const { socket, run, thread } = await startDagPlanner('dag-cycle')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Chicken', task: 'Do it.', personaName: 'fake-worker', dependsOn: [1] },
+ { title: 'Egg', task: 'Do it.', personaName: 'fake-worker', dependsOn: [0] },
+ ],
+ }),
+)
+
+ const refusal = await waitForMessage(thread.id, 'cycle')
+ expect(refusal).toContain('Chicken')
+ expect(refusal).toContain('Egg')
+
+ // Refused *whole*, unlike a path overlap, which warns and runs. The collaboration topology draws that
+ // distinction itself: a cycle is not a guess about the future.
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toEqual([])
+
+ socket.close
+ })
+
+ it('shows the per-stage spend ceiling before any child starts', async => {
+ // The collaboration topology requires this by name: "`dependsOn` ships with per-stage budget accounting
+ // visible before the plan is approved."
+ const { socket, run, thread } = await startDagPlanner('dag-stages')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Test', task: 'Test it.', personaName: 'fake-worker', dependsOn: [0] },
+ ],
+ }),
+)
+
+ const stages = await waitForMessage(thread.id, 'runs in 2 stages')
+ expect(stages).toContain('Stage 1: 1 subtask(s)')
+ expect(stages).toContain('Stage 2: 1 subtask(s)')
+ expect(stages).toContain('stops the stages after it')
+
+ socket.close
+ })
+
+ it('does not skip a dependent whose other predecessor is still running', async => {
+ // D waits on both B and C. B finishing is not enough, and treating "not all
+ // satisfied" as "bad" rather than "pending" would skip D on the first callback.
+ const { socket, run, thread } = await startDagPlanner('dag-partial')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'B', task: 'Do B.', personaName: 'fake-worker' },
+ { title: 'C', task: 'Do C.', personaName: 'fake-worker' },
+ { title: 'D', task: 'Do D.', personaName: 'fake-worker', dependsOn: [0, 1] },
+ ],
+ }),
+)
+
+ const first = await waitForChildren(run.id, 2)
+ expect(first).toHaveLength(2)
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: first[0]!.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'b done' },
+ }),
+)
+ await new Promise((r) => setTimeout(r, 400))
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toHaveLength(2)
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: first[1]!.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'c done' },
+ }),
+)
+ expect(await waitForChildren(run.id, 3)).toHaveLength(3)
+ expect(await waitForMessage(thread.id, 'Plan stage advanced')).toContain('D → fake-worker')
+
+ socket.close
+ })
+
+ it('does not post the plan-finished summary at the end of the first stage', async => {
+ /**
+ * The ordering bug `releaseDependents` is called before `aggregateForParent` to
+ * avoid: aggregation fires when every sibling is terminal, and at the moment stage
+ * one completes that is briefly true — the stage-two run does not exist yet.
+ */
+ const { socket, run, thread } = await startDagPlanner('dag-aggregate')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Test', task: 'Test it.', personaName: 'fake-worker', dependsOn: [0] },
+ ],
+ }),
+)
+
+ const first = await waitForChildren(run.id, 1)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: first[0]!.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'built' },
+ }),
+)
+
+ // Wait until stage two is demonstrably running, then assert the summary has not
+ // been posted. Asserting immediately would pass even if the ordering were wrong.
+ expect(await waitForChildren(run.id, 2)).toHaveLength(2)
+ const page = await client.message.list({ threadId: thread.id })
+ expect(page.messages.some((m) => m.body.text?.includes('Plan finished:'))).toBe(false)
+
+ socket.close
+ })
+})

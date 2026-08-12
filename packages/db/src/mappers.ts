@@ -45,6 +45,7 @@ import {
  type WorkerNote,
  type WorkerNoteKind,
 } from '@loom/domain'
+import type { PlanSubtaskRecord } from '@loom/application'
 
 /**
  * The translation seam. Drizzle row shapes stop here and domain entities start
@@ -565,6 +566,49 @@ export const toNotificationTarget = (row: NotificationTargetRow): NotificationTa
 : {},
  createdAt: row.createdAt,
 })
+
+export interface PlanSubtaskRow {
+ id: string
+ workspaceId: string
+ plannerRunId: string
+ position: number
+ title: string
+ task: string
+ personaName: string
+ paths: unknown
+ dependsOn: unknown
+ status: string
+ agentRunId: string | null
+ detail: string | null
+}
+
+const PLAN_SUBTASK_STATUSES = ['waiting', 'started', 'skipped', 'refused'] as const
+
+/**
+ * Hand-validated rather than cast, like every other status in this file. A status
+ * this mapper does not recognise is a row written by code that no longer matches the
+ * reader, and silently widening the type is how a `waiting` subtask ends up treated
+ * as terminal — which would strand the rest of its pipeline with no error anywhere.
+ */
+export const toPlanSubtask = (row: PlanSubtaskRow): PlanSubtaskRecord => {
+ const status = PLAN_SUBTASK_STATUSES.find((candidate) => candidate === row.status)
+ if (!status) throw new Error(`unknown plan_subtask.status: ${row.status}`)
+
+ return {
+ id: row.id,
+ workspaceId: asWorkspaceId(row.workspaceId),
+ plannerRunId: asAgentRunId(row.plannerRunId),
+ position: row.position,
+ title: row.title,
+ task: row.task,
+ personaName: row.personaName,
+ paths: Array.isArray(row.paths) ? (row.paths as string[]): [],
+ dependsOn: Array.isArray(row.dependsOn) ? (row.dependsOn as number[]): [],
+ status,
+ agentRunId: row.agentRunId === null ? null: asAgentRunId(row.agentRunId),
+ detail: row.detail,
+ }
+}
 
 export interface WorkerNoteRow {
  id: string

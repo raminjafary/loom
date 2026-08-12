@@ -75,6 +75,29 @@ export const createPlannerTool = : PlannerToolHandle => {
  'conflicts. Best effort is useful — name the paths you are confident ' +
  'about and leave the list short rather than guessing at the whole tree.',
 ),
+ /**
+ * The DAG. The description leads with *when to use it* rather than what
+ * it holds, because the failure mode is not a malformed edge — it is a
+ * planner that never makes one and fans out work that had an order.
+ *
+ * It also states the cost, for the reason the collaboration topology gives: "a DAG of agents is a
+ * machine for turning one bad early decision into eight expensive later
+ * ones". A model that thinks sequencing is free will sequence everything,
+ * and a fully serial plan throws away the 2.1× the parallel-branch measurement measured.
+ */
+ dependsOn: z
+.array(z.number.int)
+.optional
+.describe(
+ 'Indices of other subtasks in this same array (0-based) that must ' +
+ 'finish before this one starts. Use it when a subtask genuinely ' +
+ 'needs another\'s output — "QA tests what the engineer built", ' +
+ '"the architect decides the approach before anyone implements it". ' +
+ 'Leave it out otherwise: subtasks with no dependencies all start at ' +
+ 'once, which is faster and fails more cheaply, and a subtask whose ' +
+ 'dependency fails is skipped rather than run. Dependencies must not ' +
+ 'form a cycle — a plan containing one is refused whole.',
+),
  }),
 )
 .min(1)
