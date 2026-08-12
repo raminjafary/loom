@@ -220,6 +220,8 @@ const main = async => {
  ])
  check(midRunNodes > 0, `the map was durable while the run was still going (${midRunNodes} node(s))`)
  console.log('run finished:', settled.status, 'cost', settled.totalCostUsd)
+ // A driver that reports "failed" without the reason wastes the run it just paid for.
+ if (settled.errorMessage) console.log(' reason:', settled.errorMessage)
 
  const map = await mapOf
  if (!map) throw new Error('no map was created at all')
@@ -279,6 +281,7 @@ const main = async => {
  console.log('retrieval run', second.id)
  const settledSecond = await awaitRun(second.id)
  console.log('retrieval run finished:', settledSecond.status, 'cost', settledSecond.totalCostUsd)
+ if (settledSecond.errorMessage) console.log(' reason:', settledSecond.errorMessage)
 
  /**
  * Asserted against what the **agent** said, not against the thread.
