@@ -562,6 +562,7 @@ export interface PersonaGroupRow {
  personaIds: unknown
  layout?: unknown
  fleet?: unknown
+ reviewers?: unknown
  createdAt: Date
  updatedAt: Date
 }
@@ -584,6 +585,12 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
  fleet:
  row.fleet && typeof row.fleet === 'object' && !Array.isArray(row.fleet)
  ? (row.fleet as Record<string, number>)
+: {},
+ // Defaulted like the two above: a row written before the column existed expects nothing
+ // to be reviewed, which is the behaviour every team had before this shipped.
+ reviewers:
+ row.reviewers && typeof row.reviewers === 'object' && !Array.isArray(row.reviewers)
+ ? (row.reviewers as Record<string, string[]>)
 : {},
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,

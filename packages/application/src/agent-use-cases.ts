@@ -18,6 +18,11 @@ import {
  describeFleetRefusal,
  detectFleetOverruns,
  parseFleetSizes,
+ parseReviewPolicy,
+ describeReviewPolicy,
+ describeMissingReviews,
+ detectMissingReviews,
+ type ReviewExpectation,
  describeCrossPlanOverlaps,
  delegationDesign,
  delegationMatrix,
@@ -899,17 +904,56 @@ const plannerPersonaId = (
 ): AgentPersonaId | null =>
  personas.find((persona) => persona.name === run.persona.name)?.id ?? null
 
-const resolveFleetSizes = async (
+const resolveTeamPolicy = async (
  deps: AgentDeps,
  workspaceId: WorkspaceId,
  /** Null when the persona could not be resolved at all — unsized, same as no team. */
  personaId: AgentPersonaId | null,
-): Promise<{ fleet: Record<string, number>; ambiguous: boolean }> => {
- if (personaId === null) return { fleet: {}, ambiguous: false }
+): Promise<{
+ fleet: Record<string, number>
+ reviewers: Record<string, string[]>
+ ambiguous: boolean
+}> => {
+ const none = { fleet: {}, reviewers: {}, ambiguous: false }
+ if (personaId === null) return none
  const groups = await deps.personaGroups.listByWorkspace(workspaceId)
  const owning = groups.filter((group) => group.personaIds.includes(personaId))
- if (owning.length !== 1) return { fleet: {}, ambiguous: owning.length > 1 }
- return { fleet: owning[0]?.fleet ?? {}, ambiguous: false }
+ if (owning.length !== 1) return {...none, ambiguous: owning.length > 1 }
+ return {
+ fleet: owning[0]?.fleet ?? {},
+ reviewers: owning[0]?.reviewers ?? {},
+ ambiguous: false,
+ }
+}
+
+/**
+ * The team's review expectations as *names*, which is what a prompt and a warning both
+ * need. Stored by id, because a persona rename must not silently drop a
+ * policy; resolved here, because a Planner names personas by name and nothing else.
+ *
+ * An entry naming a persona that no longer exists is dropped rather than reported: it is
+ * the same stale-membership case `parseReviewPolicy` drops, arriving from the other side.
+ */
+const resolveReviewExpectations = (
+ reviewers: Record<string, string[]>,
+ personas: readonly AgentPersona[],
+): ReviewExpectation[] => {
+ // Keyed as plain strings: the stored policy holds ids as they came off the wire, and a
+ // branded lookup would need every one of them re-branded to be readable.
+ const nameById = new Map<string, string>(
+ personas.map((persona) => [persona.id as string, persona.name]),
+)
+ const expectations: ReviewExpectation[] = []
+ for (const [reviewerId, reviewedIds] of Object.entries(reviewers)) {
+ const reviewerName = nameById.get(reviewerId)
+ if (reviewerName === undefined) continue
+ for (const reviewedId of reviewedIds) {
+ const reviewedName = nameById.get(reviewedId)
+ if (reviewedName === undefined) continue
+ expectations.push({ reviewerName, reviewedName })
+ }
+ }
+ return expectations
 }
 
 export const updatePersonaGroup = async (
@@ -931,6 +975,11 @@ export const updatePersonaGroup = async (
  * the stored widths untouched, for the same reason `layout` does.
  */
  fleet?: Record<string, number>
+ /**
+ * Who reviews whom on this team. Omitted leaves the stored policy
+ * alone, for the same reason `layout` and `fleet` do.
+ */
+ reviewers?: Record<string, string[]>
  },
 ): Promise<PersonaGroup> => {
  if (!isHuman(input.actor)) {
@@ -948,10 +997,32 @@ export const updatePersonaGroup = async (
  const fleetVerdict = parseFleetSizes(input.fleet, input.personaIds)
  if (!fleetVerdict.ok) throw new ValidationError(fleetVerdict.reason)
 
+ /**
+ * The review policy, validated for the same reason: the roster tells a Planner to act on
+ * it, and the two refusals `parseReviewPolicy` makes are the two that would produce an
+ * instruction it cannot follow — a persona reviewing itself (which `parsePlanSubtask`
+ * refuses) and a planner as the reviewed party (whose output is a plan, not a branch).
+ *
+ * Needs to know which members are planners, so the personas are read only when a policy
+ * was actually sent.
+ */
+ const reviewersVerdict =
+ input.reviewers === undefined
+ ? { ok: true as const, reviewers: {} }
+: parseReviewPolicy(
+ input.reviewers,
+ input.personaIds,
+ (await deps.personas.listByWorkspace(input.workspaceId))
+.filter((persona) => persona.harnessPlanner)
+.map((persona) => persona.id),
+)
+ if (!reviewersVerdict.ok) throw new ValidationError(reviewersVerdict.reason)
+
  return deps.personaGroups.update(input.workspaceId, input.personaGroupId, {
  name: input.name,
  personaIds: input.personaIds,
 ...(input.fleet === undefined ? {}: { fleet: fleetVerdict.fleet }),
+...(input.reviewers === undefined ? {}: { reviewers: reviewersVerdict.reviewers }),
 ...(input.layout === undefined
  ? {}
 : {
@@ -1340,7 +1411,7 @@ export const startAgentRun = async (
  * this sits under.
  */
  if (parent && input.relation === 'delegation') {
- const team = await resolveFleetSizes(deps, input.workspaceId, input.personaId)
+ const team = await resolveTeamPolicy(deps, input.workspaceId, input.personaId)
  const limit = boundedFleet(
  team.fleet[input.personaId],
  deps.limits.maxConcurrentRunsPerWorkspace,
@@ -1406,9 +1477,9 @@ export const startAgentRun = async (
  * the planner that is acting for a team — a worker on three teams still gets the width
  * the team that is delegating to it declared.
  */
- const teamFleet = baseSpec.planner
- ? await resolveFleetSizes(deps, input.workspaceId, input.personaId)
-: { fleet: {}, ambiguous: false }
+ const teamPolicy = baseSpec.planner
+ ? await resolveTeamPolicy(deps, input.workspaceId, input.personaId)
+: await resolveTeamPolicy(deps, input.workspaceId, null)
 
  const roster = baseSpec.planner
  ? describeDelegationRoster(
@@ -1429,13 +1500,13 @@ export const startAgentRun = async (
  * the platform lying about its own limit.
  */
 ...(boundedFleet(
- teamFleet.fleet[candidate.id],
+ teamPolicy.fleet[candidate.id],
  deps.limits.maxConcurrentRunsPerWorkspace,
 ) === null
  ? {}
 : {
  fleet: boundedFleet(
- teamFleet.fleet[candidate.id],
+ teamPolicy.fleet[candidate.id],
  deps.limits.maxConcurrentRunsPerWorkspace,
 ) as number,
  }),
@@ -1456,9 +1527,31 @@ export const startAgentRun = async (
 )
 : null
 
- const personaSpec: PersonaSpec = roster
- ? {...baseSpec, systemPrompt: `${baseSpec.systemPrompt}${roster}` }
-: baseSpec
+ /**
+ * The design-canvas half, read where it is actionable: the team's standing review
+ * expectations, appended after the roster.
+ *
+ * After rather than inside `describeDelegationRoster`, because it is a fact about *pairs*
+ * of personas and the roster is a list of candidates — folding it into a candidate's line
+ * would say "reviewed by qa" on `swe` and leave `qa`'s own line silent about why it is
+ * there. It is also the only part of the roster that is a property of the *team* rather
+ * than of what this planner may reach.
+ */
+ const reviewClause =
+ baseSpec.planner && roster
+ ? describeReviewPolicy(
+ resolveReviewExpectations(
+ teamPolicy.reviewers,
+ await deps.personas.listByWorkspace(input.workspaceId),
+),
+)
+: null
+
+ const promptSuffix = `${roster ?? ''}${reviewClause ?? ''}`
+ const personaSpec: PersonaSpec =
+ promptSuffix === ''
+ ? baseSpec
+: {...baseSpec, systemPrompt: `${baseSpec.systemPrompt}${promptSuffix}` }
 
  // Capability attenuation. Checked against the parent's *snapshot*,
  // not its stored persona: the snapshot is what the parent is actually running
@@ -2010,7 +2103,7 @@ export const applySubmittedPlan = async (
  * asymmetry is deliberate: this is a statement about the plan a team's planner produced,
  * so the widths that belong to it are the ones its own team declared.
  */
- const plannerTeam = await resolveFleetSizes(deps, planner.workspaceId, plannerPersonaId(personas, planner))
+ const plannerTeam = await resolveTeamPolicy(deps, planner.workspaceId, plannerPersonaId(personas, planner))
  const fleetByName: Record<string, number> = {}
  for (const candidate of personas) {
  const limit = boundedFleet(
@@ -2026,6 +2119,26 @@ export const applySubmittedPlan = async (
 ),
 )
  if (fleetWarning) await postRunSystemMessage(deps, planner, fleetWarning)
+
+ /**
+ * The design-canvas half, read at the other end: work the team expects to be
+ * reviewed that this plan asks no review of.
+ *
+ * A **warning**, and unlike the fleet's width it is *only* a warning — enforcing would
+ * mean the platform adding a subtask the Planner did not ask for, and the decomposition
+ * is the Planner's to author. See `review-policy.ts` for the whole argument.
+ *
+ * Posted after the fleet warning rather than merged with it: they are two different
+ * statements about the plan (too many of one role, versus nobody checking a role), and a
+ * human acting on them does two different things.
+ */
+ const reviewWarning = describeMissingReviews(
+ detectMissingReviews(
+ verdict.decomposition.subtasks,
+ resolveReviewExpectations(plannerTeam.reviewers, personas),
+),
+)
+ if (reviewWarning) await postRunSystemMessage(deps, planner, reviewWarning)
 
  const records: {
  position: number

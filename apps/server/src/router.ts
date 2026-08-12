@@ -644,6 +644,7 @@ export const router = os.router({
  personaIds: input.personaIds,
 ...(input.layout === undefined ? {}: { layout: input.layout }),
 ...(input.fleet === undefined ? {}: { fleet: input.fleet }),
+...(input.reviewers === undefined ? {}: { reviewers: input.reviewers }),
  }),
 ),
 ),

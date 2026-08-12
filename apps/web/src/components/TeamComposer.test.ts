@@ -61,6 +61,7 @@ const group = (overrides: Partial<PersonaGroup> = {}): PersonaGroup => ({
  name: 'Team A',
  personaIds: ['lead', 'swe'],
  fleet: {},
+ reviewers: {},
  layout: {},
  createdAt: new Date(0),
  updatedAt: new Date(0),

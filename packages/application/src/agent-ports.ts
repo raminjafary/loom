@@ -576,6 +576,7 @@ export interface PersonaGroupRepositoryPort {
  personaIds: string[]
  layout?: Record<string, { x: number; y: number }>
  fleet?: Record<string, number>
+ reviewers?: Record<string, string[]>
  },
 ): Promise<PersonaGroup>
  delete(workspaceId: WorkspaceId, id: PersonaGroupId): Promise<void>

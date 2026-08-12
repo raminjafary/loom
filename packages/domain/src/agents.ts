@@ -193,6 +193,12 @@ export interface PersonaGroup {
  * width the runtime ignored would be worse than not offering one.
  */
  readonly fleet: Record<string, number>
+ /**
+ * Who reviews whom on this team, keyed by reviewer persona id. Read by the
+ * runtime: a clause in the Planner's roster, and a plan-time warning. See
+ * `review-policy.ts`.
+ */
+ readonly reviewers: Record<string, string[]>
  readonly createdAt: Date
  readonly updatedAt: Date
 }

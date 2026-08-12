@@ -519,6 +519,12 @@ export const PersonaGroupSchema = z.object({
  * check at child start, and the plan-time warning.
  */
  fleet: z.record(z.string, z.number),
+ /**
+ * Who reviews whom on this team, keyed by reviewer
+ * persona id. Read by the runtime: a clause in the Planner's roster, and a plan-time
+ * warning when work the team expects reviewed is not.
+ */
+ reviewers: z.record(z.string, z.array(z.string)),
  createdAt: z.date,
  updatedAt: z.date,
 })

@@ -307,3 +307,49 @@ describe('plannerLikeMarkdown', => {
  expect(markdown).toContain('planner: true')
  })
 })
+
+/**
+ * The review policy, drawn. The property that matters is that it is a *different*
+ * kind of edge: a delegation edge is the matrix's answer about what the runtime would
+ * allow, a review edge is a human's standing expectation, and nothing gates on the second.
+ * Drawn alike, the canvas would claim a rule that does not exist.
+ */
+describe('composerEdges review policy', => {
+ it('draws a review edge from the reviewer to the reviewed', => {
+ const edges = composerEdges(['qa', 'swe'], [], { qa: ['swe'] })
+ expect(edges).toEqual([
+ {
+ id: 'reviews:qa->swe',
+ source: 'qa',
+ target: 'swe',
+ kind: 'reviews',
+ ok: true,
+ refusals: [],
+ summary: "reviews this persona's work",
+ },
+ ])
+ })
+
+ it('keeps delegation and review edges apart', => {
+ const edges = composerEdges(['planner', 'swe'], [edge], { planner: ['swe'] })
+ expect(edges.map((e) => e.kind).sort).toEqual(['delegates', 'reviews'])
+ })
+
+ it('draws only pairs where both personas are on this team', => {
+ // The policy is stored per team, but a member can be removed without the policy being
+ // rewritten — a line to a persona that is not on the canvas would point at nothing.
+ expect(composerEdges(['qa'], [], { qa: ['elsewhere'], gone: ['qa'] })).toEqual([])
+ })
+
+ it('is never refusable, because nothing in the runtime refuses it', => {
+ const edges = composerEdges(['qa', 'swe'], [], { qa: ['swe'] })
+ expect(edges[0]?.ok).toBe(true)
+ expect(edges[0]?.refusals).toEqual([])
+ })
+
+ it('draws nothing extra when the team has no policy', => {
+ const edges = composerEdges(['planner', 'swe'], [edge])
+ expect(edges).toHaveLength(1)
+ expect(edges[0]?.kind).toBe('delegates')
+ })
+})

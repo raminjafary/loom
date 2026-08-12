@@ -492,6 +492,16 @@ export const personaGroup = pgTable(
  * ignores is worse than no number at all.
  */
  fleet: jsonb('fleet').$type<Record<string, number>>.notNull.default({}),
+ /**
+ * Who reviews whom on this team — the design-canvas half, keyed by *reviewer*
+ * persona id because that is the direction the relation is named and drawn in.
+ *
+ * Read by the runtime, like `fleet` and unlike `layout`: it becomes a clause in the
+ * Planner's roster and a warning when a plan gives work to a reviewed persona and
+ * asks for no review of it. The rule for this canvas is that it may only draw what
+ * the runtime executes.
+ */
+ reviewers: jsonb('reviewers').$type<Record<string, string[]>>.notNull.default({}),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },

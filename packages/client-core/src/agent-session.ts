@@ -318,6 +318,8 @@ export interface AgentSession {
  * than storing a number that would then refuse every run of that persona.
  */
  fleet?: Record<string, number>
+ /** Who reviews whom on this team. Omitted leaves it alone. */
+ reviewers?: Record<string, string[]>
  }): Promise<void>
  deletePersonaGroup(personaGroupId: string): Promise<void>
  startRun(input: {

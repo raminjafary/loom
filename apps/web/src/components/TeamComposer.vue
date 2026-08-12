@@ -55,6 +55,8 @@ const emit = defineEmits<{
  layout: Record<string, { x: number; y: number }>
  /** The widths, keyed by persona id. Always sent — see `setFleet`. */
  fleet: Record<string, number>
+ /** The review policy, keyed by reviewer persona id. Always sent, likewise. */
+ reviewers: Record<string, string[]>
  },
  ]
  'update-persona': [input: { personaId: string; markdownSource: string }]
@@ -132,6 +134,8 @@ const members = computed<AgentPersona[]>( => {
 const layout = ref<Record<string, { x: number; y: number }>>({})
 /** The widths, mirrored locally so an edit renders before the save round-trips. */
 const fleet = ref<Record<string, number>>({})
+/** The review policy, mirrored for the same reason. Keyed by reviewer persona id. */
+const reviewers = ref<Record<string, string[]>>({})
 
 watch(
  [group, members],
@@ -140,6 +144,9 @@ watch(
  // rearranges what someone put where they wanted it.
  layout.value = layoutForGroup(members.value, group.value?.layout ?? {})
  fleet.value = {...(group.value?.fleet ?? {}) }
+ reviewers.value = Object.fromEntries(
+ Object.entries(group.value?.reviewers ?? {}).map(([id, list]) => [id, [...list]]),
+)
  },
  { immediate: true },
 )
@@ -183,6 +190,7 @@ const edges = computed<ComposerEdge[]>( =>
  composerEdges(
  members.value.map((persona) => persona.id),
  props.matrix,
+ reviewers.value,
 ),
 )
 
@@ -204,10 +212,19 @@ const flowEdges = computed( =>
  id: edge.id,
  source: edge.source,
  target: edge.target,
- label: edge.ok ? '': edge.summary,
+ // A review edge is labelled always, a delegation only when refused: the delegation's
+ // label is a *problem*, and the review's is the whole content of the edge.
+ label: edge.kind === 'reviews' ? 'reviews': edge.ok ? '': edge.summary,
  animated: false,
- class: edge.ok ? 'delegates ok': 'delegates refused',
- style: edge.ok
+ class:
+ edge.kind === 'reviews' ? 'reviews': edge.ok ? 'delegates ok': 'delegates refused',
+ style:
+ edge.kind === 'reviews'
+ ? // Dotted and in the "ok" colour, and deliberately not the accent: it is not a
+ // permission the platform granted, it is a human's expectation, and nothing
+ // refuses a branch for missing it.
+ { stroke: 'var(--ok)', strokeWidth: 1.5, strokeDasharray: '2 4' }
+: edge.ok
  ? { stroke: 'var(--accent)', strokeWidth: 2 }
 : { stroke: 'var(--danger, #b42318)', strokeWidth: 1.5, strokeDasharray: '5 4' },
  })),
@@ -253,6 +270,7 @@ const saveLayout = => {
  personaIds: current.personaIds,
  layout: layout.value,
  fleet: fleet.value,
+ reviewers: reviewers.value,
  })
 }
 
@@ -274,6 +292,7 @@ const setMembers = (personaIds: string[]) => {
  personaIds,
  layout: layout.value,
  fleet: fleet.value,
+ reviewers: reviewers.value,
  })
 }
 
@@ -299,8 +318,49 @@ const setFleet = (personaId: string, size: number | null) => {
  personaIds: current.personaIds,
  layout: layout.value,
  fleet: next,
+ reviewers: reviewers.value,
  })
 }
+
+/**
+ * Sets who reviews one member's work. One reviewer per reviewed persona
+ * from this control — the stored shape allows several, and a team that wants two can say
+ * so from either side, but a single picker is the gesture that matches the sentence a
+ * human is making ("qa checks swe").
+ *
+ * Empty clears it, which is a real state: no expectation is what every team has by default.
+ */
+const setReviewer = (reviewedId: string, reviewerId: string) => {
+ const current = group.value
+ if (!current) return
+ const next: Record<string, string[]> = {}
+ for (const [existingReviewer, reviewed] of Object.entries(reviewers.value)) {
+ const kept = reviewed.filter((id) => id !== reviewedId)
+ if (kept.length > 0) next[existingReviewer] = kept
+ }
+ if (reviewerId !== '') next[reviewerId] = [...(next[reviewerId] ?? []), reviewedId]
+ reviewers.value = next
+ emit('save-group', {
+ personaGroupId: current.id,
+ name: current.name,
+ personaIds: current.personaIds,
+ layout: layout.value,
+ fleet: fleet.value,
+ reviewers: next,
+ })
+}
+
+/**
+ * Who may be named a reviewer: anyone on the team. Not filtered to read-only personas —
+ * a reviewer's *persona* decides what it can do and the runtime edge gives it no path
+ * ownership regardless, so narrowing the list here would be this canvas inventing a rule
+ * the runtime does not have.
+ */
+const reviewCandidates = computed( => members.value)
+
+/** Who currently reviews this persona, for the picker's value. */
+const reviewerOf = (reviewedId: string): string =>
+ Object.entries(reviewers.value).find(([, reviewed]) => reviewed.includes(reviewedId))?.[0] ?? ''
 
 const addMember = (personaId: string) => {
  const current = group.value
@@ -547,6 +607,25 @@ const onKeydown = (event: KeyboardEvent) => {
  placeholder="any"
  @change="onFleetInput(persona.id, $event)"
  />
+ <!--
+ The design-canvas half: who reviews this persona's work, as *policy*
+ rather than as a per-plan edge. Offered only on non-planners, because a
+ planner's output is a decomposition and not a branch — the server refuses a
+ policy that says otherwise, and offering it here would be asking for a
+ refusal.
+ -->
+ <select
+ v-if="!persona.harnessPlanner && reviewCandidates.length > 0"
+ class="reviewer"
+:value="reviewerOf(persona.id)"
+:aria-label="`Who reviews ${persona.name}'s work`"
+ @change="setReviewer(persona.id, ($event.target as HTMLSelectElement).value)"
+ >
+ <option value="">unreviewed</option>
+ <option v-for="candidate in reviewCandidates.filter((c) => c.id !== persona.id)":key="candidate.id":value="candidate.id">
+ reviewed by {{ candidate.name }}
+ </option>
+ </select>
  <button type="button" class="link" @click="removeMember(persona.id)">remove</button>
  </li>
  <li v-if="members.length === 0" class="none">Nobody yet.</li>
@@ -802,9 +881,24 @@ header h2 {
  fill: var(--bg);
 }
 
+/*
+ * Labels were red because until the canvas design a label only ever appeared on a *refused* edge, so
+ * the colour and the meaning happened to coincide. A review edge is labelled always and is
+ * not a problem, and painting its label in the danger colour made a healthy expectation
+ * read as an error. The refused case keeps red; everything else takes the edge's own
+ * colour.
+ */
 .canvas:deep(.vue-flow__edge-text) {
- fill: var(--danger, #b42318);
+ fill: var(--text-muted);
  font-size: 10px;
+}
+
+.canvas:deep(.delegates.refused.vue-flow__edge-text) {
+ fill: var(--danger, #b42318);
+}
+
+.canvas:deep(.reviews.vue-flow__edge-text) {
+ fill: var(--ok);
 }
 
 .canvas:deep(.persona-node) {
@@ -979,6 +1073,17 @@ header h2 {
  color: var(--text);
  font: inherit;
  font-size: 0.75rem;
+}
+
+.reviewer {
+ padding: 0.1rem 0.2rem;
+ border: 1px solid var(--border);
+ border-radius: 0.25rem;
+ background: var(--bg);
+ color: var(--text-muted);
+ font: inherit;
+ font-size: 0.7rem;
+ max-width: 9rem;
 }
 
 .fleet {

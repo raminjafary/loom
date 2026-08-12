@@ -455,6 +455,15 @@ export const contract = {
  * that persona.
  */
  fleet: z.record(z.string, z.number).optional,
+ /**
+ * Who reviews whom on this team, keyed by
+ * reviewer persona id. Optional on the same terms as `layout` and `fleet`.
+ *
+ * Validated server-side, not stored as given: the roster tells a Planner to act
+ * on it, so a policy asking for a self-review or for a *planner* to be reviewed
+ * would be an instruction the Planner cannot follow.
+ */
+ reviewers: z.record(z.string, z.array(z.string)).optional,
  }),
 )
 .output(PersonaGroupSchema),

@@ -47,6 +47,13 @@ export interface ComposerEdge {
  readonly id: string
  readonly source: string
  readonly target: string
+ /**
+ * `delegates` is the matrix's answer about what the runtime would allow; `reviews` is a
+ * human's standing expectation from the team's policy. Nothing gates
+ * on the second, so drawing them alike would have the canvas claim a rule that does not
+ * exist.
+ */
+ readonly kind: 'delegates' | 'reviews'
  readonly ok: boolean
  readonly refusals: readonly DelegationRefusal[]
  /** The one-line reason, for a label — the full list is the inspector's job. */
@@ -132,9 +139,38 @@ export const summarizeRefusals = (refusals: readonly DelegationRefusal[]): strin
 export const composerEdges = (
  personaIds: readonly string[],
  matrix: readonly DelegationEdge[],
+ /**
+ * The team's review policy, keyed by reviewer.
+ *
+ * Drawn as its own edge kind rather than mixed in with delegation, because the two say
+ * different things and one of them is not about permission at all: a delegation edge is
+ * the matrix's answer about what the runtime *would allow*, while a review edge is a
+ * human's standing expectation about what should happen. Drawn alike, a canvas would
+ * claim the platform refuses an unreviewed branch, which it does not.
+ */
+ reviewers: Readonly<Record<string, readonly string[]>> = {},
 ): ComposerEdge[] => {
  const members = new Set(personaIds)
- return matrix
+ const reviewEdges: ComposerEdge[] = []
+ for (const [reviewerId, reviewedIds] of Object.entries(reviewers)) {
+ if (!members.has(reviewerId)) continue
+ for (const reviewedId of reviewedIds) {
+ if (!members.has(reviewedId)) continue
+ reviewEdges.push({
+ id: `reviews:${reviewerId}->${reviewedId}`,
+ source: reviewerId,
+ target: reviewedId,
+ kind: 'reviews',
+ // Always `ok`: a review expectation cannot be refused by the runtime — nothing
+ // gates on it — so drawing it as refusable would be the canvas inventing a rule.
+ ok: true,
+ refusals: [],
+ summary: 'reviews this persona\'s work',
+ })
+ }
+ }
+ return reviewEdges.concat(
+ matrix
 .filter((edge) => members.has(edge.plannerId) && members.has(edge.workerId))
  /**
  * A self-edge is not dropped as noise any more — it is **moved to the node**, as
@@ -148,10 +184,12 @@ export const composerEdges = (
  id: `${edge.plannerId}->${edge.workerId}`,
  source: edge.plannerId,
  target: edge.workerId,
+ kind: 'delegates' as const,
  ok: edge.ok,
  refusals: edge.refusals,
  summary: summarizeRefusals(edge.refusals),
- }))
+ })),
+)
 }
 
 export type ConnectVerdict =

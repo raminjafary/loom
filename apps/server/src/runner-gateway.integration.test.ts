@@ -4124,3 +4124,188 @@ Decompose and delegate.`
  socket.close
  })
 })
+
+/**
+ * The design-canvas half — `reviews` as **policy**, over the real protocol.
+ *
+ * The rule for this canvas is the roadmap's: it "may only draw what the runtime executes, so
+ * each of these has to be a field the platform already reads — never a decoration." So the
+ * two tests that matter are the two readers: a Planner is *told* the expectation at plan
+ * time, and a plan that ignores it is *warned about* before the first child starts.
+ */
+describe('runner-gateway: review policy', => {
+ const POLICY_PLANNER = `---
+name: policy-planner
+description: Decomposes and delegates.
+model: test-model
+tools: []
+harness:
+ planner: true
+ delegates: [Read]
+---
+
+Decompose and delegate.`
+
+ const waitForMessage = async (threadId: string, needle: string) => {
+ for (let i = 0; i < 60; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ const page = await client.message.list({ threadId })
+ const hit = page.messages.find((m) => m.body.text?.includes(needle))
+ if (hit) return hit.body.text
+ }
+ return undefined
+ }
+
+ /** A team whose policy says `fake-reviewer` reads `fake-worker`'s work. */
+ const startWithPolicy = async (name: string, withPolicy: boolean) => {
+ const { socket, runnerId } = await pairFakeRunner(name)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name })
+ const planner = await client.persona.create({ markdownSource: POLICY_PLANNER })
+ const reviewer = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: fake-reviewer-${name}`,
+ 'description: Reads a branch and reports.',
+ 'model: test-model',
+ 'tools: [Read]',
+ '---',
+ 'Review.',
+ ].join('\n'),
+ })
+ const worker = (await client.persona.list).find((p) => p.name === 'fake-worker')
+ if (!worker) throw new Error('fake-worker persona missing')
+
+ const group = await client.personaGroup.create({
+ name: `${name}-team`,
+ personaIds: [planner.id, worker.id, reviewer.id],
+ })
+ await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [planner.id, worker.id, reviewer.id],
+...(withPolicy ? { reviewers: { [reviewer.id]: [worker.id] } }: {}),
+ })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: planner.id,
+ })
+ const frame = (await startRun) as { persona: { systemPrompt: string } }
+ return {
+ socket,
+ run: await runPromise,
+ thread: created.rootThread,
+ frame,
+ group,
+ reviewerName: reviewer.name,
+ }
+ }
+
+ it("tells the Planner what the team expects reviewed, and to use the reviews field", async => {
+ // The first reader. It has to name the *field*, because a review expressed as an
+ // ordinary `dependsOn` step is a worker with a write scope over someone else's paths.
+ const { socket, frame, group, reviewerName } = await startWithPolicy('policy-roster', true)
+
+ expect(frame.persona.systemPrompt).toContain('This team expects some work to be reviewed')
+ expect(frame.persona.systemPrompt).toContain(`fake-worker's work is reviewed by ${reviewerName}`)
+ expect(frame.persona.systemPrompt).toContain('reviews field')
+ expect(frame.persona.systemPrompt).toContain('not dependsOn')
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ it('warns before anything starts when a plan leaves that work unreviewed', async => {
+ // The second reader. A warning, not a refusal: enforcing would mean the platform
+ // adding a subtask the Planner did not ask for.
+ const { socket, run, thread, group, reviewerName } = await startWithPolicy('policy-warn', true)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [{ title: 'Build the API', task: 'Build it.', personaName: 'fake-worker' }],
+ }),
+)
+
+ const warning = await waitForMessage(thread.id, 'expects a review')
+ expect(warning).toContain(`${reviewerName} reviews fake-worker`)
+ expect(warning).toContain('Build the API')
+ expect(warning).toContain('The plan still runs')
+
+ //...and it did run: the warning is not a gate.
+ expect(await waitForMessage(thread.id, 'Plan accepted')).toContain('1 subtask(s) started')
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ it('says nothing when the plan does ask for a review', async => {
+ const { socket, run, thread, group, reviewerName } = await startWithPolicy('policy-met', true)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Build the API', task: 'Build it.', personaName: 'fake-worker' },
+ { title: 'Check it', task: 'Review it.', personaName: reviewerName, reviews: 0 },
+ ],
+ }),
+)
+
+ expect(await waitForMessage(thread.id, 'Plan accepted')).toContain('⌕ Check it')
+ const page = await client.message.list({ threadId: thread.id })
+ expect(page.messages.some((m) => m.body.text?.includes('expects a review'))).toBe(false)
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ it('leaves a team with no policy exactly as it was', async => {
+ // Every existing team has no policy, and none of them may change behaviour.
+ const { socket, run, thread, frame, group } = await startWithPolicy('policy-none', false)
+ expect(frame.persona.systemPrompt).not.toContain('expects some work to be reviewed')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [{ title: 'Build the API', task: 'Build it.', personaName: 'fake-worker' }],
+ }),
+)
+ expect(await waitForMessage(thread.id, 'Plan accepted')).toContain('1 subtask(s) started')
+ const page = await client.message.list({ threadId: thread.id })
+ expect(page.messages.some((m) => m.body.text?.includes('expects a review'))).toBe(false)
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ it('refuses a policy that names a planner as the reviewed party', async => {
+ // Its output is a decomposition, not a branch. Refused with a reason, because the
+ // roster would otherwise carry an instruction the Planner cannot follow.
+ const planner = await client.persona.create({
+ markdownSource: POLICY_PLANNER.replace('policy-planner', `policy-planner-${Date.now}`),
+ })
+ const worker = (await client.persona.list).find((p) => p.name === 'fake-worker')!
+ const group = await client.personaGroup.create({
+ name: `policy-refuse-${Date.now}`,
+ personaIds: [planner.id, worker.id],
+ })
+
+ await expect(
+ client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [planner.id, worker.id],
+ reviewers: { [worker.id]: [planner.id] },
+ }),
+).rejects.toThrow(/not a branch/)
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ })
+})
