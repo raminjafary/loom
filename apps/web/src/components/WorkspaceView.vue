@@ -241,6 +241,8 @@ const openRunThread = async (agentRunId: string) => {
  * wired to nothing — and this is the one control in the app where every press starts a
  * frontier-model planner run. A double-click bought two of them.
  */
+const revealGraph = ref(0)
+
 const steering = ref(false)
 
 const steer = async (agentRunId: string, message: string) => {
@@ -406,6 +408,23 @@ onBeforeUnmount( => {
  @subscribe="(registration) => agent.registerNotificationTarget(registration)"
  @unsubscribe="(endpoint) => agent.unregisterNotificationTarget(endpoint)"
  />
+ <!--
+ The canvas, hoisted out of the sidebar. It sat inside a *collapsed*
+ section, behind a panel, behind an Open button — three levels down from
+ anything a human looks at, on one of the defining surfaces. Disabled
+ rather than hidden when there is no swarm, so its absence reads as "nothing
+ to draw" rather than as the control not existing.
+ -->
+ <button
+ v-if="view === 'workspace'"
+ type="button"
+ class="graph-open"
+:disabled="boardCardCount === 0"
+:title="boardCardCount === 0 ? 'No swarm to draw yet': 'Open the swarm graph'"
+ @click="revealGraph += 1"
+ >
+ Graph
+ </button>
  <KillSwitch
  v-if="view === 'workspace'"
 :control="agentSnapshot.runControl"
@@ -596,6 +615,7 @@ onBeforeUnmount( => {
  <SwarmGraphPanel
 :board="agentSnapshot.swarmBoard"
 :active-run-id="agentSnapshot.activeRun?.id ?? null"
+:open-signal="revealGraph"
  @open="(agentRunId) => openRunThread(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
@@ -853,6 +873,11 @@ onBeforeUnmount( => {
  padding: 0.24rem 0.5rem;
  font-size: 1.05rem;
  line-height: 1;
+}
+
+.graph-open:disabled {
+ opacity: 0.4;
+ cursor: not-allowed;
 }
 
 .inbox-toggle.badge {

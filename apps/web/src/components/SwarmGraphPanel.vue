@@ -8,7 +8,7 @@ import {
  type SwarmEdgeKind,
  type SwarmGraphNode,
 } from '@loom/client-core'
-import { computed, nextTick, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
 /**
  * The tree view: nodes are runs, edges are delegation and report, click a node to open
@@ -36,6 +36,17 @@ const props = defineProps<{
  * a full-screen scrim, which reads as nothing having happened.
  */
  activeRunId: string | null
+ /**
+ * Bumped from outside to open the canvas — the same counter idiom `SidebarSection`
+ * uses, and for the same reason: a boolean that stays true fires its watcher once.
+ *
+ * This exists because the canvas was unreachable in practice. It lives inside a
+ * *collapsed* sidebar section, behind a panel, behind an Open button — three levels
+ * down from anything a human looks at, on a surface the product shape names as one of the product's
+ * defining views. Reported plainly by the operator as "canvas is not visible in the
+ * UI at all", which was true.
+ */
+ openSignal?: number
 }>
 const emit = defineEmits<{
  /**
@@ -51,6 +62,17 @@ const emit = defineEmits<{
 
 const open = ref(false)
 const stageEl = ref<HTMLElement | null>(null)
+
+watch(
+ => props.openSignal,
+ (next, previous) => {
+ if (next === undefined || next === previous) return
+ if (graph.value.nodes.length === 0) return
+ open.value = true
+ emit('refresh')
+ nextTick(fit)
+ },
+)
 
 /**
  * Ages tick on their own — see the board panel. A canvas showing "quiet since 2m" must
