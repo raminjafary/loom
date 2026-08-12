@@ -2,6 +2,7 @@
 import type { AgentPersona, DelegationEdge, PersonaGroup } from '@loom/api-contract'
 import {
  composerEdges,
+ composerNodes,
  connectVerdict,
  layoutForGroup,
  withWiderEnvelope,
@@ -119,14 +120,31 @@ watch(
  { immediate: true },
 )
 
+/**
+ * Built from `composerNodes` rather than mapped here.
+ *
+ * It was mapped here, and `composerNodes` — which exists so a TUI can compose a team
+ * without reimplementing what a node means — had no callers at all. Two copies of
+ * "what a node is", and the one the product rendered was the one that could drift.
+ */
+const nodes = computed( => composerNodes(members.value, layout.value, props.matrix))
+
 const flowNodes = computed( =>
- members.value.map((persona) => ({
- id: persona.id,
+ nodes.value.map((node) => ({
+ id: node.personaId,
  type: 'default' as const,
- position: layout.value[persona.id] ?? { x: 0, y: 0 },
- data: { persona },
- class: persona.harnessPlanner ? 'persona-node planner': 'persona-node',
- label: persona.name,
+ position: node.position,
+ data: { node },
+ class: [
+ 'persona-node',
+ node.planner ? 'planner': '',
+ // The recursion edge, as a mark on the node that starts it — see
+ // `ComposerNode.recurses` for why it is not drawn as a loop.
+ node.recurses ? 'recurses': '',
+ ]
+.filter(Boolean)
+.join(' '),
+ label: node.recurses ? `${node.name} ↻`: node.name,
  })),
 )
 
@@ -135,6 +153,19 @@ const edges = computed<ComposerEdge[]>( =>
  members.value.map((persona) => persona.id),
  props.matrix,
 ),
+)
+
+const recursivePlanners = computed( => nodes.value.filter((node) => node.recurses))
+
+/**
+ * Planners that cannot recurse, and why — a narrowed envelope that does not admit the
+ * planner's own tools makes depth impossible, and that is worth saying on the canvas
+ * rather than discovering as a refused child start at depth 2.
+ */
+const blockedRecursion = computed( =>
+ nodes.value
+.filter((node) => node.planner && !node.recurses && node.recursionSummary !== '')
+.map((node) => `${node.name} cannot: ${node.recursionSummary}`),
 )
 
 const flowEdges = computed( =>
@@ -364,6 +395,21 @@ const onKeydown = (event: KeyboardEvent) => {
  @connect="onConnect"
  @edge-click="(event) => (selectedEdgeId = event.edge.id)"
  />
+ <!--
+ The recursion mark, explained where it is drawn. Without
+ this, `↻` is a glyph nobody can look up — and the fact it stands for is the
+ one whole shape depends on, so it is worth a sentence rather than a
+ tooltip. Only shown when something on the canvas actually carries it.
+ -->
+ <p v-if="recursivePlanners.length > 0" class="fine recursion-note">
+ <strong>↻</strong> means that planner may delegate to another run of
+ <em>itself</em> — a sub-planner taking one area of its own plan. That is how
+ depth happens: several planners on a team are several planner
+ <em>personas</em>, and one planner going deeper is this.
+ <template v-if="blockedRecursion.length > 0">
+ {{ blockedRecursion.join('; ') }}
+ </template>
+ </p>
  </div>
 
  <aside class="side">
@@ -606,6 +652,13 @@ header h2 {
  padding: 0.4rem 0.7rem;
 }
 
+.canvas:deep(.persona-node.recurses) {
+ /* A double border rather than another colour: the node is already coloured by whether
+ it is a planner, and recursion is a second, independent fact about it. */
+ border-style: double;
+ border-width: 3px;
+}
+
 .canvas:deep(.persona-node.planner) {
  border-color: var(--accent);
  font-weight: 600;
@@ -737,6 +790,13 @@ header h2 {
 .fine {
  color: var(--text-faint);
  font-size: 0.72rem;
+}
+
+/* Under the canvas rather than floating over it: the canvas is the thing being read, and
+ a legend that covers a node is worse than one a reader has to glance down for. */
+.recursion-note {
+ margin: 0.4rem 0 0;
+ line-height: 1.5;
 }
 
 .actions {

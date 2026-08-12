@@ -28,6 +28,19 @@ export interface ComposerNode {
  readonly tools: readonly string[]
  readonly planner: boolean
  readonly position: { x: number; y: number }
+ /**
+ * Whether this persona may delegate to **another run of itself** — the * recursion, and the only way depth happens.
+ *
+ * It lives on the node rather than as a drawn edge, and that is a rendering choice
+ * about one fact rather than two facts: a self-loop between one node's own handles is
+ * a line hidden behind the box it starts and ends on, so drawing it as an edge is
+ * indistinguishable from dropping it. The complaint is not that a curve is
+ * missing, it is that "hiding it makes the own shape invisible on the surface
+ * built to show shape" — a mark on the planner answers that, and the edge list cannot.
+ */
+ readonly recurses: boolean
+ /** Why it may not, when it may not — the same refusal text an ordinary edge carries. */
+ readonly recursionSummary: string
 }
 
 export interface ComposerEdge {
@@ -76,15 +89,31 @@ export const layoutForGroup = (
 export const composerNodes = (
  personas: readonly AgentPersona[],
  layout: Readonly<Record<string, { x: number; y: number }>>,
+ /**
+ * The delegation matrix, for the self-edge each planner has in it. Optional so a
+ * caller that has not got the matrix yet renders nodes rather than nothing — a node
+ * without its recursion mark is incomplete, and a canvas without nodes is empty.
+ */
+ matrix: readonly DelegationEdge[] = [],
 ): ComposerNode[] =>
- personas.map((persona) => ({
+ personas.map((persona) => {
+ const self = matrix.find(
+ (edge) => edge.plannerId === persona.id && edge.workerId === persona.id,
+)
+ return {
  personaId: persona.id,
  name: persona.name,
  model: persona.model,
  tools: persona.tools,
  planner: persona.harnessPlanner,
  position: layout[persona.id] ?? { x: 0, y: 0 },
- }))
+ // Only a planner can recurse at all, and the matrix says whether this one may:
+ // its own envelope has to admit its own tools, which a narrowed envelope can fail.
+ recurses: persona.harnessPlanner && self?.ok === true,
+ recursionSummary:
+ persona.harnessPlanner && self && !self.ok ? summarizeRefusals(self.refusals): '',
+ }
+ })
 
 /** One line for an edge label; the inspector shows every refusal in full. */
 export const summarizeRefusals = (refusals: readonly DelegationRefusal[]): string => {
@@ -107,8 +136,13 @@ export const composerEdges = (
  const members = new Set(personaIds)
  return matrix
 .filter((edge) => members.has(edge.plannerId) && members.has(edge.workerId))
- // A planner delegating to itself is legal and is how the recursion works,
- // but as a self-loop on a canvas it is noise on top of the node it starts from.
+ /**
+ * A self-edge is not dropped as noise any more — it is **moved to the node**, as
+ * `ComposerNode.recurses`. Drawn between one node's own handles it
+ * would be a line behind the box, which is indistinguishable from hiding it; on the
+ * node it is a mark a human can see and act on. It is still excluded here, because
+ * the edge list is what the canvas draws *between* nodes.
+ */
 .filter((edge) => edge.plannerId !== edge.workerId)
 .map((edge) => ({
  id: `${edge.plannerId}->${edge.workerId}`,
