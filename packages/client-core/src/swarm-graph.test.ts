@@ -1,4 +1,4 @@
-import type { SwarmBoard } from '@loom/api-contract'
+import type { MergeQueueEntry, SwarmBoard } from '@loom/api-contract'
 import { describe, expect, it } from 'vitest'
 import { buildSwarmGraph } from './swarm-graph.js'
 import type { BoardCard } from './board-activity.js'
@@ -48,7 +48,7 @@ describe('buildSwarmGraph roles', => {
  card({ runId: 'unit', parentRunId: 'area', relation: 'delegation' }),
  ],
  pathCollisions: [],
- })
+ }, [])
  const roleOf = (id: string) => graph.nodes.find((node) => node.card.runId === id)?.role
  expect(roleOf('root')).toBe('planner')
  expect(roleOf('area')).toBe('planner')
@@ -64,7 +64,7 @@ describe('buildSwarmGraph roles', => {
  treeRunId: 'root',
  cards: [card({ runId: 'root' })],
  pathCollisions: [],
- })
+ }, [])
  expect(graph.nodes[0]?.role).toBe('worker')
  })
 })
@@ -77,6 +77,7 @@ describe('buildSwarmGraph', => {
  card({ runId: 'w1', parentRunId: 'planner' }),
  card({ runId: 'w2', parentRunId: 'planner' }),
  ]),
+ [],
 )
 
  expect(graph.depth).toBe(2)
@@ -100,6 +101,7 @@ describe('buildSwarmGraph', => {
  card({ runId: 'reviewer', parentRunId: 'planner', relation: 'review' }),
  card({ runId: 'fixer', parentRunId: 'planner', relation: 'reconcile' }),
  ]),
+ [],
 )
 
  const kinds = new Map(graph.edges.map((e) => [e.to, e.kind]))
@@ -114,8 +116,8 @@ describe('buildSwarmGraph', => {
  card({ runId: 'bbb', parentRunId: 'planner' }),
  card({ runId: 'aaa', parentRunId: 'planner' }),
  ]
- const first = buildSwarmGraph(board(cards)).nodes.map((n) => n.card.runId)
- const shuffled = buildSwarmGraph(board([cards[2]!, cards[0]!, cards[1]!])).nodes.map(
+ const first = buildSwarmGraph(board(cards), []).nodes.map((n) => n.card.runId)
+ const shuffled = buildSwarmGraph(board([cards[2]!, cards[0]!, cards[1]!]), []).nodes.map(
  (n) => n.card.runId,
 )
  expect(first).toEqual(shuffled)
@@ -133,6 +135,7 @@ describe('buildSwarmGraph', => {
  ],
  [{ titles: ['Frontend', 'Backend'], paths: ['apps/web'] }],
 ),
+ [],
 )
 
  const collision = graph.edges.find((e) => e.kind === 'collision')
@@ -156,6 +159,7 @@ describe('buildSwarmGraph', => {
  ],
  [{ titles: ['Docs', 'Other'], paths: ['docs'] }],
 ),
+ [],
 )
  expect(graph.edges.filter((e) => e.kind === 'collision')).toHaveLength(0)
  })
@@ -165,6 +169,7 @@ describe('buildSwarmGraph', => {
  board([card({ runId: 'w1', title: 'Here' })], [
  { titles: ['Here', 'Gone'], paths: ['src'] },
  ]),
+ [],
 )
  expect(graph.edges.filter((e) => e.kind === 'collision')).toHaveLength(0)
  })
@@ -172,7 +177,7 @@ describe('buildSwarmGraph', => {
 
  describe('structures that should degrade rather than break', => {
  it('treats a card whose parent is off the board as a root', => {
- const graph = buildSwarmGraph(board([card({ runId: 'orphan', parentRunId: 'elsewhere' })]))
+ const graph = buildSwarmGraph(board([card({ runId: 'orphan', parentRunId: 'elsewhere' })]), [])
  expect(graph.nodes[0]?.depth).toBe(0)
  // No edge to a node that is not there.
  expect(graph.edges).toHaveLength(0)
@@ -184,13 +189,14 @@ describe('buildSwarmGraph', => {
  card({ runId: 'a', parentRunId: 'b' }),
  card({ runId: 'b', parentRunId: 'a' }),
  ]),
+ [],
 )
  expect(graph.nodes).toHaveLength(2)
  expect(graph.nodes.every((n) => Number.isFinite(n.depth))).toBe(true)
  })
 
  it('is empty for no board at all', => {
- const graph = buildSwarmGraph(null)
+ const graph = buildSwarmGraph(null, [])
  expect(graph.nodes).toEqual([])
  expect(graph.edges).toEqual([])
  expect(graph.width).toBe(0)
@@ -201,8 +207,169 @@ describe('buildSwarmGraph', => {
  it('carries each node\'s live activity, so the canvas needs no second reading of it', => {
  const graph = buildSwarmGraph(
  board([card({ runId: 'w1', currentToolName: 'Bash', currentToolTarget: 'pnpm test', openCallCount: 1 })]),
+ [],
 )
  expect(graph.nodes[0]?.activity.kind).toBe('working')
  expect(graph.nodes[0]?.activity.toolName).toBe('Bash')
+ })
+})
+
+/**
+ * The merge-queue band. The argument for drawing it: the queue
+ * "is the one part of the platform where *order* is the whole semantics — a list renders
+ * order badly and a graph renders it naturally".
+ *
+ * The properties worth pinning are the ones a projection can get subtly wrong: which
+ * entries belong to *this* tree, what "place in line" means when other trees are ahead,
+ * and which of the two nodes each kind of failure belongs to.
+ */
+describe('buildSwarmGraph merge queue', => {
+ const entry = (over: Partial<MergeQueueEntry> & { id: string; agentRunId: string }) =>
+ ({
+ workspaceId: 'ws',
+ repositoryId: 'repo-1',
+ branchName: `loom/run-${over.agentRunId}`,
+ status: 'queued',
+ position: '1',
+ failureReason: null,
+ detail: null,
+ mergedCommitSha: null,
+ verified: false,
+ enqueuedByUserId: null,
+ createdAt: new Date,
+ startedAt: null,
+ finishedAt: null,
+...over,
+ }) as unknown as MergeQueueEntry
+
+ const tree = board([card({ runId: 'planner' }), card({ runId: 'w1', parentRunId: 'planner' })])
+
+ it('draws a queued entry below the runs, edged from the run whose branch it holds', => {
+ const graph = buildSwarmGraph(tree, [entry({ id: 'e1', agentRunId: 'w1' })])
+
+ expect(graph.queue).toHaveLength(1)
+ expect(graph.queue[0]?.kind).toBe('entry')
+ expect(graph.queue[0]?.depth).toBe(2)
+ expect(graph.edges.filter((e) => e.kind === 'queue')).toEqual([
+ { from: 'w1', to: 'merge:e1', kind: 'queue', detail: '1 in line' },
+ ])
+ })
+
+ it('keeps only the entries whose run is on this board', => {
+ // The queue is workspace-scoped and this canvas is tree-scoped. An entry from
+ // another swarm drawn here would attribute a stranger's branch to this tree.
+ const graph = buildSwarmGraph(tree, [
+ entry({ id: 'mine', agentRunId: 'w1' }),
+ entry({ id: 'theirs', agentRunId: 'someone-else' }),
+ ])
+ expect(graph.queue.map((node) => node.entryId)).toEqual(['mine'])
+ })
+
+ it('counts place in line across the whole repository, not just this tree', => {
+ // A branch from another tree ahead of this one really is ahead of it, and a
+ // "#1 in line" that ignored it would be wrong in the one case a human is waiting on.
+ const graph = buildSwarmGraph(tree, [
+ entry({ id: 'ahead', agentRunId: 'stranger', position: '1' }),
+ entry({ id: 'mine', agentRunId: 'w1', position: '2' }),
+ ])
+ expect(graph.queue.find((node) => node.entryId === 'mine')?.place).toBe(2)
+ })
+
+ it('counts each repository separately, since the queue is per repository', => {
+ const graph = buildSwarmGraph(tree, [
+ entry({ id: 'other-repo', agentRunId: 'stranger', repositoryId: 'repo-2', position: '1' }),
+ entry({ id: 'mine', agentRunId: 'w1', repositoryId: 'repo-1', position: '2' }),
+ ])
+ expect(graph.queue.find((node) => node.entryId === 'mine')?.place).toBe(1)
+ })
+
+ it('drops a cancelled entry and keeps a merged one', => {
+ // A human withdrew the cancelled one; "this landed" is the outcome the pipeline
+ // exists to reach, so it stays.
+ const graph = buildSwarmGraph(tree, [
+ entry({ id: 'gone', agentRunId: 'w1', status: 'cancelled' }),
+ entry({ id: 'landed', agentRunId: 'planner', status: 'merged', verified: true }),
+ ])
+ expect(graph.queue.filter((node) => node.kind === 'entry').map((node) => node.entryId)).toEqual([
+ 'landed',
+ ])
+ })
+
+ it('draws no verification node while an entry is still queued', => {
+ // Nothing is known about it yet, and a row of "pending" boxes under a long queue is
+ // noise standing where information should be.
+ const graph = buildSwarmGraph(tree, [entry({ id: 'e1', agentRunId: 'w1' })])
+ expect(graph.queue.some((node) => node.kind === 'verification')).toBe(false)
+ expect(graph.edges.some((e) => e.kind === 'verify')).toBe(false)
+ })
+
+ it('separates a merged-and-tested entry from a merged-unverified one', => {
+ // The whole reason `verified` exists: "no tests vouched for this" is not
+ // "tests passed", and a graph that drew them alike would erase the distinction.
+ const tested = buildSwarmGraph(tree, [
+ entry({ id: 'e1', agentRunId: 'w1', status: 'merged', verified: true }),
+ ])
+ const untested = buildSwarmGraph(tree, [
+ entry({ id: 'e1', agentRunId: 'w1', status: 'merged', verified: false }),
+ ])
+ expect(tested.queue.find((node) => node.kind === 'verification')?.verification).toBe('passed')
+ expect(untested.queue.find((node) => node.kind === 'verification')?.verification).toBe('skipped')
+ })
+
+ it("puts a conflict on the run's edge and a test failure on the verification node", => {
+ /**
+ * The canvas design is specific about the first half: the conflicted paths "belong on the edge
+ * between the entry that failed and the run that owns the branch", because a conflict
+ * is a fact about the pair and the run is the end that has to fix it. The mirror of
+ * that is that a verification failure's output is *not* the run's — it is the
+ * command's, and it belongs to the node that stands for the command.
+ */
+ const conflicted = buildSwarmGraph(tree, [
+ entry({
+ id: 'e1',
+ agentRunId: 'w1',
+ status: 'failed',
+ failureReason: 'conflict',
+ detail: 'CONFLICT in src/api.ts',
+ }),
+ ])
+ expect(conflicted.edges.find((e) => e.kind === 'queue')?.detail).toBe('CONFLICT in src/api.ts')
+ expect(conflicted.queue.find((node) => node.kind === 'verification')?.detail).toBeNull
+ // A conflict failed *before* verification could say anything, so it is not drawn as a
+ // verification failure — that would send someone to read test output that never ran.
+ expect(conflicted.queue.find((node) => node.kind === 'verification')?.verification).toBe(
+ 'pending',
+)
+
+ const broken = buildSwarmGraph(tree, [
+ entry({
+ id: 'e1',
+ agentRunId: 'w1',
+ status: 'failed',
+ failureReason: 'verification_failed',
+ detail: '3 tests failed',
+ }),
+ ])
+ expect(broken.queue.find((node) => node.kind === 'verification')?.detail).toBe('3 tests failed')
+ expect(broken.queue.find((node) => node.kind === 'entry')?.detail).toBeNull
+ expect(broken.edges.find((e) => e.kind === 'queue')?.detail).not.toContain('tests')
+ })
+
+ it('leaves the canvas dimensions alone when there is no queue', => {
+ // A tree with nothing queued must render exactly as it did before this existed.
+ const bare = buildSwarmGraph(tree, [])
+ expect(bare.queue).toEqual([])
+ expect(bare.depth).toBe(2)
+ expect(bare.edges.every((e) => e.kind === 'delegation')).toBe(true)
+ })
+
+ it('grows the canvas to fit the band, so a wide queue is not clipped', => {
+ const graph = buildSwarmGraph(tree, [
+ entry({ id: 'a', agentRunId: 'w1', position: '1' }),
+ entry({ id: 'b', agentRunId: 'planner', position: '2', status: 'merged', verified: true }),
+ ])
+ expect(graph.width).toBeGreaterThanOrEqual(2)
+ // Two run layers, plus the entry band, plus the verification band under it.
+ expect(graph.depth).toBe(4)
  })
 })

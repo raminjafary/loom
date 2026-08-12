@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SwarmBoard } from '@loom/api-contract'
+import type { MergeQueueEntry, SwarmBoard } from '@loom/api-contract'
 import {
  activityLabel,
  buildSwarmGraph,
@@ -7,6 +7,7 @@ import {
  shortBranchName,
  type SwarmEdgeKind,
  type SwarmGraphNode,
+ type SwarmQueueNode,
 } from '@loom/client-core'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
@@ -28,6 +29,15 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps<{
  board: SwarmBoard | null
+ /**
+ * The workspace's merge queue, drawn as its own band below the runs.
+ *
+ * Passed in rather than fetched here because the queue is workspace-scoped and this
+ * canvas is tree-scoped — `buildSwarmGraph` keeps only the entries whose run is on this
+ * board, and it needs the whole queue to work out a branch's *place in line*, since a
+ * branch from another tree ahead of this one really is ahead of it.
+ */
+ mergeQueue: readonly MergeQueueEntry[]
  /**
  * The run currently being watched, so the canvas can say which node that is.
  *
@@ -126,7 +136,7 @@ onUnmounted( => {
  if (clock !== null) clearInterval(clock)
 })
 
-const graph = computed( => buildSwarmGraph(props.board, tick.value))
+const graph = computed( => buildSwarmGraph(props.board, props.mergeQueue, tick.value))
 
 /**
  * Which runs and edges are lit right now.
@@ -169,13 +179,68 @@ const NODE_W = 210
 const NODE_H = 76
 const GAP_X = 46
 const GAP_Y = 92
+/**
+ * The queue band's boxes are shorter than a run's, and centred in the same layer height
+ * so one set of layout maths serves both. A queue entry carries three short facts where a
+ * run carries six, and giving it a run's height would leave it mostly empty and read as
+ * equally important.
+ */
+const QUEUE_H = 42
 
-const centerX = (node: SwarmGraphNode) => node.order * (NODE_W + GAP_X) + NODE_W / 2
-const centerY = (node: SwarmGraphNode) => node.depth * (NODE_H + GAP_Y) + NODE_H / 2
-const left = (node: SwarmGraphNode) => centerX(node) - NODE_W / 2
-const top = (node: SwarmGraphNode) => centerY(node) - NODE_H / 2
+/**
+ * Layout takes anything with a layer and a place in it, so the merge-queue band
+ * lands in the same coordinate space as the runs without a second set
+ * of geometry to keep in step.
+ */
+interface Placed {
+ readonly depth: number
+ readonly order: number
+}
 
-const positions = computed( => new Map(graph.value.nodes.map((node) => [node.card.runId, node])))
+const centerX = (node: Placed) => node.order * (NODE_W + GAP_X) + NODE_W / 2
+const centerY = (node: Placed) => node.depth * (NODE_H + GAP_Y) + NODE_H / 2
+const left = (node: Placed) => centerX(node) - NODE_W / 2
+const top = (node: Placed) => centerY(node) - NODE_H / 2
+
+/**
+ * Every drawable endpoint by id — runs by `runId`, queue nodes by their namespaced `id`
+ * — so `edgePath` resolves a run→entry edge exactly as it resolves a parent→child one.
+ */
+const positions = computed(
+ =>
+ new Map<string, Placed>([
+...graph.value.nodes.map((node) => [node.card.runId, node] as const),
+...graph.value.queue.map((node) => [node.id, node] as const),
+ ]),
+)
+
+/**
+ * What a verification node says when it has no output of its own to show — which is every
+ * outcome except a failure. Each line states the thing the `verified` flag exists to
+ * distinguish: merged-and-tested is not the same as merged-with-no-tests-configured.
+ */
+const verificationNote = (node: SwarmQueueNode): string => {
+ switch (node.verification) {
+ case 'passed':
+ return "the repository's checks passed"
+ case 'skipped':
+ return 'merged unverified — no command configured'
+ case 'refused':
+ return 'not run — no sandbox available'
+ case 'failed':
+ return 'the checks failed'
+ case 'pending':
+ return node.status === 'merging' ? 'running…': 'not reached'
+ }
+}
+
+const queueTitle = (node: SwarmQueueNode): string => {
+ if (node.kind === 'verification') {
+ return `Verification: ${node.verification}${node.detail ? ` — ${node.detail}`: ''}`
+ }
+ const place = node.place === null ? node.status: `${node.status}, #${node.place} in line`
+ return `${node.branchName} — ${place}${node.detail ? ` — ${node.detail}`: ''}`
+}
 
 const canvas = computed( => ({
  width: Math.max(graph.value.width, 1) * (NODE_W + GAP_X),
@@ -438,6 +503,9 @@ const collisionCount = computed(
  <li><span class="swatch reconcile"></span>reconcile</li>
  <li><span class="swatch steer"></span>steer</li>
  <li><span class="swatch collision"></span>path collision</li>
+ <!-- Only shown when there is a queue to explain: a legend entry for an
+ absent band is a promise the canvas is not keeping. -->
+ <li v-if="graph.queue.length > 0"><span class="swatch queue"></span>merge queue</li>
  </ul>
  <button type="button" @click="emit('refresh')">Refresh</button>
  <button type="button" @click="fit">Fit</button>
@@ -468,6 +536,10 @@ const collisionCount = computed(
  -->
  <clipPath id="loom-node-clip" clipPathUnits="userSpaceOnUse">
  <rect x="0" y="0":width="NODE_W":height="NODE_H" rx="10" />
+ </clipPath>
+ <!-- The queue band's own boundary — same argument, shorter box. -->
+ <clipPath id="loom-queue-clip" clipPathUnits="userSpaceOnUse">
+ <rect x="0" y="0":width="NODE_W":height="QUEUE_H" rx="8" />
  </clipPath>
  </defs>
  <g:transform="`translate(${pan.x} ${pan.y}) scale(${zoom})`">
@@ -593,6 +665,61 @@ const collisionCount = computed(
  {{ node.card.title }} — {{ node.card.personaName }},
  {{ node.card.status }}{{ node.card.blockerCount > 0 ? `, ${node.card.blockerCount} blocker(s)`: '' }}
  </title>
+ </g>
+
+ <!--
+ The merge-queue band. Deliberately narrower and
+ quieter than a run: a queue entry is bookkeeping about a branch, not an
+ agent doing something, and drawing it at equal weight would make the
+ pipeline compete with the work for attention.
+
+ Not clickable, unlike a run. Every action on an entry — cancel, requeue
+ — belongs to the merge-queue panel that owns the queue, and a second
+ place to act on it would be a second place to keep correct. This band
+ answers "what is happening to my branches", which is the question the canvas design
+ says a human currently has to assemble from four surfaces.
+ -->
+ <g
+ v-for="qnode in graph.queue"
+:key="qnode.id"
+ class="qnode"
+:class="[qnode.kind, qnode.kind === 'verification' ? qnode.verification: qnode.status]"
+:transform="`translate(${left(qnode)} ${top(qnode) + (NODE_H - QUEUE_H) / 2})`"
+ clip-path="url(#loom-queue-clip)"
+ >
+ <rect:width="NODE_W":height="QUEUE_H" rx="8" class="box" />
+ <template v-if="qnode.kind === 'entry'">
+ <!--
+ Place in line leads, because order is the merge queue's whole
+ semantics — and it is the one thing a list renders badly.
+ -->
+ <text class="qplace" x="10" y="17">
+ {{ qnode.place === null ? 'merge': `#${qnode.place} in line` }}
+ </text>
+ <text class="qstatus":x="NODE_W - 10" y="17" text-anchor="end">
+ {{ qnode.status }}
+ </text>
+ <text class="qbranch" x="10" y="32">{{ shortBranchName(qnode.branchName) }}</text>
+ </template>
+ <template v-else>
+ <text class="qplace" x="10" y="17">verification</text>
+ <text class="qstatus":x="NODE_W - 10" y="17" text-anchor="end">
+ {{ qnode.verification }}
+ </text>
+ <!--
+ The canvas design: a failed verification's own output "is the most useful
+ thing on the screen when it fails", so it is on the node rather than
+ only in a tooltip. Interpolated, never markup — it is a command's
+ stdout.
+ -->
+ <text v-if="qnode.detail" class="qbranch" x="10" y="32">
+ {{ qnode.detail.length > 30 ? `${qnode.detail.slice(0, 29)}…`: qnode.detail }}
+ </text>
+ <text v-else class="qbranch" x="10" y="32">
+ {{ verificationNote(qnode) }}
+ </text>
+ </template>
+ <title>{{ queueTitle(qnode) }}</title>
  </g>
  </g>
  </svg>
@@ -798,6 +925,10 @@ header button:disabled {
  border-color: var(--danger);
 }
 
+.swatch.queue {
+ border-color: var(--text-faint);
+}
+
 .viewer-head button {
  padding: 0.25rem 0.5rem;
  border: 1px solid var(--border);
@@ -850,8 +981,72 @@ header button:disabled {
  stroke-width: 1.75;
 }
 
+/* The merge-queue edges. Thinner than a delegation on purpose: these describe
+ what is happening to a branch, not who asked whom for work, and the tree's own shape
+ should stay the loudest thing on the canvas. */
+.edge.queue,
+.edge.verify {
+ stroke: var(--text-faint);
+ stroke-width: 1.25;
+}
+
+.edge.verify {
+ stroke-dasharray: 3 3;
+}
+
 .node {
  cursor: pointer;
+}
+
+/* The merge-queue band — quieter than a run, and not interactive: every action
+ on an entry belongs to the panel that owns the queue. */
+.qnode.box {
+ fill: var(--bg);
+ stroke: var(--border);
+ stroke-dasharray: 3 2;
+}
+
+.qnode.merging.box,
+.qnode.pending.box {
+ stroke: var(--accent);
+ stroke-dasharray: none;
+}
+
+.qnode.merged.box,
+.qnode.passed.box {
+ stroke: var(--ok);
+ stroke-dasharray: none;
+}
+
+.qnode.failed.box,
+.qnode.refused.box {
+ stroke: var(--danger);
+ stroke-dasharray: none;
+}
+
+/* Skipped is neither good nor bad — it merged, and nothing vouched for it. Left dashed,
+ because that is exactly the "no claim was made" state the dashes mean here. */
+.qnode.skipped.box {
+ stroke: var(--warn, var(--border));
+}
+
+.qplace {
+ font-size: 10px;
+ font-weight: 600;
+ fill: var(--text);
+ text-transform: uppercase;
+ letter-spacing: 0.04em;
+}
+
+.qstatus {
+ font-size: 10px;
+ fill: var(--text-faint);
+}
+
+.qbranch {
+ font-size: 10.5px;
+ fill: var(--text-muted);
+ font-family: ui-monospace, monospace;
 }
 
 .box {

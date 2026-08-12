@@ -253,6 +253,19 @@ const openRunThread = async (agentRunId: string) => {
 const revealGraph = ref(0)
 
 /**
+ * What the canvas's Refresh re-reads: the tree **and** the merge queue.
+ *
+ * Both, because the graph now draws both — refreshing only the board
+ * would leave the queue band showing a state a human had just pressed a button to update.
+ * The poll behind it does the same pair for the same reason.
+ */
+const refreshGraph = => {
+ const watched = agentSnapshot.value.activeRun
+ if (watched) void agent.refreshBoard(watched.id)
+ void agent.refreshMergeQueue
+}
+
+/**
  * The canvas's two outbound actions.
  *
  * Both watch the clicked run first: the diff and the steer target are properties of
@@ -682,13 +695,14 @@ onBeforeUnmount( => {
  -->
  <SwarmGraphPanel
 :board="agentSnapshot.swarmBoard"
+:merge-queue="agentSnapshot.mergeQueue"
 :active-run-id="agentSnapshot.activeRun?.id ?? null"
 :open-signal="revealGraph"
 :activity="agentSnapshot.recentActivity"
  @review="(agentRunId) => reviewFromGraph(agentRunId)"
  @steer="(agentRunId) => steerFromGraph(agentRunId)"
  @open="(agentRunId) => openRunThread(agentRunId)"
- @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
+ @refresh=" => refreshGraph"
  />
  <RunTreePanel
 :board="agentSnapshot.swarmBoard"

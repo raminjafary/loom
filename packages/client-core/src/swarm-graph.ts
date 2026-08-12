@@ -1,4 +1,4 @@
-import type { SwarmBoard } from '@loom/api-contract'
+import type { MergeQueueEntry, SwarmBoard } from '@loom/api-contract'
 import { describeCardActivity, type BoardCard, type CardActivity } from './board-activity.js'
 
 /**
@@ -22,7 +22,91 @@ import { describeCardActivity, type BoardCard, type CardActivity } from './board
  * integration.
  */
 
-export type SwarmEdgeKind = 'delegation' | 'review' | 'reconcile' | 'steer' | 'collision'
+export type SwarmEdgeKind =
+ | 'delegation'
+ | 'review'
+ | 'reconcile'
+ | 'steer'
+ | 'collision'
+ /** A run's branch to the merge-queue entry holding it. */
+ | 'queue'
+ /** That entry to its verification. */
+ | 'verify'
+
+/**
+ * What verification did to one entry — derived from `verified` and `failureReason`,
+ * because the canvas design asks for verification as "a node on that edge, not a boolean on the
+ * entry".
+ *
+ * Every value comes from a persisted field. `skipped` and `passed` are the two halves of
+ * a `merged` entry's `verified` flag, and the distinction is the one the flag exists to
+ * make: "no tests vouched for this" is not "tests passed".
+ */
+export type SwarmVerificationState =
+ /** The entry has not been attempted yet, so nothing is known. */
+ | 'pending'
+ | 'passed'
+ /** Merged with no verification command configured for the repository. */
+ | 'skipped'
+ | 'failed'
+ /** Would have run agent-authored code on the host with no sandbox. */
+ | 'refused'
+
+/**
+ * A merge-queue entry as a node on the live graph.
+ *
+ * The reason for wanting this drawn rather than listed: the merge queue "is the one
+ * part of the platform where *order* is the whole semantics — a list renders order badly
+ * and a graph renders it naturally".
+ *
+ * **The stage is the persisted status and nothing more.** the canvas design describes the machine
+ * as `queued → rebasing → verifying → merged`, and only two of those four are real: the
+ * row carries `queued | merging | merged | failed | cancelled`, with rebase and
+ * verification both happening inside `merging`. Splitting `merging` into two drawn stages
+ * would be the graph asserting a transition nobody recorded — so the node shows what is
+ * true and the verification node beside it carries what is known about the rest.
+ */
+export interface SwarmQueueNode {
+ /**
+ * `entry` is the queue position itself; `verification` is the command that ran against
+ * the rebased branch.
+ *
+ * Two nodes rather than one with a flag, because the canvas design asks for exactly that:
+ * "**Verification** is a node on that edge, not a boolean on the entry... its failure
+ * output is the most useful thing on the screen when it fails." A boolean has nowhere
+ * to put that output, which is the argument.
+ */
+ readonly kind: 'entry' | 'verification'
+ /** Namespaced so an edge endpoint can never collide with a run id. */
+ readonly id: string
+ readonly entryId: string
+ /** The run whose branch this holds — the other end of its `queue` edge. */
+ readonly agentRunId: string
+ readonly branchName: string
+ readonly status: 'queued' | 'merging' | 'merged' | 'failed'
+ /**
+ * Place in line among the entries still waiting for this repository, 1-based, or null
+ * once it is no longer waiting.
+ *
+ * Not `MergeQueueEntry.position`, which is a database sequence: it is the right key to
+ * order by and a meaningless thing to show a human, who wants "2nd of 4" rather than
+ * "4173". Computed per repository, because the queue is per repository.
+ */
+ readonly place: number | null
+ readonly verification: SwarmVerificationState
+ /**
+ * The failure's own words, for a title — never re-derived prose.
+ *
+ * **Split between the two nodes by what caused it**, which is the whole reason there
+ * are two: a conflict, a dirty target or a moved target belong to the `entry` (and to
+ * the edge back to the run that must fix them), while a verification failure's output
+ * belongs to the `verification` node. Putting both on one node would make "the tests
+ * said this" and "git said this" the same field.
+ */
+ readonly detail: string | null
+ readonly depth: number
+ readonly order: number
+}
 
 export interface SwarmGraphNode {
  readonly card: BoardCard
@@ -56,6 +140,16 @@ export interface SwarmGraphEdge {
 
 export interface SwarmGraph {
  readonly nodes: SwarmGraphNode[]
+ /**
+ * The merge-queue band, in its own array rather than mixed into
+ * `nodes`.
+ *
+ * A queue entry is not a run: it has no persona, no cost, no context pressure and no
+ * activity, and half of `BoardCard` would be null on it. A union type would make every
+ * reader narrow before it could draw, to describe two things that are laid out in
+ * separate bands anyway.
+ */
+ readonly queue: SwarmQueueNode[]
  readonly edges: SwarmGraphEdge[]
  /** Widest layer, so a renderer can size the canvas without measuring. */
  readonly width: number
@@ -101,7 +195,41 @@ const edgeKindOf = (card: BoardCard): Exclude<SwarmEdgeKind, 'collision'> => {
  return 'delegation'
 }
 
-export const buildSwarmGraph = (board: SwarmBoard | null, now: Date = new Date): SwarmGraph => {
+/**
+ * What verification is known to have done, from the entry's own persisted fields.
+ *
+ * `merging` is deliberately `pending` rather than `passed`: the rebase and the
+ * verification both happen inside that status, so an entry that is merging has not
+ * finished being verified — claiming otherwise would put a green node beside a command
+ * that may still fail.
+ */
+const verificationOf = (entry: MergeQueueEntry): SwarmVerificationState => {
+ if (entry.status === 'merged') return entry.verified ? 'passed': 'skipped'
+ if (entry.status === 'failed') {
+ if (entry.failureReason === 'verification_failed') return 'failed'
+ if (entry.failureReason === 'verification_refused') return 'refused'
+ // A conflict, a dirty target or a stale target all failed *before* verification
+ // could say anything. Drawing those as a verification failure would send someone to
+ // read test output that does not exist.
+ return 'pending'
+ }
+ return 'pending'
+}
+
+export const buildSwarmGraph = (
+ board: SwarmBoard | null,
+ /**
+ * The workspace's merge queue. Entries belonging to other trees are filtered out here
+ * rather than by the caller: the graph knows which runs are on it, and a caller that
+ * had to pre-filter would be a second place that decides what is in this tree.
+ *
+ * Required rather than defaulted, deliberately. A default of `[]` would let a caller
+ * that forgot it render a graph that silently omits the whole queue — which is exactly
+ * how the board came to omit every run under a sub-planner.
+ */
+ mergeQueue: readonly MergeQueueEntry[],
+ now: Date = new Date,
+): SwarmGraph => {
  const cards = board?.cards ?? []
  const byId = new Map(cards.map((card) => [card.runId, card]))
 
@@ -163,10 +291,118 @@ export const buildSwarmGraph = (board: SwarmBoard | null, now: Date = new Date):
  })
  }
 
+ /**
+ * The merge-queue band, one layer below the deepest run.
+ *
+ * Laid out left to right in queue order, which is the point of drawing it at all: work
+ * flows *down* into the queue and the queue's own order runs *across*, so "this branch
+ * is third in line behind that one" is a shape rather than a number in a column.
+ *
+ * **Cancelled entries are dropped.** A human withdrew that one, and the graph's job is
+ * what is happening to these branches now; a merged entry stays, because "this landed"
+ * is the outcome the whole pipeline exists to reach.
+ */
+ const relevant = mergeQueue
+.filter((entry) => byId.has(entry.agentRunId) && entry.status !== 'cancelled')
+.slice
+.sort((a, b) => (a.position < b.position ? -1: a.position > b.position ? 1: 0))
+
+ /**
+ * Place in line, per repository and among the still-queued only. Computed over the
+ * *whole* workspace queue rather than over `relevant`, because a branch from another
+ * tree ahead of this one really is ahead of it — a "1st in line" that ignored other
+ * trees would be wrong in the one case a human is waiting on.
+ */
+ const places = new Map<string, number>
+ const seenPerRepository = new Map<string, number>
+ for (const entry of mergeQueue
+.filter((entry) => entry.status === 'queued')
+.slice
+.sort((a, b) => (a.position < b.position ? -1: a.position > b.position ? 1: 0))) {
+ const place = (seenPerRepository.get(entry.repositoryId) ?? 0) + 1
+ seenPerRepository.set(entry.repositoryId, place)
+ places.set(entry.id, place)
+ }
+
+ const queueDepth = perLayer.size
+ const queue: SwarmQueueNode[] = []
+
+ for (const [order, entry] of relevant.entries) {
+ const verification = verificationOf(entry)
+ const verificationFailed = verification === 'failed' || verification === 'refused'
+ const status = entry.status as SwarmQueueNode['status']
+ const place = places.get(entry.id) ?? null
+
+ queue.push({
+ kind: 'entry',
+ id: `merge:${entry.id}`,
+ entryId: entry.id,
+ agentRunId: entry.agentRunId,
+ branchName: entry.branchName,
+ status,
+ place,
+ verification,
+ // Git's reasons, not the tests' — see `detail`.
+ detail: verificationFailed ? null: entry.detail,
+ depth: queueDepth,
+ order,
+ })
+
+ /**
+ * From the run to its entry, and **the conflict rides this edge** — the canvas design: the
+ * conflicted paths "belong on the edge between the entry that failed and the run that
+ * owns the branch", because a conflict is a fact about the pair and the run is the
+ * end that has to fix it.
+ */
+ edges.push({
+ from: entry.agentRunId,
+ to: `merge:${entry.id}`,
+ kind: 'queue',
+ detail:
+ status === 'failed' && !verificationFailed && entry.detail !== null
+ ? entry.detail
+: place !== null
+ ? `${place} in line`
+: status,
+ })
+
+ /**
+ * The verification node exists only once the entry has left `queued`. Before that
+ * nothing is known about it, and a row of "pending" boxes under a long queue is noise
+ * standing exactly where information should be.
+ */
+ if (status === 'queued') continue
+
+ queue.push({
+ kind: 'verification',
+ id: `verify:${entry.id}`,
+ entryId: entry.id,
+ agentRunId: entry.agentRunId,
+ branchName: entry.branchName,
+ status,
+ place,
+ verification,
+ // The command's own output, and only when the command is what failed.
+ detail: verificationFailed ? entry.detail: null,
+ depth: queueDepth + 1,
+ order,
+ })
+ edges.push({
+ from: `merge:${entry.id}`,
+ to: `verify:${entry.id}`,
+ kind: 'verify',
+ detail: verification,
+ })
+ }
+
+ const queueWidth = new Set(queue.map((node) => node.order)).size
+ const queueLayers = new Set(queue.map((node) => node.depth)).size
+
  return {
  nodes,
+ queue,
  edges,
- width: Math.max(...[...perLayer.values], 0),
- depth: perLayer.size,
+ width: Math.max(...[...perLayer.values], queueWidth, 0),
+ depth: perLayer.size + queueLayers,
  }
 }

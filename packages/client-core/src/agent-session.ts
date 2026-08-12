@@ -618,6 +618,24 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  // For the reason `listActive` is here: a sibling writing a note is the tree
  // changing, and a separate schedule would only be another thing to drift.
  await fetchBoard(agentRunId)
+ /**
+ * The merge queue rides the same pass, by that same sentence: it became part of
+ * this view rather than a panel beside it when the graph started drawing it
+ *, and an entry advances on the server's own sweep while a human
+ * is watching — so left on the Inbox's schedule the band would be stale exactly
+ * while it is being looked at.
+ *
+ * **After the patch above and guarded on its own**, deliberately. The three calls
+ * this poll exists for are in the `Promise.all`, whose failure stops the poll
+ * entirely — correct for them, and wrong for this: a queue list that 500s must not
+ * be able to freeze the watched run's own state. Its failure lands on the surface
+ * the Inbox already reports the queue's failures on, so it is not silent either.
+ */
+ try {
+ patch({ mergeQueue: await options.api.mergeQueue.list })
+ } catch (error) {
+ patchFetchError('inbox', errorMessage(error))
+ }
  // Keeps watching while *others* are still running, so a sibling finishing still
  // updates the list — stopping on the watched run alone would freeze the swarm
  // view at whatever it looked like when this one ended.

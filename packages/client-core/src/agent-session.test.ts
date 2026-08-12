@@ -127,6 +127,44 @@ describe('noteRealtimeActivity', => {
  })
 
  /**
+ * The merge queue rides the watched run's poll,
+ * and it must ride as a passenger. The three calls the poll exists for are in a
+ * `Promise.all` whose failure stops polling; if the queue joined them, a queue list
+ * that 500s could freeze the watched run's own state — a strictly worse outcome than a
+ * stale band, and one nothing else on screen would explain.
+ */
+ it('keeps polling the watched run when the merge-queue list fails', async => {
+ const get = vi.fn(async => run('running'))
+ const api = {
+ agentRun: { get, listActive: async => [run('running')] },
+ approval: { listPending: async => [] },
+ workerNote: { board: async => null, listByTree: async => [] },
+ mergeQueue: {
+ list: async => {
+ throw new Error('queue is down')
+ },
+ },
+ } as unknown as LoomApi
+
+ const session = createAgentSession({ api })
+ await session.watchRun('run-1')
+ get.mockClear
+
+ session.noteRealtimeActivity
+ await vi.advanceTimersByTimeAsync(200)
+ expect(get).toHaveBeenCalledTimes(1)
+ // The run's own state still landed, and the failure is reported rather than swallowed.
+ expect(session.snapshot.activeRuns).toHaveLength(1)
+ expect(session.snapshot.fetchErrors.inbox).toContain('queue is down')
+
+ //...and the poll is still alive.
+ session.noteRealtimeActivity
+ await vi.advanceTimersByTimeAsync(200)
+ expect(get).toHaveBeenCalledTimes(2)
+ session.dispose
+ })
+
+ /**
  * Stopping on the watched run alone would freeze the swarm view at whatever it
  * looked like when that one finished — which is exactly when the siblings it
  * spawned are the interesting part.
