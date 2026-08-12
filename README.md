@@ -2,7 +2,25 @@
 
 Human + agent collaboration workspace. See the design notes for the architecture and roadmap, and [HANDOFF.md](./HANDOFF.md) for exact current state and next steps.
 
-**Current state: Phase 1's ship criterion is met; Phase 2 has started.** Realtime chat, real auth, and a real agent pipeline end to end: pair a Runner, bind a git repo, create or `@mention` a persona, watch it work in a thread, get **notified** when it needs you, approve/deny a risky tool from a card showing the exact argv, then review and keep/discard/push the branch — with clone-per-run isolation, a container sandbox holding no credentials, proxy-metered spend against enforced budget caps, and a global kill switch. Phase 2 so far: several runs per workspace at once, `parent_run_id`, and the capability attenuation. See HANDOFF.md before starting new work.
+**Current state: Phase 1 and Phase 2 are complete. Phase 2b is 4 of 5.**
+
+A real agent pipeline end to end: pair a Runner, bind a git repo, author a persona in a
+form or in raw markdown, `@mention` it, watch it work in a thread, get **notified** when
+it needs you, approve or deny a risky tool from a card showing the exact argv, then
+review and keep/discard/push/queue the branch — with clone-per-run isolation, a container
+sandbox holding no credentials, proxy-metered spend against enforced budget caps, and a
+global kill switch.
+
+And a real swarm: a Planner decomposes a goal into a DAG of subtasks, sub-planners
+decompose their own areas, workers share a notes ledger, sibling branches converge
+through a serialized merge queue with a reconciler agent that resolves additive conflicts
+and refuses real ones, a live board and graph show what each run is doing, and a human can
+steer a running swarm without stopping it. Teams are designed on a canvas that will not
+draw an edge the runtime would refuse.
+
+Not built: the `reviews` relation (Phase 2b's last item), and everything in Phase 3
+onward. **the riskiest-assumption experiment has never been run.** See HANDOFF.md
+before starting new work.
 
 ## Requirements
 
@@ -149,8 +167,9 @@ All of this is reachable from the web UI's sidebar now (mint a pairing token, bi
 ## Verifying
 
 ```bash
-pnpm -r typecheck # all packages
-pnpm -r test # 260 tests
+pnpm typecheck # all packages
+pnpm db:test:prepare # four test databases — after any db:generate
+pnpm test # 907 tests
 npx vitest run tools/architecture.test.ts # layer boundaries
 npx eslint packages/ apps/ # boundary lint rules
 ```
