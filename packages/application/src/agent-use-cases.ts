@@ -989,6 +989,12 @@ export const updatePersonaGroup = async (
  * alone, for the same reason `layout` and `fleet` do.
  */
  reviewers?: Record<string, string[]>
+ /**
+ * The root orchestrator — the member the work starts from, and the vantage the
+ * canvas measures depth from. Omitted leaves the stored root alone; `null` clears it
+ * back to picked-by-reach, which is a different act and a real state.
+ */
+ orchestratorId?: string | null
  },
 ): Promise<PersonaGroup> => {
  if (!isHuman(input.actor)) {
@@ -1027,9 +1033,34 @@ export const updatePersonaGroup = async (
 )
  if (!reviewersVerdict.ok) throw new ValidationError(reviewersVerdict.reason)
 
+ /**
+ * The root, checked against the roster rather than stored as sent.
+ *
+ * Two refusals, and both are about the canvas telling the truth. A root that is not on
+ * the team is a vantage point with nothing under it, so every depth the canvas reports
+ * would be `unreachable`. A root that is not a planner cannot start anything at all —
+ * The chain of command begins with a decomposition, and a worker at the top would
+ * make the tiers below it a drawing of a tree no run can have.
+ */
+ if (input.orchestratorId !== undefined && input.orchestratorId !== null) {
+ if (!input.personaIds.includes(input.orchestratorId)) {
+ throw new ValidationError('The orchestrator has to be a member of this team')
+ }
+ const orchestrator = (await deps.personas.listByWorkspace(input.workspaceId)).find(
+ (persona) => persona.id === input.orchestratorId,
+)
+ if (!orchestrator) throw new NotFoundError('AgentPersona')
+ if (!orchestrator.harnessPlanner) {
+ throw new ValidationError(
+ `${orchestrator.name} is not a planner, so it cannot be this team's orchestrator — the chain of command starts with a decomposition.`,
+)
+ }
+ }
+
  return deps.personaGroups.update(input.workspaceId, input.personaGroupId, {
  name: input.name,
  personaIds: input.personaIds,
+...(input.orchestratorId === undefined ? {}: { orchestratorId: input.orchestratorId }),
 ...(input.fleet === undefined ? {}: { fleet: fleetVerdict.fleet }),
 ...(input.reviewers === undefined ? {}: { reviewers: reviewersVerdict.reviewers }),
 ...(input.layout === undefined

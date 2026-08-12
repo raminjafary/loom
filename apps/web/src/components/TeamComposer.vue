@@ -2,10 +2,12 @@
 import type { AgentPersona, DelegationEdge, PersonaGroup } from '@loom/api-contract'
 import { MAX_FLEET_SIZE } from '@loom/domain'
 import {
+ arrangeByTier,
  composerEdges,
  composerNodes,
  connectVerdict,
  layoutForGroup,
+ orchestrate,
  plannerLikeMarkdown,
  removeDelegateVerdict,
  withoutDelegate,
@@ -43,8 +45,17 @@ const props = defineProps<{
  personas: AgentPersona[]
  groups: PersonaGroup[]
  matrix: DelegationEdge[]
+ /**
+ * How deep delegation may go in this workspace. From the session
+ * rather than assumed, because it is server configuration — a canvas that hard-coded
+ * it would report depths against a rule the server does not have. Defaulted only so a
+ * caller that has not read the session yet draws a canvas rather than nothing.
+ */
+ maxDelegationDepth?: number | undefined
  busy?: boolean
 }>
+
+const maxDepth = computed( => props.maxDelegationDepth ?? 2)
 
 const emit = defineEmits<{
  close: []
@@ -60,6 +71,8 @@ const emit = defineEmits<{
  fleet: Record<string, number>
  /** The review policy, keyed by reviewer persona id. Always sent, likewise. */
  reviewers: Record<string, string[]>
+ /** The root, as the canvas's vantage. Always sent, for the same reason. */
+ orchestratorId: string | null
  },
  ]
  'update-persona': [input: { personaId: string; markdownSource: string }]
@@ -139,13 +152,42 @@ const layout = ref<Record<string, { x: number; y: number }>>({})
 const fleet = ref<Record<string, number>>({})
 /** The review policy, mirrored for the same reason. Keyed by reviewer persona id. */
 const reviewers = ref<Record<string, string[]>>({})
+/** The root, mirrored likewise. Empty string is "nobody has chosen". */
+const orchestratorId = ref('')
+
+/**
+ * The chain of command, computed from the matrix alone.
+ *
+ * Deliberately built from `composerNodes(members, {}, matrix)` and the delegation edges
+ * *without* the review policy, rather than from the rendered `nodes` and `edges`: those
+ * depend on `layout` and `reviewers`, which the watch below writes, and the layout is
+ * what this decides. One direction only — depth is a fact about the personas, position is
+ * a consequence of it.
+ */
+const orchestration = computed( =>
+ orchestrate(
+ composerNodes(members.value, {}, props.matrix),
+ composerEdges(
+ members.value.map((persona) => persona.id),
+ props.matrix,
+),
+ orchestratorId.value,
+ maxDepth.value,
+),
+)
 
 watch(
  [group, members],
  => {
+ orchestratorId.value = group.value?.orchestratorId ?? ''
  // Recomputed only for members with no stored position, so opening a group never
- // rearranges what someone put where they wanted it.
- layout.value = layoutForGroup(members.value, group.value?.layout ?? {})
+ // rearranges what someone put where they wanted it. The tiers are what an unplaced
+ // member falls into — its depth under the orchestrator, rather than a grid slot.
+ layout.value = layoutForGroup(
+ members.value,
+ group.value?.layout ?? {},
+ orchestration.value.tiers,
+)
  fleet.value = {...(group.value?.fleet ?? {}) }
  reviewers.value = Object.fromEntries(
  Object.entries(group.value?.reviewers ?? {}).map(([id, list]) => [id, [...list]]),
@@ -185,6 +227,9 @@ const flowNodes = computed( =>
  // The recursion edge, as a mark on the node that starts it — see
  // `ComposerNode.recurses` for why it is not drawn as a loop.
  node.recurses ? 'recurses': '',
+ // The seat: the orchestrator, a sub-planner under it, a worker, or a member
+ // no chain from the orchestrator reaches.
+ `seat-${orchestration.value.seats[node.personaId]?.role ?? 'worker'}`,
  // The two ends of whatever edge is selected. Without this the sidebar talks about
  // "this edge" while the canvas shows fifteen identical lines, which is the state
  // that made a specific message read as a general one.
@@ -200,7 +245,14 @@ const flowNodes = computed( =>
  * number — not N copies of a persona, which would be two runs and belongs on the * board. Unsized members show nothing, so a team that never set a width looks exactly
  * as it did before this existed.
  */
- label: [node.name, fleet.value[node.personaId] ? `×${fleet.value[node.personaId]}`: '', node.recurses ? '↻': '']
+ label: [
+ node.name,
+ fleet.value[node.personaId] ? `×${fleet.value[node.personaId]}`: '',
+ // The `↻` is dropped at a depth that has no hop left for it, rather than drawn and
+ // then refused — the mark is a claim about what the runtime would do.
+ orchestration.value.seats[node.personaId]?.canRecurse ? '↻': '',
+ orchestration.value.seats[node.personaId]?.role === 'orchestrator' ? '★ root': '',
+ ]
 .filter(Boolean)
 .join(' '),
  })),
@@ -218,7 +270,11 @@ const selectedEdge = computed(
  => edges.value.find((edge) => edge.id === selectedEdgeId.value) ?? null,
 )
 
-const recursivePlanners = computed( => nodes.value.filter((node) => node.recurses))
+const recursivePlanners = computed( =>
+ // Against the seat rather than the matrix: a planner that may recurse from a root and
+ // sits one hop down has no hop left, so the legend would explain a mark nothing carries.
+ nodes.value.filter((node) => orchestration.value.seats[node.personaId]?.canRecurse),
+)
 
 /**
  * Planners that cannot recurse, and why — a narrowed envelope that does not admit the
@@ -241,12 +297,21 @@ const hasSelection = computed( => selectedEdge.value !== null)
 const flowEdges = computed( =>
  edges.value.map((edge) => {
  const selected = edge.id === selectedEdgeId.value
+ /**
+ * An edge the pair allows and this arrangement does not. Drawn as its own
+ * state rather than as `refused`, because the two are fixed by different things: a
+ * refusal is about what these two personas are, and this is about where they sit —
+ * the same pair one tier up is a legal edge.
+ */
+ const outOfDepth = orchestration.value.outOfDepth[edge.id]
  const base =
  edge.kind === 'reviews'
  ? // Dotted and in the "ok" colour, and deliberately not the accent: it is not a
  // permission the platform granted, it is a human's expectation, and nothing
  // refuses a branch for missing it.
  { stroke: 'var(--ok)', strokeWidth: 1.5, strokeDasharray: '2 4' }
+: outOfDepth
+ ? { stroke: 'var(--text-faint)', strokeWidth: 1.5, strokeDasharray: '1 5' }
 : edge.ok
  ? { stroke: 'var(--accent)', strokeWidth: 2 }
 : { stroke: 'var(--danger, #b42318)', strokeWidth: 1.5, strokeDasharray: '5 4' }
@@ -263,12 +328,20 @@ const flowEdges = computed( =>
  ? `${personaById(edge.source)?.name ?? '?'} → ${personaById(edge.target)?.name ?? '?'}`
 : edge.kind === 'reviews'
  ? 'reviews'
+: outOfDepth
+ ? 'too deep here'
 : edge.ok
  ? ''
 : edge.summary,
  animated: selected,
  class: [
- edge.kind === 'reviews' ? 'reviews': edge.ok ? 'delegates ok': 'delegates refused',
+ edge.kind === 'reviews'
+ ? 'reviews'
+: outOfDepth
+ ? 'delegates out-of-depth'
+: edge.ok
+ ? 'delegates ok'
+: 'delegates refused',
  selected ? 'chosen': hasSelection.value ? 'muted': '',
  ]
 .filter(Boolean)
@@ -324,7 +397,34 @@ const saveLayout = => {
  layout: layout.value,
  fleet: fleet.value,
  reviewers: reviewers.value,
+ orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
  })
+}
+
+/**
+ * Puts every member back on the row its depth gives it.
+ *
+ * Deliberately destructive of the stored arrangement, and offered as a button rather
+ * than done on open for exactly that reason. Position is a fact a human recorded and recomputing it on every open would throw that away every time — but a
+ * team whose shape has changed since is holding an arrangement that describes a team
+ * that no longer exists, and the operator's report is what that looks like: a second
+ * planner added to a five-member team, and a canvas with no visible hierarchy at all.
+ */
+const arrange = => {
+ if (members.value.length === 0) return
+ layout.value = arrangeByTier(members.value, orchestration.value.tiers)
+ saveLayout
+ void nextTick.then( => requestAnimationFrame( => fitView(FIT)))
+}
+
+/**
+ * Names the member the work starts from. Empty un-chooses, which is a real state — the
+ * canvas then picks by reach and says that it did, rather than pretending to a choice
+ * nobody made.
+ */
+const setOrchestrator = (personaId: string) => {
+ orchestratorId.value = personaId
+ saveLayout
 }
 
 /**
@@ -346,6 +446,7 @@ const setMembers = (personaIds: string[]) => {
  layout: layout.value,
  fleet: fleet.value,
  reviewers: reviewers.value,
+ orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
  })
 }
 
@@ -372,6 +473,7 @@ const setFleet = (personaId: string, size: number | null) => {
  layout: layout.value,
  fleet: next,
  reviewers: reviewers.value,
+ orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
  })
 }
 
@@ -400,6 +502,7 @@ const setReviewer = (reviewedId: string, reviewerId: string) => {
  layout: layout.value,
  fleet: fleet.value,
  reviewers: next,
+ orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
  })
 }
 
@@ -410,6 +513,9 @@ const setReviewer = (reviewedId: string, reviewerId: string) => {
  * the runtime does not have.
  */
 const reviewCandidates = computed( => members.value)
+
+/** Who may be the root: a planner on this team, because the chain starts with a plan. */
+const plannerMembers = computed( => members.value.filter((persona) => persona.harnessPlanner))
 
 /** Who currently reviews this persona, for the picker's value. */
 const reviewerOf = (reviewedId: string): string =>
@@ -652,6 +758,20 @@ const onKeydown = (event: KeyboardEvent) => {
  >
  Fit
  </button>
+ <!--
+ The chain of command, applied to the positions. Destructive of what a
+ human dragged, which is why it is a button and not something that happens on
+ open — see `arrange`.
+ -->
+ <button
+ v-if="members.length > 0"
+ type="button"
+ class="link"
+ title="Put every member on the row its depth under the root gives it — this replaces the positions you dragged"
+ @click="arrange"
+ >
+ Arrange
+ </button>
  <span class="hint">
  Edges are what the platform would allow, not what you drew. Drag a planner onto a
  worker to ask for one.
@@ -726,6 +846,56 @@ const onKeydown = (event: KeyboardEvent) => {
  </div>
 
  <aside class="side">
+ <!--
+ The chain of command. The picker is here rather than on a node because
+ it is a fact about the *team* — which member the work starts from — and the
+ canvas is where its consequence is read: every tier below it, and the edges
+ that stop being usable at the depth they end up.
+ -->
+ <section v-if="plannerMembers.length > 0" class="chain">
+ <h3>Chain of command</h3>
+ <select
+ class="root-picker"
+:value="orchestration.orchestratorId"
+ aria-label="Which member the work starts from"
+ @change="setOrchestrator(($event.target as HTMLSelectElement).value)"
+ >
+ <option value="">pick by reach</option>
+ <option v-for="planner in plannerMembers":key="planner.id":value="planner.id">
+ {{ planner.name }} is the root
+ </option>
+ </select>
+ <p class="fine">
+ <template v-if="orchestratorId === '' && orchestration.orchestratorId !== ''">
+ Nobody has chosen, so this canvas is measuring from
+ <strong>{{ personaById(orchestration.orchestratorId)?.name }}</strong
+ >, the planner that reaches the most members.
+ </template>
+ <template v-else>
+ Depth is measured from here. Delegation goes
+ <strong>{{ maxDepth }}</strong> level(s) deep in this workspace, so the
+ root's own children are level 1 and theirs are level {{ maxDepth }}.
+ </template>
+ </p>
+ <!--
+ The claim this canvas was making falsely before there was a vantage: the
+ matrix is computed from a root for *every* pair, so two planner personas
+ each admit the other and both appear to own every worker.
+ -->
+ <p v-if="Object.keys(orchestration.outOfDepth).length > 0" class="fine warn">
+ {{ Object.keys(orchestration.outOfDepth).length }} drawn edge(s) are allowed
+ between those two personas and unusable where they sit — dotted and faint on
+ the canvas. Click one to see why.
+ </p>
+ <p v-if="orchestration.unreachable.length > 0" class="fine warn">
+ No chain from the root reaches
+ <strong>{{
+ orchestration.unreachable.map((id) => personaById(id)?.name ?? id).join(', ')
+ }}</strong
+ >. They are on the team and nothing the root plans can start them.
+ </p>
+ </section>
+
  <section>
  <h3>On this team</h3>
  <ul class="chips">
@@ -838,6 +1008,17 @@ const onKeydown = (event: KeyboardEvent) => {
  {{ personaById(selectedEdge.source)?.name }} is expected to review
  {{ personaById(selectedEdge.target)?.name }}'s work. Nothing in the runtime
  gates on it — it is this team's policy, not a permission.
+ </p>
+ <!--
+ An edge the pair allows and the arrangement does not. Said before the
+ "may delegate" line, because it is the answer that governs: the permission
+ is real and there is nowhere on this team it can be used from.
+ -->
+ <p v-else-if="orchestration.outOfDepth[selectedEdge.id]" class="warn">
+ {{ orchestration.outOfDepth[selectedEdge.id] }}
+ These two personas do allow it — what refuses it is where they sit under
+ {{ personaById(orchestration.orchestratorId)?.name ?? 'the root' }}. Move the
+ root, or shorten the chain.
  </p>
  <p v-else-if="selectedEdge.ok" class="ok">
  This planner may delegate to this worker.
@@ -1164,6 +1345,50 @@ header h2 {
 .canvas:deep(.persona-node.planner) {
  border-color: var(--accent);
  font-weight: 600;
+}
+
+/* The root, marked on the node that holds it. A left bar rather than another
+ border colour: the border already says planner, and being the root is a second and
+ independent fact about a planner. */
+.canvas:deep(.persona-node.seat-orchestrator) {
+ border-left: 4px solid var(--accent);
+}
+
+/* A member no chain from the root reaches. Faded rather than hidden — it is really on
+ the team, and that is the problem worth seeing. */
+.canvas:deep(.persona-node.seat-unreachable) {
+ opacity: 0.55;
+ border-style: dashed;
+}
+
+.canvas:deep(.delegates.out-of-depth.vue-flow__edge-text) {
+ fill: var(--text-faint);
+}
+
+.root-picker {
+ width: 100%;
+ padding: 0.2rem 0.3rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text);
+ font: inherit;
+ font-size: 0.75rem;
+}
+
+.warn {
+ color: var(--danger, #b42318);
+}
+
+.fine.warn {
+ color: var(--danger, #b42318);
+ opacity: 0.85;
+}
+
+.chain {
+ display: flex;
+ flex-direction: column;
+ gap: 0.3rem;
 }
 
 /* The two ends of the selected edge, so "this edge" on the right has a referent on the

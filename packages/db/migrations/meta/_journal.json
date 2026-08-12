@@ -253,6 +253,13 @@
       "when": 1786571414613,
       "tag": "0035_gray_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1786574807844,
+      "tag": "0036_ambitious_tinkerer",
+      "breakpoints": true
     }
   ]
 }

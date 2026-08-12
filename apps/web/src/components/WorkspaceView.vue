@@ -994,6 +994,7 @@ onBeforeUnmount( => {
 :personas="agentSnapshot.personas"
 :groups="agentSnapshot.personaGroups"
 :matrix="agentSnapshot.delegationMatrix"
+:max-delegation-depth="snapshot.limits?.maxDelegationDepth"
  @close="composerOpen = false"
  @create-persona="
  (input) => void agent.createPersona(input.markdownSource).then(input.done)

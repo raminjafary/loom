@@ -23,6 +23,14 @@ export interface WorkspaceSnapshot {
  * workspace at a glance. Null until `init` resolves.
  */
  readonly currentActor: Actor | null
+ /**
+ * Workspace limits, read from the session for the same reason identity is. The composition canvas needs `maxDelegationDepth` to say which of the
+ * edges it draws a plan could actually use, and a client that assumed 2 would be
+ * hard-coding server configuration into a surface whose whole job is not to.
+ *
+ * Null until `init` resolves.
+ */
+ readonly limits: { maxDelegationDepth: number; maxConcurrentRunsPerWorkspace: number } | null
  readonly channels: Channel[]
  readonly activeChannelId: string | null
  readonly activeThread: Thread | null
@@ -106,6 +114,7 @@ export const createWorkspaceSession = (options: {
 }): WorkspaceSession => {
  let state: WorkspaceSnapshot = {
  currentActor: null,
+ limits: null,
  channels: [],
  activeChannelId: null,
  activeThread: null,
@@ -249,7 +258,7 @@ export const createWorkspaceSession = (options: {
  // Identity comes from the session, never from client config.
  const me = await options.api.session.me
  const channels = await options.api.channel.list
- patch({ currentActor: me.actor, channels })
+ patch({ currentActor: me.actor, limits: me.limits, channels })
 
  realtime = connectRealtime({
  wsUrl: options.wsUrl,

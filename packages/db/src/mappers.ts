@@ -572,6 +572,7 @@ export interface PersonaGroupRow {
  layout?: unknown
  fleet?: unknown
  reviewers?: unknown
+ orchestratorId?: string | null
  createdAt: Date
  updatedAt: Date
 }
@@ -601,6 +602,9 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
  row.reviewers && typeof row.reviewers === 'object' && !Array.isArray(row.reviewers)
  ? (row.reviewers as Record<string, string[]>)
 : {},
+ // Null for every team that predates the column, which is the same state as "nobody has
+ // chosen" — the canvas picks by reach and says so, rather than rendering an empty tier.
+ orchestratorId: row.orchestratorId ?? null,
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
 })

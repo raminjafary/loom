@@ -586,6 +586,8 @@ export interface PersonaGroupRepositoryPort {
  layout?: Record<string, { x: number; y: number }>
  fleet?: Record<string, number>
  reviewers?: Record<string, string[]>
+ /** The root, as the canvas's vantage. Null clears it; absent leaves it. */
+ orchestratorId?: string | null
  },
 ): Promise<PersonaGroup>
  delete(workspaceId: WorkspaceId, id: PersonaGroupId): Promise<void>

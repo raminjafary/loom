@@ -48,7 +48,23 @@ export const contract = {
  * Identity-bound approval closes.
  */
  session: {
- me: oc.output(z.object({ actor: ActorSchema, workspaceId: z.string })),
+ me: oc.output(
+ z.object({
+ actor: ActorSchema,
+ workspaceId: z.string,
+ /**
+ * Workspace limits, sent with identity for the same reason identity is sent at
+ * all: they are server configuration, and a client that assumed a value would be
+ * drawing a surface against a rule the server does not have. The depth is
+ * the one the composition canvas needs — it decides which drawn edges a plan
+ * could use.
+ */
+ limits: z.object({
+ maxDelegationDepth: z.number.int.positive,
+ maxConcurrentRunsPerWorkspace: z.number.int.positive,
+ }),
+ }),
+),
  },
 
  channel: {
@@ -516,6 +532,17 @@ export const contract = {
  * would be an instruction the Planner cannot follow.
  */
  reviewers: z.record(z.string, z.array(z.string)).optional,
+ /**
+ * The root orchestrator — the member the work starts from, and the
+ * vantage the canvas measures depth from.
+ *
+ * Nullable *and* optional, and the two mean different things: omitted leaves
+ * the stored root alone (a TUI that draws no canvas is not un-choosing one),
+ * `null` clears it back to picked-by-reach. Validated server-side like `fleet`
+ * and `reviewers` — a root that is not a planner on this team would make every
+ * depth the canvas reports wrong.
+ */
+ orchestratorId: z.string.nullable.optional,
  }),
 )
 .output(PersonaGroupSchema),

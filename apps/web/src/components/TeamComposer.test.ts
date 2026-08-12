@@ -63,6 +63,7 @@ const group = (overrides: Partial<PersonaGroup> = {}): PersonaGroup => ({
  fleet: {},
  reviewers: {},
  layout: {},
+ orchestratorId: null,
  createdAt: new Date(0),
  updatedAt: new Date(0),
 ...overrides,
@@ -80,12 +81,14 @@ const composer = (options: {
  personas?: AgentPersona[]
  groups?: PersonaGroup[]
  matrix?: DelegationEdge[]
+ maxDelegationDepth?: number
 } = {}) =>
  mount(TeamComposer, {
  props: {
  personas: options.personas ?? [lead, persona],
  groups: options.groups ?? [group],
  matrix: options.matrix ?? [],
+ maxDelegationDepth: options.maxDelegationDepth ?? 2,
  },
  global: { stubs: { VueFlow: VueFlowStub } },
  })
@@ -348,6 +351,110 @@ describe('TeamComposer', => {
  // One tool in the envelope, so there is no alternative to offer — the list
  // appears only when a choice actually exists.
  expect(notice.findAll('.options li')).toHaveLength(0)
+ })
+ })
+
+ /**
+ * The chain of command, on the canvas (the operator's report: adding a second
+ * planner turned a five-member team into a tangle in which nothing said which planner
+ * was the root).
+ */
+ describe('the chain of command', => {
+ const second = persona({
+ id: 'second',
+ name: 'second',
+ model: 'claude-sonnet-5',
+ tools: ['Read', 'Grep', 'Glob'],
+ harnessPlanner: true,
+ harnessDelegates: ['Read'],
+ })
+ const personas = [lead, second, persona]
+ const teamOfThree = group({ personaIds: ['lead', 'second', 'swe'], orchestratorId: 'lead' })
+ const mutual: DelegationEdge[] = [
+ { plannerId: 'lead', workerId: 'second', ok: true, refusals: [] },
+ { plannerId: 'second', workerId: 'lead', ok: true, refusals: [] },
+ { plannerId: 'lead', workerId: 'swe', ok: true, refusals: [] },
+ { plannerId: 'second', workerId: 'swe', ok: true, refusals: [] },
+ ]
+
+ const canvas = => composer({ personas, groups: [teamOfThree], matrix: mutual })
+
+ it('marks the root and lays the tiers out top-down', => {
+ const wrapper = canvas
+ const nodes = flow(wrapper).props('nodes') as {
+ id: string
+ class: string
+ label: string
+ position: { x: number; y: number }
+ }[]
+
+ const root = nodes.find((node) => node.id === 'lead')!
+ expect(root.class).toContain('seat-orchestrator')
+ expect(root.label).toContain('★ root')
+ expect(nodes.find((node) => node.id === 'second')!.position.y).toBeGreaterThan(
+ root.position.y,
+)
+ })
+
+ /**
+ * The claim the canvas was making falsely: `second → lead` is a legal pair and there
+ * is nowhere on this team it can be used from, because a planner one hop down has no
+ * hop left beneath it.
+ */
+ it('draws an edge this arrangement cannot use as its own state, not as refused', => {
+ const drawn = flow(canvas).props('edges') as { id: string; class: string; label: string }[]
+ const sideways = drawn.find((edge) => edge.id === 'second->lead')!
+
+ expect(sideways.class).toContain('out-of-depth')
+ expect(sideways.class).not.toContain('refused')
+ expect(sideways.label).toBe('too deep here')
+ expect(drawn.find((edge) => edge.id === 'lead->second')!.class).toContain('ok')
+ })
+
+ it('says why, on the edge, rather than leaving it to a refused subtask', async => {
+ const wrapper = canvas
+ await flow(wrapper).vm.$emit('edgeClick', { edge: { id: 'second->lead' } })
+ expect(wrapper.get('.inspector').text).toContain('nothing below it could run')
+ })
+
+ it('saves the root a human picks, along with everything else the team holds', async => {
+ const wrapper = canvas
+ await wrapper.get('.root-picker').setValue('second')
+
+ const saved = wrapper.emitted('save-group')?.at(-1)?.[0] as { orchestratorId: string | null }
+ expect(saved.orchestratorId).toBe('second')
+ })
+
+ it('rearranges to the hierarchy on request, replacing what was dragged', async => {
+ const dragged = group({
+ personaIds: ['lead', 'second', 'swe'],
+ orchestratorId: 'lead',
+ layout: { swe: { x: 900, y: -900 } },
+ })
+ const wrapper = composer({ personas, groups: [dragged], matrix: mutual })
+
+ // Honoured until asked otherwise: position is a fact a human recorded.
+ const before = flow(wrapper).props('nodes') as { id: string; position: { y: number } }[]
+ expect(before.find((node) => node.id === 'swe')!.position.y).toBe(-900)
+
+ await wrapper.findAll('.link').find((button) => button.text === 'Arrange')?.trigger('click')
+
+ const after = flow(wrapper).props('nodes') as { id: string; position: { y: number } }[]
+ expect(after.find((node) => node.id === 'swe')!.position.y).toBeGreaterThan(0)
+ const saved = wrapper.emitted('save-group')?.at(-1)?.[0] as {
+ layout: Record<string, { x: number; y: number }>
+ }
+ expect(saved.layout.swe?.y).toBeGreaterThan(0)
+ })
+
+ it('names a member no chain from the root reaches', => {
+ const stranded = group({ personaIds: ['lead', 'second', 'swe'], orchestratorId: 'second' })
+ const noReach: DelegationEdge[] = [
+ { plannerId: 'second', workerId: 'swe', ok: true, refusals: [] },
+ ]
+ const wrapper = composer({ personas, groups: [stranded], matrix: noReach })
+ expect(wrapper.get('.chain').text).toContain('lead')
+ expect(wrapper.get('.chain').text).toContain('nothing the root plans can start them')
  })
  })
 })

@@ -1272,6 +1272,9 @@ export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort
  // Same for the fleet: a client that does not draw widths means "leave them".
 ...(patch.fleet === undefined ? {}: { fleet: patch.fleet }),
 ...(patch.reviewers === undefined ? {}: { reviewers: patch.reviewers }),
+ // Null is a real value here — "nobody has chosen" — so absent and null differ:
+ // absent leaves the stored root alone, null clears it back to picked-by-reach.
+...(patch.orchestratorId === undefined ? {}: { orchestratorId: patch.orchestratorId }),
  updatedAt: new Date,
  })
 .where(and(eq(personaGroup.workspaceId, workspaceId), eq(personaGroup.id, id)))

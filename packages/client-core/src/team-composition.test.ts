@@ -10,6 +10,9 @@ import {
  withWiderEnvelope,
  withoutDelegate,
  removeDelegateVerdict,
+ arrangeByTier,
+ chooseOrchestrator,
+ orchestrate,
 } from './team-composition.js'
 
 const persona = (overrides: Partial<AgentPersona> = {}): AgentPersona => ({
@@ -495,5 +498,164 @@ describe('removeDelegateVerdict / withoutDelegate — taking an edge off the can
  expect(markdown).toContain('delegates: [Read, Edit]')
  expect(markdown).toContain('tools: [Read, Grep, Glob]')
  expect(markdown.endsWith('You decompose.')).toBe(true)
+ })
+})
+
+/**
+ * The chain of command on the canvas (`orchestrate`).
+ *
+ * The bug this is written against is not a crash: it is a five-member team with two
+ * planners rendering as a tangle in which nothing says which planner is the root and
+ * both appear to own every worker. The matrix is computed "from a root" for every pair
+ * because a workspace-wide matrix has nowhere else to stand, so two planner personas
+ * each admit the other and the canvas draws a chain no run tree can have.
+ */
+describe('orchestrate — the chain of command', => {
+ const plannerPersona = (id: string) =>
+ persona({ id, name: id, harnessPlanner: true, harnessDelegates: ['Read', 'Edit'] })
+ const workerPersona = (id: string) => persona({ id, name: id, tools: ['Read'] })
+
+ const nodesOf = (personas: AgentPersona[], matrix: DelegationEdge[]) =>
+ composerNodes(personas, {}, matrix)
+ const edgesOf = (personas: AgentPersona[], matrix: DelegationEdge[]) =>
+ composerEdges(
+ personas.map((entry) => entry.id),
+ matrix,
+)
+
+ /** Two planners that each admit the other, and three workers both admit — the screenshot. */
+ const twoPlanners = [
+ plannerPersona('lead'),
+ plannerPersona('second'),
+ workerPersona('swe'),
+ workerPersona('qa'),
+ ]
+ const mutual: DelegationEdge[] = [
+ edge({ plannerId: 'lead', workerId: 'second' }),
+ edge({ plannerId: 'second', workerId: 'lead' }),
+ edge({ plannerId: 'lead', workerId: 'swe' }),
+ edge({ plannerId: 'lead', workerId: 'qa' }),
+ edge({ plannerId: 'second', workerId: 'swe' }),
+ edge({ plannerId: 'second', workerId: 'qa' }),
+ ]
+
+ it('seats the chosen root at the top and everything it reaches below it', => {
+ const result = orchestrate(nodesOf(twoPlanners, mutual), edgesOf(twoPlanners, mutual), 'lead', 2)
+
+ expect(result.orchestratorId).toBe('lead')
+ expect(result.seats.lead).toMatchObject({ depth: 0, role: 'orchestrator' })
+ expect(result.seats.second).toMatchObject({ depth: 1, role: 'sub-planner' })
+ expect(result.seats.swe).toMatchObject({ depth: 1, role: 'worker' })
+ expect(result.unreachable).toEqual([])
+ })
+
+ /**
+ * The edge that only exists because the matrix has no vantage. `second` may delegate to
+ * `lead` between those two personas; at depth 1 with a limit of 2 there is no hop below
+ * it for another planner, so no plan can ever use it. Drawing it as ordinary is the
+ * canvas claiming a chain the runtime refuses.
+ */
+ it('marks an edge the pair allows and this arrangement does not', => {
+ const result = orchestrate(nodesOf(twoPlanners, mutual), edgesOf(twoPlanners, mutual), 'lead', 2)
+
+ expect(result.outOfDepth['second->lead']).toContain('nothing below it could run')
+ expect(result.outOfDepth['lead->second']).toBeUndefined
+ expect(result.outOfDepth['second->swe']).toBeUndefined
+ })
+
+ it('refuses a hop past the limit, in the child-start gate\'s own terms', => {
+ const deep = [plannerPersona('lead'), plannerPersona('second'), workerPersona('swe')]
+ const chain: DelegationEdge[] = [
+ edge({ plannerId: 'lead', workerId: 'second' }),
+ edge({ plannerId: 'second', workerId: 'swe' }),
+ ]
+ // A limit of 1 means the root's children are leaves, so `second` is not offered at all.
+ const result = orchestrate(nodesOf(deep, chain), edgesOf(deep, chain), 'lead', 1)
+
+ expect(result.outOfDepth['lead->second']).toContain('nothing below it could run')
+ expect(result.unreachable).toEqual(['second', 'swe'])
+ })
+
+ it('names a member no chain from the root reaches, rather than drawing it as ordinary', => {
+ const personas = [plannerPersona('lead'), workerPersona('swe'), workerPersona('orphan')]
+ const matrix = [edge({ plannerId: 'lead', workerId: 'swe' })]
+ const result = orchestrate(nodesOf(personas, matrix), edgesOf(personas, matrix), 'lead', 2)
+
+ expect(result.unreachable).toEqual(['orphan'])
+ expect(result.seats.orphan).toMatchObject({ depth: null, role: 'unreachable' })
+ })
+
+ it('drops the recursion mark at a depth with no hop left for it', => {
+ const selfEdges = [...mutual, edge({ plannerId: 'second', workerId: 'second' })]
+ const result = orchestrate(
+ nodesOf(twoPlanners, selfEdges),
+ edgesOf(twoPlanners, selfEdges),
+ 'lead',
+ 2,
+)
+
+ // The matrix says `second` may recurse — from a root. One hop down it cannot.
+ expect(composerNodes(twoPlanners, {}, selfEdges).find((n) => n.personaId === 'second')?.recurses).toBe(true)
+ expect(result.seats.second?.canRecurse).toBe(false)
+ })
+
+ describe('choosing a root when nobody has', => {
+ it('picks the planner that reaches the most members', => {
+ const personas = [plannerPersona('lead'), plannerPersona('narrow'), workerPersona('swe')]
+ const matrix = [
+ edge({ plannerId: 'lead', workerId: 'swe' }),
+ edge({ plannerId: 'lead', workerId: 'narrow' }),
+ ]
+ expect(
+ chooseOrchestrator(nodesOf(personas, matrix), edgesOf(personas, matrix), '', 2),
+).toBe('lead')
+ })
+
+ it('falls back rather than rendering an empty tier when the stored root is gone', => {
+ const personas = [plannerPersona('lead'), workerPersona('swe')]
+ const matrix = [edge({ plannerId: 'lead', workerId: 'swe' })]
+ expect(
+ chooseOrchestrator(nodesOf(personas, matrix), edgesOf(personas, matrix), 'deleted', 2),
+).toBe('lead')
+ })
+
+ it('keeps a stored root that is still a planner on the team', => {
+ const result = orchestrate(
+ nodesOf(twoPlanners, mutual),
+ edgesOf(twoPlanners, mutual),
+ 'second',
+ 2,
+)
+ expect(result.orchestratorId).toBe('second')
+ expect(result.seats.lead).toMatchObject({ depth: 1, role: 'sub-planner' })
+ })
+ })
+})
+
+describe('arrangeByTier — the layout the chain implies', => {
+ it('puts each tier on its own row, centred, and overwrites what was stored', => {
+ const personas = [
+ persona({ id: 'lead', name: 'lead', harnessPlanner: true }),
+ persona({ id: 'swe', name: 'swe' }),
+ persona({ id: 'qa', name: 'qa' }),
+ ]
+ const layout = arrangeByTier(personas, { lead: 0, swe: 1, qa: 1 })
+
+ expect(layout.lead?.y).toBe(0)
+ expect(layout.swe?.y).toBe(layout.qa?.y)
+ expect(layout.swe?.y).toBeGreaterThan(layout.lead!.y)
+ // Centred: the root sits over the middle of the two under it.
+ expect(layout.lead?.x).toBe((layout.swe!.x + layout.qa!.x) / 2)
+ })
+
+ it('honours a stored position through layoutForGroup, and tiers only fill the gaps', => {
+ const personas = [
+ persona({ id: 'lead', name: 'lead', harnessPlanner: true }),
+ persona({ id: 'swe', name: 'swe' }),
+ ]
+ const layout = layoutForGroup(personas, { lead: { x: 999, y: 999 } }, { lead: 0, swe: 1 })
+
+ expect(layout.lead).toEqual({ x: 999, y: 999 })
+ expect(layout.swe?.y).toBeGreaterThan(0)
  })
 })

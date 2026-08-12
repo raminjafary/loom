@@ -344,6 +344,12 @@ export interface AgentSession {
  fleet?: Record<string, number>
  /** Who reviews whom on this team. Omitted leaves it alone. */
  reviewers?: Record<string, string[]>
+ /**
+ * Which member the work starts from, as the canvas's vantage for
+ * depth. Omitted leaves the stored root alone; `null` clears it back to
+ * picked-by-reach, which is a different act.
+ */
+ orchestratorId?: string | null
  }): Promise<void>
  deletePersonaGroup(personaGroupId: string): Promise<void>
  startRun(input: {

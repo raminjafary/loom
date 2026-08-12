@@ -161,6 +161,16 @@ export const router = os.router({
  me: os.session.me.handler(({ context }) => ({
  actor: context.principal.actor,
  workspaceId: context.principal.workspaceId,
+ /**
+ * Workspace limits a client must not invent. The composition
+ * canvas has to know how deep delegation may go before it can say which of the
+ * edges it draws a plan could actually use, and a client that hard-coded 2 would
+ * be hard-coding server configuration.
+ */
+ limits: {
+ maxDelegationDepth: context.deps.limits.maxDelegationDepth,
+ maxConcurrentRunsPerWorkspace: context.deps.limits.maxConcurrentRunsPerWorkspace,
+ },
  })),
  },
 
@@ -719,6 +729,9 @@ export const router = os.router({
 ...(input.layout === undefined ? {}: { layout: input.layout }),
 ...(input.fleet === undefined ? {}: { fleet: input.fleet }),
 ...(input.reviewers === undefined ? {}: { reviewers: input.reviewers }),
+ // Null is forwarded, not dropped: it is how a human un-chooses a root, which
+ // absent deliberately does not mean.
+...(input.orchestratorId === undefined ? {}: { orchestratorId: input.orchestratorId }),
  }),
 ),
 ),

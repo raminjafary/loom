@@ -529,6 +529,105 @@ describe('removal over HTTP', => {
  await client.persona.delete({ personaId: persona.id })
  })
 
+ /**
+ * The root orchestrator, over the contract.
+ *
+ * The two refusals are what keep the canvas honest rather than what keep the runtime
+ * safe: a root that is not on the team, or is not a planner, would make every depth the
+ * canvas reports a drawing of a tree no run can have.
+ */
+ it('stores a root orchestrator, and refuses one that could not start a chain', async => {
+ const stamp = Date.now
+ const planner = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: root-planner-${stamp}`,
+ 'description: Decomposes',
+ 'model: claude-sonnet-5',
+ 'tools: []',
+ 'harness:',
+ ' planner: true',
+ ' delegates: [Read]',
+ '---',
+ 'You decompose.',
+ ].join('\n'),
+ })
+ const worker = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: root-worker-${stamp}`,
+ 'description: Works',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'Do nothing.',
+ ].join('\n'),
+ })
+ const group = await client.personaGroup.create({
+ name: `chain-${stamp}`,
+ personaIds: [planner.id, worker.id],
+ })
+ // Nobody has chosen out of the box, which is a real state — the canvas picks by reach.
+ expect(group.orchestratorId).toBeNull
+
+ const rooted = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [planner.id, worker.id],
+ orchestratorId: planner.id,
+ })
+ expect(rooted.orchestratorId).toBe(planner.id)
+
+ // Omitted leaves it alone; null clears it. Two different acts, deliberately.
+ const renamed = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: `${group.name}-renamed`,
+ personaIds: [planner.id, worker.id],
+ })
+ expect(renamed.orchestratorId).toBe(planner.id)
+
+ const cleared = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [planner.id, worker.id],
+ orchestratorId: null,
+ })
+ expect(cleared.orchestratorId).toBeNull
+
+ await expect(
+ client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [planner.id, worker.id],
+ orchestratorId: worker.id,
+ }),
+).rejects.toThrow(/not a planner/)
+
+ await expect(
+ client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [worker.id],
+ orchestratorId: planner.id,
+ }),
+).rejects.toThrow(/member of this team/)
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ await client.persona.delete({ personaId: planner.id })
+ await client.persona.delete({ personaId: worker.id })
+ })
+
+ /**
+ * The depth limit reaches the client through the session, because the composition
+ * canvas cannot say which of the edges it draws a plan could use without it — and a
+ * client that assumed a value would be hard-coding server configuration.
+ */
+ it('sends the workspace limits with identity', async => {
+ const me = await client.session.me
+ expect(me.limits.maxDelegationDepth).toBeGreaterThanOrEqual(1)
+ expect(me.limits.maxConcurrentRunsPerWorkspace).toBeGreaterThanOrEqual(1)
+ })
+
  it('refuses to remove a Runner that still has a repository bound', async => {
  const pairing = await client.runner.createPairingToken({ name: 'removable' })
  // Nothing bound yet, so this one goes.

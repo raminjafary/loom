@@ -70,12 +70,28 @@ const PER_ROW = 4
  * Planners first and on their own row, because the thing a human is looking for on
  * this canvas is which workers hang off which planner — a grid that interleaves them
  * makes the one relationship it exists to show the hardest to see.
+ *
+ * `tiers` is the chain of command when the canvas has one (see `orchestrate`):
+ * a member's row is then the depth its runs would actually sit at, which is the
+ * arrangement the tangle in a two-planner team is asking for. Without it this falls
+ * back to the two-row split, which is all that can be said when nobody has picked a
+ * vantage to measure depth from.
  */
 export const layoutForGroup = (
  personas: readonly AgentPersona[],
  stored: Readonly<Record<string, { x: number; y: number }>>,
+ tiers?: Readonly<Record<string, number>>,
 ): Record<string, { x: number; y: number }> => {
  const layout: Record<string, { x: number; y: number }> = {}
+
+ if (tiers) {
+ const arranged = arrangeByTier(personas, tiers)
+ for (const persona of personas) {
+ layout[persona.id] = stored[persona.id] ?? arranged[persona.id]!
+ }
+ return layout
+ }
+
  const planners = personas.filter((persona) => persona.harnessPlanner)
  const workers = personas.filter((persona) => !persona.harnessPlanner)
 
@@ -91,6 +107,211 @@ export const layoutForGroup = (
  place(planners, 0)
  place(workers, Math.ceil(planners.length / PER_ROW) + 1)
  return layout
+}
+
+/**
+ * Every member placed on the row its depth puts it on, centred, ignoring what is stored.
+ *
+ * The counterpart to dragging rather than a replacement for it: a human arranges a team
+ * and that arrangement is a fact worth keeping, but a team whose shape has
+ * changed — a second planner added, an envelope widened — has an arrangement describing a
+ * team that no longer exists. So this is what "Arrange" applies, deliberately overwriting,
+ * and everything after it is dragging again.
+ */
+export const arrangeByTier = (
+ personas: readonly AgentPersona[],
+ tiers: Readonly<Record<string, number>>,
+): Record<string, { x: number; y: number }> => {
+ const rows = new Map<number, AgentPersona[]>
+ for (const persona of personas) {
+ const tier = tiers[persona.id] ?? UNREACHABLE_TIER
+ rows.set(tier, [...(rows.get(tier) ?? []), persona])
+ }
+
+ const layout: Record<string, { x: number; y: number }> = {}
+ for (const [tier, members] of [...rows.entries].sort((a, b) => a[0] - b[0])) {
+ members.forEach((persona, index) => {
+ layout[persona.id] = {
+ // Centred on the row rather than left-aligned: a root with three workers under it
+ // reads as a hierarchy only if the parent sits over the middle of its children.
+ x: (index - (members.length - 1) / 2) * COLUMN,
+ y: tier * ROW,
+ }
+ })
+ }
+ return layout
+}
+
+/**
+ * The chain of command, as the canvas can know it.
+ *
+ * **The problem this solves is that the matrix has no vantage point.** Every edge on
+ * this canvas is `delegationMatrixForWorkspace`'s answer, and that answer is computed
+ * "from a root" — the most permissive real position — because a workspace-wide matrix
+ * has nowhere else to stand. That is right for a pair and wrong for an arrangement: two
+ * planner personas each admit the other, so the canvas draws a line both ways and a team
+ * of two planners and three workers becomes the tangle in the operator's screenshot, in
+ * which nothing says which planner is the root and both appear to own every worker.
+ *
+ * The runtime has no such ambiguity. A run tree has a root, a child of a run at depth `d`
+ * is at `d + 1` and is refused past `maxDelegationDepth`, and a planner is only *offered*
+ * as a delegate while a hop remains below it — so the same pair of personas is a legal
+ * edge in one arrangement and an edge no plan can use in another.
+ *
+ * So the canvas needs the one thing the matrix cannot supply: **which member the work
+ * starts from.** Given that, every other depth follows, and the edges the runtime would
+ * refuse *in that arrangement* become sayable. This is not the canvas inventing a rule —
+ * it is the canvas stopping short of a claim it was making falsely, which is the caution
+ * about this surface read in the only direction that matters.
+ */
+export type OrchestrationRole = 'orchestrator' | 'sub-planner' | 'worker' | 'unreachable'
+
+/** The row a member with no depth is drawn on — below everything that has one. */
+export const UNREACHABLE_TIER = 9
+
+export interface OrchestrationSeat {
+ /** How deep this member's runs would sit under the orchestrator; null when unreachable. */
+ readonly depth: number | null
+ readonly role: OrchestrationRole
+ /**
+ * Whether the `↻` still holds at this depth. The matrix answers it from a root,
+ * and a sub-planner one hop down has no hop left to recurse into — a mark that survives
+ * a move down the chain would be the node claiming a shape the runtime refuses.
+ */
+ readonly canRecurse: boolean
+}
+
+export interface Orchestration {
+ readonly orchestratorId: string
+ readonly seats: Record<string, OrchestrationSeat>
+ /** Tier per persona id, for `arrangeByTier` and `layoutForGroup`. */
+ readonly tiers: Record<string, number>
+ /**
+ * Edges the matrix allows but this arrangement does not, with the reason. Keyed by
+ * `ComposerEdge.id`. An empty record is the ordinary case, and a non-empty one is the
+ * canvas telling a human something they would otherwise learn from a refused subtask.
+ */
+ readonly outOfDepth: Record<string, string>
+ /** Members no chain from the orchestrator reaches — on the team, and unusable from it. */
+ readonly unreachable: string[]
+}
+
+/**
+ * Which member the chain starts from, when a human has not said.
+ *
+ * The stored choice wins whenever it is still a planner on this team; a team whose
+ * orchestrator was removed or demoted falls back rather than rendering an empty tier.
+ * The fallback is **reach** — the planner from which the most members are reachable —
+ * because that is what a root is for, and ties break on the name so a canvas does not
+ * rearrange itself between two equally good answers.
+ */
+export const chooseOrchestrator = (
+ nodes: readonly ComposerNode[],
+ edges: readonly ComposerEdge[],
+ stored: string,
+ maxDepth: number,
+): string => {
+ const planners = nodes.filter((node) => node.planner)
+ if (planners.some((node) => node.personaId === stored)) return stored
+ if (planners.length === 0) return ''
+
+ const scored = planners
+.map((node) => ({
+ id: node.personaId,
+ name: node.name,
+ reach: Object.keys(reachFrom(nodes, edges, node.personaId, maxDepth).seats).length,
+ }))
+.sort((a, b) => b.reach - a.reach || (a.name < b.name ? -1: 1))
+ return scored[0]!.id
+}
+
+/** BFS over the ok delegation edges, applying the runtime's own two depth rules. */
+const reachFrom = (
+ nodes: readonly ComposerNode[],
+ edges: readonly ComposerEdge[],
+ orchestratorId: string,
+ maxDepth: number,
+): { seats: Record<string, number>; outOfDepth: Record<string, string> } => {
+ const byId = new Map(nodes.map((node) => [node.personaId, node]))
+ const seats: Record<string, number> = {}
+ const outOfDepth: Record<string, string> = {}
+ if (!byId.has(orchestratorId)) return { seats, outOfDepth }
+
+ const delegations = edges.filter((edge) => edge.kind === 'delegates' && edge.ok)
+ seats[orchestratorId] = 0
+ const queue = [orchestratorId]
+ while (queue.length > 0) {
+ const currentId = queue.shift!
+ const depth = seats[currentId]!
+ for (const edge of delegations) {
+ if (edge.source !== currentId) continue
+ const target = byId.get(edge.target)
+ if (!target) continue
+
+ /**
+ * The child-start gate: a run at `depth` starts children at `depth + 1`, refused
+ * past the limit. Copied in its own terms rather than approximated — the whole
+ * value of saying this on the canvas is that it is the same arithmetic.
+ */
+ if (depth + 1 > maxDepth) {
+ outOfDepth[edge.id] =
+ `${target.name} would be level ${depth + 1}, and delegation is ${maxDepth} level(s) deep at most here.`
+ continue
+ }
+ /**
+ * And the roster's: a planner is only offered while a hop remains *below* it,
+ * because a sub-planner with nothing under it can only produce subtasks that are
+ * refused. This is the rule that makes a two-planner team's second edge unusable
+ * rather than merely deep, and it is invisible on a canvas without a vantage.
+ */
+ if (target.planner && maxDepth - depth - 1 < 1) {
+ outOfDepth[edge.id] =
+ `${target.name} is a planner, and at level ${depth + 1} nothing below it could run — ` +
+ 'so it is not offered in this planner\'s roster.'
+ continue
+ }
+ // Cycles end here: a node already seated keeps its shallowest depth, which is the
+ // one the runtime would give it, and is not queued twice.
+ if (seats[edge.target] !== undefined) continue
+ seats[edge.target] = depth + 1
+ queue.push(edge.target)
+ }
+ }
+ return { seats, outOfDepth }
+}
+
+export const orchestrate = (
+ nodes: readonly ComposerNode[],
+ edges: readonly ComposerEdge[],
+ stored: string,
+ maxDepth: number,
+): Orchestration => {
+ const orchestratorId = chooseOrchestrator(nodes, edges, stored, maxDepth)
+ const { seats: depths, outOfDepth } = reachFrom(nodes, edges, orchestratorId, maxDepth)
+
+ const seats: Record<string, OrchestrationSeat> = {}
+ const tiers: Record<string, number> = {}
+ const unreachable: string[] = []
+ for (const node of nodes) {
+ const depth = depths[node.personaId]
+ if (depth === undefined) {
+ seats[node.personaId] = { depth: null, role: 'unreachable', canRecurse: false }
+ tiers[node.personaId] = UNREACHABLE_TIER
+ unreachable.push(node.personaId)
+ continue
+ }
+ const role: OrchestrationRole =
+ node.personaId === orchestratorId ? 'orchestrator': node.planner ? 'sub-planner': 'worker'
+ seats[node.personaId] = {
+ depth,
+ role,
+ // Same rule as the roster's, applied to the self-edge: recursing costs a hop.
+ canRecurse: node.recurses && maxDepth - depth - 1 >= 1,
+ }
+ tiers[node.personaId] = depth
+ }
+
+ return { orchestratorId, seats, tiers, outOfDepth, unreachable }
 }
 
 export const composerNodes = (

@@ -199,6 +199,16 @@ export interface PersonaGroup {
  * `review-policy.ts`.
  */
  readonly reviewers: Record<string, string[]>
+ /**
+ * Which member the work starts from — the root orchestrator, and the canvas's
+ * vantage point for depth. Null when nobody has chosen.
+ *
+ * Not read by the runtime, and that is not the same as decorative: the delegation
+ * matrix a canvas draws is computed from a root because a workspace-wide matrix has
+ * nowhere else to stand, so without a chosen root the canvas draws chains no run tree
+ * can have. This says where to stand.
+ */
+ readonly orchestratorId: string | null
  readonly createdAt: Date
  readonly updatedAt: Date
 }

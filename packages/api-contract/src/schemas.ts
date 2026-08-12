@@ -642,6 +642,21 @@ export const PersonaGroupSchema = z.object({
  * warning when work the team expects reviewed is not.
  */
  reviewers: z.record(z.string, z.array(z.string)),
+ /**
+ * Which member the work starts from — the root orchestrator, as the canvas's
+ * vantage point (see `orchestrate` in client-core).
+ *
+ * Stored because depth is only answerable from somewhere. The delegation matrix is
+ * computed from a root because a workspace-wide matrix has nowhere else to stand, so
+ * two planner personas each admit the other and the canvas draws a chain that no run
+ * tree can have. Given the root, every other depth follows and the edges the runtime
+ * would refuse *in this arrangement* become sayable.
+ *
+ * Null means nobody has chosen and the canvas picks by reach. This is deliberately
+ * not a claim that the runtime reads it: it selects which of two runtime behaviours
+ * the drawing describes, which is the opposite of a control the runtime ignores.
+ */
+ orchestratorId: z.string.nullable,
  createdAt: z.date,
  updatedAt: z.date,
 })

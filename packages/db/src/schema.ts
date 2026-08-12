@@ -502,6 +502,16 @@ export const personaGroup = pgTable(
  * the runtime executes.
  */
  reviewers: jsonb('reviewers').$type<Record<string, string[]>>.notNull.default({}),
+ /**
+ * Which member the work starts from — the root orchestrator, and the canvas's
+ * vantage point for depth.
+ *
+ * Not a foreign key, deliberately, and for the same reason `personaIds` is not: a
+ * persona removed from the workspace must leave a team that still opens, and the
+ * canvas already falls back when the stored choice is no longer a planner on the
+ * roster. A constraint here would turn a stale pointer into a failed load.
+ */
+ orchestratorId: uuid('orchestrator_id'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },
