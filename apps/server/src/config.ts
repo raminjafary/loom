@@ -30,11 +30,21 @@ const EnvSchema = z.object({
  // Identifies the operator to the push service, which uses it to contact
  // whoever is sending if something goes wrong. `mailto:` or an https URL.
  VAPID_SUBJECT: z.string.default('mailto:operator@localhost'),
- // How many runs may be active in one workspace at once. Phase 1 hardcoded one. The default of 3 is deliberately small and
- // matches the own experiment (three workers on one repo): concurrency
- // multiplies spend and the human attention the riskiest assumption is about, so it should be raised
- // knowingly rather than defaulted high.
- MAX_CONCURRENT_RUNS_PER_WORKSPACE: z.coerce.number.int.positive.default(3),
+ // How many runs may be active in one workspace at once. Phase 1 hardcoded one.
+ //
+ // Was 3, on the stated grounds that it matches the own experiment — three workers
+ // on one repo. That reasoning still holds and the number no longer follows from it,
+ // because the corporation put *planner* runs above those workers and they are active at the
+ // same time: a root plus two areas already fills a limit of 3 before a single worker
+ // starts, so a corporation was silently truncated to whichever subtree got there
+ // first. Observed live — one sub-planner finished having started nothing.
+ //
+ // 6 is three workers plus the planners above them, which is the same experiment with
+ // the tree the corporation actually produces. Still deliberately small: concurrency
+ // multiplies both spend and the human attention the riskiest assumption is about, so it should be raised
+ // knowingly rather than defaulted high. Raise it with `MAX_DELEGATION_DEPTH`, never
+ // separately — depth without width is what starves a subtree.
+ MAX_CONCURRENT_RUNS_PER_WORKSPACE: z.coerce.number.int.positive.default(6),
  // How many delegation hops may separate a run from the root of its tree. 1 is the flat fan-out Phase 2 shipped: a Planner and its
  // workers, nothing below them. The default of 2 admits exactly one layer of
  // sub-planners — a root that delegates areas, sub-planners that decompose them,

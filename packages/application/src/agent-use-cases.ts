@@ -880,8 +880,20 @@ export const startAgentRun = async (
  // Planner that can spawn without bound is how a runaway loop gets expensive.
  const active = await deps.agentRuns.listActiveByWorkspace(input.workspaceId)
  if (active.length >= deps.limits.maxConcurrentRunsPerWorkspace) {
+ /**
+ * The refusal names what is actually holding the slots, because "wait for one to
+ * finish" is wrong advice for the commonest case.
+ *
+ * `awaiting_approval` is not a terminal status, so a run blocked on a human holds
+ * a slot until that human acts — and waiting is then the one thing that will never
+ * clear it. Observed on a real workspace: two of three slots held by runs waiting
+ * on an approval, and a message telling the operator to wait.
+ */
+ const waiting = active.filter((run) => run.status === 'awaiting_approval').length
  throw new ValidationError(
- `This workspace already has ${active.length} active run(s), its configured maximum — wait for one to finish first`,
+ waiting > 0
+ ? `This workspace already has ${active.length} active run(s), its configured maximum — and ${waiting} of them ${waiting === 1 ? 'is': 'are'} waiting on an approval from you, which will not clear on its own. Decide those in the Inbox, or stop a run.`
+: `This workspace already has ${active.length} active run(s), its configured maximum — wait for one to finish first`,
 )
  }
 

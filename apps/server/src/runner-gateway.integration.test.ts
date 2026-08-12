@@ -837,21 +837,25 @@ irrelevant for this test`
  const repo = await bindViaFakeRunner(socket, runnerId)
  const created = await client.channel.create({ name: 'concurrency' })
 
- // The configured default is 3 (see config.ts on why it is deliberately small).
- const first = await startOne(socket, created.rootThread.id, repo.id)
- const second = await startOne(socket, created.rootThread.id, repo.id)
- const third = await startOne(socket, created.rootThread.id, repo.id)
- expect([first.status, second.status, third.status]).toEqual(['running', 'running', 'running'])
+ // Read from config rather than hardcoded: this number moved once already, when
+ // The corporation put planner runs above the workers the riskiest assumption sized it for, and a test that
+ // hardcodes it fails for the wrong reason when it moves again.
+ const limit = config.MAX_CONCURRENT_RUNS_PER_WORKSPACE
+ const started = []
+ for (let i = 0; i < limit; i += 1) {
+ started.push(await startOne(socket, created.rootThread.id, repo.id))
+ }
+ expect(started.every((run) => run.status === 'running')).toBe(true)
 
  // Order is asserted, not just membership, and asserted twice: this list is
  // rendered as clickable rows that re-poll, so an unordered query moves a row
  // out from under a human mid-click. That happened live before the `orderBy`
  // landed.
- const expected = [first.id, second.id, third.id]
+ const expected = started.map((run) => run.id)
  expect((await client.agentRun.listActive).map((run) => run.id)).toEqual(expected)
  expect((await client.agentRun.listActive).map((run) => run.id)).toEqual(expected)
 
- // Not silently queued: a human who asks for a fourth must be told why not.
+ // Not silently queued: a human who asks for one more must be told why not.
  await expect(
  client.agentRun.start({
  threadId: created.rootThread.id,
@@ -859,6 +863,49 @@ irrelevant for this test`
  personaId: testPersonaId,
  }),
 ).rejects.toThrow
+
+ socket.close
+ })
+
+ /**
+ * `awaiting_approval` is not a terminal status, so a run blocked on a human holds a
+ * concurrency slot until that human acts — and "wait for one to finish" is then the
+ * one piece of advice that will never clear it. Seen on a real workspace: two of
+ * three slots held by runs waiting on an approval, under a message saying to wait.
+ */
+ it('tells the operator when the slots are held by approvals waiting on them', async => {
+ const { socket, runnerId } = await pairFakeRunner('concurrency-approval')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'concurrency-approval' })
+
+ const limit = config.MAX_CONCURRENT_RUNS_PER_WORKSPACE
+ const started = []
+ for (let i = 0; i < limit; i += 1) {
+ started.push(await startOne(socket, created.rootThread.id, repo.id))
+ }
+
+ // One of them stops on a gate, which is what makes the message change.
+ socket.send(
+ JSON.stringify({
+ type: 'permission_request',
+ runId: started[0]!.id,
+ toolUseId: 'call-approval-slot',
+ toolName: 'Bash',
+ input: { command: 'rm -rf /tmp/whatever' },
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ if ((await client.agentRun.get({ agentRunId: started[0]!.id })).status === 'awaiting_approval') break
+ }
+
+ await expect(
+ client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ }),
+).rejects.toThrow(/waiting on an approval/)
 
  socket.close
  })
@@ -2155,9 +2202,12 @@ Decompose and delegate.`
  // Its own chain of command still reaches it, decisions included.
  expect(ledger).toContain('ROOT DECISION zod not io-ts')
 
- // The plan's own summary write has to land before the next test truncates the
- // thread out from under it, or it fails a foreign key on a table already gone.
- await awaitPlanApplied(created.rootThread.id)
+ // Waited on *areaA's* thread, not the root's: areaA is a planner, so its plan is
+ // applied in its own area thread. Watching the root would return
+ // immediately on the root planner's own summary and let the test finish while
+ // areaA's write was still in flight — which then fails a foreign key against a
+ // table the next test has already truncated.
+ await awaitPlanApplied(areaA.threadId)
  socket.close
  })
 
