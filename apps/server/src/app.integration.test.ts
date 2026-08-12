@@ -593,6 +593,7 @@ describe('contract completeness', => {
  'repository',
  'mergeQueue',
  'workerNote',
+ 'mastery',
  'cost',
  'persona',
  'capability',

@@ -8,6 +8,7 @@ import {
  recordAgentNote,
  recordMapFragment,
  recordMasteryCheckpoint,
+ resolveMapRevision,
  recordRunCost,
  recordRawTranscriptChunk,
  recordReconcileResult,
@@ -514,6 +515,16 @@ export const createRunnerGateway = (
  clonePath: frame.clonePath,
  branchName: frame.branchName,
  })
+ // A mastery run's map is waiting on this: it was opened `pending` at dispatch,
+ // because the commit only exists once the Runner has cloned.
+ // A no-op for every other run.
+ if (frame.headSha !== undefined) {
+ await resolveMapRevision(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ revision: frame.headSha,
+ })
+ }
  return
 
  case 'diff_result': {

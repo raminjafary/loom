@@ -39,6 +39,19 @@ export interface MasteryDeps {
 }
 
 /**
+ * The revision a map carries before the Runner has told the server what the clone
+ * actually opened at.
+ *
+ * A sentinel rather than an empty string or a branch name, both of which would read as
+ * a real answer somewhere: a branch name is not a revision (it moves), and an empty
+ * string is the shape every "unset" bug in this codebase has taken. A map still holding
+ * this when its run ends is marked `failed`, because a map that can never be
+ * invalidated is worse than no map — it keeps its authority while the repository moves
+ * underneath it.
+ */
+export const PENDING_REVISION = 'pending'
+
+/**
  * Opens (or re-opens) the map a mastery run will write into.
  *
  * Called when the run starts, not when it first writes, and the difference matters: a
@@ -84,6 +97,36 @@ export const openMap = async (
  revision,
  status: 'mastering',
  masteryRunId: input.masteryRunId,
+ })
+}
+
+/**
+ * Fixes a map's revision once the Runner reports what its clone opened at.
+ *
+ * This exists because the server genuinely cannot know the answer: the repository is on
+ * the Runner's machine and nothing in the contract resolves a ref. Rather than storing a
+ * guess, the map is opened `pending` at dispatch and corrected here — and if this never
+ * arrives, `closeMap` refuses to call the map ready.
+ */
+export const resolveMapRevision = async (
+ deps: MasteryDeps,
+ input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; revision: string },
+): Promise<void> => {
+ const revision = input.revision.trim
+ if (revision.length === 0 || revision === PENDING_REVISION) return
+
+ const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
+ if (!map || map.revision === revision) return
+
+ await deps.subjectMaps.upsertMap({
+ workspaceId: map.workspaceId,
+ personaId: map.personaId,
+ subjectKind: map.subjectKind,
+ repositoryId: map.repositoryId,
+ subjectRef: map.subjectRef,
+ revision,
+ status: map.status,
+ masteryRunId: map.masteryRunId,
  })
 }
 
@@ -211,7 +254,14 @@ export const closeMap = async (
  * a map with nothing in it — a run that never learned anything.
  */
  const live = await deps.subjectMaps.countLive(input.workspaceId, map.id)
- const status = live.nodes > 0 || input.ok ? 'ready': 'failed'
+
+ /**
+ * A map still on the sentinel never learned what it was derived at, so nothing can
+ * ever invalidate its claims — see `PENDING_REVISION`. It is failed regardless of how
+ * much it recorded, which is the one case where discarding real work is right.
+ */
+ const status =
+ map.revision === PENDING_REVISION ? 'failed': live.nodes > 0 || input.ok ? 'ready': 'failed'
  await deps.subjectMaps.setStatus(input.workspaceId, map.id, status)
 }
 

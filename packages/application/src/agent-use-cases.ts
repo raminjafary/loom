@@ -116,6 +116,7 @@ import {
  closeMap,
  invalidateMapsForMerge,
  openMap,
+ PENDING_REVISION,
  type MasteryDeps,
 } from './mastery-use-cases.js'
 import {
@@ -1311,7 +1312,7 @@ export const startAgentRun = async (
  * named subject, not a diff. Opens (or re-opens) the persona's map for that subject
  * before dispatch, and is what gives the run `record_map` at all.
  */
- mastery?: { subjectKind: MapSubjectKind; subjectRef: string; revision: string }
+ mastery?: { subjectKind: MapSubjectKind; subjectRef: string }
  },
 ): Promise<AgentRun> => {
  const parent = input.parentRunId
@@ -1648,7 +1649,7 @@ export const startAgentRun = async (
  * leave a row saying it tried, against which subject, at what revision. A map that
  * comes into existence only once a model has succeeded cannot record a failure.
  */
- let mastery: { subjectKind: MapSubjectKind; subjectRef: string; revision: string } | null = null
+ let mastery: { subjectKind: MapSubjectKind; subjectRef: string } | null = null
  if (input.mastery) {
  const map = await openMap(deps, {
  workspaceId: input.workspaceId,
@@ -1656,14 +1657,13 @@ export const startAgentRun = async (
  subjectKind: input.mastery.subjectKind,
  repositoryId: repository.id,
  subjectRef: input.mastery.subjectRef,
- revision: input.mastery.revision,
+ // Pending until the Runner reports the clone's HEAD — see `PENDING_REVISION`.
+ // The server cannot resolve a ref on the Runner's machine, and a map given a
+ // revision nobody checked is the one failure mastery calls a rumour.
+ revision: PENDING_REVISION,
  masteryRunId: run.id,
  })
- mastery = {
- subjectKind: map.subjectKind,
- subjectRef: map.subjectRef,
- revision: map.revision,
- }
+ mastery = { subjectKind: map.subjectKind, subjectRef: map.subjectRef }
  }
 
  /**

@@ -262,6 +262,109 @@ export const WorkerNoteSchema = z.object({
  createdAt: z.date,
 })
 
+/**
+ * A persona's expertise in one subject.
+ *
+ * `createdAt` is a `Date` rather than a string for the same reason every other schema
+ * here uses one, and the reason is a bug this repository shipped: the socket path is
+ * `JSON.stringify` → Valkey → a gateway forwarding bytes, so a `z.date` on a frame
+ * arrives as an ISO string and silently fails validation. These procedures are HTTP
+ * only, where the oRPC codec preserves the type.
+ */
+export const SubjectMapSchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ personaId: z.string,
+ subjectKind: z.enum(['repository', 'author', 'corpus']),
+ repositoryId: z.string.nullable,
+ subjectRef: z.string,
+ /** Mastery: "a map with no commit is a rumour." */
+ revision: z.string,
+ status: z.enum(['mastering', 'ready', 'failed']),
+ masteryRunId: z.string.nullable,
+ createdAt: z.date,
+ updatedAt: z.date,
+})
+
+export const MapNodeSchema = z.object({
+ id: z.string,
+ key: z.string,
+ kind: z.enum([
+ 'module',
+ 'file',
+ 'symbol',
+ 'test',
+ 'entry_point',
+ 'migration',
+ 'config',
+ 'concept',
+ 'convention',
+ 'constraint',
+ 'hazard',
+ 'person',
+ ]),
+ label: z.string,
+ summary: z.string,
+ /**
+ * The trust boundary, carried to the client so the UI can render it. Mastery: an inferred
+ * edge must not look like a parsed one, and a client that could not tell them apart
+ * would be the place the distinction quietly stopped mattering.
+ */
+ provenance: z.enum(['extracted', 'inferred', 'ambiguous']),
+ paths: z.array(z.string),
+ observationCount: z.number,
+ derivedAtRevision: z.string,
+ createdAt: z.date,
+ /** Set rather than deleted when superseded — history, not absence. */
+ invalidatedAt: z.date.nullable,
+ invalidatedReason: z.string.nullable,
+})
+
+export const MapEdgeSchema = z.object({
+ id: z.string,
+ fromKey: z.string,
+ toKey: z.string,
+ kind: z.enum([
+ 'imports',
+ 'calls',
+ 'tested_by',
+ 'implements',
+ 'configures',
+ 'supersedes',
+ 'contradicts',
+ 'owned_by',
+ 'documented_in',
+ ]),
+ provenance: z.enum(['extracted', 'inferred', 'ambiguous']),
+ derivedAtRevision: z.string,
+ createdAt: z.date,
+ invalidatedAt: z.date.nullable,
+ invalidatedReason: z.string.nullable,
+})
+
+/**
+ * The measured progress. Every figure is one the platform computed; an agent's own
+ * estimate of its progress is model output and is deliberately not in this payload at
+ * all, so no client can accidentally render it as the number.
+ */
+export const MasteryProgressSchema = z.object({
+ coverage: z.number,
+ nodeCount: z.number,
+ edgeCount: z.number,
+ yield: z.number,
+ /** Coverage still climbing while yield has stopped — "reading without learning". */
+ yieldFlat: z.boolean,
+ spendUsd: z.number,
+})
+
+export const MasteryViewSchema = z.object({
+ map: SubjectMapSchema,
+ nodes: z.array(MapNodeSchema),
+ edges: z.array(MapEdgeSchema),
+ progress: MasteryProgressSchema.nullable,
+ hubs: z.array(z.object({ key: z.string, degree: z.number })),
+})
+
 /** One card on the kanban — a *run*, since the board and the ledger are one object. */
 export const SwarmBoardCardSchema = z.object({
  runId: z.string,
@@ -661,6 +764,10 @@ export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
 export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
 export type WorkerNote = z.infer<typeof WorkerNoteSchema>
+export type SubjectMap = z.infer<typeof SubjectMapSchema>
+export type MapNode = z.infer<typeof MapNodeSchema>
+export type MapEdge = z.infer<typeof MapEdgeSchema>
+export type MasteryView = z.infer<typeof MasteryViewSchema>
 export type SwarmBoardCard = z.infer<typeof SwarmBoardCardSchema>
 export type SwarmBoard = z.infer<typeof SwarmBoardSchema>
 export type CostSummary = z.infer<typeof CostSummarySchema>

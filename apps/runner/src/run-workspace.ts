@@ -364,6 +364,24 @@ export const getDiff = async (clonePath: string, defaultBranch: string): Promise
 }
 
 /**
+ * The commit a clone opened at.
+ *
+ * Null rather than throwing on failure: this is called on the path that starts every
+ * run, and a repository whose HEAD cannot be read — an empty repository with no commits
+ * is the ordinary case — must still be able to run. What must not happen is a map given
+ * a revision nobody checked, so the caller leaves it pending instead.
+ */
+export const readHeadSha = async (clonePath: string): Promise<string | null> => {
+ try {
+ const { stdout } = await execFileAsync('git', ['-C', clonePath, 'rev-parse', 'HEAD'])
+ const sha = stdout.trim
+ return sha.length > 0 ? sha: null
+ } catch {
+ return null
+ }
+}
+
+/**
  * Removes a run's scratch clone after a human discards the branch on DiffView, and its
  * host-backed HOME with it — that directory holds the SDK session transcript, which is
  * a record of the run and should not outlive the branch a human just discarded.

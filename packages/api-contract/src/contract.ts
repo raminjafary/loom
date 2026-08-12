@@ -26,6 +26,8 @@ import {
  CostSummarySchema,
  SwarmBoardSchema,
  ThreadSchema,
+ MasteryViewSchema,
+ SubjectMapSchema,
  WorkerNoteSchema,
 } from './schemas.js'
 
@@ -284,6 +286,44 @@ export const contract = {
 
  /** The board: a card per run in the tree, plus the path collisions to expect. */
  board: oc.input(z.object({ agentRunId: z.string })).output(SwarmBoardSchema),
+ },
+
+ /**
+ * A persona's expertise.
+ *
+ * There is deliberately no client path that writes a node or an edge. A map is what
+ * later runs are handed as context, so a client able to write one could put text of
+ * its choosing into every future run's prompt — the same reasoning that keeps
+ * `workerNote.write` to human-authored notes only. Agents write through `record_map`
+ * over the Runner socket, where the domain refuses them `extracted` provenance.
+ */
+ mastery: {
+ /** Every subject this persona has a map of — what makes an expert legible before it is used. */
+ listForPersona: oc
+.input(z.object({ personaId: z.string }))
+.output(z.array(SubjectMapSchema)),
+
+ /** One map whole: nodes, edges, measured progress, and the computed hubs. */
+ get: oc.input(z.object({ mapId: z.string })).output(MasteryViewSchema),
+
+ /**
+ * Start a mastery run.
+ *
+ * Takes a repository rather than a free-text subject: the revision has to be
+ * checkable, and the platform can only check one it can resolve. An author or corpus
+ * subject needs a different extractor before it can be started this way, and
+ * offering the field before that exists would be a control the runtime ignores.
+ */
+ start: oc
+.input(
+ z.object({
+ threadId: z.string,
+ personaId: z.string,
+ repositoryId: z.string,
+ task: z.string.max(4_000).optional,
+ }),
+)
+.output(AgentRunSchema),
  },
 
  /**

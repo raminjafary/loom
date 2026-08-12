@@ -46,6 +46,8 @@ import {
  listRepositories,
  listRunners,
  listRunsNeedingAttention,
+ getMastery,
+ listPersonaMaps,
  listTreeNotes,
  delegationMatrixForWorkspace,
  delegationPreviewForPersona,
@@ -77,6 +79,8 @@ import {
 import {
  asAgentPersonaId,
  asAgentRunId,
+ asSubjectMapId,
+ NotFoundError,
  asApprovalRequestId,
  asCapabilityId,
  asChannelId,
@@ -411,6 +415,67 @@ export const router = os.router({
  },
 
  /** The worker-notes ledger and the board. */
+ /**
+ * A persona's expertise.
+ *
+ * No write path for nodes or edges, deliberately — see the contract. A client that
+ * could write a map could put text of its choosing into every future run's prompt.
+ */
+ mastery: {
+ listForPersona: os.mastery.listForPersona.handler(({ context, input }) =>
+ guard( =>
+ listPersonaMaps(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ personaId: asAgentPersonaId(input.personaId),
+ }),
+),
+),
+
+ get: os.mastery.get.handler(({ context, input }) =>
+ guard(async => {
+ const view = await getMastery(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ mapId: asSubjectMapId(input.mapId),
+ })
+ // `paths` is readonly in the domain and mutable on the wire; spreading is the
+ // same seam `toWireWorkerNote` is.
+ return {
+...view,
+ nodes: view.nodes.map((node) => ({...node, paths: [...node.paths] })),
+ hubs: view.hubs.map((hub) => ({...hub })),
+ }
+ }),
+),
+
+ /**
+ * The mastery run. Goes through `startAgentRun` unchanged — "a mastery run is a
+ * normal run: same sandbox, same egress metering, same budget cap. It is cheap
+ * because it is read-only and Haiku-tier, not because it is exempt" — so the
+ * concurrency limit, the kill switch and the reaper all see it as what it is.
+ */
+ start: os.mastery.start.handler(({ context, input }) =>
+ guard(async => {
+ const repository = await context.deps.repositories.findById(
+ context.principal.workspaceId,
+ asRepositoryId(input.repositoryId),
+)
+ if (!repository) throw new NotFoundError('Repository')
+
+ return startAgentRun(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ threadId: asThreadId(input.threadId),
+ repositoryId: repository.id,
+ personaId: asAgentPersonaId(input.personaId),
+...(input.task === undefined ? {}: { task: input.task }),
+ // The subject is the repository's display name rather than its id: it is what a
+ // human reads on the map, and an id would make every map's title a uuid.
+ mastery: { subjectKind: 'repository', subjectRef: repository.displayName },
+ })
+ }),
+),
+ },
+
  workerNote: {
  listByTree: os.workerNote.listByTree.handler(({ context, input }) =>
  guard(async =>

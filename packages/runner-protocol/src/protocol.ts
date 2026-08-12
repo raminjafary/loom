@@ -178,6 +178,15 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  runId: z.string,
  clonePath: z.string,
  branchName: z.string,
+ /**
+ * The commit the clone opened at.
+ *
+ * The server cannot know this: the repository lives on the Runner's machine and
+ * nothing in the contract resolves a ref. So a mastery run's map is opened at
+ * dispatch with its revision *pending* and given the real one here — which is also
+ * the first moment it exists, since the clone is what fixes it.
+ */
+ headSha: z.string.optional,
  }),
  z.object({
  type: z.literal('diff_result'),
@@ -501,7 +510,6 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
 .object({
  subjectKind: z.enum(['repository', 'author', 'corpus']),
  subjectRef: z.string,
- revision: z.string,
  })
 .optional,
  /**

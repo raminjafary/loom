@@ -54,6 +54,7 @@ import {
  prepareRunWorkspace,
  pushRunBranch,
  updateBranchFrom,
+ readHeadSha,
 } from './run-workspace.js'
 import {
  checkImageFreshness,
@@ -972,7 +973,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }
  return workspace
  })
-.then(({ clonePath, branchName, homePath }) => {
+.then(async ({ clonePath, branchName, homePath }) => {
  // A cancel that landed while the clone was still running has no
  // agent loop to abort yet — honor it here instead of starting one.
  if (abort.signal.aborted) return
@@ -999,7 +1000,20 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  void saveRunState(state).catch((error) =>
  log(`failed to persist state for ${runId}: ${error instanceof Error ? error.message: String(error)}`),
 )
- send({ type: 'run_workspace_ready', runId, clonePath, branchName })
+ /**
+ * The clone's HEAD travels with this frame because it is the first moment
+ * anything knows it, and a mastery run's map is waiting on it. Best-effort: a repository
+ * whose HEAD cannot be read still runs, and its map stays pending and is
+ * marked failed rather than being given a revision nobody checked.
+ */
+ const headSha = await readHeadSha(clonePath)
+ send({
+ type: 'run_workspace_ready',
+ runId,
+ clonePath,
+ branchName,
+...(headSha === null ? {}: { headSha }),
+ })
  log(`starting run ${runId} in ${clonePath}`)
  return runAgentForRun({
  runId,
@@ -1013,7 +1027,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // state that moves while a run works, so a resumed run gets whatever
  // the server sends it now rather than a replay of what it had.
 ...(frame.mapContext === undefined ? {}: { mapContext: frame.mapContext }),
-...(frame.mastery === undefined ? {}: { mastery: frame.mastery }),
+...(frame.mastery === undefined || headSha === null
+ ? {}
+: { mastery: {...frame.mastery, revision: headSha } }),
 ...(frame.steering ? { steering: true }: {}),
  clonePath,
  homePath,
