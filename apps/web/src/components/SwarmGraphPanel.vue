@@ -73,10 +73,15 @@ const emit = defineEmits<{
  */
  open: [agentRunId: string]
  refresh: []
+ /** Load and show the selected run's branch diff, without leaving the canvas. */
+ review: [agentRunId: string]
+ /** Re-enter a planner with a message. Only offered on planner nodes. */
+ steer: [agentRunId: string]
 }>
 
 const open = ref(false)
 const stageEl = ref<HTMLElement | null>(null)
+const scrimEl = ref<HTMLElement | null>(null)
 
 watch(
  => props.openSignal,
@@ -110,7 +115,13 @@ const startClock = (ms: number) => {
  clock = setInterval( => (tick.value = new Date), ms)
 }
 startClock(5_000)
-watch(open, (isOpen) => startClock(isOpen ? 1_000: 5_000))
+watch(open, (isOpen) => {
+ startClock(isOpen ? 1_000: 5_000)
+ // Focused so the arrow keys reach `onKeydown` at all — the same lesson the Settings
+ // overlay's Escape handler taught, which sat on an element nothing ever focused.
+ if (isOpen) void nextTick( => scrimEl.value?.focus)
+ else selectedId.value = null
+})
 onUnmounted( => {
  if (clock !== null) clearInterval(clock)
 })
@@ -219,9 +230,26 @@ const endPan = => {
  dragging = null
 }
 
+/**
+ * Zooms about the pointer, not the origin.
+ *
+ * Zooming about the origin walks whatever you were looking at off the screen, which
+ * on a wide tree means every zoom is followed by a hunt. Keeping the point under the
+ * cursor fixed is what makes the gesture usable: solve for the pan that leaves the
+ * cursor's graph-space coordinate where it was.
+ */
 const onWheel = (event: WheelEvent) => {
  event.preventDefault
- zoom.value = Math.min(Math.max(zoom.value * (event.deltaY < 0 ? 1.1: 0.9), 0.4), 2.5)
+ const next = Math.min(Math.max(zoom.value * (event.deltaY < 0 ? 1.1: 0.9), 0.4), 2.5)
+ const stage = stageEl.value
+ if (stage) {
+ const rect = stage.getBoundingClientRect
+ const cx = event.clientX - rect.left
+ const cy = event.clientY - rect.top
+ const ratio = next / zoom.value
+ pan.value = { x: cx - (cx - pan.value.x) * ratio, y: cy - (cy - pan.value.y) * ratio }
+ }
+ zoom.value = next
 }
 
 /**
@@ -253,13 +281,82 @@ const fit = => {
 }
 
 /**
- * Closing on click is what makes the click legible. The state it changes — the
- * watched run, its board, its thread — is all *behind* this overlay, so leaving the
- * scrim up shows the human the same picture they just acted on.
+ * The selected node.
+ *
+ * A click used to leave the canvas immediately. That was right when the canvas offered
+ * exactly one action, and wrong as soon as it offered several: every useful thing a
+ * human wants to do about a run — read its thread, review its branch, re-plan it,
+ * leave it a note — lived somewhere else, so the graph was a picture you looked at and
+ * then navigated away from. Selecting keeps you here and puts the actions on the node.
  */
-const openNode = (agentRunId: string) => {
- emit('open', agentRunId)
+const selectedId = ref<string | null>(null)
+
+const selected = computed(
+ => graph.value.nodes.find((node) => node.card.runId === selectedId.value) ?? null,
+)
+
+// A selection that outlived its node — the tree changed underneath it — is cleared
+// rather than left pointing at nothing.
+watch(graph, (next) => {
+ if (selectedId.value && !next.nodes.some((node) => node.card.runId === selectedId.value)) {
+ selectedId.value = null
+ }
+})
+
+const selectNode = (agentRunId: string) => {
+ selectedId.value = selectedId.value === agentRunId ? null: agentRunId
+}
+
+/**
+ * Leaving the canvas is now an explicit action rather than a side effect of clicking.
+ * It still closes the overlay, because the thread it opens is behind this scrim and
+ * leaving it up would show the human the same picture they just acted on.
+ */
+const openSelected = => {
+ if (!selectedId.value) return
+ emit('open', selectedId.value)
  open.value = false
+}
+
+/** Same reasoning as `openSelected`: the panel it reveals is behind this scrim. */
+const steerSelected = => {
+ if (!selectedId.value) return
+ emit('steer', selectedId.value)
+ open.value = false
+}
+
+/**
+ * Arrow keys walk the tree in reading order, so the canvas is navigable without a
+ * mouse — the nodes were already focusable, but tabbing through thirty of them to
+ * reach one is not navigation.
+ */
+const moveSelection = (delta: number) => {
+ const nodes = graph.value.nodes
+ if (nodes.length === 0) return
+ const at = nodes.findIndex((node) => node.card.runId === selectedId.value)
+ const next = at === -1 ? 0: (at + delta + nodes.length) % nodes.length
+ selectedId.value = nodes[next]?.card.runId ?? null
+}
+
+const onKeydown = (event: KeyboardEvent) => {
+ if (!open.value) return
+ if (event.key === 'Escape') {
+ if (selectedId.value) {
+ selectedId.value = null
+ event.preventDefault
+ }
+ return
+ }
+ const step =
+ event.key === 'ArrowRight' || event.key === 'ArrowDown'
+ ? 1
+: event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+ ? -1
+: 0
+ if (step !== 0) {
+ moveSelection(step)
+ event.preventDefault
+ }
 }
 
 /**
@@ -324,7 +421,14 @@ const collisionCount = computed(
  </p>
 
  <Teleport to="body">
- <div v-if="open" class="scrim" @click.self="open = false">
+ <div
+ v-if="open"
+ ref="scrimEl"
+ class="scrim"
+ tabindex="-1"
+ @click.self="open = false"
+ @keydown="onKeydown"
+ >
  <section class="viewer" role="dialog" aria-label="Swarm graph">
  <header class="viewer-head">
  <h2>Swarm graph</h2>
@@ -407,6 +511,7 @@ const collisionCount = computed(
  {
  blocked: node.card.blockerCount > 0,
  live: liveRuns.has(node.card.runId),
+ selected: node.card.runId === selectedId,
  },
  ]"
 :transform="`translate(${left(node)} ${top(node)})`"
@@ -414,9 +519,9 @@ const collisionCount = computed(
  role="button"
  tabindex="0"
 :aria-current="node.card.runId === props.activeRunId ? 'true': undefined"
- @click="openNode(node.card.runId)"
- @keydown.enter.prevent="openNode(node.card.runId)"
- @keydown.space.prevent="openNode(node.card.runId)"
+ @click="selectNode(node.card.runId)"
+ @keydown.enter.prevent="selectNode(node.card.runId)"
+ @keydown.space.prevent="selectNode(node.card.runId)"
  >
  <rect:width="NODE_W":height="NODE_H" rx="10" class="box" />
  <!--
@@ -493,8 +598,59 @@ const collisionCount = computed(
  </svg>
  </div>
 
+ <!--
+ The inspector. Everything here is already on the board payload — this panel
+ exists because none of it was reachable *from the node*, which is what made
+ a canvas full of live detail something you could only look at.
+ -->
+ <aside v-if="selected" class="inspector">
+ <header>
+ <div>
+ <strong>{{ selected.card.personaName }}</strong>
+ <span class="chip">{{ selected.card.status }}</span>
+ </div>
+ <button type="button" class="close" aria-label="Clear selection" @click="selectedId = null">
+ ✕
+ </button>
+ </header>
+ <!-- Plain interpolation: a title is a run's task, which is model-adjacent. -->
+ <p class="task">{{ selected.card.title }}</p>
+ <dl>
+ <div><dt>Cost</dt><dd>{{ money(selected.card.totalCostUsd) ?? 'not metered' }}</dd></div>
+ <div v-if="selected.card.branchName">
+ <dt>Branch</dt><dd>{{ shortBranchName(selected.card.branchName) }}</dd>
+ </div>
+ <div v-if="selected.card.ownedPaths.length > 0">
+ <dt>Owns</dt><dd>{{ selected.card.ownedPaths.join(', ') }}</dd>
+ </div>
+ <div v-if="selected.card.blockerCount > 0" class="warn">
+ <dt>Blockers</dt><dd>{{ selected.card.blockerCount }}</dd>
+ </div>
+ </dl>
+ <div class="actions">
+ <button type="button" @click="openSelected">Open thread</button>
+ <button
+ v-if="selected.card.branchName"
+ type="button"
+ @click="emit('review', selected.card.runId)"
+ >
+ Review diff
+ </button>
+ <button
+ v-if="selected.card.planner"
+ type="button"
+ @click="steerSelected"
+ >
+ Re-plan this
+ </button>
+ </div>
+ </aside>
+
  <footer class="viewer-foot">
- <span>Drag to pan, scroll to zoom, click a run to open its thread.</span>
+ <span>
+ Drag to pan, scroll to zoom, click a run to inspect it, arrow keys to walk
+ the tree.
+ </span>
  <span v-if="collisionCount > 0" class="warn">
  {{ collisionCount }} pair<span v-if="collisionCount !== 1">s</span> claim overlapping
  paths — expect a rebase.
@@ -793,6 +949,81 @@ header button:disabled {
 .node[aria-current='true'].box {
  stroke: var(--accent);
  stroke-width: 2.5;
+}
+
+/* The selection, distinct from the watched run: one is what you are inspecting, the
+ other is what the rest of the app is pointed at, and they are often not the same. */
+.node.selected.box {
+ stroke: var(--text);
+ stroke-width: 2.5;
+}
+
+.inspector {
+ position: absolute;
+ right: 1rem;
+ bottom: 3.4rem;
+ width: 19rem;
+ padding: 0.7rem 0.8rem;
+ border: 1px solid var(--border);
+ border-radius: 0.6rem;
+ background: var(--surface);
+ box-shadow: 0 8px 30px rgb(0 0 0 / 45%);
+ font-size: 0.8rem;
+}
+
+.inspector header {
+ display: flex;
+ align-items: baseline;
+ justify-content: space-between;
+ gap: 0.5rem;
+}
+
+.inspector.chip {
+ margin-left: 0.4rem;
+ color: var(--text-faint);
+ font-size: 0.7rem;
+}
+
+.inspector.task {
+ margin: 0.35rem 0 0.5rem;
+ color: var(--text-muted);
+ line-height: 1.4;
+}
+
+.inspector dl {
+ display: grid;
+ gap: 0.15rem;
+ margin: 0 0 0.6rem;
+}
+
+.inspector dl > div {
+ display: flex;
+ gap: 0.4rem;
+}
+
+.inspector dt {
+ min-width: 4rem;
+ color: var(--text-faint);
+}
+
+.inspector dd {
+ margin: 0;
+ overflow-wrap: anywhere;
+}
+
+.inspector.warn dd {
+ color: var(--danger, #b4443a);
+}
+
+.inspector.actions {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 0.35rem;
+}
+
+.inspector.actions button {
+ padding: 0.28rem 0.5rem;
+ font-size: 0.75rem;
 }
 
 /*

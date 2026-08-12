@@ -243,6 +243,27 @@ const openRunThread = async (agentRunId: string) => {
  */
 const revealGraph = ref(0)
 
+/**
+ * The canvas's two outbound actions.
+ *
+ * Both watch the clicked run first: the diff and the steer target are properties of
+ * the *watched* run everywhere else in this app, and giving the canvas its own path to
+ * either would be a second way to reach the same state — which is how the two get out
+ * of step.
+ */
+const reviewFromGraph = async (agentRunId: string) => {
+ await agent.watchRun(agentRunId)
+ await agent.loadDiff(agentRunId)
+}
+
+const steerFromGraph = async (agentRunId: string) => {
+ await agent.watchRun(agentRunId)
+ // SteerPanel lives inside the Swarm section, so this is the counter that reveals it.
+ // The canvas closes itself on this action; opening a sidebar section behind a
+ // full-screen scrim would look like nothing happened.
+ revealSwarm.value += 1
+}
+
 const steering = ref(false)
 
 const steer = async (agentRunId: string, message: string) => {
@@ -638,6 +659,8 @@ onBeforeUnmount( => {
 :active-run-id="agentSnapshot.activeRun?.id ?? null"
 :open-signal="revealGraph"
 :activity="agentSnapshot.recentActivity"
+ @review="(agentRunId) => reviewFromGraph(agentRunId)"
+ @steer="(agentRunId) => steerFromGraph(agentRunId)"
  @open="(agentRunId) => openRunThread(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
