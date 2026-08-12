@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
  finishReconcile,
+ getDiff,
  prepareReconcileWorkspace,
  prepareReviewWorkspace,
  prepareRunWorkspace,
@@ -222,6 +223,23 @@ describe('prepareReviewWorkspace', => {
 
  const { stdout } = await git(workspace.clonePath, ['status', '--porcelain'])
  expect(stdout.trim).toBe('')
+ })
+
+ it('has a computable diff — a clone of a clone has no local default branch', async => {
+ /**
+ * `git clone` creates a local branch only for the source's HEAD, and the source here
+ * is a run clone with its own run branch checked out. So `main` exists only as
+ * `origin/main`, and `git diff main...HEAD` fails outright.
+ *
+ * Found live: a reviewer's diff came back empty while its notes quoted the code it
+ * had just read. Silent, because the caller reads a git error as "no diff yet".
+ * `prepareReconcileWorkspace` produces the same shape, so this was latent there too.
+ */
+ const { clonePath, branchName } = await buildReviewable
+ const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-5')
+
+ const diff = await getDiff(workspace.clonePath, 'main')
+ expect(diff).toContain('export const b = 2')
  })
 
  it('cannot affect the branch it reviews', async => {

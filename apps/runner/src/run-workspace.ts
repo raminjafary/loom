@@ -319,14 +319,47 @@ export const commitRunWork = async (
  return { committed: true }
 }
 
+/**
+ * Which ref in this clone stands for the default branch.
+ *
+ * An ordinary run's clone is taken from the bound repository with the default branch
+ * checked out, so `main` is a local branch and naming it is enough. A **clone of another
+ * run's clone** is not: `git clone` only creates a local branch for the source's HEAD,
+ * and that source had its own run branch checked out — so the default branch exists only
+ * as `origin/main`, and every command naming `main` fails with "unknown revision".
+ *
+ * That is the shape both a review workspace and a reconcile
+ * workspace have. Found by a live review whose diff came back empty while
+ * the reviewer was demonstrably reading the code — the failure was silent because the
+ * caller treats a git error as "no diff yet".
+ */
+const resolveDefaultBranchRef = async (
+ clonePath: string,
+ defaultBranch: string,
+): Promise<string> => {
+ for (const ref of [defaultBranch, `origin/${defaultBranch}`]) {
+ try {
+ await execFileAsync('git', ['-C', clonePath, 'rev-parse', '--verify', '--quiet', ref])
+ return ref
+ } catch {
+ // Not present — try the next candidate.
+ }
+ }
+ // Neither exists: fall through with the caller's own name so the error names the
+ // branch they asked for rather than a rewritten one.
+ return defaultBranch
+}
+
 /** The run's branch diff against the point it was cloned from, for end-of-run review. */
 export const getDiff = async (clonePath: string, defaultBranch: string): Promise<string> => {
- const { stdout } = await execFileAsync('git', [
- '-C',
- clonePath,
- 'diff',
- `${defaultBranch}...HEAD`,
- ])
+ const base = await resolveDefaultBranchRef(clonePath, defaultBranch)
+ const { stdout } = await execFileAsync(
+ 'git',
+ ['-C', clonePath, 'diff', `${base}...HEAD`],
+ // A review of a large branch is exactly the case this is needed for, and the default
+ // 1MB buffer would reject it with a stdout-maxBuffer error rather than a git error.
+ { maxBuffer: 32 * 1024 * 1024 },
+)
  return stdout
 }
 

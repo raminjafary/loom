@@ -355,7 +355,23 @@ const parseSubtaskReviews = (
  reason: `${where} reviews subtask ${value}, but this plan has ${subtaskCount} subtask(s) (0–${subtaskCount - 1})`,
  }
  }
- if (value === index) return { ok: false, reason: `${where} reviews itself` }
+ /**
+ * The refusal names the off-by-one, because that is what this always is.
+ *
+ * Observed on the first live run: a planner wrote two subtasks, described the second
+ * as "reviewing subtask 1" in its own prose, and sent `reviews: 1` — its own numbering
+ * being 1-based, and there being only one plausible target. "Subtask 1 reviews itself"
+ * is true and teaches nothing; naming the convention and the index it probably meant
+ * is a message a model can act on in one edit.
+ */
+ if (value === index) {
+ return {
+ ok: false,
+ reason: `${where} reviews itself. Indices are 0-based, so subtask ${index} is this one${
+ index > 0 ? ` — did you mean ${index - 1}?`: ''
+ }`,
+ }
+ }
  return { ok: true, reviews: value }
 }
 

@@ -1,5 +1,10 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
-import { MAX_DELTA_OPS, MAX_DELTA_RATIONALE_LENGTH, MAX_SUBTASKS } from '@loom/domain'
+import {
+ MAX_DELTA_OPS,
+ MAX_DELTA_RATIONALE_LENGTH,
+ MAX_SUBTASKS,
+ parseDecomposition,
+} from '@loom/domain'
 import type { WirePlanSubtask } from '@loom/runner-protocol'
 import { z } from 'zod'
 
@@ -29,15 +34,12 @@ export interface PlannerToolHandle {
  readonly taken: => WirePlanSubtask[] | null
 }
 
-export const createPlannerTool = : PlannerToolHandle => {
- let submitted: WirePlanSubtask[] | null = null
-
- const submitPlan = tool(
- 'submit_plan',
- 'Submit a decomposition of the goal into subtasks. Each subtask becomes one agent ' +
- 'run on its own branch. Submit exactly one plan, then stop.',
- {
- subtasks: z
+/**
+ * `submit_plan`'s `subtasks` schema, at module scope so a test can validate against the
+ * exact object the tool is defined with rather than a copy of it. The pre-flight below
+ * is the part worth testing, and it is invisible in the JSON schema the model is shown.
+ */
+export const PLAN_SUBTASKS_SCHEMA = z
 .array(
  z.object({
  title: z.string.min(1).max(200).describe('A short name for this subtask'),
@@ -127,8 +129,41 @@ export const createPlannerTool = : PlannerToolHandle => {
  }),
 )
 .min(1)
-.max(MAX_SUBTASKS),
- },
+.max(MAX_SUBTASKS)
+ /**
+ * The server's own validator, run here **so a fixable mistake reaches the model
+ * while it can still fix it** — not to decide anything.
+ *
+ * This matters because of where a plan is validated: `submit_plan` returns
+ * "recorded", the run ends, and *then* the server parses the decomposition. A
+ * semantically invalid plan is therefore a refusal nobody can act on — the
+ * planner has already stopped — so the whole run is wasted and a human gets a
+ * thread saying "Plan refused" and nothing else.
+ *
+ * Found on the first live run of the `reviews`: a Haiku planner sent
+ * `reviews: [0]`, saw the schema's type error, corrected itself in the same turn,
+ * and then sent `reviews: 1` for subtask 1 — its prose numbering being 1-based.
+ * The second mistake was not caught here, so the run ended and the plan died.
+ * The first was, and it recovered immediately. That is the whole argument.
+ *
+ * `parseDecomposition` itself rather than a copy of its rules: two validators
+ * would drift, and the one that drifted would be this one. The Runner still
+ * decides nothing — the server re-validates the frame it relays, exactly as
+ * before, and that check remains the authoritative one.
+ */
+.superRefine((subtasks, ctx) => {
+ const verdict = parseDecomposition({ subtasks })
+ if (!verdict.ok) ctx.addIssue({ code: 'custom', message: verdict.reason })
+ })
+
+export const createPlannerTool = : PlannerToolHandle => {
+ let submitted: WirePlanSubtask[] | null = null
+
+ const submitPlan = tool(
+ 'submit_plan',
+ 'Submit a decomposition of the goal into subtasks. Each subtask becomes one agent ' +
+ 'run on its own branch. Submit exactly one plan, then stop.',
+ { subtasks: PLAN_SUBTASKS_SCHEMA },
  async (args) => {
  submitted = args.subtasks
  // The count is echoed back rather than a bare "ok": a Planner that meant to
