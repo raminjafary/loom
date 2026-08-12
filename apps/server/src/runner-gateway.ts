@@ -227,6 +227,8 @@ export const createRunnerGateway = (
  repositoryId,
  task,
  contextLedger,
+ mapContext,
+ mastery,
  reconcile,
  review,
  steering,
@@ -240,6 +242,12 @@ export const createRunnerGateway = (
 ...(repositoryId === undefined ? {}: { repositoryId }),
 ...(task === undefined ? {}: { task }),
 ...(contextLedger === undefined ? {}: { contextLedger }),
+ // A field added to the port and not destructured here is dropped in silence —
+ // there is no type error for an argument you decline to read. That is exactly
+ // how `mastery` was lost on its first live run: the map row was created, the
+ // revision resolved, and the model was never offered `record_map`.
+...(mapContext === undefined ? {}: { mapContext }),
+...(mastery === undefined ? {}: { mastery }),
 ...(reconcile === undefined ? {}: { reconcile }),
 ...(review === undefined ? {}: { review }),
 ...(steering ? { steering: true }: {}),

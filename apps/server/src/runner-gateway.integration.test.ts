@@ -15,6 +15,7 @@ import {
  asThreadId,
  asWorkspaceId,
  type Notification,
+ UNTRUSTED_MAP_OPEN,
 } from '@loom/domain'
 import { seedBuiltinPersonas } from '@loom/application'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
@@ -206,6 +207,124 @@ describe('runner-gateway: pairing and repository binding', => {
  JSON.stringify({ type: 'check_path_result', requestId: frame.requestId, ok: false, error: 'not a git repository' }),
 )
  await expect(bindPromise).rejects.toThrow
+ socket.close
+ })
+})
+
+/**
+ * The frame-level guard for the mastery run.
+ *
+ * Written after a live run produced an empty map with every other test green. Two
+ * separate places had to know about the field and neither was type-checked into
+ * agreeing: `mastery` was an excess property on a spread (which TypeScript deliberately
+ * does not check), and the dispatch adapter destructures its argument, so a field it
+ * declines to read is dropped with no error anywhere. The map row was created, the
+ * revision resolved from the clone, and the model was simply never offered `record_map`.
+ *
+ * So these assert the *frame*, which is the only place both halves are visible at once.
+ */
+describe('runner-gateway: a mastery run reaches the Runner as one', => {
+ it('carries `mastery` on start_run, which is what gives the run record_map', async => {
+ const { socket, runnerId } = await pairFakeRunner('mastery-dispatch')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'mastery-dispatch' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ const startFrame = await startRun
+
+ expect(startFrame.mastery).toEqual({ subjectKind: 'repository', subjectRef: 'test repo' })
+ await runPromise
+ socket.close
+ })
+
+ it('opens the map before dispatch, so a run that produced nothing still recorded that it tried', async => {
+ const { socket, runnerId } = await pairFakeRunner('mastery-open')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'mastery-open' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startRun
+ await runPromise
+
+ const maps = await client.mastery.listForPersona({ personaId: testPersonaId })
+ expect(maps.some((map) => map.subjectRef === 'test repo' && map.revision === 'pending')).toBe(
+ true,
+)
+ socket.close
+ })
+
+ it('hands a later ordinary run the map, which is what the whole artifact is for', async => {
+ const { socket, runnerId } = await pairFakeRunner('mastery-retrieval')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'mastery-retrieval' })
+
+ const firstFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const masteryRun = await client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await firstFrame
+
+ // The Runner's half: the clone's HEAD is what fixes the map's revision, and a map
+ // still on the sentinel is refused as ready.
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: masteryRun.id,
+ clonePath: '/tmp/clone',
+ branchName: 'loom/mastery',
+ headSha: 'abc123def456',
+ }),
+)
+ const mapResult = nextFrame(socket, (v) => v.type === 'map_result')
+ socket.send(
+ JSON.stringify({
+ type: 'map_written',
+ runId: masteryRun.id,
+ requestId: 'frag-1',
+ fragment: {
+ nodes: [
+ { key: 'checkout', kind: 'concept', label: 'The checkout flow', summary: 'spans four modules' },
+ ],
+ },
+ }),
+)
+ expect((await mapResult).ok).toBe(true)
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: masteryRun.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'mapped' },
+ }),
+)
+ await new Promise((resolve) => setTimeout(resolve, 250))
+
+ const secondFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ const second = await secondFrame
+
+ expect(second.mapContext).toContain('The checkout flow')
+ // Fenced, because every claim in a map is a model's.
+ expect(second.mapContext).toContain(UNTRUSTED_MAP_OPEN)
+ // And not offered `record_map`: an ordinary run may read a map, never write one.
+ expect(second.mastery).toBeUndefined
  socket.close
  })
 })

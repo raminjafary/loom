@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { RECORD_MAP_TOOL_NAME } from './map-tool.js'
 import {
  buildPrompt,
  buildQueryOptions,
@@ -247,5 +248,60 @@ describe('gateBehavior', => {
 
  it('asks about nothing under auto', => {
  expect(decide('auto', 'Bash', { ok: true, requiresApproval: true })).toBe('allow')
+ })
+})
+
+/**
+ * The same guard, for the mapping channel.
+ *
+ * Written after a live run scored 0/9 on `record_map` while every unit and integration
+ * test passed — the third time in this repository that a tool existed everywhere except
+ * in the list the model is actually offered. The failure is silent by construction: the
+ * run completes, the map is empty, and nothing anywhere reports a problem.
+ */
+describe('buildQueryOptions: the mapping channel', => {
+ const fakeMap = { type: 'sdk' as const, name: 'loom_map', instance: {} as never }
+
+ it('registers the map server on a mastery run', => {
+ const options = buildQueryOptions({ persona, cwd: '/clone', mapTool: fakeMap })
+ expect(Object.keys(options.mcpServers ?? {})).toContain('loom_map')
+ })
+
+ it('names record_map in the tool list, which is what makes it reachable', => {
+ const options = buildQueryOptions({ persona, cwd: '/clone', mapTool: fakeMap })
+ expect(options.agents[persona.name]?.tools).toContain(RECORD_MAP_TOOL_NAME)
+ })
+
+ it('offers it to a read-only persona, whose exhaustive allowlist would otherwise drop it', => {
+ const readOnly = {...persona, tools: ['Read', 'Grep', 'Glob'] }
+ const options = buildQueryOptions({ persona: readOnly, cwd: '/clone', mapTool: fakeMap })
+ expect(options.agents[readOnly.name]?.tools).toContain(RECORD_MAP_TOOL_NAME)
+ })
+
+ it('offers nothing to an ordinary run — a map is not something any worker may write', => {
+ const options = buildQueryOptions({ persona, cwd: '/clone' })
+ expect(options.agents[persona.name]?.tools ?? []).not.toContain(RECORD_MAP_TOOL_NAME)
+ })
+})
+
+describe('buildPrompt: a mastery run is told its deliverable is a map', => {
+ it('says the job is to learn and record, not to change anything', => {
+ const prompt = buildPrompt({
+ persona,
+ mastery: { subjectKind: 'repository', subjectRef: 'booking', revision: 'abc123' },
+ })
+ expect(prompt).toContain('record_map')
+ expect(prompt).toContain('do not edit')
+ })
+
+ it('puts the map before the ledger, and both after the task', => {
+ const prompt = buildPrompt({
+ persona,
+ task: 'do the thing',
+ mapContext: 'MAP-BLOCK',
+ contextLedger: 'LEDGER-BLOCK',
+ })
+ expect(prompt.indexOf('do the thing')).toBeLessThan(prompt.indexOf('MAP-BLOCK'))
+ expect(prompt.indexOf('MAP-BLOCK')).toBeLessThan(prompt.indexOf('LEDGER-BLOCK'))
  })
 })

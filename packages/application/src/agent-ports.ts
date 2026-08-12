@@ -794,6 +794,23 @@ export interface RunDispatchPort {
  */
  contextLedger?: string
  /**
+ * What this persona already knows about the subject it is working on, selected, rendered and fenced server-side for the same reason
+ * `contextLedger` is.
+ */
+ mapContext?: string
+ /**
+ * Start this run as a mastery run: its deliverable is a map, and its
+ * presence is what gives the run `record_map` at all.
+ *
+ * **Declared here, and the omission was a real bug.** Without it this field was an
+ * excess property on a spread — which TypeScript deliberately does not check — so
+ * the server built a frame carrying `mastery`, the type said nothing, and the field
+ * never reached the Runner. Every unit test passed, the map row was created, the
+ * revision resolved, and the model was simply never offered the tool. A live run
+ * scored 0 nodes; nothing else noticed.
+ */
+ mastery?: { subjectKind: MapSubjectKind; subjectRef: string }
+ /**
  * Start this run as a reconciler over another run's conflicted branch
  *. Changes how the Runner prepares the workspace — a
  * paused rebase rather than a fresh branch — and how it ends it.
