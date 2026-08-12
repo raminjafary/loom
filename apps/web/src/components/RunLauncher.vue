@@ -24,6 +24,15 @@ const emit = defineEmits<{
  repositoryId: string
  personaId: string
  responseStyle: ResponseStyle
+ /**
+ * What the agent is actually being asked to do.
+ *
+ * This control had no task field at all, so every run started from the
+ * sidebar — the app's one primary action — reached the Runner with nothing
+ * to do but the fixed "begin working now" prompt. `agentRun.start` has
+ * accepted a task the whole time; only the `@mention` path ever sent one.
+ */
+ task?: string
  /** Absent means "whatever the persona's own model is". */
  model?: string
  /** Absent keeps the persona's cap; null is a deliberate "uncapped". */
@@ -35,6 +44,7 @@ const emit = defineEmits<{
 
 const repositoryId = ref('')
 const personaId = ref('')
+const task = ref('')
 
 /**
  * Style choices, duplicated from `@loom/domain`'s catalogue for the same reason the
@@ -81,8 +91,19 @@ const selected = computed(
  => props.personas.find((persona) => persona.id === personaId.value) ?? null,
 )
 
+/**
+ * The task is required here, unlike on the wire where it is optional.
+ *
+ * A run with no task is legal — the Runner falls back to a generic prompt — but it
+ * is never what a human at this form meant, and shipping it as optional is how the
+ * field goes unfilled and the run comes back having done something adjacent.
+ */
 const canSubmit = computed(
- => !props.disabled && repositoryId.value !== '' && personaId.value !== '',
+ =>
+ !props.disabled &&
+ repositoryId.value !== '' &&
+ personaId.value !== '' &&
+ task.value.trim !== '',
 )
 
 /**
@@ -141,9 +162,13 @@ const submit = => {
  repositoryId: repositoryId.value,
  personaId: personaId.value,
  responseStyle: responseStyle.value,
+ task: task.value.trim,
 ...(model.value === '' ? {}: { model: model.value }),
 ...(budgetCapUsd.value === undefined ? {}: { budgetCapUsd: budgetCapUsd.value }),
  })
+ // Cleared because the next run is a different question; the repository, agent and
+ // voice are preferences and deliberately survive.
+ task.value = ''
 }
 
 const startLabel = computed( => {
@@ -180,6 +205,18 @@ const harnessSummary = (persona: AgentPersona): string => {
  {{ persona.name }} — {{ persona.description }}
  </option>
  </select>
+ </label>
+
+ <!-- The instruction itself. First, because it is the thing being decided. -->
+ <label class="field">
+ <span>Task</span>
+ <textarea
+ v-model="task"
+ class="task"
+ rows="3"
+ aria-label="Task"
+ placeholder="What should this agent do? Be specific — this is the whole instruction it gets."
+ ></textarea>
  </label>
 
  <label class="field">
@@ -299,6 +336,18 @@ h3 {
 
 select {
  font-size: 0.82rem;
+}
+
+.task {
+ padding: 0.35rem 0.4rem;
+ border: 1px solid var(--border);
+ border-radius: 0.35rem;
+ background: var(--bg);
+ color: var(--text);
+ font: inherit;
+ font-size: 0.82rem;
+ line-height: 1.4;
+ resize: vertical;
 }
 
 .styles {

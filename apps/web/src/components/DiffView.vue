@@ -8,6 +8,8 @@ import DiffFileView from './DiffFileView.vue'
 const props = defineProps<{
  run: AgentRun | null
  diff: string | null
+ /** The last diff fetch's failure — see AgentSnapshot.fetchErrors. */
+ fetchError: string | null
 }>
 
 const emit = defineEmits<{
@@ -156,7 +158,18 @@ const canDecideDisposition = =>
  </header>
 
  <div class="review-body">
- <p v-if="parsed === null" class="loading">Loading the diff…</p>
+ <!--
+ The error branch comes first, because `parsed === null` is also what a
+ failed load looks like — so without it this panel says "Loading the
+ diff…" forever while the real reason sits in a banner behind the scrim.
+ -->
+ <p v-if="props.fetchError" class="failed">
+ Could not load the diff — <strong>{{ props.fetchError }}</strong>
+ <button type="button" class="retry" @click="props.run && emit('load-diff', props.run.id)">
+ Try again
+ </button>
+ </p>
+ <p v-else-if="parsed === null" class="loading">Loading the diff…</p>
  <p v-else-if="parsed.files.length === 0" class="loading">
  No changes on this branch yet.
  </p>

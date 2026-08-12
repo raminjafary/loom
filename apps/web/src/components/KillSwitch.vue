@@ -7,7 +7,14 @@ import { ref } from 'vue'
  * every view — a stop control you have to navigate to is not one button.
  */
 
-const props = defineProps<{ control: RunControl | null }>
+const props = defineProps<{
+ control: RunControl | null
+ /**
+ * How many runs the last press cancelled. Null when no pause has happened in this
+ * session — which is not the same as a pause that cancelled nothing.
+ */
+ cancelledCount: number | null
+}>
 const emit = defineEmits<{ pause: []; resume: [] }>
 
 // Two-step inline confirm instead of `window.confirm`: pausing cancels
@@ -24,7 +31,10 @@ const pause = => {
 <template>
  <div class="kill-switch">
  <template v-if="props.control?.paused">
- <span class="paused" title="New runs are blocked until resumed">Runs paused</span>
+ <span class="paused" title="New runs are blocked until resumed">
+ Runs paused<template v-if="props.cancelledCount !== null">
+ — {{ props.cancelledCount }} stopped</template>
+ </span>
  <button type="button" class="resume" @click="emit('resume')">Resume</button>
  </template>
 

@@ -220,3 +220,146 @@ describe('resolvePersonaNames', => {
  session.dispose
  })
 })
+
+/**
+ * Per-surface fetch errors (see `AgentSnapshot.fetchErrors`).
+ *
+ * The property under test is not "an error is recorded" — the global `error` already
+ * did that. It is that a panel can tell **"empty" apart from "failed"**, because the
+ * Inbox rendering "Nothing needs you right now" on a failed fetch is the one false
+ * statement in this app that costs a human something.
+ */
+describe('fetchErrors', => {
+ const inboxApi = (listNeedsAttention: => Promise<unknown>) =>
+ ({
+ agentRun: { listNeedsAttention },
+ mergeQueue: { list: async => [] },
+ }) as unknown as LoomApi
+
+ it('starts with every surface clear', => {
+ const session = createAgentSession({ api: stubApi.api })
+ expect(session.snapshot.fetchErrors).toEqual({
+ inbox: null,
+ board: null,
+ cost: null,
+ diff: null,
+ })
+ session.dispose
+ })
+
+ it('records an inbox failure on the inbox, not only in the banner', async => {
+ const session = createAgentSession({
+ api: inboxApi(async => {
+ throw new Error('backend down')
+ }),
+ })
+ await session.refreshInbox
+ expect(session.snapshot.fetchErrors.inbox).toBe('backend down')
+ // The list is still empty — which is precisely why the flag has to exist.
+ expect(session.snapshot.needsAttention).toEqual([])
+ session.dispose
+ })
+
+ it('clears the inbox error once a fetch succeeds', async => {
+ let fail = true
+ const session = createAgentSession({
+ api: inboxApi(async => {
+ if (fail) throw new Error('backend down')
+ return []
+ }),
+ })
+ await session.refreshInbox
+ expect(session.snapshot.fetchErrors.inbox).toBe('backend down')
+ fail = false
+ await session.refreshInbox
+ expect(session.snapshot.fetchErrors.inbox).toBeNull
+ session.dispose
+ })
+
+ it('does not let one surface clear another', async => {
+ // `patch` replaces `fetchErrors` wholesale, so a surface writing its own key
+ // without spreading the rest would silently wipe the other three.
+ let fail = true
+ const session = createAgentSession({
+ api: {
+ agentRun: {
+ listNeedsAttention: async => {
+ if (fail) throw new Error('inbox down')
+ return []
+ },
+ getDiff: async => {
+ throw new Error('diff down')
+ },
+ },
+ mergeQueue: { list: async => [] },
+ } as unknown as LoomApi,
+ })
+ await session.refreshInbox
+ await session.loadDiff('run-1')
+ expect(session.snapshot.fetchErrors.diff).toBe('diff down')
+ expect(session.snapshot.fetchErrors.inbox).toBe('inbox down')
+
+ fail = false
+ await session.refreshInbox
+ expect(session.snapshot.fetchErrors.inbox).toBeNull
+ expect(session.snapshot.fetchErrors.diff).toBe('diff down')
+ session.dispose
+ })
+})
+
+/**
+ * What the kill switch killed.
+ *
+ * `runControl.pauseAll` has always returned `cancelledRunIds`; the client destructured
+ * `{ control }` and dropped it, so the button said "Runs paused" and never what it had
+ * stopped.
+ */
+describe('lastPauseCancelledCount', => {
+ const pauseApi = (cancelledRunIds: string[]) =>
+ ({
+ runControl: {
+ pauseAll: async => ({
+ control: { workspaceId: 'w1', paused: true, pausedAt: new Date, pausedByUserId: 'u1' },
+ cancelledRunIds,
+ }),
+ resume: async => ({
+ workspaceId: 'w1',
+ paused: false,
+ pausedAt: null,
+ pausedByUserId: null,
+ }),
+ },
+ agentRun: { listNeedsAttention: async => [] },
+ mergeQueue: { list: async => [] },
+ }) as unknown as LoomApi
+
+ it('is null before any pause, which is not the same as zero', => {
+ const session = createAgentSession({ api: stubApi.api })
+ expect(session.snapshot.lastPauseCancelledCount).toBeNull
+ session.dispose
+ })
+
+ it('reports how many runs the pause actually cancelled', async => {
+ const session = createAgentSession({ api: pauseApi(['a', 'b', 'c']) })
+ await session.pauseAllRuns
+ expect(session.snapshot.lastPauseCancelledCount).toBe(3)
+ session.dispose
+ })
+
+ it('reports zero rather than nothing when a pause killed nothing', async => {
+ // A real and reassuring answer: the switch was pressed and there was nothing running.
+ const session = createAgentSession({ api: pauseApi([]) })
+ await session.pauseAllRuns
+ expect(session.snapshot.lastPauseCancelledCount).toBe(0)
+ session.dispose
+ })
+
+ it('forgets the count on resume', async => {
+ // "3 runs stopped" beside a Resume button reads as a claim about what is starting.
+ const session = createAgentSession({ api: pauseApi(['a', 'b', 'c']) })
+ await session.pauseAllRuns
+ await session.resumeAllRuns
+ expect(session.snapshot.lastPauseCancelledCount).toBeNull
+ session.dispose
+ })
+})

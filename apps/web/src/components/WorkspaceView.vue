@@ -4,6 +4,7 @@ import {
  areaLabelFromAnnouncement,
  buildThreadTrail,
  parseMention,
+ SELECTABLE_MODELS,
  threadsByParentMessage,
 } from '@loom/client-core'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -46,6 +47,7 @@ const startRun = (input: {
  repositoryId: string
  personaId: string
  responseStyle: ResponseStyle
+ task?: string
  model?: string
  budgetCapUsd?: number | null
 }) => {
@@ -144,6 +146,15 @@ const spendSummary = computed( => {
 // channel, and never assumed (the persona model non-scope).
 const pendingMention = ref<{ personaId: string; personaName: string; task: string } | null>(null)
 const mentionRepositoryId = ref('')
+const mentionModel = ref('')
+const mentionBudgetCap = ref('')
+
+/** What the "Agent default" option should say it will actually use. */
+const mentionPersonaModel = computed( => {
+ const personaId = pendingMention.value?.personaId
+ if (!personaId) return ''
+ return agentSnapshot.value.personas.find((persona) => persona.id === personaId)?.model ?? ''
+})
 
 const handleSend = (text: string) => {
  void store.send(text)
@@ -151,6 +162,10 @@ const handleSend = (text: string) => {
  pendingMention.value = mention
  if (mention) {
  mentionRepositoryId.value = agentSnapshot.value.repositories[0]?.id ?? ''
+ // Reset per mention: an override chosen for one agent is not a choice about
+ // the next one, matching RunLauncher's rule.
+ mentionModel.value = ''
+ mentionBudgetCap.value = ''
  }
 }
 
@@ -158,11 +173,19 @@ const confirmMention = => {
  const threadId = snapshot.value.activeThread?.id
  const mention = pendingMention.value
  if (!threadId || !mention || !mentionRepositoryId.value) return
+ const cap =
+ mentionBudgetCap.value === ''
+ ? undefined
+: mentionBudgetCap.value === 'none'
+ ? null
+: Number.parseFloat(mentionBudgetCap.value)
  void agent.startRun({
  threadId,
  repositoryId: mentionRepositoryId.value,
  personaId: mention.personaId,
  task: mention.task,
+...(mentionModel.value === '' ? {}: { model: mentionModel.value }),
+...(cap === undefined ? {}: { budgetCapUsd: cap }),
  })
  pendingMention.value = null
 }
@@ -192,6 +215,43 @@ const openInbox = => {
  * time. Expanded here for the same reason.
  */
 const revealSwarm = ref(0)
+
+/**
+ * Watch a run *and* open the thread it is talking in.
+ *
+ * The graph, the board and the run tree all used to emit `watch`, which fetches the
+ * run and its board and leaves the conversation on whatever thread was already open.
+ * On a corporation that is usually the wrong one: a sub-planner runs in its own area
+ * thread, so clicking its node showed a human the root's conversation and none of the
+ * work they had just clicked on.
+ *
+ * The thread comes from the fetched run rather than from the board card, which does
+ * not carry one — so this awaits the watch instead of firing both at once.
+ */
+const openRunThread = async (agentRunId: string) => {
+ await agent.watchRun(agentRunId)
+ const threadId = agent.snapshot.activeRun?.threadId
+ if (threadId && threadId !== snapshot.value.activeThread?.id) {
+ await store.openThread(threadId)
+ }
+}
+
+/**
+ * `:busy` was hardcoded `false`, so the prop `SteerPanel` disables its button with was
+ * wired to nothing — and this is the one control in the app where every press starts a
+ * frontier-model planner run. A double-click bought two of them.
+ */
+const steering = ref(false)
+
+const steer = async (agentRunId: string, message: string) => {
+ if (steering.value) return
+ steering.value = true
+ try {
+ await agent.steer(agentRunId, message)
+ } finally {
+ steering.value = false
+ }
+}
 
 const watchFromInbox = (agentRunId: string) => {
  void agent.watchRun(agentRunId)
@@ -349,6 +409,7 @@ onBeforeUnmount( => {
  <KillSwitch
  v-if="view === 'workspace'"
 :control="agentSnapshot.runControl"
+:cancelled-count="agentSnapshot.lastPauseCancelledCount"
  @pause="agent.pauseAllRuns"
  @resume="agent.resumeAllRuns"
  />
@@ -413,6 +474,12 @@ onBeforeUnmount( => {
  @decide="(id, decision, answer) => agent.decide(id, decision, answer)"
  />
 
+ <!--
+ The mention path used to send only thread/repository/persona/task, so the two
+ launch surfaces were each missing what the other had: the sidebar could set a
+ model and a cap but not a task, and this could set a task but neither of the
+ two the cost model calls the cost swing factors. Both are here now.
+ -->
  <div v-if="pendingMention" class="mention-bar">
  <span>Start <strong>{{ pendingMention.personaName }}</strong> on:</span>
  <select v-model="mentionRepositoryId" aria-label="Repository for this run">
@@ -420,6 +487,20 @@ onBeforeUnmount( => {
  <option v-for="repo in agentSnapshot.repositories":key="repo.id":value="repo.id">
  {{ repo.displayName }}
  </option>
+ </select>
+ <select v-model="mentionModel" aria-label="Model for this run">
+ <option value="">{{ mentionPersonaModel || 'Agent default' }}</option>
+ <option v-for="entry in SELECTABLE_MODELS":key="entry.id":value="entry.id">
+ {{ entry.label }}
+ </option>
+ </select>
+ <select v-model="mentionBudgetCap" aria-label="Spend cap for this run">
+ <option value="">Agent cap</option>
+ <option value="0.50">$0.50</option>
+ <option value="1.00">$1.00</option>
+ <option value="5.00">$5.00</option>
+ <option value="20.00">$20.00</option>
+ <option value="none">No cap</option>
  </select>
  <button type="button":disabled="!mentionRepositoryId" @click="confirmMention">Start run</button>
  <button type="button" class="cancel" @click="cancelMention">Cancel</button>
@@ -435,6 +516,10 @@ onBeforeUnmount( => {
 :selected-run="agentSnapshot.inspectedRun"
 :approvals="agentSnapshot.inspectedApprovals"
 :diff="agentSnapshot.diff"
+:fetch-error="agentSnapshot.fetchErrors.inbox"
+:diff-error="agentSnapshot.fetchErrors.diff"
+:loading="agentSnapshot.loading"
+ @refresh=" => agent.refreshInbox"
  @select="(agentRunId) => agent.inspectRun(agentRunId)"
  @decide="(id, decision, answer) => agent.decide(id, decision, answer)"
  @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
@@ -478,6 +563,7 @@ onBeforeUnmount( => {
  <DiffView
 :run="agentSnapshot.activeRun"
 :diff="agentSnapshot.diff"
+:fetch-error="agentSnapshot.fetchErrors.diff"
  @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
  @keep="(agentRunId) => agent.keepRun(agentRunId)"
  @discard="(agentRunId) => agent.discardRun(agentRunId)"
@@ -498,7 +584,8 @@ onBeforeUnmount( => {
  >
  <SwarmBoardPanel
 :board="agentSnapshot.swarmBoard"
- @watch="(agentRunId) => agent.watchRun(agentRunId)"
+:fetch-error="agentSnapshot.fetchErrors.board"
+ @watch="(agentRunId) => openRunThread(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
  <!--
@@ -508,12 +595,13 @@ onBeforeUnmount( => {
  -->
  <SwarmGraphPanel
 :board="agentSnapshot.swarmBoard"
- @watch="(agentRunId) => agent.watchRun(agentRunId)"
+:active-run-id="agentSnapshot.activeRun?.id ?? null"
+ @open="(agentRunId) => openRunThread(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
  <RunTreePanel
 :board="agentSnapshot.swarmBoard"
- @watch="(agentRunId) => agent.watchRun(agentRunId)"
+ @watch="(agentRunId) => openRunThread(agentRunId)"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
  <!--
@@ -523,8 +611,8 @@ onBeforeUnmount( => {
  -->
  <SteerPanel
 :board="agentSnapshot.swarmBoard"
-:busy="false"
- @steer="(agentRunId, message) => agent.steer(agentRunId, message)"
+:busy="steering"
+ @steer="(agentRunId, message) => steer(agentRunId, message)"
  />
  </SidebarSection>
 
@@ -538,6 +626,8 @@ onBeforeUnmount( => {
  <WorkerNotesPanel
 :notes="agentSnapshot.treeNotes"
 :agent-run-id="agentSnapshot.activeRun?.id ?? null"
+:persona-name-by-run-id="personaNameByRunId"
+ @open="(agentRunId) => openRunThread(agentRunId)"
  @write="(input) => agentSnapshot.activeRun && agent.writeNote({ agentRunId: agentSnapshot.activeRun.id,...input })"
  @refresh=" => agentSnapshot.activeRun && agent.refreshBoard(agentSnapshot.activeRun.id)"
  />
@@ -553,6 +643,7 @@ onBeforeUnmount( => {
  >
  <MergeQueuePanel
 :entries="agentSnapshot.mergeQueue"
+ @open="(agentRunId) => openRun(agentRunId)"
  @cancel="(entryId) => agent.cancelMerge(entryId)"
  @refresh=" => agent.refreshMergeQueue"
  />
@@ -572,6 +663,8 @@ onBeforeUnmount( => {
  <CostDashboardPanel
 :summary="agentSnapshot.costSummary"
 :window-hours="costWindowHours"
+:fetch-error="agentSnapshot.fetchErrors.cost"
+ @open="(agentRunId) => openRun(agentRunId)"
  @refresh=" => agent.refreshCostSummary(costWindowHours)"
  @window="(hours) => setCostWindow(hours)"
  />

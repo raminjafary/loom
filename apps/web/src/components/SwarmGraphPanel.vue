@@ -8,7 +8,7 @@ import {
  type SwarmEdgeKind,
  type SwarmGraphNode,
 } from '@loom/client-core'
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onUnmounted, ref } from 'vue'
 
 /**
  * The tree view: nodes are runs, edges are delegation and report, click a node to open
@@ -26,10 +26,31 @@ import { computed, onUnmounted, ref } from 'vue'
  * human authors the graph and interaction is the product.
  */
 
-const props = defineProps<{ board: SwarmBoard | null }>
-const emit = defineEmits<{ watch: [agentRunId: string]; refresh: [] }>
+const props = defineProps<{
+ board: SwarmBoard | null
+ /**
+ * The run currently being watched, so the canvas can say which node that is.
+ *
+ * Without it, clicking a node changed the app's state and the graph reflected
+ * none of it — the one interaction the canvas offers was fire-and-forget, behind
+ * a full-screen scrim, which reads as nothing having happened.
+ */
+ activeRunId: string | null
+}>
+const emit = defineEmits<{
+ /**
+ * Renamed from `watch` because the footer has always said "click a run to watch
+ * its thread" and watching was all it did: `watchRun` fetches the run, its
+ * approvals and its board, and never opens the thread the label promises.
+ * The product shape states the tree view's defining interaction as "click a node to open its
+ * thread", so the handler does both and the overlay closes behind it.
+ */
+ open: [agentRunId: string]
+ refresh: []
+}>
 
 const open = ref(false)
+const stageEl = ref<HTMLElement | null>(null)
 
 /**
  * Ages tick on their own — see the board panel. A canvas showing "quiet since 2m" must
@@ -112,9 +133,42 @@ const onWheel = (event: WheelEvent) => {
  zoom.value = Math.min(Math.max(zoom.value * (event.deltaY < 0 ? 1.1: 0.9), 0.4), 2.5)
 }
 
-const reset = => {
+/**
+ * Fits the whole tree, rather than returning to the fixed origin `reset` used to.
+ *
+ * `{40, 40}` at zoom 1 is only the right view for a tree that happens to be small:
+ * a wide one starts partly off-screen, and a "Reset view" that returns to the same
+ * off-screen origin is not a way back to the content.
+ */
+const fit = => {
+ const stage = stageEl.value
+ const nodes = graph.value.nodes
+ if (!stage || nodes.length === 0) {
  pan.value = { x: 40, y: 40 }
  zoom.value = 1
+ return
+ }
+ const maxX = Math.max(...nodes.map((node) => left(node) + NODE_W))
+ const maxY = Math.max(...nodes.map((node) => top(node) + NODE_H))
+ const { width, height } = stage.getBoundingClientRect
+ const margin = 32
+ const next = Math.min(
+ (width - margin * 2) / Math.max(maxX, 1),
+ (height - margin * 2) / Math.max(maxY, 1),
+ 1,
+)
+ zoom.value = Math.min(Math.max(next, 0.4), 2.5)
+ pan.value = { x: margin, y: margin }
+}
+
+/**
+ * Closing on click is what makes the click legible. The state it changes — the
+ * watched run, its board, its thread — is all *behind* this overlay, so leaving the
+ * scrim up shows the human the same picture they just acted on.
+ */
+const openNode = (agentRunId: string) => {
+ emit('open', agentRunId)
+ open.value = false
 }
 
 const money = (usd: number | null) => (usd === null ? null: `$${usd.toFixed(4)}`)
@@ -134,8 +188,9 @@ const collisionCount = computed(
  @click="
  => {
  open = true
- reset
  emit('refresh')
+ // After paint, so the stage has a measurable size to fit against.
+ nextTick(fit)
  }
  "
  >
@@ -166,13 +221,14 @@ const collisionCount = computed(
  <li><span class="swatch collision"></span>path collision</li>
  </ul>
  <button type="button" @click="emit('refresh')">Refresh</button>
- <button type="button" @click="reset">Reset view</button>
+ <button type="button" @click="fit">Fit</button>
  <button type="button" class="close" aria-label="Close graph" @click="open = false">
  ✕
  </button>
  </header>
 
  <div
+ ref="stageEl"
  class="stage"
  @pointerdown="startPan"
  @pointermove="movePan"
@@ -205,8 +261,10 @@ const collisionCount = computed(
 :transform="`translate(${left(node)} ${top(node)})`"
  role="button"
  tabindex="0"
- @click="emit('watch', node.card.runId)"
- @keydown.enter="emit('watch', node.card.runId)"
+:aria-current="node.card.runId === props.activeRunId ? 'true': undefined"
+ @click="openNode(node.card.runId)"
+ @keydown.enter.prevent="openNode(node.card.runId)"
+ @keydown.space.prevent="openNode(node.card.runId)"
  >
  <rect:width="NODE_W":height="NODE_H" rx="10" class="box" />
  <!--
@@ -291,7 +349,7 @@ const collisionCount = computed(
  </div>
 
  <footer class="viewer-foot">
- <span>Drag to pan, scroll to zoom, click a run to watch its thread.</span>
+ <span>Drag to pan, scroll to zoom, click a run to open its thread.</span>
  <span v-if="collisionCount > 0" class="warn">
  {{ collisionCount }} pair<span v-if="collisionCount !== 1">s</span> claim overlapping
  paths — expect a rebase.
@@ -503,6 +561,18 @@ header button:disabled {
 
 .node:hover.box {
  stroke: var(--accent);
+}
+
+.node:focus-visible.box {
+ stroke: var(--accent);
+ stroke-width: 2;
+}
+
+/* Which node the app is actually watching. Without it the canvas showed no trace of
+ the one action it offers. */
+.node[aria-current='true'].box {
+ stroke: var(--accent);
+ stroke-width: 2.5;
 }
 
 /*

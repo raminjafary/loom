@@ -49,7 +49,11 @@ const money = (usd: number) => `$${usd.toFixed(4)}`
  class="row"
 :class="{ blocked: node.card.blockerCount > 0 }"
 :style="{ paddingLeft: `${node.depth * 0.9 + 0.4}rem` }"
+ role="button"
+ tabindex="0"
  @click="emit('watch', node.card.runId)"
+ @keydown.enter.prevent="emit('watch', node.card.runId)"
+ @keydown.space.prevent="emit('watch', node.card.runId)"
  >
  <span class="branchline" aria-hidden="true">{{ node.depth === 0 ? '': '└' }}</span>
  <!--

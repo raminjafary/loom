@@ -22,8 +22,23 @@ import type { CostSummary } from '@loom/api-contract'
  * The shaping lives in `client-core` so a TUI renders the same numbers.
  */
 
-const props = defineProps<{ summary: CostSummary | null; windowHours: number | null }>
-const emit = defineEmits<{ refresh: []; window: [hours: number | null] }>
+const props = defineProps<{
+ summary: CostSummary | null
+ windowHours: number | null
+ /** The last spend fetch's failure — see AgentSnapshot.fetchErrors. */
+ fetchError: string | null
+}>
+const emit = defineEmits<{
+ refresh: []
+ window: [hours: number | null]
+ /**
+ * The drill-down this panel was missing. A human sees the run that cost $14 and
+ * the id is already on the payload (`topRuns[].agentRunId`) — it just had nothing
+ * attached to it, so the single highest-value question the dashboard raises was
+ * also the one place it could not answer.
+ */
+ open: [agentRunId: string]
+}>
 
 const byModel = computed( => (props.summary ? spendByModel(props.summary): []))
 const byPersona = computed( => (props.summary ? spendByPersona(props.summary): []))
@@ -60,7 +75,15 @@ const percent = (share: number) => `${Math.round(share * 100)}%`
  </div>
  </header>
 
- <p v-if="!summary" class="empty">No spend recorded yet.</p>
+ <!--
+ Three states, not one. `!summary` used to conflate "not fetched yet", "the
+ fetch failed" and "genuinely zero spend" into a sentence that only the third
+ makes true.
+ -->
+ <p v-if="props.fetchError" class="failed">
+ Could not load spend — <strong>{{ props.fetchError }}</strong>
+ </p>
+ <p v-else-if="!summary" class="empty">No spend recorded yet.</p>
 
  <template v-else>
  <div class="totals">
@@ -119,7 +142,15 @@ const percent = (share: number) => `${Math.round(share * 100)}%`
 
  <h4>Most expensive runs</h4>
  <ol class="rows">
- <li v-for="run in summary.topRuns":key="run.agentRunId">
+ <li v-for="run in summary.topRuns":key="run.agentRunId" class="clickable">
+ <button
+ type="button"
+ class="rowbtn"
+:title="`Open this run`"
+ @click="emit('open', run.agentRunId)"
+ >
+ <span class="sr">Open run</span>
+ </button>
  <span class="label">{{ run.personaName }}</span>
  <span class="sub">{{ run.model }}</span>
  <span v-if="run.relation" class="relation">{{ run.relation }}</span>
@@ -132,6 +163,35 @@ const percent = (share: number) => `${Math.round(share * 100)}%`
 </template>
 
 <style scoped>
+/* The row is a grid of spans; the button is stretched over it rather than wrapping
+ the content, so the existing layout is untouched and the whole row is one hit
+ target with a real focus ring. */
+.clickable {
+ position: relative;
+}
+
+.rowbtn {
+ position: absolute;
+ inset: 0;
+ width: 100%;
+ border: 0;
+ background: none;
+ cursor: pointer;
+}
+
+.rowbtn:hover {
+ background: var(--accent-soft);
+}
+
+.sr {
+ position: absolute;
+ width: 1px;
+ height: 1px;
+ overflow: hidden;
+ clip-path: inset(50%);
+ white-space: nowrap;
+}
+
 .panel {
  border: 1px solid var(--border);
  border-radius: 0.5rem;

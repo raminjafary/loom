@@ -130,6 +130,37 @@ export interface AgentSnapshot {
  readonly notificationConfig: NotificationConfig | null
  readonly loading: boolean
  readonly error: string | null
+ /**
+ * Per-surface failures, because a panel that renders its empty state on a failed
+ * fetch tells the human the opposite of what happened.
+ *
+ * There is one global `error`, and it is not enough for these four. It is shared by
+ * ~35 actions and rendered in a banner at the top of the page, so a failed Inbox
+ * fetch produces "Nothing needs you right now" in the list — the single most
+ * dangerous false statement this app can make — with the real reason somewhere
+ * above, or replaced already by the next error to arrive.
+ *
+ * Only the surfaces whose empty state is indistinguishable from failure get one.
+ * A panel whose fetch failure is visible some other way does not need a field here.
+ */
+ readonly fetchErrors: {
+ readonly inbox: string | null
+ readonly board: string | null
+ readonly cost: string | null
+ readonly diff: string | null
+ }
+ /**
+ * How many runs the last kill-switch press actually cancelled.
+ *
+ * `runControl.pauseAll` has always returned `cancelledRunIds`; this client
+ * destructured `{ control }` and dropped it, so the button reported "Runs paused"
+ * and never what it had stopped. A stop control that will not say what it stopped
+ * leaves a human to go and count, which is the opposite of one button.
+ *
+ * Null until a pause happens in this session — "not pressed here" is not "pressed,
+ * and it killed nothing", and zero is a real and reassuring answer.
+ */
+ readonly lastPauseCancelledCount: number | null
 }
 
 export interface AgentSession {
@@ -346,6 +377,20 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  notificationConfig: null,
  loading: false,
  error: null,
+ fetchErrors: { inbox: null, board: null, cost: null, diff: null },
+ lastPauseCancelledCount: null,
+ }
+
+ /**
+ * `patch` replaces top-level keys wholesale, so a surface clearing its own error
+ * must not clear the other three. One helper rather than three spread expressions
+ * at every call site, which is how one of them ends up wrong.
+ */
+ const patchFetchError = (
+ key: keyof AgentSnapshot['fetchErrors'],
+ message: string | null,
+): void => {
+ patch({ fetchErrors: {...state.fetchErrors, [key]: message } })
  }
 
  const listeners = new Set<(snapshot: AgentSnapshot) => void>
@@ -397,9 +442,13 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.mergeQueue.list,
  ])
  patch({ needsAttention, mergeQueue })
+ patchFetchError('inbox', null)
  rememberPersonaNames(fromRuns(needsAttention))
  } catch (error) {
+ // Both the banner and the surface: the banner is what a human scanning the page
+ // sees, and the surface is what stops the empty list reading as "all clear".
  patch({ error: errorMessage(error) })
+ patchFetchError('inbox', errorMessage(error))
  }
  }
 
@@ -416,6 +465,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.workerNote.listByTree({ agentRunId }),
  ])
  patch({ swarmBoard, treeNotes })
+ patchFetchError('board', null)
  // The board is the best source there is for a *tree*: one card per run,
  // each already carrying the persona that ran it.
  rememberPersonaNames(
@@ -423,6 +473,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
 )
  } catch (error) {
  patch({ error: errorMessage(error) })
+ patchFetchError('board', errorMessage(error))
  }
  }
 
@@ -435,8 +486,10 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  const fetchCostSummary = async (windowHours: number | null): Promise<void> => {
  try {
  patch({ costSummary: await options.api.cost.summary({ windowHours }) })
+ patchFetchError('cost', null)
  } catch (error) {
  patch({ error: errorMessage(error) })
+ patchFetchError('cost', errorMessage(error))
  }
  }
 
@@ -794,6 +847,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  try {
  const run = await options.api.agentRun.start(input)
  patch({ activeRun: run, pendingApprovals: [], diff: null })
+ patchFetchError('diff', null)
  pollActiveRun(run.id)
  } catch (error) {
  patch({ error: errorMessage(error) })
@@ -810,6 +864,9 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  // Diff cleared: it belongs to whichever run it was loaded for, and showing
  // one run's diff under another's name is worse than showing none.
  patch({ activeRun: run, pendingApprovals, diff: null })
+ // The diff's error belongs to the run it was loaded for, exactly as the diff
+ // itself does — a stale failure under a new run's name is the same lie.
+ patchFetchError('diff', null)
  rememberPersonaNames([{ id: run.id, name: run.persona.name }])
  // Fetched here as well as on the poll tick, because a finished run has no
  // poll — and its tree's ledger is exactly what a human reviewing it wants.
@@ -838,11 +895,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
 
  async loadDiff(agentRunId) {
  patch({ error: null })
+ patchFetchError('diff', null)
  try {
  const { diff } = await options.api.agentRun.getDiff({ agentRunId })
  patch({ diff })
  } catch (error) {
+ // `diff` stays null on failure, and the overlay renders null as "Loading the
+ // diff…" — so without this the panel claims to be loading forever while the
+ // real reason sits in a banner behind the scrim.
  patch({ error: errorMessage(error) })
+ patchFetchError('diff', errorMessage(error))
  }
  },
 
@@ -918,6 +980,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  // from it: a re-plan that cancels a subtask changes the board a human is
  // looking at, and leaving it stale would show work that has already stopped.
  patch({ activeRun: run, pendingApprovals: [], diff: null })
+ patchFetchError('diff', null)
  rememberPersonaNames([{ id: run.id, name: run.persona.name }])
  await fetchBoard(run.id)
  } catch (error) {
@@ -1012,8 +1075,8 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  async pauseAllRuns {
  patch({ error: null })
  try {
- const { control } = await options.api.runControl.pauseAll
- patch({ runControl: control })
+ const { control, cancelledRunIds } = await options.api.runControl.pauseAll
+ patch({ runControl: control, lastPauseCancelledCount: cancelledRunIds.length })
  // The pause cancelled whatever was in flight, so stop the run poller
  // rather than letting it keep hitting a now-terminal run, and re-read
  // the run it was watching so the UI shows `cancelled` immediately.
@@ -1032,7 +1095,9 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  const runControl = await options.api.runControl.resume
- patch({ runControl })
+ // Cleared with the pause it describes: "3 runs stopped" beside a Resume button
+ // reads as a claim about the runs that are about to start again.
+ patch({ runControl, lastPauseCancelledCount: null })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

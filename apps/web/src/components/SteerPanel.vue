@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { SwarmBoard } from '@loom/api-contract'
 
 /**
@@ -31,6 +31,30 @@ const planners = computed( =>
 )
 
 const chosen = computed( => target.value ?? planners.value[0]?.runId ?? null)
+
+/**
+ * The select showed blank while `chosen` had already silently defaulted to the first
+ * planner — so the control named a different target than the button would use, on the
+ * one form in the app that spends a frontier-model run per press. Keeping `target`
+ * pinned to `chosen` makes the displayed answer the real one.
+ *
+ * Re-pinned when the roster changes, not only on mount: a steered planner leaves the
+ * list (it is `relation: 'steer'`), and the selection it held would otherwise point at
+ * a run that is no longer offered.
+ */
+watch(
+ planners,
+ (cards) => {
+ if (cards.length === 0) {
+ target.value = null
+ return
+ }
+ if (target.value === null || !cards.some((card) => card.runId === target.value)) {
+ target.value = cards[0]?.runId ?? null
+ }
+ },
+ { immediate: true },
+)
 
 const submit = => {
  const runId = chosen.value

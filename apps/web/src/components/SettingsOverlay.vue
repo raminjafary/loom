@@ -8,7 +8,7 @@ import type {
  Repository,
  Runner,
 } from '@loom/api-contract'
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import CapabilityPanel from './CapabilityPanel.vue'
 import PersonaEditor from './PersonaEditor.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
@@ -90,16 +90,30 @@ const tab = ref<Tab>('infrastructure')
 const onKeydown = (event: KeyboardEvent) => {
  if (event.key === 'Escape') emit('close')
 }
+
+/**
+ * The Escape handler sat on a `tabindex="-1"` element that nothing ever focused, so
+ * it never fired — and unlike the diff and graph overlays this scrim had no
+ * `@click.self` either. Settings was closable only by its ✕, while claiming
+ * `aria-modal="true"`.
+ *
+ * Focusing the scrim on mount is what makes both the keydown and the modal claim
+ * true, and it moves focus off whatever was behind the overlay.
+ */
+const scrim = ref<HTMLElement | null>(null)
+onMounted( => scrim.value?.focus)
 </script>
 
 <template>
  <div
+ ref="scrim"
  class="scrim"
  role="dialog"
  aria-modal="true"
  aria-label="Settings"
  tabindex="-1"
  @keydown="onKeydown"
+ @click.self="emit('close')"
  >
  <div class="sheet">
  <header>

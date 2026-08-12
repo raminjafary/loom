@@ -14,7 +14,12 @@ import ConfirmButton from './ConfirmButton.vue'
  */
 
 const props = defineProps<{ entries: MergeQueueEntry[] }>
-const emit = defineEmits<{ cancel: [entryId: string]; refresh: [] }>
+const emit = defineEmits<{
+ cancel: [entryId: string]
+ refresh: []
+ /** See the failed-entry button below — the run that owns the branch. */
+ open: [agentRunId: string]
+}>
 
 // Only a still-queued entry can be called back: once it is merging, a rebase is
 // already running on the Runner.
@@ -52,6 +57,20 @@ const detailOf = (entry: MergeQueueEntry): string | null => {
  />
  </div>
  <p v-if="detailOf(entry)" class="detail">{{ detailOf(entry) }}</p>
+ <!--
+ `agentRunId` has been on this payload the whole time and nothing used it, so
+ a failed merge was a dead end at the exact moment a human has a reason to
+ dig in: the branch is the run's to fix, and this is the only place that says
+ it failed.
+ -->
+ <button
+ v-if="entry.status === 'failed'"
+ type="button"
+ class="open"
+ @click="emit('open', entry.agentRunId)"
+ >
+ Open the run that owns this branch
+ </button>
  <!-- Plain text, never v-html: this carries git output. -->
  <pre v-if="entry.status === 'failed' && entry.detail" class="reason">{{ entry.detail }}</pre>
  </li>
@@ -60,6 +79,18 @@ const detailOf = (entry: MergeQueueEntry): string | null => {
 </template>
 
 <style scoped>
+.open {
+ margin-top: 0.3rem;
+ border: 0;
+ padding: 0;
+ background: none;
+ color: var(--accent);
+ font: inherit;
+ font-size: 0.75rem;
+ text-decoration: underline;
+ cursor: pointer;
+}
+
 .panel {
  border: 1px solid var(--border);
  border-radius: 0.5rem;

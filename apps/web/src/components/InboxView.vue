@@ -9,6 +9,18 @@ const props = defineProps<{
  selectedRun: AgentRun | null
  approvals: ApprovalRequest[]
  diff: string | null
+ /**
+ * The last Inbox fetch's failure, if it failed.
+ *
+ * Without it this list renders "Nothing needs you right now" whenever the fetch
+ * errored — telling a human that nothing is waiting on them at the exact moment the
+ * app cannot know that. It is the one false statement here that costs something.
+ */
+ fetchError: string | null
+ /** The diff overlay's own failure — passed through to DiffView. */
+ diffError: string | null
+ /** Distinguishes "not fetched yet" from "fetched, and genuinely empty". */
+ loading: boolean
 }>
 
 const emit = defineEmits<{
@@ -34,6 +46,7 @@ const emit = defineEmits<{
  * a swarm still running.
  */
  watch: [agentRunId: string]
+ refresh: []
 }>
 
 /**
@@ -50,13 +63,23 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
 <template>
  <div class="inbox">
  <ul class="list">
- <li v-if="props.runs.length === 0" class="empty">Nothing needs you right now.</li>
+ <li v-if="props.fetchError" class="failed">
+ Could not load the inbox — <strong>{{ props.fetchError }}</strong>
+ <button type="button" class="retry" @click="emit('refresh')">Try again</button>
+ </li>
+ <li v-else-if="props.loading && props.runs.length === 0" class="empty">Loading…</li>
+ <li v-else-if="props.runs.length === 0" class="empty">Nothing needs you right now.</li>
  <li
  v-for="run in props.runs"
 :key="run.id"
  class="row"
 :class="[attentionReason(run).kind, { selected: run.id === props.selectedRun?.id }]"
+ role="button"
+ tabindex="0"
+:aria-current="run.id === props.selectedRun?.id ? 'true': undefined"
  @click="emit('select', run.id)"
+ @keydown.enter.prevent="emit('select', run.id)"
+ @keydown.space.prevent="emit('select', run.id)"
  >
  <div class="line">
  <strong>{{ run.persona.name }}</strong>
@@ -119,6 +142,7 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
  <DiffView
 :run="props.selectedRun"
 :diff="props.diff"
+:fetch-error="props.diffError"
  @load-diff="(agentRunId) => emit('load-diff', agentRunId)"
  @keep="(agentRunId) => emit('keep', agentRunId)"
  @discard="(agentRunId) => emit('discard', agentRunId)"
@@ -153,6 +177,28 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
  padding: 1rem 1.25rem;
  color: var(--text-faint);
  font-size: 0.85rem;
+}
+
+/* Deliberately not styled like `.empty`: the whole point is that it must not read
+ as "all clear". */
+.failed {
+ display: flex;
+ align-items: baseline;
+ gap: 0.5rem;
+ flex-wrap: wrap;
+ padding: 1rem 1.25rem;
+ color: var(--danger, #b4443a);
+ font-size: 0.85rem;
+}
+
+.retry {
+ border: 0;
+ padding: 0;
+ background: none;
+ color: inherit;
+ font: inherit;
+ text-decoration: underline;
+ cursor: pointer;
 }
 
 .row {

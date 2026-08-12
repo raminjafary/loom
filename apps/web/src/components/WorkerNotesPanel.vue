@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { describeAge } from '@loom/client-core'
 import type { WorkerNote } from '@loom/api-contract'
 
 /**
@@ -21,11 +22,31 @@ import type { WorkerNote } from '@loom/api-contract'
  * Everything is plain interpolation. No `v-html` anywhere near a note body.
  */
 
-const props = defineProps<{ notes: WorkerNote[]; agentRunId: string | null }>
+const props = defineProps<{
+ notes: WorkerNote[]
+ agentRunId: string | null
+ /**
+ * Run id → persona name, so a note can say who wrote it rather than showing a uuid.
+ * The session accumulates this for the thread already; the ledger needs the same
+ * answer for the same reason.
+ */
+ personaNameByRunId: Record<string, string>
+}>
 const emit = defineEmits<{
  refresh: []
  write: [input: { kind: 'finding' | 'decision' | 'blocker'; title: string; body: string; paths: string[] }]
+ /** Opens the run that wrote a note — provenance you can follow, not just read. */
+ open: [agentRunId: string]
 }>
+
+/**
+ * Never falls back to the raw id. A byline that resolves to a uuid says less than one
+ * that admits it does not know, and this codebase has shipped the uuid version before.
+ */
+const authorName = (note: WorkerNote): string => {
+ if (!note.agentRunId) return 'unknown author'
+ return props.personaNameByRunId[note.agentRunId] ?? 'an agent run'
+}
 
 const kind = ref<'finding' | 'decision' | 'blocker'>('decision')
 const title = ref('')
@@ -88,6 +109,7 @@ const submit = => {
  <span class="title">{{ note.title }}</span>
  <p class="body">{{ note.body }}</p>
  <code v-if="note.paths.length > 0" class="paths">{{ note.paths.join(', ') }}</code>
+ <p class="provenance"><span class="when">{{ describeAge(note.createdAt) }}</span></p>
  </li>
  </ul>
  </div>
@@ -109,6 +131,25 @@ const submit = => {
  <span class="title">{{ note.title }}</span>
  <p class="body">{{ note.body }}</p>
  <code v-if="note.paths.length > 0" class="paths">{{ note.paths.join(', ') }}</code>
+ <!--
+ Who wrote it and when. `agentRunId` and `createdAt` have always been on
+ the note and neither was rendered, which mattered most in exactly this
+ group: framing a claim as untrusted is worth much less when a reader
+ cannot tell *which* worker is making it, or whether it is from before
+ the thing they are looking at changed.
+ -->
+ <p class="provenance">
+ <button
+ v-if="note.agentRunId"
+ type="button"
+ class="author"
+ @click="emit('open', note.agentRunId)"
+ >
+ {{ authorName(note) }}
+ </button>
+ <span v-else class="author-plain">{{ authorName(note) }}</span>
+ <span class="when">{{ describeAge(note.createdAt) }}</span>
+ </p>
  </li>
  </ul>
  </div>
@@ -147,6 +188,26 @@ const submit = => {
 </template>
 
 <style scoped>
+.provenance {
+ display: flex;
+ gap: 0.4rem;
+ align-items: baseline;
+ margin: 0.2rem 0 0;
+ font-size: 0.68rem;
+ color: var(--text-faint);
+}
+
+.author {
+ border: 0;
+ padding: 0;
+ background: none;
+ color: var(--accent);
+ font: inherit;
+ font-size: inherit;
+ text-decoration: underline;
+ cursor: pointer;
+}
+
 .panel {
  border: 1px solid var(--border);
  border-radius: 0.5rem;

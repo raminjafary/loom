@@ -26,7 +26,11 @@ import { computed, onUnmounted, ref } from 'vue'
  * discovers them.
  */
 
-const props = defineProps<{ board: SwarmBoard | null }>
+const props = defineProps<{
+ board: SwarmBoard | null
+ /** The last board fetch's failure — see AgentSnapshot.fetchErrors. */
+ fetchError: string | null
+}>
 const emit = defineEmits<{ refresh: []; watch: [agentRunId: string] }>
 
 /** Ordered so a reader's eye travels the way work does. */
@@ -85,7 +89,10 @@ const workingCount = computed(
  <button type="button" @click="emit('refresh')">Refresh</button>
  </header>
 
- <p v-if="!props.board || props.board.cards.length === 0" class="empty">
+ <p v-if="props.fetchError" class="failed">
+ Could not load the board — <strong>{{ props.fetchError }}</strong>
+ </p>
+ <p v-else-if="!props.board || props.board.cards.length === 0" class="empty">
  No swarm to show. Start a planner, or watch a run.
  </p>
 
@@ -113,7 +120,11 @@ const workingCount = computed(
 :key="card.runId"
  class="card"
 :class="{ blocked: card.blockerCount > 0 }"
+ role="button"
+ tabindex="0"
  @click="emit('watch', card.runId)"
+ @keydown.enter.prevent="emit('watch', card.runId)"
+ @keydown.space.prevent="emit('watch', card.runId)"
  >
  <!--
  Plain interpolation, never v-html: a card's title comes from a run's
