@@ -243,13 +243,88 @@ export const connectVerdict = (
  * Goes through the same serializer the persona form uses, and is saved through
  * `persona.update` — the "through the same contract calls a markdown edit uses",
  * which is what keeps the canvas from being a second write path with its own rules.
- * Additive only: a connection asks for a permission and never removes one, so
- * disconnecting a line is not the same gesture in reverse and is not offered.
+ * Additive only. Removing is `withoutDelegate` below, and it is deliberately a
+ * different function rather than this one in reverse — see its own comment for why the
+ * two are not symmetric.
  */
 export const withWiderEnvelope = (planner: AgentPersona, tools: readonly string[]): string => {
  const form = personaFormFromPersona(planner)
  const delegates = [...new Set([...form.delegates,...tools])]
  return personaFormToMarkdown({...form, delegates })
+}
+
+/**
+ * What removing one delegation edge would cost, and whether it can be done at all.
+ *
+ * **A delegation edge is not a stored pair**, and that is the whole difficulty. The
+ * matrix is computed from the planner's `harness.delegates` envelope against each
+ * worker's tools (the attenuation), so there is no row to delete: the only way to stop a
+ * planner delegating to one worker is to narrow the envelope until that worker no longer
+ * fits. Which means removing an edge can remove *others*, and a canvas that silently did
+ * that would be the design surface lying about what it changed — the one thing the roadmap says it
+ * must never do.
+ *
+ * So this computes the tools that only the removed worker needs, and reports what else
+ * would go with them. Three outcomes, all of which a human should see before agreeing:
+ *
+ * - `clean` — those tools serve no other current delegate, so the edge goes and nothing
+ * else moves.
+ * - `collateral` — narrowing also drops the named workers, because they need the same
+ * tools. Offered, with the list, because it is sometimes exactly what is wanted.
+ * - `impossible` — the worker needs no tool the others do not also need, so no envelope
+ * excludes it while including them. There is nothing to narrow, and saying "removed"
+ * would be a lie the next plan would expose.
+ */
+export type RemoveEdgeVerdict =
+ | { readonly kind: 'clean'; readonly tools: string[] }
+ | { readonly kind: 'collateral'; readonly tools: string[]; readonly alsoLoses: string[] }
+ | { readonly kind: 'impossible'; readonly reason: string }
+
+export const removeDelegateVerdict = (
+ planner: AgentPersona,
+ remove: { name: string; tools: readonly string[] },
+ /** The other workers this planner currently delegates to, with their tools. */
+ others: readonly { name: string; tools: readonly string[] }[],
+): RemoveEdgeVerdict => {
+ const envelope = new Set(personaFormFromPersona(planner).delegates)
+ // Only tools the envelope actually grants are candidates: narrowing cannot remove
+ // what was never there, and listing them would overstate what the change does.
+ const needed = [...new Set(remove.tools)].filter((tool) => envelope.has(tool))
+ if (needed.length === 0) {
+ return {
+ kind: 'impossible',
+ reason: `${remove.name} needs no tool this planner's envelope grants, so narrowing it changes nothing.`,
+ }
+ }
+
+ const othersNeed = new Set(others.flatMap((worker) => worker.tools))
+ const exclusive = needed.filter((tool) => !othersNeed.has(tool))
+ if (exclusive.length === 0) {
+ return {
+ kind: 'impossible',
+ reason: `Every tool ${remove.name} needs is also needed by ${others
+.map((worker) => worker.name)
+.join(', ')}, so no envelope excludes it while keeping them.`,
+ }
+ }
+
+ const alsoLoses = others
+.filter((worker) => worker.tools.some((tool) => exclusive.includes(tool)))
+.map((worker) => worker.name)
+
+ return alsoLoses.length === 0
+ ? { kind: 'clean', tools: exclusive }
+: { kind: 'collateral', tools: exclusive, alsoLoses }
+}
+
+/** The planner's markdown with those tools removed from `harness.delegates`. */
+export const withoutDelegate = (planner: AgentPersona, tools: readonly string[]): string => {
+ const form = personaFormFromPersona(planner)
+ const drop = new Set(tools)
+ return personaFormToMarkdown({
+...form,
+ delegates: form.delegates.filter((tool) => !drop.has(tool)),
+ })
 }
 
 /**

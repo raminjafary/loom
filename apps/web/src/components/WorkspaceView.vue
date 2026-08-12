@@ -213,10 +213,6 @@ const loadGraphExpertise = async => {
  })
 }
 
-watch(
- => [revealGraph.value, agentSnapshot.value.activeRun?.repositoryId] as const,
- => void loadGraphExpertise,
-)
 
 const startMastery = async (repositoryId: string) => {
  const personaId = masteryPersonaId.value
@@ -408,6 +404,17 @@ const openRunThread = async (agentRunId: string) => {
  * frontier-model planner run. A double-click bought two of them.
  */
 const revealGraph = ref(0)
+
+/**
+ * Declared after `revealGraph` on purpose. Placed above it this watcher reads the ref in
+ * its own initializer, which `vue-tsc` accepts and the browser refuses — "Cannot access
+ * 'revealGraph' before initialization", thrown once at setup, killing the whole view.
+ * A temporal-dead-zone error is invisible to every static check in this repo.
+ */
+watch(
+ => [revealGraph.value, agentSnapshot.value.activeRun?.repositoryId] as const,
+ => void loadGraphExpertise,
+)
 
 /**
  * What the canvas's Refresh re-reads: the tree **and** the merge queue.
