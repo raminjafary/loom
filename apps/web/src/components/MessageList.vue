@@ -592,8 +592,23 @@ header {
  font-weight: 700;
 }
 
+/*
+ Line breaks survive.
+
+ Every multi-line message the platform writes is newline-joined and was being rendered
+ into a `<p>`, where the browser collapses newlines to spaces — so a plan summary read
+ as one run-on line: "Plan finished: 2/2 subtasks completed, $0.3880 total. •
+ product-manager — completed → loom/run-3d034d3c • security-reviewer …". Every list the
+ platform composes lands here: `summarizeChildOutcomes`, `applySubmittedPlan`'s
+ accepted/refused summary, the path-overlap warnings, the cross-plan warning.
+
+ `pre-wrap` rather than `pre`: these still have to wrap in a ~21rem column, and the
+ text is composed with meaningful newlines and no meaningful leading whitespace.
+ `overflow-wrap` stays for the long branch names and paths inside them.
+*/
 .detail {
  margin: 0;
+ white-space: pre-wrap;
  overflow-wrap: anywhere;
 }
 
