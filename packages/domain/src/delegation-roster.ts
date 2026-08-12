@@ -128,6 +128,18 @@ export const describeDelegationRoster = (
  'one unit of work and it will decompose that area itself; give a worker a piece ' +
  'small enough to finish on one branch. Prefer a planner when a part of the goal ' +
  'would otherwise need more subtasks than you can describe precisely.',
+ /**
+ * A planner holds no tools — including yours. Observed live: a root that
+ * delegated "decompose the docs area (docs-area.md)" produced two sub-planners
+ * that each stopped and asked a human what was in the file, planned nothing,
+ * and sat on the gate until the SLA denied them. The subtask text is the only
+ * thing a sub-planner has, and naming a file inside it describes work the
+ * recipient cannot look at.
+ */
+ 'A planner cannot read files — it has no tools at all, exactly as you have none. ' +
+ "So write a subtask for a planner as a self-contained brief: say what that area " +
+ 'has to end up containing and what constraints apply, in the task text itself. ' +
+ 'Naming a file it should go and read will stop it, because it cannot.',
  ]
 : []
 

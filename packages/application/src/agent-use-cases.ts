@@ -1302,13 +1302,25 @@ const startPlannedChild = async (
  threadId,
  repositoryId: planner.repositoryId,
  personaId: persona.id,
- // The paths this subtask owns are appended to the *task*, not left only in
- // the ledger. The ledger carries every sibling's claim, so a worker reading
- // it alone cannot tell which claim is its own — and the task is the one
- // channel a worker is meant to treat as authoritative.
+ /**
+ * The paths this subtask owns are appended to the *task*, not left only in the
+ * ledger. The ledger carries every sibling's claim, so a worker reading it alone
+ * cannot tell which claim is its own — and the task is the one channel a worker
+ * is meant to treat as authoritative.
+ *
+ * **Worded differently for a sub-planner, because it cannot act on the worker
+ * version.** A planner holds `tools: []`: told "you own these paths, leave the
+ * others alone", it reads that as an instruction about files it is expected to
+ * open, finds it has no way to open them, and asks a human for their contents —
+ * observed live, twice in one run, with both sub-planners parked on `ask_human`
+ * having planned nothing. What a planner owns is an *area to decompose*, and
+ * the paths are the boundary it should hand down.
+ */
  task:
  subtask.paths.length === 0
  ? subtask.task
+: persona.harnessPlanner
+ ? `${subtask.task}\n\nYour area covers these paths: ${subtask.paths.join(', ')}. You cannot read files yourself — decompose the work and let the workers you delegate to read them, claiming paths within your area for each subtask. Other areas own the rest.`
 : `${subtask.task}\n\nYou own these paths for this task: ${subtask.paths.join(', ')}. Other workers own the rest; prefer leaving their paths alone and reporting what you need from them.`,
  parentRunId: planner.id,
  relation: 'delegation',

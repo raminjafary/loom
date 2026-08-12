@@ -51,6 +51,30 @@ export const createPlannerTool = : PlannerToolHandle => {
 .min(1)
 .max(100)
 .describe('The name of the registered persona that should do this subtask'),
+ /**
+ * **This field was missing, and its absence explains a feature that never
+ * fired.** Path ownership, the overlap warning, the cross-plan collision
+ * check and the board's per-card claim are all built on it — and all of
+ * them were reading a field the model was never asked for. The wire
+ * protocol carried it, the domain validated it, the server acted on it,
+ * and every live planner submitted plans without it, which read as
+ * "planners choose not to claim paths" rather than as a missing input.
+ *
+ * The description says *why* to claim rather than only what to write: the
+ * point of the field is the warning it makes possible before tokens are
+ * spent, and a model that does not know that treats it as bookkeeping.
+ */
+ paths: z
+.array(z.string)
+.optional
+.describe(
+ 'Repository-relative paths (files or directories) this subtask will ' +
+ 'work in — for example ["src/api", "docs/api.md"]. Claim them: the ' +
+ 'platform uses these to warn about two workers heading for the same ' +
+ 'file before either of them starts, which is the main cause of merge ' +
+ 'conflicts. Best effort is useful — name the paths you are confident ' +
+ 'about and leave the list short rather than guessing at the whole tree.',
+),
  }),
 )
 .min(1)

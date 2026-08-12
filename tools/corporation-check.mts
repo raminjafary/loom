@@ -237,8 +237,22 @@ const main = async => {
  // run's start is the one fact that names another area.
  const notes = await client.workerNote.listByTree({ agentRunId: root.id })
  check(notes.length > 0, `the tree accumulated a ledger (${notes.length} note(s))`)
+ /**
+ * Path ownership, asserted rather than merely printed.
+ *
+ * This was a `console.log` for several sessions, and the line it printed was empty
+ * every time — which read as "planners choose not to claim paths" and was recorded
+ * as such in two handoffs. The real cause was that `submit_plan`'s schema never
+ * offered a `paths` field, so no planner could claim one however it was prompted.
+ * The wire protocol carried the field, the domain validated it, the server acted on
+ * it, and the model was never asked. A printed line cannot fail; this can.
+ */
  const ownership = notes.filter((n: any) => n.kind === 'path_ownership')
  console.log(' path claims:', ownership.map((n: any) => `${n.title}:[${n.paths}]`).join(' '))
+ check(
+ ownership.some((n: any) => (n.paths ?? []).length > 0),
+ `a planner claimed paths for its subtasks (${ownership.length} claim(s))`,
+)
 
  const messages = await client.message.list({ threadId: channel.rootThread.id })
  const refusals = messages.messages
