@@ -956,22 +956,26 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  }
  },
 
+ /**
+ * Both of these **throw** rather than patching the session error, and that is
+ * deliberate.
+ *
+ * The Expertise panel owns its own error line, and the session banner is shared by
+ * ~35 actions. Routing a failed map read there produced exactly the failure this
+ * codebase already fixed once for the Inbox: a red bar at the top of the page, and
+ * underneath it a panel calmly reporting "this agent has mastered nothing yet" —
+ * which is the opposite of what happened. Worse, the banner is not cleared by the
+ * retry that succeeds, so it outlives the problem it describes.
+ *
+ * `startMastery` below keeps the banner, because it is an *action* a human took and
+ * has no panel of its own to fail into.
+ */
  async listPersonaMaps(personaId) {
- try {
- return await options.api.mastery.listForPersona({ personaId })
- } catch (error) {
- patch({ error: errorMessage(error) })
- return []
- }
+ return options.api.mastery.listForPersona({ personaId })
  },
 
  async getMastery(mapId) {
- try {
- return await options.api.mastery.get({ mapId })
- } catch (error) {
- patch({ error: errorMessage(error) })
- return null
- }
+ return options.api.mastery.get({ mapId })
  },
 
  async startMastery(input) {

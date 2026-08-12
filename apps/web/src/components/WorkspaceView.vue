@@ -7,7 +7,7 @@ import {
  SELECTABLE_MODELS,
  threadsByParentMessage,
 } from '@loom/client-core'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ActiveRunsPanel from './ActiveRunsPanel.vue'
 import ApprovalCard from './ApprovalCard.vue'
 import Composer from './Composer.vue'
@@ -111,13 +111,65 @@ const loadMastery = async (mapId: string) => {
  masteryLoading.value = true
  masteryError.value = null
  try {
- masteryView.value = await agent.getMastery(mapId)
+ const view = await agent.getMastery(mapId)
+ masteryView.value = view
+ /**
+ * The list is refreshed from the view's own row, not left as it was fetched.
+ *
+ * A map's status moves while a human is looking at it — `mastering` becomes `ready`
+ * or `failed` when the run ends — so the row and the summary underneath it are two
+ * reads taken at different moments. Seen in a browser: the subject row said
+ * "mastering" directly above a line reading "the mastery run failed". The view is
+ * the later read and carries the same row, so there is nothing to fetch.
+ */
+ if (view) {
+ masteryMaps.value = masteryMaps.value.map((map) => (map.id === view.map.id ? view.map: map))
+ }
  } catch (error) {
  masteryError.value = error instanceof Error ? error.message: String(error)
  } finally {
  masteryLoading.value = false
  }
 }
+
+/**
+ * The open map follows the run that is writing it.
+ *
+ * The reason for writing a map incrementally is not only durability: "that also makes
+ * the partial map readable *during* the run, which is what makes stopping early a real
+ * option." A panel that only fetched on click made that claim false — the data
+ * accumulated and nobody could watch it.
+ *
+ * Driven by the session snapshot rather than by a timer, which is the same mechanism the
+ * board uses: every run transition posts a thread message, so a snapshot changing is the
+ * earliest signal that anything about a run has moved. The guard is what keeps it cheap —
+ * one extra read per nudge, only while a map is actually being mastered and only while
+ * someone is looking at it.
+ */
+const followOpenMap = => {
+ const open = masteryView.value
+ if (!open || open.map.status !== 'mastering' || masteryLoading.value) return
+ void loadMastery(open.map.id)
+}
+
+watch( => agentSnapshot.value, followOpenMap)
+
+/**
+ * The safety net behind the nudge, and it is not optional — the nudge alone loses a
+ * race that happens constantly.
+ *
+ * A snapshot changes when a run transitions, so the *completion* nudge is what would
+ * flip an open map from `mastering` to `ready`. Open the panel a moment after that
+ * nudge has already passed and no further snapshot ever arrives, so the map sits on
+ * "Mastering." forever while the database says otherwise. Seen in a browser: 7 nodes,
+ * status `ready` in Postgres, and a panel still claiming the run was in progress.
+ *
+ * Same shape and same reasoning as the session's own 10s net behind its socket. It
+ * costs nothing when nothing is being mastered, because the guard above returns first.
+ */
+const MASTERY_FOLLOW_MS = 4_000
+const masteryFollowTimer = window.setInterval(followOpenMap, MASTERY_FOLLOW_MS)
+onBeforeUnmount( => window.clearInterval(masteryFollowTimer))
 
 const startMastery = async (repositoryId: string) => {
  const personaId = masteryPersonaId.value
