@@ -576,6 +576,24 @@ describe('runner-gateway: agent run event ingest', => {
  }
  expect(pending).toHaveLength(1)
 
+ /**
+ * Waits for the *status*, not only for the approval row, and the difference is a
+ * flake this suite had.
+ *
+ * The gate is two writes: the `approval_request` row and the run's transition to
+ * `awaiting_approval`. Polling the first and then asserting the second leaves a
+ * window where the reaper below — running with a zero no-progress timeout, which
+ * reaps anything not already excused — takes a run that is a few milliseconds from
+ * being excused. It failed roughly one full-suite run in five and never in
+ * isolation, which is exactly the shape of a race against a write that is still
+ * in flight.
+ */
+ for (let i = 0; i < 40; i += 1) {
+ const current = await client.agentRun.get({ agentRunId: run.id })
+ if (current.status === 'awaiting_approval') break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+
  // Zero no-progress timeout would reap any other run instantly; a generous
  // heartbeat timeout isolates the signal under test to no-progress alone.
  await reapStuckRuns(app.deps, { heartbeatTimeoutMs: 3_600_000, noProgressTimeoutMs: 0 })

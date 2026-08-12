@@ -5,6 +5,11 @@ import {
  agentRun,
  agentRunEvent,
  approvalRequest,
+ masteryCheckpoint,
+ noteReadEdge,
+ subjectMap,
+ subjectMapEdge,
+ subjectMapNode,
  auditEvent,
  channel,
  message,
@@ -30,13 +35,13 @@ import {
 
 export const truncateDomainTables = async (db: Database): Promise<void> => {
  await db.execute(
- sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${agentRun}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel} restart identity cascade`,
+ sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel} restart identity cascade`,
 )
 }
 
 export const truncateAll = async (db: Database): Promise<void> => {
  await db.execute(
- sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${agentRun}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel}, ${workspace} restart identity cascade`,
+ sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel}, ${workspace} restart identity cascade`,
 )
 }
 
