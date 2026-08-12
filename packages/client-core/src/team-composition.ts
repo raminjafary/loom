@@ -275,9 +275,37 @@ export const withWiderEnvelope = (planner: AgentPersona, tools: readonly string[
  * excludes it while including them. There is nothing to narrow, and saying "removed"
  * would be a lie the next plan would expose.
  */
+/**
+ * One way to narrow the envelope, and what that particular way costs.
+ *
+ * Every option removes the edge; they differ only in who else goes. The list is
+ * returned rather than only the winner because the automatic choice is a *minimum*,
+ * not the answer — a human may prefer to drop a tool that costs two teammates they
+ * were going to remove anyway over one that costs one they were not. Reporting only
+ * the winner also produced the complaint this list answers: a panel that names three
+ * collateral workers with no way to see the alternatives reads as "everyone loses
+ * something", when the truth is "this narrowing does, and there are two others".
+ */
+export interface RemoveEdgeOption {
+ readonly tool: string
+ readonly alsoLoses: string[]
+}
+
 export type RemoveEdgeVerdict =
- | { readonly kind: 'clean'; readonly tools: string[] }
- | { readonly kind: 'collateral'; readonly tools: string[]; readonly alsoLoses: string[] }
+ | { readonly kind: 'clean'; readonly tools: string[]; readonly options: RemoveEdgeOption[] }
+ | {
+ readonly kind: 'collateral'
+ readonly tools: string[]
+ readonly alsoLoses: string[]
+ readonly options: RemoveEdgeOption[]
+ /**
+ * Whether *no* narrowing spares anyone — the case that reads as "all the workers
+ * lose something", and the only case where saying so is true. Distinguished from
+ * ordinary collateral because the two call for different decisions: one is a
+ * trade between options, the other is a choice between this edge and the team.
+ */
+ readonly everyOptionCosts: boolean
+ }
  | { readonly kind: 'impossible'; readonly reason: string }
 
 export const removeDelegateVerdict = (
@@ -285,6 +313,12 @@ export const removeDelegateVerdict = (
  remove: { name: string; tools: readonly string[] },
  /** The other workers this planner currently delegates to, with their tools. */
  others: readonly { name: string; tools: readonly string[] }[],
+ /**
+ * Which tool to narrow by, when a human picked one from `options` rather than taking
+ * the cheapest. Ignored when the envelope does not grant it — an option that is not on
+ * the list cannot become the answer by being asked for.
+ */
+ preferTool?: string,
 ): RemoveEdgeVerdict => {
  const envelope = new Set(personaFormFromPersona(planner).delegates)
  // Only tools the envelope actually grants are candidates: narrowing cannot remove
@@ -308,17 +342,23 @@ export const removeDelegateVerdict = (
  * intersection, and "impossible" survives only for the case where there is nothing to
  * drop at all.
  */
- const options = needed
+ const options: RemoveEdgeOption[] = needed
 .map((tool) => ({
  tool,
  alsoLoses: others.filter((worker) => worker.tools.includes(tool)).map((w) => w.name),
  }))
 .sort((a, b) => a.alsoLoses.length - b.alsoLoses.length || (a.tool < b.tool ? -1: 1))
 
- const best = options[0]!
- return best.alsoLoses.length === 0
- ? { kind: 'clean', tools: [best.tool] }
-: { kind: 'collateral', tools: [best.tool], alsoLoses: best.alsoLoses }
+ const chosen = options.find((option) => option.tool === preferTool) ?? options[0]!
+ return chosen.alsoLoses.length === 0
+ ? { kind: 'clean', tools: [chosen.tool], options }
+: {
+ kind: 'collateral',
+ tools: [chosen.tool],
+ alsoLoses: chosen.alsoLoses,
+ options,
+ everyOptionCosts: options.every((option) => option.alsoLoses.length > 0),
+ }
 }
 
 /** The planner's markdown with those tools removed from `harness.delegates`. */

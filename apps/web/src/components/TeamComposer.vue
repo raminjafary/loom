@@ -163,6 +163,16 @@ watch(
  */
 const nodes = computed( => composerNodes(members.value, layout.value, props.matrix))
 
+/**
+ * Declared above everything that reads it, not beside the inspector that owns it.
+ *
+ * A `computed` is lazy so a later `const` would work by accident, and a `watch` in the
+ * same position would not — this repository has already lost a whole view to a watcher
+ * reading a ref inside its own temporal dead zone, which `vue-tsc` and eslint both
+ * accept. Ordering by first use is the cheap way not to have that argument again.
+ */
+const selectedEdgeId = ref('')
+
 const flowNodes = computed( =>
  nodes.value.map((node) => ({
  id: node.personaId,
@@ -175,6 +185,13 @@ const flowNodes = computed( =>
  // The recursion edge, as a mark on the node that starts it — see
  // `ComposerNode.recurses` for why it is not drawn as a loop.
  node.recurses ? 'recurses': '',
+ // The two ends of whatever edge is selected. Without this the sidebar talks about
+ // "this edge" while the canvas shows fifteen identical lines, which is the state
+ // that made a specific message read as a general one.
+ selectedEdge.value &&
+ (selectedEdge.value.source === node.personaId || selectedEdge.value.target === node.personaId)
+ ? 'endpoint'
+: '',
  ]
 .filter(Boolean)
 .join(' '),
@@ -197,6 +214,10 @@ const edges = computed<ComposerEdge[]>( =>
 ),
 )
 
+const selectedEdge = computed(
+ => edges.value.find((edge) => edge.id === selectedEdgeId.value) ?? null,
+)
+
 const recursivePlanners = computed( => nodes.value.filter((node) => node.recurses))
 
 /**
@@ -210,18 +231,17 @@ const blockedRecursion = computed( =>
 .map((node) => `${node.name} cannot: ${node.recursionSummary}`),
 )
 
+/**
+ * Whether anything is selected at all, so the unselected edges can be dimmed only when
+ * there is something to dim. Dimming everything by default would make the ordinary
+ * canvas quieter than it should be — every edge on it is a fact worth reading.
+ */
+const hasSelection = computed( => selectedEdge.value !== null)
+
 const flowEdges = computed( =>
- edges.value.map((edge) => ({
- id: edge.id,
- source: edge.source,
- target: edge.target,
- // A review edge is labelled always, a delegation only when refused: the delegation's
- // label is a *problem*, and the review's is the whole content of the edge.
- label: edge.kind === 'reviews' ? 'reviews': edge.ok ? '': edge.summary,
- animated: false,
- class:
- edge.kind === 'reviews' ? 'reviews': edge.ok ? 'delegates ok': 'delegates refused',
- style:
+ edges.value.map((edge) => {
+ const selected = edge.id === selectedEdgeId.value
+ const base =
  edge.kind === 'reviews'
  ? // Dotted and in the "ok" colour, and deliberately not the accent: it is not a
  // permission the platform granted, it is a human's expectation, and nothing
@@ -229,8 +249,43 @@ const flowEdges = computed( =>
  { stroke: 'var(--ok)', strokeWidth: 1.5, strokeDasharray: '2 4' }
 : edge.ok
  ? { stroke: 'var(--accent)', strokeWidth: 2 }
-: { stroke: 'var(--danger, #b42318)', strokeWidth: 1.5, strokeDasharray: '5 4' },
- })),
+: { stroke: 'var(--danger, #b42318)', strokeWidth: 1.5, strokeDasharray: '5 4' }
+ return {
+ id: edge.id,
+ source: edge.source,
+ target: edge.target,
+ /**
+ * A selected edge says who it joins, whatever kind it is. Otherwise a review edge
+ * is labelled always and a delegation only when refused: the delegation's label is
+ * a *problem*, and the review's is the whole content of the edge.
+ */
+ label: selected
+ ? `${personaById(edge.source)?.name ?? '?'} → ${personaById(edge.target)?.name ?? '?'}`
+: edge.kind === 'reviews'
+ ? 'reviews'
+: edge.ok
+ ? ''
+: edge.summary,
+ animated: selected,
+ class: [
+ edge.kind === 'reviews' ? 'reviews': edge.ok ? 'delegates ok': 'delegates refused',
+ selected ? 'chosen': hasSelection.value ? 'muted': '',
+ ]
+.filter(Boolean)
+.join(' '),
+ /**
+ * Thicker rather than recoloured. The colour already carries the edge's *kind*,
+ * which does not stop being true because someone clicked it — repainting a refused
+ * edge in the accent to show selection would trade the one thing the canvas is for
+ * against a state that lasts until the next click.
+ */
+ style: selected
+ ? {...base, strokeWidth: 4, strokeDasharray: undefined }
+: hasSelection.value
+ ? {...base, opacity: 0.25 }
+: base,
+ }
+ }),
 )
 
 /**
@@ -255,11 +310,6 @@ watch(
  await nextTick
  requestAnimationFrame( => fitView(FIT))
  },
-)
-
-const selectedEdgeId = ref('')
-const selectedEdge = computed(
- => edges.value.find((edge) => edge.id === selectedEdgeId.value) ?? null,
 )
 
 const personaById = (id: string) => props.personas.find((persona) => persona.id === id) ?? null
@@ -473,19 +523,21 @@ const onConnect = (connection: Connection) => {
 const removal = ref<{
  verdict: RemoveEdgeVerdict
  plannerId: string
+ plannerName: string
  targetName: string
 } | null>(null)
 
-const requestRemoveEdge = => {
+/**
+ * Computes the removal for one edge, optionally narrowing by a tool the human chose
+ * from the offered alternatives rather than by the cheapest one.
+ *
+ * Recomputed from the matrix on every call rather than kept as state, because the
+ * personas can change underneath an open panel — a proposal that outlived the envelope
+ * it was computed against would apply a narrowing whose cost it no longer describes.
+ */
+const proposeRemoval = (preferTool?: string) => {
  const edge = selectedEdge.value
- if (!edge) return
-
- if (edge.kind === 'reviews') {
- // `source` reviews `target` — clearing is the picker's own empty state.
- setReviewer(edge.target, '')
- selectedEdgeId.value = ''
- return
- }
+ if (!edge || edge.kind === 'reviews') return
 
  const planner = personaById(edge.source)
  const target = personaById(edge.target)
@@ -505,10 +557,30 @@ const requestRemoveEdge = => {
  })
 
  removal.value = {
- verdict: removeDelegateVerdict(planner, { name: target.name, tools: target.tools }, others),
+ verdict: removeDelegateVerdict(
+ planner,
+ { name: target.name, tools: target.tools },
+ others,
+ preferTool,
+),
  plannerId: planner.id,
+ plannerName: planner.name,
  targetName: target.name,
  }
+}
+
+const requestRemoveEdge = => {
+ const edge = selectedEdge.value
+ if (!edge) return
+
+ if (edge.kind === 'reviews') {
+ // `source` reviews `target` — clearing is the picker's own empty state.
+ setReviewer(edge.target, '')
+ selectedEdgeId.value = ''
+ return
+ }
+
+ proposeRemoval
 }
 
 const applyRemoval = => {
@@ -749,10 +821,25 @@ const onKeydown = (event: KeyboardEvent) => {
  -->
  <section v-if="selectedEdge" class="inspector">
  <h3>
+ <span class="edge-name">
  {{ personaById(selectedEdge.source)?.name }} →
  {{ personaById(selectedEdge.target)?.name }}
+ </span>
+ <!--
+ Which of the two kinds this is, said on the edge's own panel. They are
+ stored differently and removed by genuinely different acts, so a human
+ reading a message about "this edge" needs to know which one they picked.
+ -->
+ <em class="edge-kind">{{
+ selectedEdge.kind === 'reviews' ? 'review expectation': 'delegation'
+ }}</em>
  </h3>
- <p v-if="selectedEdge.ok" class="ok">
+ <p v-if="selectedEdge.kind === 'reviews'" class="ok">
+ {{ personaById(selectedEdge.source)?.name }} is expected to review
+ {{ personaById(selectedEdge.target)?.name }}'s work. Nothing in the runtime
+ gates on it — it is this team's policy, not a permission.
+ </p>
+ <p v-else-if="selectedEdge.ok" class="ok">
  This planner may delegate to this worker.
  </p>
  <ul v-else class="refusals">
@@ -779,27 +866,64 @@ const onKeydown = (event: KeyboardEvent) => {
  </section>
 
  <section v-if="removal" class="pending" role="alert">
+ <h3 class="removal-head">
+ Remove {{ removal.plannerName }} → {{ removal.targetName }}
+ </h3>
  <template v-if="removal.verdict.kind === 'impossible'">
  <p>{{ removal.verdict.reason }}</p>
  <button type="button" class="link" @click="removal = null">Dismiss</button>
  </template>
  <template v-else>
  <p>
- Removing this edge narrows the planner's envelope by
+ Removing <strong>this one edge</strong> narrows
+ {{ removal.plannerName }}'s envelope by
  <strong>{{ removal.verdict.tools.join(', ') }}</strong
  >, which is the only way to stop it delegating to
  {{ removal.targetName }} — a delegation edge is derived from the envelope,
  not stored as a pair.
  </p>
- <p v-if="removal.verdict.kind === 'collateral'" class="fine">
- It also stops this planner delegating to
+ <p v-if="removal.verdict.kind === 'clean'" class="fine">
+ No other delegate needs that tool, so every other edge on this canvas stays
+ exactly as it is.
+ </p>
+ <template v-else>
+ <p class="fine">
+ It also stops {{ removal.plannerName }} delegating to
  <strong>{{ removal.verdict.alsoLoses.join(', ') }}</strong
  >, which need the same tool. Said before it happens rather than discovered
  afterwards.
  </p>
+ <!--
+ The alternatives, because the automatic choice is a minimum and not the
+ answer. Without them a panel naming three collateral workers reads as
+ "everyone loses something", when the truth is that *this* narrowing does
+ and another may not.
+ -->
+ <p v-if="removal.verdict.everyOptionCosts" class="fine">
+ Every tool that would remove this edge is shared with someone, so there is
+ no narrowing that costs nothing. The choice below is which cost to pay.
+ </p>
+ <ul v-if="removal.verdict.options.length > 1" class="options">
+ <li v-for="option in removal.verdict.options":key="option.tool">
+ <button
+ type="button"
+ class="link"
+:disabled="removal.verdict.tools.includes(option.tool)"
+ @click="proposeRemoval(option.tool)"
+ >
+ drop {{ option.tool }}
+ </button>
+ <span class="fine">{{
+ option.alsoLoses.length === 0
+ ? 'nothing else changes'
+: `also loses ${option.alsoLoses.join(', ')}`
+ }}</span>
+ </li>
+ </ul>
+ </template>
  <div class="actions">
  <button type="button":disabled="props.busy" @click="applyRemoval">
- Narrow the envelope
+ Narrow by {{ removal.verdict.tools.join(', ') }}
  </button>
  <button type="button" class="link" @click="removal = null">Cancel</button>
  </div>
@@ -1040,6 +1164,55 @@ header h2 {
 .canvas:deep(.persona-node.planner) {
  border-color: var(--accent);
  font-weight: 600;
+}
+
+/* The two ends of the selected edge, so "this edge" on the right has a referent on the
+ left. An outline rather than a border change: the border already says planner. */
+.canvas:deep(.persona-node.endpoint) {
+ outline: 2px solid var(--text-muted);
+ outline-offset: 2px;
+}
+
+/* A selected edge's own label stays readable while the rest fade — the label is the
+ name of the thing the sidebar is talking about. */
+.canvas:deep(.chosen.vue-flow__edge-text) {
+ fill: var(--text);
+ font-weight: 600;
+}
+
+.canvas:deep(.muted.vue-flow__edge-text) {
+ opacity: 0.25;
+}
+
+.edge-name {
+ color: var(--text);
+}
+
+.edge-kind {
+ margin-left: 0.4rem;
+ font-style: normal;
+ font-size: 0.68rem;
+ color: var(--text-faint);
+}
+
+.removal-head {
+ margin: 0;
+ color: var(--text);
+}
+
+.options {
+ margin: 0;
+ padding: 0;
+ list-style: none;
+ display: flex;
+ flex-direction: column;
+ gap: 0.2rem;
+}
+
+.options li {
+ display: flex;
+ align-items: baseline;
+ gap: 0.4rem;
 }
 
 .side {

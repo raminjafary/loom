@@ -419,6 +419,71 @@ describe('removeDelegateVerdict / withoutDelegate — taking an edge off the can
  if (verdict.kind === 'collateral') expect(verdict.alsoLoses).toEqual(['qa'])
  })
 
+ /**
+ * The complaint this answers, verbatim from the operator: selecting one edge produced a
+ * notice that read as though every worker would lose something. It was accurate and it
+ * was one option out of several — reporting only the winner is what made a specific cost
+ * read as a general one.
+ */
+ it('returns every narrowing that would work, not only the cheapest', => {
+ const verdict = removeDelegateVerdict(
+ planner,
+ { name: 'swe', tools: ['Read', 'Edit', 'Bash'] },
+ [
+ { name: 'qa', tools: ['Read'] },
+ { name: 'frontend', tools: ['Read', 'Edit'] },
+ ],
+)
+
+ expect(verdict.kind).toBe('clean')
+ if (verdict.kind !== 'clean') return
+ expect(verdict.tools).toEqual(['Bash'])
+ expect(verdict.options.map((option) => option.tool)).toEqual(['Bash', 'Edit', 'Read'])
+ expect(verdict.options.find((option) => option.tool === 'Read')?.alsoLoses).toEqual([
+ 'qa',
+ 'frontend',
+ ])
+ })
+
+ it('narrows by the tool a human picked from the alternatives, not by the minimum', => {
+ const verdict = removeDelegateVerdict(
+ planner,
+ { name: 'swe', tools: ['Read', 'Edit', 'Bash'] },
+ [{ name: 'frontend', tools: ['Read', 'Edit'] }],
+ 'Edit',
+)
+
+ expect(verdict.kind).toBe('collateral')
+ if (verdict.kind !== 'collateral') return
+ expect(verdict.tools).toEqual(['Edit'])
+ expect(verdict.alsoLoses).toEqual(['frontend'])
+ // Bash costs nothing, so this is not the case where the team is the price.
+ expect(verdict.everyOptionCosts).toBe(false)
+ })
+
+ it('ignores a preferred tool the envelope does not grant', => {
+ const verdict = removeDelegateVerdict(
+ planner,
+ { name: 'swe', tools: ['Read', 'Bash'] },
+ [{ name: 'qa', tools: ['Read'] }],
+ 'WebFetch',
+)
+
+ expect(verdict.kind).toBe('clean')
+ if (verdict.kind === 'clean') expect(verdict.tools).toEqual(['Bash'])
+ })
+
+ it('says when no narrowing spares anyone, which is the only honest "everyone loses"', => {
+ const verdict = removeDelegateVerdict(
+ planner,
+ { name: 'swe', tools: ['Read', 'Edit'] },
+ [{ name: 'qa', tools: ['Read', 'Edit'] }],
+)
+
+ expect(verdict.kind).toBe('collateral')
+ if (verdict.kind === 'collateral') expect(verdict.everyOptionCosts).toBe(true)
+ })
+
  it('refuses when the envelope grants the worker nothing to begin with', => {
  const verdict = removeDelegateVerdict(planner, { name: 'oddball', tools: ['WebFetch'] }, [])
  expect(verdict.kind).toBe('impossible')

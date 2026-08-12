@@ -282,4 +282,72 @@ describe('TeamComposer', => {
  expect(inspector.findAll('.refusals li')).toHaveLength(3)
  expect(inspector.text).toContain('give it a cap')
  })
+
+ /**
+ * Selecting an edge (the operator's report: "I selected one edge and it referenced
+ * every worker losing something").
+ *
+ * Two halves, and they fail separately: the canvas has to show *which* line is being
+ * discussed, and the sidebar has to name that line rather than describing the class of
+ * thing it belongs to.
+ */
+ describe('selecting an edge', => {
+ const qa = persona({ id: 'qa', name: 'qa', tools: ['Read'] })
+ const teamOfThree = group({ personaIds: ['lead', 'swe', 'qa'] })
+ const allowed: DelegationEdge[] = [
+ { plannerId: 'lead', workerId: 'swe', ok: true, refusals: [] },
+ { plannerId: 'lead', workerId: 'qa', ok: true, refusals: [] },
+ ]
+
+ const selected = async => {
+ const wrapper = composer({
+ personas: [lead, persona, qa],
+ groups: [teamOfThree],
+ matrix: allowed,
+ })
+ await flow(wrapper).vm.$emit('edgeClick', { edge: { id: 'lead->swe' } })
+ return wrapper
+ }
+
+ it('marks the chosen line and fades the rest, so "this edge" has a referent', async => {
+ const wrapper = await selected
+ const drawn = flow(wrapper).props('edges') as {
+ id: string
+ class: string
+ label: string
+ style: Record<string, unknown>
+ }[]
+
+ const chosen = drawn.find((edge) => edge.id === 'lead->swe')!
+ const other = drawn.find((edge) => edge.id === 'lead->qa')!
+ expect(chosen.class).toContain('chosen')
+ expect(chosen.style.strokeWidth).toBe(4)
+ expect(chosen.label).toBe('lead → swe')
+ expect(other.class).toContain('muted')
+ expect(other.style.opacity).toBe(0.25)
+ })
+
+ it('outlines both ends of it on the canvas', async => {
+ const wrapper = await selected
+ const drawn = flow(wrapper).props('nodes') as { id: string; class: string }[]
+ expect(drawn.find((node) => node.id === 'lead')!.class).toContain('endpoint')
+ expect(drawn.find((node) => node.id === 'swe')!.class).toContain('endpoint')
+ expect(drawn.find((node) => node.id === 'qa')!.class).not.toContain('endpoint')
+ })
+
+ it('names the pair in the removal notice and offers the other narrowings', async => {
+ const wrapper = await selected
+ await wrapper.get('.inspector.link.danger').trigger('click')
+
+ const notice = wrapper.get('.pending')
+ expect(notice.text).toContain('Remove lead → swe')
+ expect(notice.text).toContain('It also stops lead delegating to qa')
+ // lead's envelope is [Read] and qa needs Read too, so this is the honest
+ // "there is no free narrowing" case rather than an ordinary trade.
+ expect(notice.text).toContain('no narrowing that costs nothing')
+ // One tool in the envelope, so there is no alternative to offer — the list
+ // appears only when a choice actually exists.
+ expect(notice.findAll('.options li')).toHaveLength(0)
+ })
+ })
 })
