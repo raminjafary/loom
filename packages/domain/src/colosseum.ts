@@ -191,7 +191,38 @@ export const rosterDiversity = (
  * cannot; different models is better and is not required, because a workspace with one
  * backend would otherwise never be able to convene anything.
  */
-export const conveneRoster = (participants: readonly ColosseumParticipant[]): ConveneVerdict => {
+export const conveneRoster = (
+ participants: readonly ColosseumParticipant[],
+ purpose: ColosseumPurpose = 'contention',
+): ConveneVerdict => {
+ /**
+ * **A warm-up is not a debate, so the rules that stop a debate manufacturing agreement
+ * do not apply to it** — and applying them anyway would refuse the case mastery names.
+ *
+ * Every refusal below exists for one mechanism: correlated errors make agreement
+ * uninformative, so a roster that cannot disagree is a session that cannot find
+ * anything. A warm-up settles nothing and compares nothing. It is a predecessor telling
+ * its successor what it learned, and the two are *deliberately* the same persona —
+ * continuity for the human is the tree, and a successor with a different identity would
+ * be the silent swap mastery forbids rather than the handoff it asks for.
+ *
+ * What a warm-up keeps is every property that makes this a venue rather than a private
+ * channel: a fixed roster, a spend ceiling, a transcript, and a verdict. Those are the
+ * reason to hold a handover here at all.
+ */
+ if (purpose === 'warm_up') {
+ if (participants.length === 0) {
+ return { ok: false, reason: 'A warm-up needs the persona being handed over from' }
+ }
+ if (participants.length > MAX_COLOSSEUM_ROSTER) {
+ return {
+ ok: false,
+ reason: 'A warm-up is a handover between two runs, not a meeting',
+ }
+ }
+ return { ok: true, diversity: rosterDiversity(participants) }
+ }
+
  if (participants.length < MIN_COLOSSEUM_ROSTER) {
  return {
  ok: false,

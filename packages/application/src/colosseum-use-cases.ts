@@ -106,7 +106,7 @@ export const conveneSession = async (
  })
  }
 
- const verdict = conveneRoster(participants)
+ const verdict = conveneRoster(participants, input.purpose)
  if (!verdict.ok) throw new ValidationError(verdict.reason)
 
  const turnCap = Math.min(Math.max(input.turnCap ?? MAX_COLOSSEUM_TURNS, 1), MAX_COLOSSEUM_TURNS)
@@ -539,6 +539,93 @@ export const takeSessionTurn = async (
  }
 
  return { ok: true, reason: 'speaking', agentRunId, speaker }
+}
+
+/**
+ * How many turns a warm-up holds: the brief, and what came of it.
+ *
+ * Not a bound on a conversation — there is no conversation. It is the shape of the record:
+ * a predecessor says what it knows, a successor takes over, and what the successor
+ * produced is the second half of the same story.
+ */
+export const WARM_UP_TURN_CAP = 2
+
+/**
+ * A handover, held in the venue.
+ *
+ * **The venue is the record, not the channel**, and the difference is deliberate. The * sentence reads as though the brief should travel through here, but a handoff is the one
+ * item in mastery that can lose work — making it depend on a second subsystem to deliver its
+ * payload would put a tree with no live run and a branch nobody owns behind an unrelated
+ * failure. So the brief reaches the successor exactly as it did before, as its task, and
+ * this writes down what happened where a human can audit it.
+ *
+ * What that buys is real rather than decorative: the brief becomes a transcript entry
+ * nobody can quietly revise, the successor's run holds the session's floor so its cost is
+ * summed by the same `spentOnSession` every other session uses, and a handover stops being
+ * a thing that only exists as two rows in `agent_run` and a line in a thread.
+ *
+ * One participant, not two. The successor carries the *same persona snapshot* — that is
+ * what makes it continuity rather than a substitution — so the roster is one persona and
+ * two runs, and the runs are told apart by the `agentRunId` each turn already carries.
+ */
+export const recordWarmUp = async (
+ deps: ColosseumDeps,
+ input: {
+ workspaceId: WorkspaceId
+ threadId: ThreadId
+ repositoryId: RepositoryId | null
+ personaId: AgentPersonaId
+ personaName: string
+ predecessorRunId: AgentRunId
+ successorRunId: AgentRunId
+ /** What the predecessor is handing over, already checked and already rendered. */
+ brief: string
+ /** The task both runs are on, which is what this warm-up is about. */
+ subject: string
+ },
+): Promise<ColosseumSession> => {
+ const session = await deps.colosseum.convene({
+ workspaceId: input.workspaceId,
+ threadId: input.threadId,
+ repositoryId: input.repositoryId,
+ purpose: 'warm_up',
+ subject: input.subject,
+ question: 'What does the agent taking this over need to know?',
+ turnCap: WARM_UP_TURN_CAP,
+ spendCapUsd: null,
+ diversity: { subjects: 0, models: 1, personas: 1, voices: 1 },
+ participants: [
+ {
+ personaId: input.personaId,
+ personaName: input.personaName,
+ mapId: null,
+ model: '',
+ subjectRef: '',
+ },
+ ],
+ })
+
+ await appendSessionTurn(deps, {
+ workspaceId: input.workspaceId,
+ sessionId: session.id,
+ personaId: input.personaId,
+ personaName: input.personaName,
+ agentRunId: input.predecessorRunId,
+ text: input.brief.slice(0, MAX_TURN_TEXT_CHARS),
+ })
+
+ /**
+ * The successor takes the floor, so what it produces lands here as the second turn
+ * through the same completion path every other turn uses — and its spend is counted
+ * against this session by the same sum. Without it the venue would hold half a story
+ * and none of the accounting mastery says it inherits.
+ */
+ await deps.colosseum.claimFloor(input.workspaceId, session.id, {
+ agentRunId: input.successorRunId,
+ personaId: input.personaId,
+ })
+
+ return session
 }
 
 /**

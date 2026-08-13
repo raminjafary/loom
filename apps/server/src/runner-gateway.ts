@@ -44,11 +44,13 @@ import {
  askClarifyingQuestion,
  handOverToSuccessor,
  handoffLimits,
+ recordWarmUp,
  resolveTreeRunId,
  startAgentRun,
  requestApproval,
 } from '@loom/application'
 import {
+ asAgentPersonaId,
  asAgentRunId,
  asRunnerId,
  asWorkspaceId,
@@ -747,6 +749,15 @@ export const createRunnerGateway = (
  return persona.id
  }
 
+ /**
+ * Captured for the warm-up below. The rendered brief is what the successor
+ * was actually handed — platform facts outside the fence, the predecessor's
+ * words inside it — so recording anything else in the venue would put a
+ * transcript beside the handover that does not match it.
+ */
+ let handedBrief = ''
+ let handedPersonaId: string | null = null
+
  const result = await handOverToSuccessor(
  {
  agentRuns: deps.agentRuns as never,
@@ -775,7 +786,7 @@ export const createRunnerGateway = (
  * would fail here rather than start a successor with a different
  * identity, which is the right failure.
  */
- personaId: await personaIdByName(predecessor.persona.name),
+ personaId: (handedPersonaId = await personaIdByName(predecessor.persona.name)),
  parentRunId: predecessor.id,
  relation: 'handoff',
  /**
@@ -785,6 +796,7 @@ export const createRunnerGateway = (
  */
  task: task === null ? brief: `${brief}\n\nThe original task was: ${task}`,
  })
+ handedBrief = brief
  return successor.id
  },
  announce: async ({ successorRunId, reason }) => {
@@ -808,6 +820,34 @@ export const createRunnerGateway = (
  },
  { workspaceId, agentRunId: asAgentRunId(frame.runId), brief: frame.brief },
 )
+
+ /**
+ * The handover, written down in the venue.
+ *
+ * After the handoff and best-effort, which is the whole of the design decision.
+ * Mastery reads as though the brief should *travel* through the Colosseum, but this
+ * is the one item in the section that can lose work: making it depend on a
+ * second subsystem to deliver its payload would put "a tree with no live run and
+ * a branch nobody owns" behind an unrelated failure. So the venue is the record,
+ * and a venue that could not be written still leaves a successor working.
+ */
+ if (result.ok && result.successorRunId !== null && handedPersonaId !== null) {
+ try {
+ await recordWarmUp(deps, {
+ workspaceId,
+ threadId: predecessor.threadId,
+ repositoryId: predecessor.repositoryId,
+ personaId: asAgentPersonaId(handedPersonaId),
+ personaName: predecessor.persona.name,
+ predecessorRunId: predecessor.id,
+ successorRunId: result.successorRunId,
+ brief: handedBrief,
+ subject: predecessor.task ?? 'this work',
+ })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+ }
 
  send(from, {
  type: 'handoff_result',

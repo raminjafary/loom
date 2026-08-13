@@ -691,6 +691,26 @@ describe('runner-gateway: warm handoff', => {
  const page = await client.message.list({ threadId: created.rootThread.id })
  expect(page.messages.some((m) => m.body.text?.includes('handed this work'))).toBe(true)
 
+ /**
+ * The warm-up: "a successor is briefed by its predecessor here rather than through a
+ * private channel, so a handoff inherits the venue's transcript and spend accounting
+ * for free." It was an enum value with no exchange behind it until turns existed.
+ */
+ const sessions = await client.colosseum.list
+ const warmUp = sessions.find((entry) => entry.purpose === 'warm_up')
+ expect(warmUp).toBeDefined
+
+ const venue = await client.colosseum.get({ sessionId: warmUp!.id })
+ // One participant and two runs: the successor carries the same persona snapshot,
+ // which is what makes this continuity rather than a substitution.
+ expect(venue.participants).toHaveLength(1)
+ expect(venue.turns).toHaveLength(1)
+ expect(venue.turns[0]?.agentRunId).toBe(run.id)
+ expect(venue.turns[0]?.text).toContain('Run the payments suite')
+ // The successor holds the floor, so what it produces lands here as the second turn
+ // through the same completion path every other turn uses.
+ expect(venue.session.speakingRunId).toBe(successor?.id)
+
  socket.close
  })
 

@@ -322,3 +322,33 @@ describe('nextSpeaker', => {
  expect(nextSpeaker([], [])).toBeNull
  })
 })
+
+describe('conveneRoster — a warm-up is not a debate', => {
+ /**
+ * Every other refusal exists for one mechanism: correlated errors make agreement
+ * uninformative. A warm-up settles nothing and compares nothing — it is a predecessor
+ * telling its successor what it learned, and the two are *deliberately* the same
+ * persona, because a successor with a different identity would be the silent swap mastery
+ * forbids rather than the handoff it asks for.
+ */
+ it('accepts one persona, which every other purpose refuses', => {
+ const one = [participant]
+ expect(conveneRoster(one, 'warm_up').ok).toBe(true)
+ expect(conveneRoster(one, 'contention').ok).toBe(false)
+ })
+
+ it('accepts a roster that brings nothing, which a contention refuses', => {
+ const blank = [participant({ mapId: null, subjectRef: '' })]
+ expect(conveneRoster(blank, 'warm_up').ok).toBe(true)
+ expect(conveneRoster([...blank,...blank], 'crunching').ok).toBe(false)
+ })
+
+ it('still refuses an empty room', => {
+ expect(conveneRoster([], 'warm_up').ok).toBe(false)
+ })
+
+ /** The default is unchanged, so nothing that does not ask for a warm-up gets one. */
+ it('leaves every other purpose exactly as it was', => {
+ expect(conveneRoster([participant]).ok).toBe(false)
+ })
+})
