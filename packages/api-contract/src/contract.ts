@@ -508,6 +508,26 @@ export const contract = {
 )
 .output(ColosseumClaimSchema),
 
+ /**
+ * Takes one turn — one agent run, against the cap and the spend ceiling.
+ *
+ * `personaId` omitted means whoever has gone longest without speaking, so a session
+ * driven by clicking one button still gives every participant the floor. The output
+ * says what happened rather than throwing, because every refusal here — the floor is
+ * taken, the cap is reached, the ceiling is spent — is a fact about the session that
+ * a human should read, not an error.
+ */
+ takeTurn: oc
+.input(z.object({ sessionId: z.string, personaId: z.string.optional }))
+.output(
+ z.object({
+ ok: z.boolean,
+ reason: z.string,
+ agentRunId: z.string.nullable,
+ speakerPersonaName: z.string.nullable,
+ }),
+),
+
  conclude: oc.input(z.object({ sessionId: z.string })).output(ColosseumViewSchema),
  },
 

@@ -281,6 +281,13 @@
       "when": 1786583878089,
       "tag": "0039_sturdy_talkback",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1786596799427,
+      "tag": "0040_groovy_forge",
+      "breakpoints": true
     }
   ]
 }

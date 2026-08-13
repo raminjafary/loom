@@ -1873,6 +1873,9 @@ export const colosseumRepository = (db: Database): ColosseumRepositoryPort => {
  spendCapUsd: row.spendCapUsd,
  distinctSubjects: row.distinctSubjects,
  distinctModels: row.distinctModels,
+ speakingRunId: row.speakingRunId,
+ speakingPersonaId:
+ row.speakingPersonaId === null ? null: asAgentPersonaId(row.speakingPersonaId),
  createdAt: row.createdAt,
  concludedAt: row.concludedAt,
  })
@@ -1970,6 +1973,51 @@ export const colosseumRepository = (db: Database): ColosseumRepositoryPort => {
  and(eq(colosseumSession.workspaceId, workspaceId), eq(colosseumSession.id, sessionId)),
 )
 .returning
+ return row ? toSession(row): null
+ },
+
+ /**
+ * Claims the floor for one run, or refuses.
+ *
+ * Conditional on the floor being free, in the update itself rather than in a read
+ * beforehand: two turn requests racing would both read `null` and both start a run,
+ * and the second one's answer would land in a transcript that had already moved on.
+ * The `returning` being empty *is* the refusal.
+ */
+ async claimFloor(workspaceId, sessionId, input) {
+ const rows = await db
+.update(colosseumSession)
+.set({ speakingRunId: input.agentRunId, speakingPersonaId: input.personaId })
+.where(
+ and(
+ eq(colosseumSession.workspaceId, workspaceId),
+ eq(colosseumSession.id, sessionId),
+ isNull(colosseumSession.speakingRunId),
+),
+)
+.returning
+ return rows.length > 0
+ },
+
+ async releaseFloor(workspaceId, sessionId) {
+ await db
+.update(colosseumSession)
+.set({ speakingRunId: null, speakingPersonaId: null })
+.where(
+ and(eq(colosseumSession.workspaceId, workspaceId), eq(colosseumSession.id, sessionId)),
+)
+ },
+
+ async findSessionSpeakingFor(workspaceId, agentRunId) {
+ const [row] = await db
+.select
+.from(colosseumSession)
+.where(
+ and(
+ eq(colosseumSession.workspaceId, workspaceId),
+ eq(colosseumSession.speakingRunId, agentRunId),
+),
+)
  return row ? toSession(row): null
  },
 

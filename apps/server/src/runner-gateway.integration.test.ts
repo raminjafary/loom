@@ -785,6 +785,98 @@ describe('runner-gateway: the Colosseum', => {
  socket.close
  })
 
+ /**
+ * The exchange itself. One turn is one ordinary run, and this drives the whole
+ * loop against a real Runner socket and a real database: the run starts, the floor is
+ * held, the answer arrives as the run's own terminal event, and the transcript gains a
+ * turn attributed to the persona that spoke.
+ */
+ it('takes a turn as an ordinary run, and records what it said', async => {
+ const stamp = Date.now
+ const { socket, runnerId } = await pairFakeRunner(`colosseum-turn-${stamp}`)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: `colosseum-turn-${stamp}` })
+
+ await giveMap(socket, created.rootThread.id, repo.id, testPersonaId, 'checkout')
+
+ const worker = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: colosseum-asker-${stamp}`,
+ 'description: Asks',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'You ask.',
+ ].join('\n'),
+ })
+
+ const session = await client.colosseum.convene({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ purpose: 'consultation',
+ subject: 'test repo',
+ question: 'Does the refund path double-convert minor units?',
+ personaIds: [testPersonaId, worker.id],
+ turnCap: 1,
+ })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const turn = await client.colosseum.takeTurn({
+ sessionId: session.id,
+ personaId: testPersonaId,
+ })
+ expect(turn.ok).toBe(true)
+ expect(turn.speakerPersonaName).toBeTruthy
+
+ // What the speaker was actually handed — the domain's opening, assembled server-side
+ // because the wording is the mitigation.
+ const dispatched = await startRun
+ expect(dispatched.task).toContain('recorded session about test repo')
+ expect(dispatched.task).toContain('not trying to reach agreement')
+
+ // The floor is held while it speaks, and a second turn is refused rather than queued.
+ const held = await client.colosseum.get({ sessionId: session.id })
+ expect(held.session.speakingRunId).toBe(turn.agentRunId)
+ expect(held.session.status).toBe('running')
+ const second = await client.colosseum.takeTurn({ sessionId: session.id })
+ expect(second.ok).toBe(false)
+ expect(second.reason).toContain('already speaking')
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: turn.agentRunId,
+ seq: 1,
+ event: {
+ kind: 'run_completed',
+ totalCostUsd: 0.02,
+ result: 'refundFor re-applies the conversion; check fareFor(10) against refundFor(1000).',
+ },
+ }),
+)
+
+ let view = await client.colosseum.get({ sessionId: session.id })
+ for (let i = 0; i < 40 && view.turns.length === 0; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ view = await client.colosseum.get({ sessionId: session.id })
+ }
+ expect(view.turns).toHaveLength(1)
+ expect(view.turns[0]?.text).toContain('re-applies the conversion')
+ expect(view.turns[0]?.agentRunId).toBe(turn.agentRunId)
+ // The floor is back, and the cap is what refuses the next turn — abandoning the
+ // session rather than concluding it, because it was cut off.
+ expect(view.session.speakingRunId).toBeNull
+
+ const capped = await client.colosseum.takeTurn({ sessionId: session.id })
+ expect(capped.ok).toBe(false)
+ expect(capped.reason).toContain('all 1 of its turns')
+ expect((await client.colosseum.get({ sessionId: session.id })).session.status).toBe('abandoned')
+
+ await client.persona.delete({ personaId: worker.id })
+ socket.close
+ })
+
  it('refuses a roster where nobody knows anything', async => {
  const stamp = Date.now
  const { socket } = await pairFakeRunner(`colosseum-empty-${stamp}`)

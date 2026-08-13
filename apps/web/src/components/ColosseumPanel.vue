@@ -40,6 +40,7 @@ const emit = defineEmits<{
  ]
  claim: [input: { sessionId: string; personaId: string; statement: string }]
  settle: [input: { claimId: string; verdict: 'upheld' | 'refuted'; citation: string }]
+ takeTurn: [input: { sessionId: string; personaId?: string }]
  conclude: [sessionId: string]
 }>
 
@@ -99,6 +100,36 @@ const personaName = (personaId: string) =>
  props.personas.find((persona) => persona.id === personaId)?.name ?? personaId
 
 const openingClaims = computed( => props.view?.claims ?? [])
+
+/**
+ * Whether a turn can be asked for at all, and every reason it cannot — said here rather
+ * than only discovered by clicking.
+ *
+ * The refusals are the venue's own bounds, so they read as facts about the session and not
+ * as errors: someone has the floor, the cap is used up, there is no repository for an
+ * answer to be checked against.
+ */
+const speaking = computed( =>
+ props.view === null || props.view.session.speakingPersonaId === null
+ ? null
+: (props.view.participants.find(
+ (participant) => participant.personaId === props.view?.session.speakingPersonaId,
+)?.personaName ?? 'a participant'),
+)
+
+const turnBlocker = computed( => {
+ const session = props.view?.session
+ if (!session) return 'no session'
+ if (session.status === 'concluded' || session.status === 'abandoned') return 'this session has ended'
+ if (speaking.value !== null) return `${speaking.value} is speaking`
+ if (session.repositoryId === null) {
+ return 'this session has no repository, so there is nothing to answer from'
+ }
+ if ((props.view?.turns.length ?? 0) >= session.turnCap) {
+ return `all ${session.turnCap} turns are used`
+ }
+ return null
+})
 </script>
 
 <template>
@@ -260,6 +291,39 @@ const openingClaims = computed( => props.view?.claims ?? [])
  </li>
  </ol>
 
+ <!--
+ The exchange itself. One turn is one ordinary agent run — same sandbox, same
+ metering, same kill switch — so the turn counter beside it is the spend bound a
+ human actually reads, and the named participant buttons are there because a
+ session where one voice takes every turn is the roster check undone at exchange
+ time.
+ -->
+ <div v-if="view.session.status !== 'concluded' && view.session.status !== 'abandoned'" class="floor">
+ <div class="row">
+ <button
+ type="button"
+ class="primary"
+:disabled="props.busy || turnBlocker !== null"
+ @click="emit('takeTurn', { sessionId: view.session.id })"
+ >
+ Take a turn
+ </button>
+ <span class="meta">{{ view.turns.length }} of {{ view.session.turnCap }} turns</span>
+ </div>
+ <div class="roster" role="group" aria-label="Ask one participant to speak">
+ <button
+ v-for="participant in view.participants"
+:key="participant.personaId"
+ type="button"
+:disabled="props.busy || turnBlocker !== null"
+ @click="emit('takeTurn', { sessionId: view.session.id, personaId: participant.personaId })"
+ >
+ {{ participant.personaName }}
+ </button>
+ </div>
+ <p v-if="turnBlocker" class="empty">Nobody can speak: {{ turnBlocker }}.</p>
+ </div>
+
  <button
  v-if="view.session.status !== 'concluded' && view.session.status !== 'abandoned'"
  type="button"
@@ -339,6 +403,25 @@ h3 {
  display: flex;
  flex-wrap: wrap;
  gap: 0.3rem;
+}
+
+.floor {
+ display: flex;
+ flex-direction: column;
+ gap: 0.35rem;
+ padding: 0.55rem 0.6rem;
+ border: 1px solid var(--border);
+ border-radius: 0.4rem;
+}
+
+.floor.row {
+ align-items: center;
+ gap: 0.5rem;
+}
+
+.floor button:disabled {
+ opacity: 0.5;
+ cursor: default;
 }
 
 .roster button,

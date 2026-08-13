@@ -360,6 +360,15 @@ const conveneColosseum = async (input: {
  if (sessionId) await selectColosseumSession(sessionId)
 }
 
+/**
+ * One turn. The refreshed view is what shows the floor as taken — the answer itself
+ * lands when the run finishes, through the same completion path every other run uses.
+ */
+const takeColosseumTurn = async (input: { sessionId: string; personaId?: string }) => {
+ await agent.takeColosseumTurn(input)
+ await selectColosseumSession(input.sessionId)
+}
+
 const composerOpen = ref(false)
 
 /**
@@ -1138,6 +1147,7 @@ onBeforeUnmount( => {
 .settleColosseumClaim(input)
 .then( => colosseumView && selectColosseumSession(colosseumView.session.id))
  "
+ @colosseum-take-turn="(input) => void takeColosseumTurn(input)"
  @colosseum-conclude="
  (sessionId) =>
  void agent.concludeColosseum(sessionId).then( => selectColosseumSession(sessionId))

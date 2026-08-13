@@ -95,6 +95,7 @@ const emit = defineEmits<{
  'colosseum-settle': [
  input: { claimId: string; verdict: 'upheld' | 'refuted'; citation: string },
  ]
+ 'colosseum-take-turn': [input: { sessionId: string; personaId?: string }]
  'colosseum-conclude': [sessionId: string]
  'create-pairing-token': [name: string]
  bind: [input: { runnerId: string; path: string; displayName: string }]
@@ -283,6 +284,7 @@ onMounted( => scrim.value?.focus)
  @convene="(input) => emit('colosseum-convene', input)"
  @claim="(input) => emit('colosseum-claim', input)"
  @settle="(input) => emit('colosseum-settle', input)"
+ @take-turn="(input) => emit('colosseum-take-turn', input)"
  @conclude="(sessionId) => emit('colosseum-conclude', sessionId)"
  />
  </template>

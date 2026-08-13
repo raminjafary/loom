@@ -54,6 +54,7 @@ import {
  listSessions,
  recordOpeningClaim,
  settleSessionClaim,
+ takeSessionTurn,
  listExpertiseUsedByRuns,
  listPersonaMaps,
  listRepositoryMaps,
@@ -624,6 +625,53 @@ export const router = os.router({
  citation: input.citation,
  }),
 ),
+),
+
+ /**
+ * One turn — one ordinary agent run, started here so the use case never has to know
+ * `startAgentRun` exists (the same injection `hand_over` uses, for the same reason).
+ *
+ * The session's thread and repository, the speaker's persona, and what is left of the
+ * session's ceiling as this run's budget cap. Nothing about it is a special execution
+ * path: it is metered, sandboxed, approvable and killable exactly like any other run,
+ * which is what makes the "a session is a thing on the board" true rather than
+ * aspirational.
+ */
+ takeTurn: os.colosseum.takeTurn.handler(({ context, input }) =>
+ guard(async => {
+ const result = await takeSessionTurn(
+ {
+...context.deps,
+ startTurnRun: async ({ session, speaker, task, budgetCapUsd }) => {
+ const run = await startAgentRun(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ threadId: session.threadId,
+ // Non-null by the time this runs — `takeSessionTurn` refuses a session
+ // with no repository before it ever gets here, and says why.
+ repositoryId: session.repositoryId as never,
+ personaId: speaker.personaId,
+ task,
+...(budgetCapUsd === null ? {}: { budgetCapUsd }),
+ })
+ return run.id
+ },
+ },
+ {
+ workspaceId: context.principal.workspaceId,
+ sessionId: input.sessionId,
+...(input.personaId === undefined
+ ? {}
+: { personaId: asAgentPersonaId(input.personaId) }),
+ },
+)
+ return {
+ ok: result.ok,
+ reason: result.reason,
+ agentRunId: result.agentRunId,
+ speakerPersonaName: result.speaker?.personaName ?? null,
+ }
+ }),
 ),
 
  conclude: os.colosseum.conclude.handler(({ context, input }) =>

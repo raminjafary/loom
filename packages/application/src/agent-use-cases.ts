@@ -128,6 +128,7 @@ import {
  resolveTreeRunId,
  type NoteDeps,
 } from './note-use-cases.js'
+import { recordSpokenTurn } from './colosseum-use-cases.js'
 import { startThread, type Deps } from './use-cases.js'
 
 export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps {
@@ -3303,6 +3304,15 @@ const cancelRun = async (deps: AgentDeps, run: AgentRun, reason: string): Promis
  completedAt: new Date,
  })
  await postRunSystemMessage(deps, cancelled, `Run cancelled: ${reason}.`)
+ // The kill switch stops a session like any other run, and a stopped turn must give
+ // the floor back — a session whose speaker was cancelled would otherwise be one nobody
+ // can ever speak in again. Terminal transitions that bypass `recordAgentEvent` are the
+ // only places this has to be said twice.
+ await recordSpokenTurn(deps, {
+ workspaceId: run.workspaceId,
+ agentRunId: run.id,
+ outcome: { ok: false, message: reason },
+ })
  // No notification here on purpose: every path into this function is a human
  // deliberately stopping the work (the kill switch), and pushing "your run
  // stopped" back at the person who just stopped it trains people to ignore
@@ -4222,6 +4232,12 @@ export const reapStuckRuns = async (
  // A reaped run is the case least likely to be noticed: it produced no
  // terminal event of its own, so a watcher sees the thread simply stop.
  await notifyRun(deps, failed, 'run_failed', { detail: reason })
+ // The other terminal transition that never emits `run_failed` — see `cancelRun`.
+ await recordSpokenTurn(deps, {
+ workspaceId: run.workspaceId,
+ agentRunId: run.id,
+ outcome: { ok: false, message: `reaped — ${reason}` },
+ })
  }
 }
 
@@ -4440,6 +4456,15 @@ export const recordAgentEvent = async (
  // every other run, which is why it is unconditional rather than behind a check
  // this function would have to keep in step with.
  await closeMap(deps, { workspaceId: input.workspaceId, agentRunId: completed.id, ok: true })
+ // A Colosseum turn's answer is the run's final text. Unconditional for
+ // the same reason `closeMap` is: a no-op for every run that was not speaking in a
+ // session, and a check here would be a second place that has to agree about which
+ // runs those are.
+ await recordSpokenTurn(deps, {
+ workspaceId: input.workspaceId,
+ agentRunId: completed.id,
+ outcome: { ok: true, text: input.event.result },
+ })
  await releaseDependents(deps, completed)
  await aggregateForParent(deps, completed)
  } else if (input.event.kind === 'run_failed') {
@@ -4467,6 +4492,13 @@ export const recordAgentEvent = async (
  * marks the map `failed` only when it holds nothing at all — see `closeMap`.
  */
  await closeMap(deps, { workspaceId: input.workspaceId, agentRunId: failed.id, ok: false })
+ // A turn that failed still cost money and a slot against the cap, so the session
+ // records it rather than waiting forever for an answer that is not coming.
+ await recordSpokenTurn(deps, {
+ workspaceId: input.workspaceId,
+ agentRunId: failed.id,
+ outcome: { ok: false, message: input.event.message },
+ })
  await releaseDependents(deps, failed)
  await aggregateForParent(deps, failed)
  }

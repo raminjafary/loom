@@ -1,12 +1,16 @@
 import {
  MAX_COLOSSEUM_TURNS,
+ MAX_TURN_TEXT_CHARS,
  NotFoundError,
  ValidationError,
  colosseumOpening,
+ colosseumTurnContext,
  conveneRoster,
+ nextSpeaker,
  settleClaim as settleClaimRule,
  summarizeOutcome,
  type AgentPersonaId,
+ type AgentRunId,
  type ColosseumClaim,
  type ColosseumOutcome,
  type ColosseumParticipant,
@@ -327,5 +331,265 @@ export const openingFor = async (
  otherParticipants: participants
 .filter((participant) => participant.personaId !== input.personaId)
 .map((participant) => participant.personaName),
+ })
+}
+
+/**
+ * How much of a session's ceiling has already been spent.
+ *
+ * Summed from the runs that took the turns rather than kept as a column on the session,
+ * for the reason `countHandoffsInTree` gives: a running total is a second fact that can
+ * disagree with the runs, and the runs are what the ledger is built from. A turn whose run
+ * has been deleted contributes nothing, which is the right answer — there is no longer a
+ * charge to attribute.
+ */
+const spentOnSession = async (
+ deps: ColosseumTurnDeps,
+ input: { workspaceId: WorkspaceId; sessionId: string },
+): Promise<number> => {
+ const turns = await deps.colosseum.listTurns(input.workspaceId, input.sessionId)
+ let spent = 0
+ for (const runId of new Set(turns.map((turn) => turn.agentRunId).filter((id) => id !== null))) {
+ const run = await deps.agentRuns.findById(input.workspaceId, runId as AgentRunId)
+ spent += run?.totalCostUsd ?? 0
+ }
+ return spent
+}
+
+export interface ColosseumTurnDeps extends ColosseumDeps {
+ readonly agentRuns: {
+ findById(
+ workspaceId: WorkspaceId,
+ id: AgentRunId,
+): Promise<{ totalCostUsd: number | null } | null>
+ }
+ /**
+ * Starts the run that will speak, and returns its id. Throws if it could not start.
+ *
+ * Injected rather than imported for the reason `startSuccessor` is: it keeps this file
+ * out of the cycle `startAgentRun` would create, and it puts the one thing a turn
+ * actually *is* — an ordinary run, same sandbox, same metering, same kill switch — in
+ * the signature where a reader will find it.
+ */
+ startTurnRun(input: {
+ session: ColosseumSession
+ speaker: ColosseumParticipant
+ task: string
+ /** What is left of the session's ceiling, or null when it has none. */
+ budgetCapUsd: number | null
+ }): Promise<AgentRunId>
+}
+
+export interface TurnResult {
+ readonly ok: boolean
+ readonly reason: string
+ readonly agentRunId: AgentRunId | null
+ readonly speaker: ColosseumParticipant | null
+}
+
+/**
+ * Takes one turn.
+ *
+ * **One `startAgentRun` per turn, and that is the whole shape.** A turn in this venue is
+ * an ordinary run — same sandbox, same egress policy, same metering, same kill switch —
+ * because the alternative is a second execution path that the security model would have
+ * to be re-proved against. What makes it a *session* rather than a run is what it is
+ * handed and where its answer lands: the domain's opening, the transcript so far behind an
+ * untrusted fence, and an answer appended as a turn against the cap.
+ *
+ * Four refusals, and each is one of the venue's four properties doing its job:
+ *
+ * - **The floor** — a turn requested while one is in flight is refused. A session speaks
+ * one voice at a time or its transcript is overlapping monologues in arrival order.
+ * - **The turn cap** — reaching it *abandons* the session rather than concluding one, for
+ * the reason `appendSessionTurn` gives: a conversation cut off has not reached a verdict.
+ * - **The spend ceiling** — counted from the turns' own runs, and a session that has spent
+ * it is abandoned rather than quietly continuing. A ceiling nothing checks is a comment.
+ * - **The roster** — the speaker must be on it, and by default it is whoever has gone
+ * longest without speaking, so one voice cannot take every turn against the cap.
+ */
+export const takeSessionTurn = async (
+ deps: ColosseumTurnDeps,
+ input: {
+ workspaceId: WorkspaceId
+ sessionId: string
+ /** Who speaks. Omitted means whoever has gone longest without it. */
+ personaId?: AgentPersonaId
+ },
+): Promise<TurnResult> => {
+ const session = await deps.colosseum.getSession(input.workspaceId, input.sessionId)
+ if (!session) throw new NotFoundError('ColosseumSession')
+
+ const refuse = (reason: string): TurnResult => ({
+ ok: false,
+ reason,
+ agentRunId: null,
+ speaker: null,
+ })
+
+ if (session.status === 'concluded' || session.status === 'abandoned') {
+ return refuse('This session has ended')
+ }
+ if (session.speakingRunId !== null) {
+ return refuse(
+ 'Somebody is already speaking. A session takes one turn at a time — two runs ' +
+ 'answering at once would land in the transcript in whichever order they finished, ' +
+ 'and neither would have heard the other.',
+)
+ }
+ /**
+ * The arbiter is the repository, and a run has to have one to be started at all. A
+ * session convened without one can still record claims and settle them by hand; what it
+ * cannot do is send an agent to answer, and saying so is better than a repository picked
+ * on the session's behalf.
+ */
+ if (session.repositoryId === null) {
+ return refuse(
+ 'This session has no repository, so there is nothing for an agent to answer from ' +
+ 'and nothing to settle a claim against. Convene it against a repository to let ' +
+ 'the participants speak.',
+)
+ }
+
+ const taken = await deps.colosseum.countTurns(input.workspaceId, input.sessionId)
+ if (taken >= session.turnCap) {
+ await deps.colosseum.setStatus(input.workspaceId, input.sessionId, 'abandoned')
+ return refuse(
+ `This session has taken all ${session.turnCap} of its turns. It is abandoned rather ` +
+ 'than concluded: a conversation that ran out of turns did not reach a conclusion.',
+)
+ }
+
+ let budgetCapUsd: number | null = null
+ if (session.spendCapUsd !== null) {
+ const spent = await spentOnSession(deps, input)
+ const remaining = session.spendCapUsd - spent
+ if (remaining <= 0) {
+ await deps.colosseum.setStatus(input.workspaceId, input.sessionId, 'abandoned')
+ return refuse(
+ `This session has spent its ceiling of $${session.spendCapUsd.toFixed(2)}. Abandoned ` +
+ 'for the same reason the turn cap abandons one — it stopped early rather than ' +
+ 'reaching a conclusion.',
+)
+ }
+ budgetCapUsd = remaining
+ }
+
+ const participants = await deps.colosseum.listParticipants(input.workspaceId, session.id)
+ const turns = await deps.colosseum.listTurns(input.workspaceId, session.id)
+ const speaker =
+ input.personaId === undefined
+ ? nextSpeaker(participants, turns)
+: (participants.find((participant) => participant.personaId === input.personaId) ?? null)
+ if (!speaker) {
+ return refuse(
+ input.personaId === undefined
+ ? 'This session has no participants'
+: "That persona is not on this session's roster",
+)
+ }
+
+ const claims = await deps.colosseum.listClaims(input.workspaceId, session.id)
+ const task = [
+ colosseumOpening({
+ personaName: speaker.personaName,
+ purpose: session.purpose,
+ subject: session.subject,
+ question: session.question,
+ otherParticipants: participants
+.filter((participant) => participant.personaId !== speaker.personaId)
+.map((participant) => participant.personaName),
+ }),
+ colosseumTurnContext({
+ turns,
+ ownOpeningClaims: claims
+.filter((claim) => claim.originalHolderPersonaId === speaker.personaId)
+.map((claim) => claim.statement),
+ }),
+ ].join('\n\n')
+
+ const agentRunId = await deps.startTurnRun({ session, speaker, task, budgetCapUsd })
+
+ /**
+ * Claimed *after* the run exists, and the refusal path retires the run rather than
+ * leaving it.
+ *
+ * The other order — claim, then start — would leave a session with the floor held by a
+ * run that failed to start, which is a session nobody can speak in again. This order's
+ * failure is a run that speaks into nothing, which the transcript simply never gains and
+ * which the ledger still accounts for.
+ */
+ const claimed = await deps.colosseum.claimFloor(input.workspaceId, session.id, {
+ agentRunId,
+ personaId: speaker.personaId,
+ })
+ if (!claimed) {
+ return {
+ ok: false,
+ reason:
+ 'Another turn claimed the floor first. This one will not be recorded — stop it if ' +
+ 'it is still running.',
+ agentRunId,
+ speaker,
+ }
+ }
+
+ if (session.status === 'convened') {
+ await deps.colosseum.setStatus(input.workspaceId, session.id, 'running')
+ }
+
+ return { ok: true, reason: 'speaking', agentRunId, speaker }
+}
+
+/**
+ * A turn's run finished — record what it said.
+ *
+ * Called on **every** run's completion, and a no-op for every run that was not speaking in
+ * a session, which is why it is unconditional rather than behind a check the caller would
+ * have to keep in step with (`closeMap` is unconditional for the same reason and it was
+ * the right call there too).
+ *
+ * A failed turn is recorded as a turn the *platform* narrated, and it counts against the
+ * cap. That is deliberate on both halves: the failure cost money and a slot, so hiding it
+ * would make a session look cheaper and longer-lived than it was, and attributing it to
+ * the persona would put words in a mouth that never opened.
+ */
+export const recordSpokenTurn = async (
+ deps: ColosseumDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ outcome: { ok: true; text: string } | { ok: false; message: string }
+ },
+): Promise<void> => {
+ const session = await deps.colosseum.findSessionSpeakingFor(input.workspaceId, input.agentRunId)
+ if (!session) return
+
+ const speakerName =
+ (await deps.colosseum.listParticipants(input.workspaceId, session.id)).find(
+ (participant) => participant.personaId === session.speakingPersonaId,
+)?.personaName ?? 'a participant'
+
+ // The floor first. A record that throws must not leave the session unable to take
+ // another turn — the transcript can lose an entry and recover; a stuck floor cannot.
+ await deps.colosseum.releaseFloor(input.workspaceId, session.id)
+
+ /**
+ * A session ended while this run was speaking — a human concluded it, or the kill
+ * switch took the run. The answer arrives after the venue closed and is not appended:
+ * a turn recorded after the conclusion would sit below a verdict that never heard it.
+ */
+ if (session.status === 'concluded' || session.status === 'abandoned') return
+
+ await appendSessionTurn(deps, {
+ workspaceId: input.workspaceId,
+ sessionId: session.id,
+...(input.outcome.ok
+ ? { personaId: session.speakingPersonaId, personaName: speakerName }
+: { personaId: null, personaName: 'the platform' }),
+ agentRunId: input.agentRunId,
+ text: input.outcome.ok
+ ? input.outcome.text.slice(0, MAX_TURN_TEXT_CHARS)
+: `${speakerName}'s turn did not finish: ${input.outcome.message.slice(0, 500)}`,
  })
 }

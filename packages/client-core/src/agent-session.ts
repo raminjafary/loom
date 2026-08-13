@@ -315,6 +315,20 @@ export interface AgentSession {
  verdict: 'upheld' | 'refuted'
  citation: string
  }): Promise<void>
+ /**
+ * Asks one participant to speak. `personaId` omitted means whoever has gone
+ * longest without it.
+ *
+ * Returns the refusal rather than swallowing it, because every refusal here is a fact
+ * about the session — the floor is taken, the cap is used up, there is no repository to
+ * answer from — and a button that silently does nothing teaches a human that the venue
+ * is broken.
+ */
+ takeColosseumTurn(input: { sessionId: string; personaId?: string }): Promise<{
+ ok: boolean
+ reason: string
+ speakerPersonaName: string | null
+ } | null>
  concludeColosseum(sessionId: string): Promise<void>
  /** A human's standing answer about whether a map is used. */
  setMapRetrieval(mapId: string, override: 'on' | 'off' | null): Promise<void>
@@ -1132,6 +1146,20 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  await options.api.colosseum.settleClaim(input)
  } catch (error) {
  patch({ error: errorMessage(error) })
+ }
+ },
+
+ async takeColosseumTurn(input) {
+ patch({ error: null })
+ try {
+ const result = await options.api.colosseum.takeTurn(input)
+ // A refusal is not an exception, but it is still what the human needs to read —
+ // it is the venue's own bound saying no.
+ if (!result.ok) patch({ error: result.reason })
+ return result
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return null
  }
  },
 

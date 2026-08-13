@@ -1160,6 +1160,26 @@ export interface ColosseumRepositoryPort {
  status: ColosseumStatus,
 ): Promise<ColosseumSession | null>
 
+ /**
+ * Claims the floor for one run — false when somebody already has it.
+ *
+ * The check and the write are one statement, deliberately: two turn requests racing
+ * would both read an empty floor and both start a run, and the loser's answer would
+ * land in a transcript that had moved on without it. A session speaks one voice at a
+ * time or its transcript is a set of overlapping monologues.
+ */
+ claimFloor(
+ workspaceId: WorkspaceId,
+ sessionId: string,
+ input: { agentRunId: AgentRunId; personaId: AgentPersonaId },
+): Promise<boolean>
+ releaseFloor(workspaceId: WorkspaceId, sessionId: string): Promise<void>
+ /** How a completing run finds the session it was speaking in, on the completion path. */
+ findSessionSpeakingFor(
+ workspaceId: WorkspaceId,
+ agentRunId: AgentRunId,
+): Promise<ColosseumSession | null>
+
  /** An opening claim, recorded before the first exchange. */
  recordClaim(input: {
  workspaceId: WorkspaceId

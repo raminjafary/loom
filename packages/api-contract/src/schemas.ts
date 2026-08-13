@@ -440,6 +440,9 @@ export const ColosseumSessionSchema = z.object({
  /** Roster diversity as convened — correlated errors are the mechanism, so this is data. */
  distinctSubjects: z.number.int,
  distinctModels: z.number.int,
+ /** Who has the floor. A session speaks one voice at a time, and this is that voice. */
+ speakingRunId: z.string.nullable,
+ speakingPersonaId: z.string.nullable,
  createdAt: z.date,
  concludedAt: z.date.nullable,
 })

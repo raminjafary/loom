@@ -1037,10 +1037,29 @@ export const colosseumSession = pgTable(
  */
  distinctSubjects: integer('distinct_subjects').notNull.default(0),
  distinctModels: integer('distinct_models').notNull.default(0),
+ /**
+ * The run taking a turn right now, and whose persona it speaks for.
+ *
+ * A session speaks one voice at a time, and this is what enforces that: a turn
+ * requested while one is in flight is refused, and the completing run finds its
+ * session through this column. `set null` on the run rather than cascade — a deleted
+ * run must free the floor, not delete the session it was speaking in.
+ */
+ speakingRunId: uuid('speaking_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ speakingPersonaId: uuid('speaking_persona_id').references( => agentPersona.id, {
+ onDelete: 'set null',
+ }),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  concludedAt: timestamp('concluded_at', { withTimezone: true }),
  },
- (t) => [index('colosseum_session_workspace_idx').on(t.workspaceId, t.createdAt)],
+ (t) => [
+ index('colosseum_session_workspace_idx').on(t.workspaceId, t.createdAt),
+ // How a completing run finds the session it was speaking in — on the run's own
+ // completion path, which is not a place to table-scan.
+ index('colosseum_session_speaking_idx').on(t.workspaceId, t.speakingRunId),
+ ],
 )
 
 /**

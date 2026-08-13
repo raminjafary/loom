@@ -57,6 +57,8 @@ export const useAgentStore = defineStore('agent', => {
  session.recordColosseumClaim(input),
  settleColosseumClaim: (input: Parameters<typeof session.settleColosseumClaim>[0]) =>
  session.settleColosseumClaim(input),
+ takeColosseumTurn: (input: Parameters<typeof session.takeColosseumTurn>[0]) =>
+ session.takeColosseumTurn(input),
  concludeColosseum: (sessionId: string) => session.concludeColosseum(sessionId),
  curateMap: (mapId: string) => session.curateMap(mapId),
  listExpertiseUsedByRuns: (agentRunIds: readonly string[]) =>
