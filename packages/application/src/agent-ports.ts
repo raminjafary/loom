@@ -641,6 +641,12 @@ export interface PersonaGroupRepositoryPort {
  layout?: Record<string, { x: number; y: number }>
  fleet?: Record<string, number>
  reviewers?: Record<string, string[]>
+ /**
+ * The chain of command, keyed by worker. Absent leaves it alone like the
+ * three above; an empty object clears it, which is a team saying it has no chain of
+ * command rather than a client that did not draw one.
+ */
+ reportsTo?: Record<string, string>
  /** The root, as the canvas's vantage. Null clears it; absent leaves it. */
  orchestratorId?: string | null
  /** The team repository. Null clears it; absent leaves it, likewise. */

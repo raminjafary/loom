@@ -231,6 +231,18 @@ export interface PersonaGroup {
  */
  readonly reviewers: Record<string, string[]>
  /**
+ * The chain of command, keyed by the **worker** and holding the
+ * planner it reports to.
+ *
+ * Keyed the opposite way from `reviewers`, and see `reporting-lines.ts` for why that is a
+ * constraint rather than an inconsistency: a worker reports to at most one planner.
+ *
+ * Read by the runtime — it narrows the roster a planner is given — and it can only
+ * narrow. Attenuation still decides what a child may hold, so a line to a worker the
+ * envelope refuses grants nothing. Empty means no narrowing rather than nobody.
+ */
+ readonly reportsTo: Record<string, string>
+ /**
  * Which member the work starts from — the root orchestrator, and the canvas's
  * vantage point for depth. Null when nobody has chosen.
  *

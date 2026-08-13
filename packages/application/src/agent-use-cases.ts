@@ -33,6 +33,9 @@ import {
  delegationDesign,
  delegationMatrix,
  describeDelegationRoster,
+ describeReportingLines,
+ reportingLineProblems,
+ scopeToReportingLines,
  describePathOverlaps,
  describePlanStages,
  detectClaimsAgainstExisting,
@@ -1149,9 +1152,10 @@ const resolveTeamPolicy = async (
 ): Promise<{
  fleet: Record<string, number>
  reviewers: Record<string, string[]>
+ reportsTo: Record<string, string>
  ambiguous: boolean
 }> => {
- const none = { fleet: {}, reviewers: {}, ambiguous: false }
+ const none = { fleet: {}, reviewers: {}, reportsTo: {}, ambiguous: false }
  if (personaId === null) return none
  const groups = await deps.personaGroups.listByWorkspace(workspaceId)
  const owning = groups.filter((group) => group.personaIds.includes(personaId))
@@ -1159,6 +1163,7 @@ const resolveTeamPolicy = async (
  return {
  fleet: owning[0]?.fleet ?? {},
  reviewers: owning[0]?.reviewers ?? {},
+ reportsTo: owning[0]?.reportsTo ?? {},
  ambiguous: false,
  }
 }
@@ -1218,6 +1223,12 @@ export const updatePersonaGroup = async (
  */
  reviewers?: Record<string, string[]>
  /**
+ * The chain of command, keyed by worker. Omitted leaves the stored
+ * assignment alone; an empty object clears it, which is a team saying it has no chain
+ * of command and is a real state — the one every team starts in.
+ */
+ reportsTo?: Record<string, string>
+ /**
  * The root orchestrator — the member the work starts from, and the vantage the
  * canvas measures depth from. Omitted leaves the stored root alone; `null` clears it
  * back to picked-by-reach, which is a different act and a real state.
@@ -1268,6 +1279,26 @@ export const updatePersonaGroup = async (
  if (!reviewersVerdict.ok) throw new ValidationError(reviewersVerdict.reason)
 
  /**
+ * The chain of command, validated for the reason the review policy is: the runtime reads
+ * it, so a line the runtime cannot act on is an instruction a planner cannot follow. All
+ * of them at once rather than the first — a canvas that reports one refusal at a time is
+ * the failure the roadmap describes for this surface.
+ */
+ if (input.reportsTo !== undefined) {
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const nameById = new Map(personas.map((persona) => [persona.id as string, persona.name]))
+ const problems = reportingLineProblems({
+ memberIds: input.personaIds,
+ plannerIds: personas
+.filter((persona) => persona.harnessPlanner)
+.map((persona) => persona.id as string),
+ lines: input.reportsTo,
+ nameOf: (personaId) => nameById.get(personaId) ?? personaId,
+ })
+ if (problems.length > 0) throw new ValidationError(problems.join(' '))
+ }
+
+ /**
  * The root, checked against the roster rather than stored as sent.
  *
  * Two refusals, and both are about the canvas telling the truth. A root that is not on
@@ -1314,6 +1345,22 @@ export const updatePersonaGroup = async (
 ...(input.repositoryId === undefined ? {}: { repositoryId: input.repositoryId }),
 ...(input.fleet === undefined ? {}: { fleet: fleetVerdict.fleet }),
 ...(input.reviewers === undefined ? {}: { reviewers: reviewersVerdict.reviewers }),
+ /**
+ * Entries for members that are gone are dropped, exactly as `layout` drops positions
+ * and `parseFleetSizes` drops widths: a team that has churned would otherwise carry an
+ * assignment naming nobody, and the roster would narrow against a planner that is no
+ * longer on it — which reads as "this planner has no people" rather than as stale data.
+ */
+...(input.reportsTo === undefined
+ ? {}
+: {
+ reportsTo: Object.fromEntries(
+ Object.entries(input.reportsTo).filter(
+ ([workerId, plannerId]) =>
+ input.personaIds.includes(workerId) && input.personaIds.includes(plannerId),
+),
+),
+ }),
 ...(input.layout === undefined
  ? {}
 : {
@@ -1790,10 +1837,27 @@ export const startAgentRun = async (
  ? await resolveTeamPolicy(deps, input.workspaceId, input.personaId)
 : await resolveTeamPolicy(deps, input.workspaceId, null)
 
+ /**
+ * The chain of command, applied before the roster is described.
+ *
+ * Narrowed here rather than inside `describeDelegationRoster`, because this is the layer
+ * that knows persona *ids* — a roster candidate is named, and a reporting line is stored
+ * by id so that a rename cannot silently drop an assignment. Same division
+ * `resolveReviewExpectations` already makes.
+ *
+ * Only ever a narrowing: `attenuateChildPersona` runs afterwards, inside the roster, and
+ * is untouched. A worker assigned to this planner that its envelope refuses stays refused
+ * — a reporting line says who *should* do the work, never that they may.
+ */
+ const allPersonas = await deps.personas.listByWorkspace(input.workspaceId)
+ const myPeople = baseSpec.planner
+ ? scopeToReportingLines(allPersonas, teamPolicy.reportsTo, input.personaId as string)
+: allPersonas
+
  const roster = baseSpec.planner
  ? describeDelegationRoster(
  baseSpec,
- (await deps.personas.listByWorkspace(input.workspaceId)).map((candidate) => ({
+ myPeople.map((candidate) => ({
  name: candidate.name,
  description: candidate.description,
  model: candidate.model,
@@ -1848,15 +1912,35 @@ export const startAgentRun = async (
  */
  const reviewClause =
  baseSpec.planner && roster
- ? describeReviewPolicy(
- resolveReviewExpectations(
- teamPolicy.reviewers,
- await deps.personas.listByWorkspace(input.workspaceId),
-),
-)
+ ? describeReviewPolicy(resolveReviewExpectations(teamPolicy.reviewers, allPersonas))
 : null
 
- const promptSuffix = `${roster ?? ''}${reviewClause ?? ''}`
+ /**
+ * Who is this planner's, and who is on the team but somebody else's.
+ *
+ * Said out loud rather than left implicit in a shortened roster, because the two read
+ * identically to a model and mean opposite things: a roster narrowed to three looks
+ * exactly like a workspace that only has three, and a planner that believes the second
+ * reports the goal is impossible instead of delegating what it has.
+ */
+ const reportingClause =
+ baseSpec.planner && roster
+ ? describeReportingLines({
+ lines: teamPolicy.reportsTo,
+ plannerPersonaId: input.personaId as string,
+ assignedNames: allPersonas
+.filter((candidate) => teamPolicy.reportsTo[candidate.id as string] === (input.personaId as string))
+.map((candidate) => candidate.name),
+ elsewhereNames: allPersonas
+.filter((candidate) => {
+ const assigned = teamPolicy.reportsTo[candidate.id as string]
+ return assigned !== undefined && assigned !== (input.personaId as string)
+ })
+.map((candidate) => candidate.name),
+ })
+: ''
+
+ const promptSuffix = `${roster ?? ''}${reviewClause ?? ''}${reportingClause}`
  const personaSpec: PersonaSpec =
  promptSuffix === ''
  ? baseSpec

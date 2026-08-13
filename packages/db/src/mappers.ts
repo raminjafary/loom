@@ -587,6 +587,7 @@ export interface PersonaGroupRow {
  layout?: unknown
  fleet?: unknown
  reviewers?: unknown
+ reportsTo?: unknown
  orchestratorId?: string | null
  repositoryId?: string | null
  createdAt: Date
@@ -617,6 +618,13 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
  reviewers:
  row.reviewers && typeof row.reviewers === 'object' && !Array.isArray(row.reviewers)
  ? (row.reviewers as Record<string, string[]>)
+: {},
+ // Defaulted like the three above. Empty is every team that predates the column, and it
+ // means no narrowing rather than nobody: an unassigned worker is offered to every planner,
+ // which is exactly what a team with no chain of command has always done.
+ reportsTo:
+ row.reportsTo && typeof row.reportsTo === 'object' && !Array.isArray(row.reportsTo)
+ ? (row.reportsTo as Record<string, string>)
 : {},
  // Null for every team that predates the column, which is the same state as "nobody has
  // chosen" — the canvas picks by reach and says so, rather than rendering an empty tier.

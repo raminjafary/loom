@@ -465,6 +465,12 @@ export interface AgentSession {
  /** Who reviews whom on this team. Omitted leaves it alone. */
  reviewers?: Record<string, string[]>
  /**
+ * The chain of command, keyed by **worker**. Omitted leaves it alone;
+ * `{}` clears it, which is a real state — an unassigned member is offered to every
+ * planner's roster, which is what every team does today.
+ */
+ reportsTo?: Record<string, string>
+ /**
  * Which member the work starts from, as the canvas's vantage for
  * depth. Omitted leaves the stored root alone; `null` clears it back to
  * picked-by-reach, which is a different act.

@@ -553,6 +553,23 @@ export const personaGroup = pgTable(
  */
  reviewers: jsonb('reviewers').$type<Record<string, string[]>>.notNull.default({}),
  /**
+ * Who reports to whom — the chain of command, keyed by the
+ * **worker** and holding the planner it reports to.
+ *
+ * Keyed the opposite way from `reviewers`, and the asymmetry is a constraint rather
+ * than an inconsistency: a worker reports to at most one planner, and one value per key
+ * is what enforces that. Keyed by planner, the same worker could appear under two of
+ * them — which is exactly the ambiguity that makes "whose work is this" unanswerable.
+ *
+ * Read by the runtime, like `fleet` and `reviewers`: it narrows the roster a planner is
+ * given. It can only ever narrow — a worker assigned to a planner whose envelope
+ * refuses it is still refused, because attenuation runs afterwards and is unchanged. A
+ * reporting line says who *should* do the work, never that they *may*.
+ *
+ * Empty is every team today, and empty means no narrowing rather than nobody.
+ */
+ reportsTo: jsonb('reports_to').$type<Record<string, string>>.notNull.default({}),
+ /**
  * Which member the work starts from — the root orchestrator, and the canvas's
  * vantage point for depth.
  *

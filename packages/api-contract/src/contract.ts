@@ -775,6 +775,12 @@ export const contract = {
  */
  reviewers: z.record(z.string, z.array(z.string)).optional,
  /**
+ * The chain of command, keyed by worker. Absent leaves the stored
+ * assignment alone; `{}` clears it, which is a real state — no chain of command,
+ * which is what every team has today.
+ */
+ reportsTo: z.record(z.string, z.string).optional,
+ /**
  * The root orchestrator — the member the work starts from, and the
  * vantage the canvas measures depth from.
  *

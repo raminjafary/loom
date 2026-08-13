@@ -109,6 +109,11 @@ const emit = defineEmits<{
  fleet: Record<string, number>
  /** The review policy, keyed by reviewer persona id. Always sent, likewise. */
  reviewers: Record<string, string[]>
+ /**
+ * The chain of command, keyed by **worker** — the opposite key from
+ * `reviewers`, because a worker reports to at most one planner. Always sent.
+ */
+ reportsTo: Record<string, string>
  /** The root, as the canvas's vantage. Always sent, for the same reason. */
  orchestratorId: string | null
  },
@@ -208,6 +213,8 @@ const layout = ref<Record<string, { x: number; y: number }>>({})
 const fleet = ref<Record<string, number>>({})
 /** The review policy, mirrored for the same reason. Keyed by reviewer persona id. */
 const reviewers = ref<Record<string, string[]>>({})
+/** The chain of command, keyed by worker. */
+const reportsTo = ref<Record<string, string>>({})
 /** The root, mirrored likewise. Empty string is "nobody has chosen". */
 const orchestratorId = ref('')
 /** The team repository, mirrored likewise. Empty string is "nobody has chosen". */
@@ -251,6 +258,7 @@ watch(
  reviewers.value = Object.fromEntries(
  Object.entries(group.value?.reviewers ?? {}).map(([id, list]) => [id, [...list]]),
 )
+ reportsTo.value = {...(group.value?.reportsTo ?? {}) }
  },
  { immediate: true },
 )
@@ -465,6 +473,7 @@ const saveGroup = (
  layout: Record<string, { x: number; y: number }>
  fleet: Record<string, number>
  reviewers: Record<string, string[]>
+ reportsTo: Record<string, string>
  orchestratorId: string | null
  repositoryId: string | null
  }> = {},
@@ -478,6 +487,7 @@ const saveGroup = (
  layout: layout.value,
  fleet: fleet.value,
  reviewers: reviewers.value,
+ reportsTo: reportsTo.value,
  orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
  repositoryId: repositoryId.value === '' ? null: repositoryId.value,
 ...changed,
@@ -629,6 +639,33 @@ const setReviewer = (reviewedId: string, reviewerId: string) => {
  * the runtime does not have.
  */
 const reviewCandidates = computed( => members.value)
+
+/**
+ * Sets which planner a member reports to.
+ *
+ * Empty clears it, and clearing is a real state rather than a missing value: an unassigned
+ * member is offered to *every* planner's roster, which is what every team does today. So the
+ * option says "anyone's" rather than "none" — "none" would read as a member nobody may
+ * delegate to, which is the opposite of what it does.
+ */
+const setReportsTo = (workerId: string, plannerId: string) => {
+ const next = {...reportsTo.value }
+ if (plannerId === '') delete next[workerId]
+ else next[workerId] = plannerId
+ reportsTo.value = next
+ saveGroup({ reportsTo: next })
+}
+
+/**
+ * Who may be reported to: a planner on this team, other than the member itself.
+ *
+ * Narrowed here because the server refuses the rest — only a planner is given a roster, so
+ * a line into a worker would be an assignment nothing ever reads. Offering it would be
+ * asking for a refusal, which is the same rule the reviewer picker follows.
+ */
+const reportingCandidates = computed( => plannerMembers.value)
+
+const reportsToOf = (workerId: string): string => reportsTo.value[workerId] ?? ''
 
 const repositories = computed( => props.repositories ?? [])
 
@@ -1412,6 +1449,31 @@ const onKeydown = (event: KeyboardEvent) => {
  <option value="">unreviewed</option>
  <option v-for="candidate in reviewCandidates.filter((c) => c.id !== persona.id)":key="candidate.id":value="candidate.id">
  reviewed by {{ candidate.name }}
+ </option>
+ </select>
+ <!--
+ The chain of command: which planner this member reports to. Offered
+ on every member including a planner — a sub-planner reporting to a root is
+ the shape the corporation describes and the reason this field exists at all.
+
+ "Anyone's" rather than "none" for the empty state, because an unassigned
+ member appears in *every* planner's roster. "None" would read as nobody may
+ delegate to it, which is the opposite of what it does.
+ -->
+ <select
+ v-if="reportingCandidates.filter((c) => c.id !== persona.id).length > 0"
+ class="reports-to"
+:value="reportsToOf(persona.id)"
+:aria-label="`Which planner ${persona.name} reports to`"
+ @change="setReportsTo(persona.id, ($event.target as HTMLSelectElement).value)"
+ >
+ <option value="">anyone's to assign</option>
+ <option
+ v-for="candidate in reportingCandidates.filter((c) => c.id !== persona.id)"
+:key="`reports-${candidate.id}`"
+:value="candidate.id"
+ >
+ reports to {{ candidate.name }}
  </option>
  </select>
  <button type="button" class="link" @click="removeMember(persona.id)">remove</button>

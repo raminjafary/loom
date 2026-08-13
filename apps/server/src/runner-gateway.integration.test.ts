@@ -5417,6 +5417,157 @@ Decompose and delegate.`
  return { socket, run: await runPromise, thread: created.rootThread, frame, group }
  }
 
+ /**
+ * The chain of command, asserted where it actually acts: the roster a
+ * planner is handed at run start.
+ *
+ * Only this level can prove it. The domain's `scopeToReportingLines` is a filter over ids;
+ * what matters is that the ids resolve, that the narrowing survives the whole dispatch
+ * path, and that the planner is *told* which people are somebody else's — because a
+ * narrowed roster and a small workspace read identically to a model.
+ */
+ it('narrows a planner’s roster to the people who report to it', async => {
+ const { socket, runnerId } = await pairFakeRunner('reports-to')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'reports-to' })
+ const mine = await client.persona.create({
+ markdownSource: FLEET_PLANNER.replace('name: fleet-planner', 'name: mine-planner'),
+ })
+ const theirs = await client.persona.create({
+ markdownSource: FLEET_PLANNER.replace('name: fleet-planner', 'name: theirs-planner'),
+ })
+ const worker = (await client.persona.list).find((p) => p.name === 'fake-worker')
+ if (!worker) throw new Error('fake-worker persona missing')
+
+ const group = await client.personaGroup.create({
+ name: 'reports-to-team',
+ personaIds: [mine.id, theirs.id, worker.id],
+ })
+ // The worker belongs to the *other* planner, so this planner must not be offered it.
+ await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [mine.id, theirs.id, worker.id],
+ reportsTo: { [worker.id]: theirs.id },
+ })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: mine.id,
+ })
+ const frame = (await startRun) as { persona: { systemPrompt: string } }
+
+ // Not on the roster — the list of names the platform will accept.
+ expect(frame.persona.systemPrompt).not.toContain('- fake-worker —')
+ // And said out loud, so the planner hands that part of the goal to the right planner
+ // rather than reporting the goal impossible.
+ expect(frame.persona.systemPrompt).toContain('report to another planner')
+ expect(frame.persona.systemPrompt).toContain('fake-worker')
+
+ /**
+ * Finished rather than left running. A run left active counts against the workspace
+ * concurrency limit for every test after this one in the file, which is the kind of
+ * cross-test coupling that shows up as an unrelated failure three tests later.
+ */
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: run.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0, result: 'done' },
+ }),
+)
+ for (let i = 0; i < 60; i += 1) {
+ if ((await client.agentRun.listActive).every((entry) => entry.id !== run.id)) break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ /** A reporting line only narrows. Clearing it puts everyone back on every roster. */
+ it('offers an unassigned worker to every planner', async => {
+ const { socket, runnerId } = await pairFakeRunner('reports-to-clear')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'reports-to-clear' })
+ const planner = await client.persona.create({
+ markdownSource: FLEET_PLANNER.replace('name: fleet-planner', 'name: open-planner'),
+ })
+ const worker = (await client.persona.list).find((p) => p.name === 'fake-worker')
+ if (!worker) throw new Error('fake-worker persona missing')
+
+ const group = await client.personaGroup.create({
+ name: 'reports-to-clear-team',
+ personaIds: [planner.id, worker.id],
+ })
+ await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [planner.id, worker.id],
+ reportsTo: {},
+ })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: planner.id,
+ })
+ const frame = (await startRun) as { persona: { systemPrompt: string } }
+
+ expect(frame.persona.systemPrompt).toContain('- fake-worker —')
+ // A team with no chain of command is not told it has one.
+ expect(frame.persona.systemPrompt).not.toContain('report to another planner')
+
+ /**
+ * Finished rather than left running. A run left active counts against the workspace
+ * concurrency limit for every test after this one in the file, which is the kind of
+ * cross-test coupling that shows up as an unrelated failure three tests later.
+ */
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: run.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0, result: 'done' },
+ }),
+)
+ for (let i = 0; i < 60; i += 1) {
+ if ((await client.agentRun.listActive).every((entry) => entry.id !== run.id)) break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
+ /** Only a planner is given a roster, so a line into a worker reads nothing. Refused. */
+ it('refuses a reporting line into a persona that is not a planner', async => {
+ const created = await client.channel.create({ name: 'reports-to-refuse' })
+ expect(created.channel.name).toBe('reports-to-refuse')
+ const worker = (await client.persona.list).find((p) => p.name === 'fake-worker')
+ const other = await client.persona.create({
+ markdownSource: FLEET_PLANNER.replace('name: fleet-planner', 'name: refuse-planner'),
+ })
+ if (!worker) throw new Error('fake-worker persona missing')
+
+ const group = await client.personaGroup.create({
+ name: 'reports-to-refuse-team',
+ personaIds: [worker.id, other.id],
+ })
+ await expect(
+ client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [worker.id, other.id],
+ reportsTo: { [other.id]: worker.id },
+ }),
+).rejects.toThrow(/not a planner/)
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ })
+
  it("tells the Planner how wide its team is, in the roster it is given", async => {
  // The first place, and the cheapest half: a real instruction to a real model,
  // delivered while it is deciding how wide to fan out.

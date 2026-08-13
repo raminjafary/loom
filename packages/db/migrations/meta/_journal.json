@@ -344,6 +344,13 @@
       "when": 1786622733933,
       "tag": "0048_blushing_jazinda",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1786623890883,
+      "tag": "0049_complete_smasher",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "persona_group" ADD COLUMN "reports_to" jsonb DEFAULT '{}'::jsonb NOT NULL;

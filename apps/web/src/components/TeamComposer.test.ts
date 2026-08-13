@@ -68,6 +68,7 @@ const group = (overrides: Partial<PersonaGroup> = {}): PersonaGroup => ({
  personaIds: ['lead', 'swe'],
  fleet: {},
  reviewers: {},
+ reportsTo: {},
  layout: {},
  orchestratorId: null,
  repositoryId: null,

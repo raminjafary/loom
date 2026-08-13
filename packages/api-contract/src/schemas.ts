@@ -903,6 +903,16 @@ export const PersonaGroupSchema = z.object({
  */
  reviewers: z.record(z.string, z.array(z.string)),
  /**
+ * Who reports to whom — the chain of command, keyed by the **worker**
+ * and holding the planner it reports to.
+ *
+ * Keyed the opposite way from `reviewers`, because a worker reports to at most one
+ * planner and one value per key is what enforces it. Read by the runtime: it narrows the
+ * roster a planner is given, and it can only narrow — attenuation still decides what a
+ * child may hold. Empty means no narrowing, not nobody.
+ */
+ reportsTo: z.record(z.string, z.string),
+ /**
  * Which member the work starts from — the root orchestrator, as the canvas's
  * vantage point (see `orchestrate` in client-core).
  *
