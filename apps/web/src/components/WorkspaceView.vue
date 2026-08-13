@@ -954,6 +954,7 @@ onBeforeUnmount( => {
 :loading="agentSnapshot.loading"
  @refresh=" => agent.refreshInbox"
  @select="(agentRunId) => agent.inspectRun(agentRunId)"
+ @close=" => agent.clearInspectedRun"
  @decide="(id, decision, answer) => agent.decide(id, decision, answer)"
  @load-diff="(agentRunId) => agent.loadDiff(agentRunId)"
  @keep="(agentRunId) => agent.keepRun(agentRunId)"

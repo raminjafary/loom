@@ -537,6 +537,14 @@ export interface AgentSession {
  refreshInbox: Promise<void>
  inspectRun(agentRunId: string): Promise<void>
  /**
+ * Closes the review overlay.
+ *
+ * Clears the diff and its error with the run, not only the run: reopening a *different*
+ * card would otherwise show the previous one's diff underneath a new header for as long
+ * as the fetch takes, which is the worst moment to show someone the wrong branch.
+ */
+ clearInspectedRun: void
+ /**
  * Registers where this client can be reached. The caller obtains
  * the registration from its own runtime — `PushManager.subscribe` in a
  * browser — since granting permission is inherently a platform interaction;
@@ -1639,6 +1647,11 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
 
  refreshInbox: fetchInbox,
  inspectRun: fetchInspected,
+
+ clearInspectedRun {
+ patch({ inspectedRun: null, inspectedApprovals: [], diff: null })
+ patchFetchError('diff', null)
+ },
  noteRealtimeActivity,
  noteRunActivity,
 

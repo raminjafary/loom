@@ -6,7 +6,7 @@ import {
  describeAge,
  shortBranchName,
 } from '@loom/client-core'
-import { computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import DiffView from './DiffView.vue'
 
@@ -65,6 +65,8 @@ const emit = defineEmits<{
  * a swarm still running.
  */
  watch: [agentRunId: string]
+ /** Dismisses the review overlay. */
+ close: []
  refresh: []
 }>
 
@@ -101,6 +103,26 @@ const lanes = computed( =>
  * check".
  */
 const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.length, 0))
+
+/**
+ * Review opens over the board, not beside it.
+ *
+ * A side panel had to be paid for out of the board's width, and the columns paid — six of
+ * them squeezed until the last one was unreadable. The board is the thing a human is
+ * comparing; the review is one card at a time, and one-at-a-time is what an overlay is for.
+ *
+ * The same shape as the settings and graph overlays, including the part this repository
+ * got wrong once: the Escape handler sits on an element that is actually focused, or it
+ * never fires and the dialog claims `aria-modal` while being closable only by its ✕.
+ */
+const scrim = ref<HTMLElement | null>(null)
+const focusScrim = => scrim.value?.focus
+onMounted(focusScrim)
+watch( => props.selectedRun?.id, focusScrim)
+
+const onKeydown = (event: KeyboardEvent) => {
+ if (event.key === 'Escape') emit('close')
+}
 </script>
 
 <template>
@@ -166,9 +188,27 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
  </div>
  </div>
 
- <div class="detail">
- <p v-if="!props.selectedRun" class="hint">Select a run to review it.</p>
- <template v-else>
+ <!--
+ Review opens over the board rather than beside it. A side panel is paid for out of
+ the board's width, and the columns paid it — six of them squeezed until the last was
+ unreadable. The board is what a human compares; a review is one card at a time.
+ -->
+ <div
+ v-if="props.selectedRun"
+ ref="scrim"
+ class="scrim"
+ role="dialog"
+ aria-modal="true"
+ aria-label="Review this run"
+ tabindex="-1"
+ @keydown="onKeydown"
+ @click.self="emit('close')"
+ >
+ <section class="sheet">
+ <button type="button" class="close" aria-label="Close review" @click="emit('close')">
+ ✕
+ </button>
+
  <!--
  A header, because selecting a run used to show only a branch name and a Review
  button: everything that says *why this is here* was in the row you just
@@ -221,7 +261,7 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
  @merge="(agentRunId, override, done) => emit('merge', agentRunId, override, done)"
  @load-raw="(agentRunId, done) => emit('load-raw', agentRunId, done)"
  />
- </template>
+ </section>
  </div>
  </div>
 </template>
@@ -260,13 +300,12 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
 
 .lane {
  /*
- * Shrinks to fit before it scrolls. Six columns that each refused to narrow put the
- * last one — what got thrown away — off the right edge behind the detail panel, which
- * is the one column a human would never think to go looking for.
+ * Fixed width, and the row scrolls. Columns that shrank to fit stayed on screen and
+ * stopped being readable — a card three words wide is not a card — and there is nothing
+ * to be gained by seeing all six at once if none of them can be read. Now the board is
+ * the width it needs and the last column is a scroll away, which is what a board is.
  */
- flex: 1 1 12rem;
- min-width: 10.5rem;
- max-width: 22rem;
+ flex: 0 0 17rem;
  min-height: 0;
  display: flex;
  flex-direction: column;
@@ -434,25 +473,53 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
 }
 
 /*
- * The detail sits beside the board rather than replacing it: a human reviewing one branch
- * is usually deciding it *against* the others, and a full-page detail hides the column
- * that made them pick this card.
+ * The review, over the board. Same shape as the settings and graph overlays.
+ *
+ * `position: fixed` so it escapes the board's own `overflow: hidden` — the board clips its
+ * columns on purpose, and a panel that lived inside that clip was laid out as a flex item
+ * beside them, at whatever width its content happened to want.
  */
-.detail {
- width: 26rem;
- flex-shrink: 0;
- min-width: 0;
+.scrim {
+ position: fixed;
+ inset: 0;
+ z-index: 40;
+ display: flex;
+ align-items: flex-start;
+ justify-content: center;
+ padding: 3rem 1rem 1rem;
+ background: rgba(0, 0, 0, 0.55);
+}
+
+/*
+ * One width, whatever is in it. Sized by content, the panel was a different shape for
+ * every card — wide for a long error, narrow for a short one — so nothing on it ever sat
+ * where it had been a moment before.
+ */
+.sheet {
+ position: relative;
+ width: min(52rem, 100%);
+ max-height: 100%;
  overflow-y: auto;
- padding: 0.75rem 1rem;
- border-left: 1px solid var(--border);
+ padding: 1.1rem 1.2rem;
+ border: 1px solid var(--border);
+ border-radius: 0.6rem;
+ background: var(--bg);
  display: flex;
  flex-direction: column;
  gap: 0.75rem;
 }
 
-/* Nothing selected: the board takes the width rather than leaving a column of hint text. */
-.detail:has(>.hint) {
- width: 14rem;
+.sheet.close {
+ position: absolute;
+ top: 0.5rem;
+ right: 0.6rem;
+ border: 0;
+ padding: 0.15rem 0.35rem;
+ background: none;
+ color: var(--text-faint);
+ font: inherit;
+ font-size: 0.95rem;
+ cursor: pointer;
 }
 
 .run-head {
