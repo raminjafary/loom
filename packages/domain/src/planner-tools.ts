@@ -34,8 +34,64 @@
  */
 export const PLANNER_READABLE_TOOLS: readonly string[] = ['Read', 'Grep', 'Glob']
 
+/**
+ * What a Planner may hold to **research** — reading outside the repository.
+ *
+ * **[AMENDED — the operator asked for planners that can do R&D, and the rule as coded was
+ * coarser than its own justification.]**
+ *
+ * These were excluded before, and not by the planner/worker trust boundary's argument: the planner/worker trust boundary's amendment draws its line at
+ * *"reading is not acting"*, and fetching a URL changes nothing. They were excluded by
+ * being absent from an allowlist, and the persona form then told an operator they were
+ * "acting" tools — which is not the reason and taught the wrong model of the boundary.
+ *
+ * The reason the exclusion was nevertheless defensible is one planner/worker trust boundary does not spell out. the planner/worker trust boundary's
+ * stated cost of letting a planner read is that "repository content is now an instruction
+ * source" — but a bound repository is a perimeter *the operator chose*. An arbitrary URL is
+ * not: a worker note saying "the spec is at https://…" turns a planner's read into an
+ * attacker-selected fetch, and a planner's output is authority — subtasks carrying tool
+ * grants up to its `delegates` ceiling.
+ *
+ * **What changed is that the operator moved the gate, deliberately.** Their position:
+ * teams run autonomously and a human only merges. That is a real bound and the strongest
+ * one available here — the push policy keeps git credentials out of the sandbox, so a merge is
+ * already the one thing no agent can do for itself. Injected planning therefore surfaces as
+ * a branch a human declined to merge rather than as silent action.
+ *
+ * **The two are not equally safe, and the asymmetry is the whole content of this list:**
+ *
+ * - `WebFetch` runs in the sandbox behind the egress proxy, so it reaches **only** hosts a
+ * capability an operator attached names. Allowing it on a planner therefore adds no
+ * reach at all until an operator grants a host — the perimeter stays operator-chosen,
+ * which is exactly the property the planner/worker trust boundary's own reasoning turns on.
+ * - `WebSearch` is executed by the *model API*, so no allowlist ever sees it and nothing
+ * can scope it to hosts. Ticking it **is** the grant. It is the widest instruction source
+ * in the system and it is here because the operator asked for it with the merge gate as
+ * the accepted backstop — recorded rather than implied, because the next person to read
+ * this should know it was a decision and not an oversight.
+ *
+ * Still no MCP capability on a planner: the capability registry treats an MCP server as a route to a shell, and
+ * `attenuateChildCapabilities` is unchanged.
+ */
+export const PLANNER_RESEARCH_TOOLS: readonly string[] = ['WebFetch', 'WebSearch']
+
+/**
+ * Everything a Planner may hold: the read-only three plus the two research tools.
+ *
+ * One list rather than two call sites, because the invariant that matters is "a planner
+ * cannot act", and every check should be against that single answer.
+ */
+export const PLANNER_ALLOWED_TOOLS: readonly string[] = [
+...PLANNER_READABLE_TOOLS,
+...PLANNER_RESEARCH_TOOLS,
+]
+
 export const isPlannerReadableTool = (tool: string): boolean =>
- PLANNER_READABLE_TOOLS.includes(tool)
+ PLANNER_ALLOWED_TOOLS.includes(tool)
+
+/** Whether this tool reaches outside the repository — true of the research two only. */
+export const isPlannerResearchTool = (tool: string): boolean =>
+ PLANNER_RESEARCH_TOOLS.includes(tool)
 
 /**
  * The tools on a list that a planner may not hold — everything that is not
@@ -52,4 +108,4 @@ export const actingTools = (tools: readonly string[]): string[] =>
  * subtask wording both have to keep telling the truth about.
  */
 export const canPlannerRead = (tools: readonly string[]): boolean =>
- tools.some(isPlannerReadableTool)
+ tools.some((tool) => PLANNER_READABLE_TOOLS.includes(tool))

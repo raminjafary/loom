@@ -64,9 +64,10 @@ export interface PersonaFormEnvelope {
  * string and the Runner's allowlist is what decides — but a human authoring a
  * persona should not have to remember the SDK's exact spelling of `NotebookEdit`.
  *
- * `acting` is what `PLANNER_READABLE_TOOLS` calls the other side of the line: a
- * planner may hold only the read-only ones, and the form greys the rest out
- * rather than letting a human type a persona the server will refuse.
+ * `acting` is what `PLANNER_ALLOWED_TOOLS` calls the other side of the line: a planner may
+ * hold only the tools that change nothing (the planner/worker trust boundary — the read-only three, plus the two that
+ * only *read* outside the repository), and the form greys the rest out rather than letting a
+ * human type a persona the server will refuse.
  */
 export const SELECTABLE_TOOLS: ReadonlyArray<{
  readonly name: string
@@ -89,9 +90,17 @@ export const SELECTABLE_TOOLS: ReadonlyArray<{
  * and adding it here *is* the grant: metered like any other model call, and bounded by
  * the run's budget cap, but not host-scoped. Saying which is which is the difference
  * between an operator who knows what they turned on and one who assumed.
+ *
+ * **`acting: false`, and it was `true` — which was wrong and said so in the UI.** This
+ * flag decides two things: whether the form greys a tool out on a planner, and what the
+ * label "an acting tool is one that changes something" claims about it. Fetching a URL
+ * changes nothing, so the label was false; and the amendment draws its line at
+ * "reading is not acting", so the planner exclusion was not the planner/worker trust boundary's rule either. See
+ * `planner-tools.ts` for why it was nevertheless defensible and what the operator
+ * changed. Both halves are now consistent: the label is true, and a planner may research.
  */
- { name: 'WebFetch', acting: true, summary: 'Fetch a URL — only hosts a capability allows' },
- { name: 'WebSearch', acting: true, summary: 'Search the web via the model API — not host-scoped' },
+ { name: 'WebFetch', acting: false, summary: 'Fetch a URL — only hosts a capability allows' },
+ { name: 'WebSearch', acting: false, summary: 'Search the web via the model API — not host-scoped' },
 ]
 
 /** Mirrors `PLANNER_READABLE_TOOLS`; the server refuses anything else on a planner. */
