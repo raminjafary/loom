@@ -288,6 +288,13 @@
       "when": 1786596799427,
       "tag": "0040_groovy_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1786598223615,
+      "tag": "0041_clean_nuke",
+      "breakpoints": true
     }
   ]
 }

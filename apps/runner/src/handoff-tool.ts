@@ -1,5 +1,5 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
-import { MAX_BRIEF_ITEMS } from '@loom/domain'
+import { HAND_OVER_TOOL_NAME, HANDOFF_SERVER_NAME, MAX_BRIEF_ITEMS } from '@loom/domain'
 import { z } from 'zod'
 
 /**
@@ -20,8 +20,9 @@ import { z } from 'zod'
  * deciding what to do, which is the expensive part the handoff was supposed to carry.
  */
 
-export const HANDOFF_SERVER_NAME = 'loom_handoff'
-export const HAND_OVER_TOOL_NAME = `mcp__${HANDOFF_SERVER_NAME}__hand_over`
+// Re-exported, not redefined: the server names this tool in the nudge it delivers, so the
+// name has one home and it is the domain's.
+export { HANDOFF_SERVER_NAME, HAND_OVER_TOOL_NAME }
 
 export const HANDOFF_TOOL_NAMES = [HAND_OVER_TOOL_NAME] as const
 

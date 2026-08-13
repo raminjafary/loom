@@ -1,0 +1,1 @@
+ALTER TABLE "agent_run" ADD COLUMN "handoff_suggested_at" timestamp with time zone;

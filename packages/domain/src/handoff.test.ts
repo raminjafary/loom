@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
  DEFAULT_HANDOFF_CAP_PER_TREE,
+ HAND_OVER_TOOL_NAME,
  UNTRUSTED_BRIEF_OPEN,
  checkBrief,
  handoffDecision,
  parseBrief,
  renderHandoffBrief,
+ renderHandoffNudge,
  type HandoffBrief,
  type HandoffFacts,
 } from './handoff.js'
@@ -175,5 +177,39 @@ describe('renderHandoffBrief', => {
 
  it('says plainly when nothing was verified, rather than leaving it out', => {
  expect(rendered).toContain('Nothing has been verified')
+ })
+})
+
+describe('renderHandoffNudge', => {
+ const nudge = (over: Partial<Parameters<typeof renderHandoffNudge>[0]> = {}) =>
+ renderHandoffNudge({
+ pressure: 0.86,
+ toolName: HAND_OVER_TOOL_NAME,
+ handoffsInTree: 0,
+ cap: DEFAULT_HANDOFF_CAP_PER_TREE,
+...over,
+ })
+
+ /**
+ * Mastery: "the threshold nudges; the agent asks; the cap refuses." A nudge that told the
+ * run to hand over would be the platform retiring an agent mid-thought on a ratio,
+ * which is the decision this whole shape exists to avoid.
+ */
+ it('hands over the measurement and the option, never an instruction', => {
+ const text = nudge
+ expect(text).toContain('86%')
+ expect(text).toContain('a measurement, not an instruction')
+ expect(text).toContain('nobody is stopping you')
+ expect(text).toContain('carry on if you are still doing the work well')
+ })
+
+ /** A nudge naming a tool the model was never given is worse than no nudge at all. */
+ it('names the tool the run actually has', => {
+ expect(nudge).toContain('mcp__loom_handoff__hand_over')
+ })
+
+ it('says how close the tree is to the cap once one handoff has happened', => {
+ expect(nudge({ handoffsInTree: 1 })).toContain('handed off 1 time(s) already')
+ expect(nudge({ handoffsInTree: 0 })).toContain('Finish the thought you are on first')
  })
 })

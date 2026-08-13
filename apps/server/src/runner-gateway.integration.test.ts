@@ -644,6 +644,75 @@ describe('runner-gateway: warm handoff', => {
  socket.close
  })
 
+ /**
+ * The nudge (mastery — "the threshold nudges; the agent asks; the cap refuses"), driven by
+ * the frame that actually carries the measurement. This is the half that was missing:
+ * `shouldSuggestHandoff` existed and nothing called it, so an agent could hand over and
+ * the platform never said a word.
+ */
+ it('tells a run its window is filling, once, from the heartbeat that measured it', async => {
+ const stamp = Date.now
+ const { socket, runnerId } = await pairFakeRunner(`handoff-nudge-${stamp}`)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: `handoff-nudge-${stamp}` })
+ const run = await startOn(socket, created.rootThread.id, repo.id)
+
+ // Below the threshold: measured, and nothing said.
+ socket.send(
+ JSON.stringify({
+ type: 'heartbeat',
+ runId: run.id,
+ contextTokens: 10_000,
+ contextMaxTokens: 100_000,
+ }),
+)
+
+ const delivered = nextFrame(socket, (v) => v.type === 'deliver_context')
+ socket.send(
+ JSON.stringify({
+ type: 'heartbeat',
+ runId: run.id,
+ contextTokens: 91_000,
+ contextMaxTokens: 100_000,
+ }),
+)
+
+ // It goes to the run itself — the platform tells it the number and names the tool it
+ // actually has, and never hands over on its behalf.
+ const frame = await delivered
+ expect(frame.text).toContain('91%')
+ expect(frame.text).toContain('mcp__loom_handoff__hand_over')
+ expect(frame.text).toContain('nobody is stopping you')
+
+ // And where a human reads, because a threshold nobody can see acting is a setting.
+ for (let i = 0; i < 40; i += 1) {
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ if (page.messages.some((m) => m.body.text?.includes('91% full'))) break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ const notices = page.messages.filter((m) => m.body.text?.includes('context window is'))
+ expect(notices).toHaveLength(1)
+
+ // Once. A nudge repeated every heartbeat is a nudge ignored, and this run has no
+ // room to spare by hypothesis.
+ socket.send(
+ JSON.stringify({
+ type: 'heartbeat',
+ runId: run.id,
+ contextTokens: 96_000,
+ contextMaxTokens: 100_000,
+ }),
+)
+ await new Promise((r) => setTimeout(r, 400))
+ const after = await client.message.list({ threadId: created.rootThread.id })
+ expect(after.messages.filter((m) => m.body.text?.includes('context window is'))).toHaveLength(1)
+
+ // Still working: the nudge retired nothing.
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('running')
+ socket.close
+ })
+
  it('refuses a brief with no next step, and the run carries on', async => {
  const stamp = Date.now
  const { socket, runnerId } = await pairFakeRunner(`handoff-summary-${stamp}`)

@@ -875,6 +875,25 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
 .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
  },
 
+ /**
+ * The claim, not a read-then-write. `returning` being empty means somebody else got
+ * there first — which for a heartbeat means the previous heartbeat, a few seconds ago.
+ */
+ async markHandoffSuggested(workspaceId, id) {
+ const rows = await db
+.update(agentRun)
+.set({ handoffSuggestedAt: new Date })
+.where(
+ and(
+ eq(agentRun.workspaceId, workspaceId),
+ eq(agentRun.id, id),
+ isNull(agentRun.handoffSuggestedAt),
+),
+)
+.returning({ id: agentRun.id })
+ return rows.length > 0
+ },
+
  async recordEventActivity(workspaceId, id) {
  await db
 .update(agentRun)

@@ -1,10 +1,12 @@
 import {
  DEFAULT_HANDOFF_CAP_PER_TREE,
+ HAND_OVER_TOOL_NAME,
  NotFoundError,
  checkBrief,
  handoffDecision,
  parseBrief,
  renderHandoffBrief,
+ renderHandoffNudge,
  type AgentRunId,
  type WorkspaceId,
 } from '@loom/domain'
@@ -183,3 +185,91 @@ export const shouldSuggestHandoff = (
 ...(limits?.handoffThreshold === undefined ? {}: { threshold: limits.handoffThreshold }),
 ...(limits?.handoffCapPerTree === undefined ? {}: { cap: limits.handoffCapPerTree }),
  }).handOff
+
+export interface SuggestHandoffDeps {
+ readonly agentRuns: {
+ markHandoffSuggested(workspaceId: WorkspaceId, id: AgentRunId): Promise<boolean>
+ listTree(workspaceId: WorkspaceId, treeRunId: AgentRunId): Promise<{ relation: string | null }[]>
+ }
+ readonly resolveTreeRunId: (workspaceId: WorkspaceId, runId: AgentRunId) => Promise<AgentRunId>
+ /** Says it to the run itself, in-flight. */
+ readonly deliver: (input: { runnerId: string; runId: AgentRunId; text: string }) => Promise<void>
+ /** Says it where a human reads — a threshold nobody can see acting is a setting. */
+ readonly announce: (input: { runId: AgentRunId; text: string }) => Promise<void>
+ readonly limits?: { handoffThreshold?: number; handoffCapPerTree?: number }
+}
+
+/**
+ * The nudge.
+ *
+ * Called from the heartbeat, which is the frame that already carries the measurement live swarm observability
+ * takes and mastery acts on — so the platform notices a filling window at the moment it fills
+ * rather than the next time somebody looks at the board.
+ *
+ * **It never hands over.** All it does is tell the run its own number and remind it the
+ * tool exists, because retiring an agent mid-thought on a ratio is the thing mastery rules
+ * out: the measurement is the platform's, the judgement is the agent's, and the cap is the
+ * only part that refuses.
+ *
+ * Two guards keep it from being a cost of its own. The decision is taken **before** the
+ * tree is read — a heartbeat arrives every few seconds and every run in the workspace
+ * sends one, so a tree query per heartbeat would be a query per run per tick for a
+ * condition almost no run is in. And the stamp is claimed conditionally, so it fires once
+ * per run: a nudge repeated every heartbeat is a nudge ignored, in a window that by
+ * hypothesis has no room to spare.
+ */
+export const suggestHandoffOnPressure = async (
+ deps: SuggestHandoffDeps,
+ run: {
+ id: AgentRunId
+ workspaceId: WorkspaceId
+ runnerId: string
+ status: string
+ contextTokens: number | null
+ contextMaxTokens: number | null
+ },
+): Promise<boolean> => {
+ /**
+ * The cheap half first, with the tree count assumed clear. Assuming zero can only make
+ * this *more* likely to pass, so nothing that deserves a nudge is filtered out here —
+ * the authoritative decision below re-runs with the real count.
+ */
+ const provisional = handoffDecision({
+ status: run.status,
+ contextTokens: run.contextTokens,
+ contextMaxTokens: run.contextMaxTokens,
+ handoffsInTree: 0,
+...(deps.limits?.handoffThreshold === undefined
+ ? {}
+: { threshold: deps.limits.handoffThreshold }),
+ })
+ if (!provisional.handOff) return false
+
+ const treeRunId = await deps.resolveTreeRunId(run.workspaceId, run.id)
+ const handoffsInTree = countHandoffsInTree(await deps.agentRuns.listTree(run.workspaceId, treeRunId))
+ if (!shouldSuggestHandoff(run, handoffsInTree, deps.limits)) return false
+
+ // The claim is what makes it once-only, and it is taken before the delivery: a nudge
+ // sent twice is worse than one that was stamped and then failed to send.
+ if (!(await deps.agentRuns.markHandoffSuggested(run.workspaceId, run.id))) return false
+
+ const cap = deps.limits?.handoffCapPerTree ?? DEFAULT_HANDOFF_CAP_PER_TREE
+ await deps.deliver({
+ runnerId: run.runnerId,
+ runId: run.id,
+ text: renderHandoffNudge({
+ pressure: provisional.pressure,
+ toolName: HAND_OVER_TOOL_NAME,
+ handoffsInTree,
+ cap,
+ }),
+ })
+ await deps.announce({
+ runId: run.id,
+ text:
+ `This run's context window is ${Math.round(provisional.pressure * 100)}% full. It has ` +
+ 'been told, and it may hand the work to a fresh run on the same branch and the same ' +
+ 'budget — that is its call, not the platform\'s.',
+ })
+ return true
+}

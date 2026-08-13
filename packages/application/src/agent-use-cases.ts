@@ -129,6 +129,7 @@ import {
  type NoteDeps,
 } from './note-use-cases.js'
 import { recordSpokenTurn } from './colosseum-use-cases.js'
+import { suggestHandoffOnPressure } from './handoff-use-cases.js'
 import { startThread, type Deps } from './use-cases.js'
 
 export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps {
@@ -3156,8 +3157,47 @@ export const recordRunHeartbeat = async (
  */
  context?: { tokens: number; maxTokens: number } | undefined
  },
-): Promise<void> =>
- deps.agentRuns.recordHeartbeat(input.workspaceId, input.agentRunId, input.context)
+): Promise<void> => {
+ await deps.agentRuns.recordHeartbeat(input.workspaceId, input.agentRunId, input.context)
+
+ /**
+ * The nudge. This frame is the only place the platform
+ * *learns* a window is filling, so it is the only place it can say so at the moment it
+ * happens rather than the next time somebody opens the board.
+ *
+ * Only when this frame carried a sample: a heartbeat with no reading has told us
+ * nothing new, and re-deciding on a stale figure would put the nudge on a timer rather
+ * than on the measurement.
+ *
+ * Best-effort. A run must not be reaped because the thing telling it to consider a
+ * handoff threw — the whole feature is optional advice, and the heartbeat it rides on
+ * is what keeps the run alive.
+ */
+ if (!input.context) return
+ try {
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!run) return
+ await suggestHandoffOnPressure(
+ {
+ agentRuns: deps.agentRuns,
+ resolveTreeRunId: async (workspaceId, runId) => {
+ const target = await deps.agentRuns.findById(workspaceId, runId)
+ return target === null ? runId: resolveTreeRunId(deps, target)
+ },
+ deliver: async ({ runnerId, runId, text }) => {
+ await deps.dispatch.deliverToRun({ runnerId: runnerId as RunnerId, runId, text })
+ },
+ announce: async ({ text }) => {
+ await postRunSystemMessage(deps, run, text)
+ },
+ limits: {},
+ },
+ run,
+)
+ } catch {
+ // See above — advice, and never a reason to lose a heartbeat.
+ }
+}
 
 /** Backs the Inbox view — runs a human hasn't finished with yet. */
 export const listRunsNeedingAttention = (

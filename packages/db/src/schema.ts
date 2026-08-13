@@ -207,6 +207,11 @@ export const agentRun = pgTable(
  // Both null until a Runner samples one — which never happens before the first turn.
  contextTokens: integer('context_tokens'),
  contextMaxTokens: integer('context_max_tokens'),
+ // When the platform told this run its window was filling. A stamp rather than a boolean so the record says *when*, and claimed
+ // conditionally like `aggregatedAt` above and for the same reason: heartbeats arrive
+ // every few seconds, and a read-then-write would re-nudge on every one of them from
+ // the moment the run crossed the threshold.
+ handoffSuggestedAt: timestamp('handoff_suggested_at', { withTimezone: true }),
  // Claimed by whichever sibling reports this run's plan. The claim is the point, not the timestamp: "only the last sibling
  // reports" was a read-then-write with no claim, so two children reaching a
  // terminal status at the same moment both read "all terminal" and both posted.

@@ -94,6 +94,53 @@ export const handoffDecision = (input: {
  }
 }
 
+/**
+ * The handover channel's name, here rather than on the Runner that builds the tool.
+ *
+ * Two places need to agree on it — the Runner offering the tool and the server naming it
+ * in the nudge — and this repository has shipped "a tool exists everywhere except the list
+ * the model sees" three times. One constant is what stops a fourth: a nudge that names a
+ * tool the model was never given is worse than no nudge at all.
+ */
+export const HANDOFF_SERVER_NAME = 'loom_handoff'
+export const HAND_OVER_TOOL_NAME = `mcp__${HANDOFF_SERVER_NAME}__hand_over`
+
+/**
+ * What the platform says to a run whose window is filling.
+ *
+ * **It nudges; it does not instruct.** mastery: "the threshold nudges; the agent asks; the cap
+ * refuses." Acting on the ratio alone would retire an agent mid-thought on a number, and
+ * the agent is the one that knows whether it is still getting better at the task — so this
+ * hands over the measurement and the option, and leaves the judgement where it belongs.
+ *
+ * It says the number rather than a verdict, for the same reason the brief carries the
+ * platform's observed paths: a figure the run can weigh against what it is actually doing
+ * is worth more than the platform's opinion of that figure. And it is sent **once** — a
+ * nudge repeated every heartbeat is a nudge ignored, in a window with no room to spare.
+ */
+export const renderHandoffNudge = (input: {
+ pressure: number
+ toolName: string
+ handoffsInTree: number
+ cap: number
+}): string =>
+ [
+ `The platform has measured this run's context window at ${Math.round(input.pressure * 100)}% ` +
+ 'full. This is a measurement, not an instruction: nobody is stopping you, and you ' +
+ 'should carry on if you are still doing the work well.',
+ 'What it means in practice is that from here you will start compacting, and compaction ' +
+ 'loses detail at exactly the point you have learned the most about this task. If you ' +
+ 'can feel that — you are re-reading things you already read, or you have lost the ' +
+ `thread of what you were doing — call \`${input.toolName}\` and write down what the ` +
+ 'next agent needs. It continues on this branch, in this tree, on this budget.',
+ input.handoffsInTree > 0
+ ? `This tree has handed off ${input.handoffsInTree} time(s) already, and the limit is ` +
+ `${input.cap}. Past that nobody takes over, so if you are going to, do it while the ` +
+ 'handover is still worth writing.'
+: 'Finish the thought you are on first. A brief written well is worth more than one ' +
+ 'written early.',
+ ].join('\n\n')
+
 export const MAX_BRIEF_ITEMS = 12
 export const MAX_BRIEF_FIELD_LENGTH = 2_000
 

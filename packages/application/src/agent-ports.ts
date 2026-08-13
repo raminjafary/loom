@@ -459,6 +459,16 @@ export interface AgentRunRepositoryPort {
  id: AgentRunId,
  context?: { tokens: number; maxTokens: number } | undefined,
 ): Promise<void>
+ /**
+ * Stamps that the platform has told this run its window is filling, and
+ * says whether *this* call was the one that stamped it.
+ *
+ * Conditional on the stamp being absent, in the update itself: heartbeats arrive every
+ * few seconds and a read-then-write would nudge the same run on every one of them from
+ * the moment it crosses the threshold. A nudge repeated is a nudge ignored, and this is
+ * a run that by hypothesis has no room to spare.
+ */
+ markHandoffSuggested(workspaceId: WorkspaceId, id: AgentRunId): Promise<boolean>
  /** Bumped by any agent_event — distinct signal from a heartbeat: a hung-but-connected run keeps sending heartbeats but stops making progress. */
  recordEventActivity(workspaceId: WorkspaceId, id: AgentRunId): Promise<void>
  /**
