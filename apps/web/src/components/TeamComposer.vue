@@ -332,6 +332,7 @@ const selectedEdge = computed(
  => edges.value.find((edge) => edge.id === selectedEdgeId.value) ?? null,
 )
 
+
 const recursivePlanners = computed( =>
  // Against the seat rather than the matrix: a planner that may recurse from a root and
  // sits one hop down has no hop left, so the legend would explain a mark nothing carries.
@@ -849,6 +850,32 @@ const requestRemoveEdge = => {
  proposeRemoval
 }
 
+/**
+ * The side panel returns to the top when an edge is selected or a proposal opens.
+ *
+ * Ordering alone does not finish the fix. This column scrolls and it keeps where it was —
+ * so a human who had scrolled to the roster clicked an edge and still saw nothing move,
+ * which is the report that started this. Moving the panel is the only way a surface says
+ * "here" to someone whose eyes are somewhere else.
+ *
+ * Declared below `removal` and `pending` rather than beside `selectedEdge`, for the reason
+ * the inspector's own note gives: a `watch` runs its source immediately, so a `const`
+ * declared later is a reference before initialization rather than a lazy read.
+ */
+const side = ref<HTMLElement | null>(null)
+watch([selectedEdgeId, removal, pending], ([edgeId, removalOpen, pendingOpen]) => {
+ if (edgeId === '' && removalOpen === null && pendingOpen === null) return
+ /**
+ * `scrollTop = 0`, not `scrollTo({ behavior: 'smooth' })`. The smooth form did nothing
+ * at all in a real browser — checked by hand on this panel — and a fix that silently
+ * no-ops is the failure being fixed. Instant is also the right answer: the panel has to
+ * be showing this *now*, not arriving shortly.
+ */
+ void nextTick( => {
+ if (side.value) side.value.scrollTop = 0
+ })
+})
+
 const applyRemoval = => {
  const request = removal.value
  if (!request || request.verdict.kind === 'impossible') return
@@ -1005,7 +1032,183 @@ const onKeydown = (event: KeyboardEvent) => {
  </p>
  </div>
 
- <aside class="side">
+ <aside ref="side" class="side">
+ <!--
+ **What the human just acted on comes first.**
+
+ This panel and the two proposals below it used to sit under the roster, the
+ derive form and the whole Add list — several screens down a scrolling column.
+ Selecting an edge appeared to do nothing, and "Remove this edge" appeared to do
+ nothing twice: the proposal it opens rendered below the fold as well. Both were
+ working the entire time, which is the point — an operator reported the feature as
+ broken and every test passed, the same shape as the Inbox lanes that shipped
+ correct and unreadable.
+
+ The rest of this column is standing configuration and can be scrolled to. What a
+ human touched a second ago cannot.
+ -->
+ <!--
+ The panel the roadmap calls this canvas's highest-value job: every reason at once,
+ each with what to change, instead of one runtime error at a time.
+ -->
+ <section v-if="selectedEdge" class="inspector">
+ <h3>
+ <span class="edge-name">
+ {{ personaById(selectedEdge.source)?.name }} →
+ {{ personaById(selectedEdge.target)?.name }}
+ </span>
+ <!--
+ Which of the two kinds this is, said on the edge's own panel. They are
+ stored differently and removed by genuinely different acts, so a human
+ reading a message about "this edge" needs to know which one they picked.
+ -->
+ <em class="edge-kind">{{
+ selectedEdge.kind === 'reviews' ? 'review expectation': 'delegation'
+ }}</em>
+ </h3>
+ <p v-if="selectedEdge.kind === 'reviews'" class="ok">
+ {{ personaById(selectedEdge.source)?.name }} is expected to review
+ {{ personaById(selectedEdge.target)?.name }}'s work. Nothing in the runtime
+ gates on it — it is this team's policy, not a permission.
+ </p>
+ <!--
+ An edge the pair allows and the arrangement does not. Said before the
+ "may delegate" line, because it is the answer that governs: the permission
+ is real and there is nowhere on this team it can be used from.
+ -->
+ <p v-else-if="orchestration.outOfDepth[selectedEdge.id]" class="warn">
+ {{ orchestration.outOfDepth[selectedEdge.id] }}
+ These two personas do allow it — what refuses it is where they sit under
+ {{ personaById(orchestration.orchestratorId)?.name ?? 'the root' }}. Move the
+ root, or shorten the chain.
+ </p>
+ <p v-else-if="selectedEdge.ok" class="ok">
+ This planner may delegate to this worker.
+ </p>
+ <ul v-else class="refusals">
+ <li v-for="refusal in selectedEdge.refusals":key="refusal.rule">
+ <strong>{{ refusal.rule }}</strong>
+ <span>{{ refusal.detail }}</span>
+ <em>{{ refusal.fix }}</em>
+ </li>
+ </ul>
+ <!--
+ Offered only for an edge that actually exists. A refused delegation is
+ already not there, and "remove" on it would promise to undo something that
+ never happened.
+ -->
+ <button
+ v-if="selectedEdge.kind === 'reviews' || selectedEdge.ok"
+ type="button"
+ class="link danger"
+:disabled="props.busy"
+ @click="requestRemoveEdge"
+ >
+ Remove this edge
+ </button>
+ </section>
+ <section v-if="removal" class="pending" role="alert">
+ <h3 class="removal-head">
+ Remove {{ removal.plannerName }} → {{ removal.targetName }}
+ </h3>
+ <template v-if="removal.verdict.kind === 'impossible'">
+ <p>{{ removal.verdict.reason }}</p>
+ <button type="button" class="link" @click="removal = null">Dismiss</button>
+ </template>
+ <template v-else>
+ <p>
+ Removing <strong>this one edge</strong> narrows
+ {{ removal.plannerName }}'s envelope by
+ <strong>{{ removal.verdict.tools.join(', ') }}</strong
+ >, which is the only way to stop it delegating to
+ {{ removal.targetName }} — a delegation edge is derived from the envelope,
+ not stored as a pair.
+ </p>
+ <p v-if="removal.verdict.kind === 'clean'" class="fine">
+ No other delegate needs that tool, so every other edge on this canvas stays
+ exactly as it is.
+ </p>
+ <template v-else>
+ <p class="fine">
+ It also stops {{ removal.plannerName }} delegating to
+ <strong>{{ removal.verdict.alsoLoses.join(', ') }}</strong
+ >, which need the same tool. Said before it happens rather than discovered
+ afterwards.
+ </p>
+ <!--
+ The alternatives, because the automatic choice is a minimum and not the
+ answer. Without them a panel naming three collateral workers reads as
+ "everyone loses something", when the truth is that *this* narrowing does
+ and another may not.
+ -->
+ <p v-if="removal.verdict.everyOptionCosts" class="fine">
+ Every tool that would remove this edge is shared with someone, so there is
+ no narrowing that costs nothing. The choice below is which cost to pay.
+ </p>
+ <ul v-if="removal.verdict.options.length > 1" class="options">
+ <li v-for="option in removal.verdict.options":key="option.tool">
+ <button
+ type="button"
+ class="link"
+:disabled="removal.verdict.tools.includes(option.tool)"
+ @click="proposeRemoval(option.tool)"
+ >
+ drop {{ option.tool }}
+ </button>
+ <span class="fine">{{
+ option.alsoLoses.length === 0
+ ? 'nothing else changes'
+: `also loses ${option.alsoLoses.join(', ')}`
+ }}</span>
+ </li>
+ </ul>
+ </template>
+ <div class="actions">
+ <button type="button":disabled="props.busy" @click="applyRemoval">
+ Narrow by {{ removal.verdict.tools.join(', ') }}
+ </button>
+ <button type="button" class="link" @click="removal = null">Cancel</button>
+ </div>
+ </template>
+ </section>
+ <section v-if="pending" class="pending" role="alert">
+ <template v-if="pending.verdict.kind === 'widen'">
+ <p>{{ pending.verdict.detail }}</p>
+ <p class="fine">
+ This edits the planner's own markdown through the same call the persona
+ editor uses. It widens what the planner may hand down; it does not change
+ what {{ pending.targetName }} is.
+ </p>
+ <div class="actions">
+ <button type="button":disabled="props.busy" @click="applyWidening">
+ Widen the envelope
+ </button>
+ <button type="button" class="link" @click="pending = null">Cancel</button>
+ </div>
+ </template>
+ <template v-else-if="pending.verdict.kind === 'not-a-planner'">
+ <p>{{ pending.verdict.detail }}</p>
+ <button type="button" class="link" @click="pending = null">Dismiss</button>
+ </template>
+ <template v-else-if="pending.verdict.kind === 'refused'">
+ <p>
+ This edge cannot be drawn, because granting it would change what
+ {{ pending.targetName }} is rather than what this planner may hand down:
+ </p>
+ <ul class="refusals">
+ <li v-for="refusal in pending.verdict.refusals":key="refusal.rule">
+ <strong>{{ refusal.rule }}</strong>
+ <span>{{ refusal.detail }}</span>
+ <em>{{ refusal.fix }}</em>
+ </li>
+ </ul>
+ <button type="button" class="link" @click="pending = null">Dismiss</button>
+ </template>
+ <template v-else>
+ <p>They are already connected.</p>
+ <button type="button" class="link" @click="pending = null">Dismiss</button>
+ </template>
+ </section>
  <!--
  The design-canvas policy, and the item the other two were blocked on.
  Leads with the answer — where this team's work lands — because the sentence is
@@ -1293,170 +1496,6 @@ const onKeydown = (event: KeyboardEvent) => {
  </ul>
  </section>
 
- <!--
- The panel the roadmap calls this canvas's highest-value job: every reason at once,
- each with what to change, instead of one runtime error at a time.
- -->
- <section v-if="selectedEdge" class="inspector">
- <h3>
- <span class="edge-name">
- {{ personaById(selectedEdge.source)?.name }} →
- {{ personaById(selectedEdge.target)?.name }}
- </span>
- <!--
- Which of the two kinds this is, said on the edge's own panel. They are
- stored differently and removed by genuinely different acts, so a human
- reading a message about "this edge" needs to know which one they picked.
- -->
- <em class="edge-kind">{{
- selectedEdge.kind === 'reviews' ? 'review expectation': 'delegation'
- }}</em>
- </h3>
- <p v-if="selectedEdge.kind === 'reviews'" class="ok">
- {{ personaById(selectedEdge.source)?.name }} is expected to review
- {{ personaById(selectedEdge.target)?.name }}'s work. Nothing in the runtime
- gates on it — it is this team's policy, not a permission.
- </p>
- <!--
- An edge the pair allows and the arrangement does not. Said before the
- "may delegate" line, because it is the answer that governs: the permission
- is real and there is nowhere on this team it can be used from.
- -->
- <p v-else-if="orchestration.outOfDepth[selectedEdge.id]" class="warn">
- {{ orchestration.outOfDepth[selectedEdge.id] }}
- These two personas do allow it — what refuses it is where they sit under
- {{ personaById(orchestration.orchestratorId)?.name ?? 'the root' }}. Move the
- root, or shorten the chain.
- </p>
- <p v-else-if="selectedEdge.ok" class="ok">
- This planner may delegate to this worker.
- </p>
- <ul v-else class="refusals">
- <li v-for="refusal in selectedEdge.refusals":key="refusal.rule">
- <strong>{{ refusal.rule }}</strong>
- <span>{{ refusal.detail }}</span>
- <em>{{ refusal.fix }}</em>
- </li>
- </ul>
- <!--
- Offered only for an edge that actually exists. A refused delegation is
- already not there, and "remove" on it would promise to undo something that
- never happened.
- -->
- <button
- v-if="selectedEdge.kind === 'reviews' || selectedEdge.ok"
- type="button"
- class="link danger"
-:disabled="props.busy"
- @click="requestRemoveEdge"
- >
- Remove this edge
- </button>
- </section>
-
- <section v-if="removal" class="pending" role="alert">
- <h3 class="removal-head">
- Remove {{ removal.plannerName }} → {{ removal.targetName }}
- </h3>
- <template v-if="removal.verdict.kind === 'impossible'">
- <p>{{ removal.verdict.reason }}</p>
- <button type="button" class="link" @click="removal = null">Dismiss</button>
- </template>
- <template v-else>
- <p>
- Removing <strong>this one edge</strong> narrows
- {{ removal.plannerName }}'s envelope by
- <strong>{{ removal.verdict.tools.join(', ') }}</strong
- >, which is the only way to stop it delegating to
- {{ removal.targetName }} — a delegation edge is derived from the envelope,
- not stored as a pair.
- </p>
- <p v-if="removal.verdict.kind === 'clean'" class="fine">
- No other delegate needs that tool, so every other edge on this canvas stays
- exactly as it is.
- </p>
- <template v-else>
- <p class="fine">
- It also stops {{ removal.plannerName }} delegating to
- <strong>{{ removal.verdict.alsoLoses.join(', ') }}</strong
- >, which need the same tool. Said before it happens rather than discovered
- afterwards.
- </p>
- <!--
- The alternatives, because the automatic choice is a minimum and not the
- answer. Without them a panel naming three collateral workers reads as
- "everyone loses something", when the truth is that *this* narrowing does
- and another may not.
- -->
- <p v-if="removal.verdict.everyOptionCosts" class="fine">
- Every tool that would remove this edge is shared with someone, so there is
- no narrowing that costs nothing. The choice below is which cost to pay.
- </p>
- <ul v-if="removal.verdict.options.length > 1" class="options">
- <li v-for="option in removal.verdict.options":key="option.tool">
- <button
- type="button"
- class="link"
-:disabled="removal.verdict.tools.includes(option.tool)"
- @click="proposeRemoval(option.tool)"
- >
- drop {{ option.tool }}
- </button>
- <span class="fine">{{
- option.alsoLoses.length === 0
- ? 'nothing else changes'
-: `also loses ${option.alsoLoses.join(', ')}`
- }}</span>
- </li>
- </ul>
- </template>
- <div class="actions">
- <button type="button":disabled="props.busy" @click="applyRemoval">
- Narrow by {{ removal.verdict.tools.join(', ') }}
- </button>
- <button type="button" class="link" @click="removal = null">Cancel</button>
- </div>
- </template>
- </section>
-
- <section v-if="pending" class="pending" role="alert">
- <template v-if="pending.verdict.kind === 'widen'">
- <p>{{ pending.verdict.detail }}</p>
- <p class="fine">
- This edits the planner's own markdown through the same call the persona
- editor uses. It widens what the planner may hand down; it does not change
- what {{ pending.targetName }} is.
- </p>
- <div class="actions">
- <button type="button":disabled="props.busy" @click="applyWidening">
- Widen the envelope
- </button>
- <button type="button" class="link" @click="pending = null">Cancel</button>
- </div>
- </template>
- <template v-else-if="pending.verdict.kind === 'not-a-planner'">
- <p>{{ pending.verdict.detail }}</p>
- <button type="button" class="link" @click="pending = null">Dismiss</button>
- </template>
- <template v-else-if="pending.verdict.kind === 'refused'">
- <p>
- This edge cannot be drawn, because granting it would change what
- {{ pending.targetName }} is rather than what this planner may hand down:
- </p>
- <ul class="refusals">
- <li v-for="refusal in pending.verdict.refusals":key="refusal.rule">
- <strong>{{ refusal.rule }}</strong>
- <span>{{ refusal.detail }}</span>
- <em>{{ refusal.fix }}</em>
- </li>
- </ul>
- <button type="button" class="link" @click="pending = null">Dismiss</button>
- </template>
- <template v-else>
- <p>They are already connected.</p>
- <button type="button" class="link" @click="pending = null">Dismiss</button>
- </template>
- </section>
  </aside>
  </div>
  </div>

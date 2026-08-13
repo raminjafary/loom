@@ -331,6 +331,27 @@ describe('TeamComposer', => {
  * discussed, and the sidebar has to name that line rather than describing the class of
  * thing it belongs to.
  */
+ /**
+ * The operator's report was "remove edge not working", and everything worked — the
+ * inspector and its proposal rendered several screens below the fold, under the roster
+ * and the whole Add list. Order is the fix, so order is what is asserted.
+ */
+ it('puts the edge a human just selected above the standing configuration', async => {
+ const wrapper = composer({
+ matrix: [{ plannerId: 'lead', workerId: 'swe', ok: true, refusals: [] } as DelegationEdge],
+ })
+ await flow(wrapper).vm.$emit('edgeClick', { edge: { id: 'lead->swe' } })
+
+ const side = wrapper.get('.side').element
+ const inspector = wrapper.get('.inspector').element
+ const roster = wrapper.findAll('.side section').find((s) => s.text.includes('On this team'))
+ expect(roster).toBeDefined
+ const order = [...side.querySelectorAll('section')]
+ expect(order.indexOf(inspector as HTMLElement)).toBeLessThan(
+ order.indexOf(roster!.element as HTMLElement),
+)
+ })
+
  describe('selecting an edge', => {
  const qa = persona({ id: 'qa', name: 'qa', tools: ['Read'] })
  const teamOfThree = group({ personaIds: ['lead', 'swe', 'qa'] })
