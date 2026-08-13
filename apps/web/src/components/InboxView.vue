@@ -5,9 +5,8 @@ import {
  buildInboxBoard,
  describeAge,
  shortBranchName,
- type InboxLaneId,
 } from '@loom/client-core'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import DiffView from './DiffView.vue'
 
@@ -92,33 +91,27 @@ const lanes = computed( =>
 )
 
 /**
- * Which lanes are open, and why the last three start shut.
+ * Columns, left to right, in the order work moves through them: blocked, reviewable,
+ * stopped, queued, landed, dropped.
  *
- * The first three are work; the last three are a record. A board that opened everything
- * would put fifty landed branches above the one thing blocking an agent, which is the
- * flat list's failure with columns drawn on it.
+ * Side by side rather than stacked, because the question the board answers is a
+ * *comparison* — how much is waiting against how much has landed — and a stack answers it
+ * only for whoever scrolls to the bottom. It is also why nothing collapses: a column with
+ * nothing in it is an answer, and hiding it turns "nothing is blocked" into "I did not
+ * check".
  */
-const collapsed = ref<Set<InboxLaneId>>(new Set(['queued', 'landed', 'dropped']))
-
-const toggle = (id: InboxLaneId) => {
- const next = new Set(collapsed.value)
- if (next.has(id)) next.delete(id)
- else next.add(id)
- collapsed.value = next
-}
-
 const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.length, 0))
 </script>
 
 <template>
  <div class="inbox">
  <div class="board">
- <p v-if="props.fetchError" class="failed">
+ <p v-if="props.fetchError" class="notice failed">
  Could not load the inbox — <strong>{{ props.fetchError }}</strong>
  <button type="button" class="retry" @click="emit('refresh')">Try again</button>
  </p>
- <p v-else-if="props.loading && total === 0" class="empty">Loading…</p>
- <p v-else-if="total === 0" class="empty">
+ <p v-else-if="props.loading && total === 0" class="notice empty">Loading…</p>
+ <p v-else-if="total === 0" class="notice empty">
  Nothing has come out of this workspace yet. Start a run and its branch will land
  here.
  </p>
@@ -128,18 +121,19 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
  branch and a completed run with a branch have different statuses and the same next
  action; a merged run and a discarded run share a status and have nothing left to do.
  -->
+ <div class="columns">
  <section
  v-for="lane in lanes"
 :key="lane.id"
  class="lane"
-:class="[lane.id, { shut: collapsed.has(lane.id) }]"
+:class="lane.id"
  >
- <button type="button" class="lane-head" @click="toggle(lane.id)">
+ <header class="lane-head">
  <span class="lane-title">{{ lane.title }}</span>
  <span class="count">{{ lane.cards.length }}</span>
- </button>
+ </header>
 
- <ul v-if="!collapsed.has(lane.id)" class="cards">
+ <ul class="cards">
  <li
  v-for="card in lane.cards"
 :key="card.run.id"
@@ -169,6 +163,7 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
  <li v-if="lane.cards.length === 0" class="lane-empty">{{ lane.empty }}</li>
  </ul>
  </section>
+ </div>
  </div>
 
  <div class="detail">
@@ -238,49 +233,69 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
  min-height: 0;
 }
 
+/*
+ * The board fills the region and its columns run left to right in the order work moves
+ * through them. Horizontal overflow scrolls rather than wrapping: a column that wrapped
+ * onto a second row stops being comparable with the ones beside it, which is the only
+ * thing this layout is for.
+ */
 .board {
- width: 21rem;
- flex-shrink: 0;
+ flex: 1;
+ min-width: 0;
  display: flex;
  flex-direction: column;
- gap: 0.15rem;
- padding: 0.4rem 0.35rem;
- overflow-y: auto;
- border-right: 1px solid var(--border);
+ gap: 0.4rem;
+ padding: 0.6rem;
+ overflow: hidden;
+}
+
+.columns {
+ flex: 1;
+ min-height: 0;
+ display: flex;
+ gap: 0.5rem;
+ overflow-x: auto;
+ overflow-y: hidden;
+}
+
+.lane {
+ /*
+ * Shrinks to fit before it scrolls. Six columns that each refused to narrow put the
+ * last one — what got thrown away — off the right edge behind the detail panel, which
+ * is the one column a human would never think to go looking for.
+ */
+ flex: 1 1 12rem;
+ min-width: 10.5rem;
+ max-width: 22rem;
+ min-height: 0;
+ display: flex;
+ flex-direction: column;
+ border: 1px solid var(--border);
+ border-radius: 0.45rem;
+ background: var(--surface-hover, transparent);
+}
+
+.notice {
+ margin: 0;
+ padding: 0.2rem 0.1rem;
 }
 
 .lane-head {
- width: 100%;
  display: flex;
  align-items: center;
  justify-content: space-between;
  gap: 0.4rem;
- padding: 0.3rem 0.4rem;
- border: 0;
- border-radius: 0.3rem;
- background: none;
+ padding: 0.4rem 0.55rem;
+ border-bottom: 1px solid var(--border);
  color: var(--text-faint);
- font: inherit;
  font-size: 0.66rem;
  font-weight: 600;
  text-transform: uppercase;
  letter-spacing: 0.06em;
- cursor: pointer;
-}
-
-.lane-head::before {
- content: '▾';
- margin-right: 0.3rem;
- font-size: 0.6rem;
-}
-
-.lane.shut.lane-head::before {
- content: '▸';
 }
 
 .lane-title {
  flex: 1;
- text-align: left;
 }
 
 /* The two lanes that are actually asking for something read louder than the record. */
@@ -298,18 +313,22 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
 }
 
 .cards {
- margin: 0 0 0.3rem;
- padding: 0;
+ flex: 1;
+ min-height: 0;
+ margin: 0;
+ padding: 0.35rem;
  list-style: none;
  display: flex;
  flex-direction: column;
- gap: 0.2rem;
+ gap: 0.3rem;
+ overflow-y: auto;
 }
 
 .lane-empty {
- padding: 0.15rem 0.55rem 0.35rem;
+ padding: 0.2rem 0.25rem;
  font-size: 0.68rem;
  color: var(--text-faint);
+ line-height: 1.5;
 }
 
 .failed.retry {
@@ -414,14 +433,26 @@ const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.le
  text-overflow: ellipsis;
 }
 
+/*
+ * The detail sits beside the board rather than replacing it: a human reviewing one branch
+ * is usually deciding it *against* the others, and a full-page detail hides the column
+ * that made them pick this card.
+ */
 .detail {
- flex: 1;
+ width: 26rem;
+ flex-shrink: 0;
  min-width: 0;
  overflow-y: auto;
  padding: 0.75rem 1rem;
+ border-left: 1px solid var(--border);
  display: flex;
  flex-direction: column;
  gap: 0.75rem;
+}
+
+/* Nothing selected: the board takes the width rather than leaving a column of hint text. */
+.detail:has(>.hint) {
+ width: 14rem;
 }
 
 .run-head {
