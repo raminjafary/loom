@@ -193,6 +193,14 @@ export const CapabilitySchema = z.object({
  /** The pinned tool-list hash; null until first observed. */
  toolListHash: z.string.nullable,
  content: z.string.nullable,
+ /**
+ * Hosts a persona holding this may reach through the egress proxy.
+ *
+ * The grant is the capability, not the tool — a persona reaches the open web because
+ * an operator attached something that says so, never because its tool list happens to
+ * contain `WebFetch`. On the wire so a surface can *show* which agents have web reach.
+ */
+ egressHosts: z.array(z.string),
  createdAt: z.date,
  updatedAt: z.date,
 })

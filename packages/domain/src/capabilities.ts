@@ -41,6 +41,16 @@ export interface Capability {
  readonly toolListHash: string | null
  /** Skill only: the SKILL.md source, held here rather than on any run's disk. */
  readonly content: string | null
+ /**
+ * Hosts a persona holding this may reach through the egress proxy.
+ *
+ * **The capability is the grant, and the tool is only the means.** A persona reaches
+ * the open web because an operator attached something that says so — not because its
+ * tool list happens to contain `WebFetch`, and not because a deployment-wide env var
+ * opened the host for every run in the workspace. That is what makes "off by default"
+ * a statement about an agent rather than about a deployment.
+ */
+ readonly egressHosts: string[]
  readonly createdAt: Date
  readonly updatedAt: Date
 }
@@ -71,8 +81,29 @@ export type CapabilitySpec =
  readonly url: string | null
  readonly toolListHash: string | null
  readonly allowedTools: string[]
+ /**
+ * Hosts a run holding this capability may reach through the egress proxy
+ *.
+ *
+ * **The capability is the grant; the tool is only the means.** A persona reaches
+ * the open web because an operator attached something that says so — not because
+ * its tool list happens to contain `WebFetch`, and not because a deployment-wide
+ * env var opened the host for every run in the workspace. That distinction is what
+ * makes "off by default" true per persona rather than per deployment.
+ *
+ * Snapshotted onto the run like the rest of this spec, and attenuated with it: a
+ * child may hold no capability its parent does not, so it can reach no host its
+ * parent could not.
+ */
+ readonly egressHosts: string[]
  }
- | { readonly kind: 'skill'; readonly name: string; readonly content: string }
+ | {
+ readonly kind: 'skill'
+ readonly name: string
+ readonly content: string
+ /** See the mcp variant: a skill may be a pure grant, with no tools of its own. */
+ readonly egressHosts: string[]
+ }
 
 /**
  * The canonical form a tool list is hashed over. Sorted and deduplicated so that

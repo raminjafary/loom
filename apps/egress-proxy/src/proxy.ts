@@ -325,7 +325,22 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
  return
  }
 
- const verdict = classifyEgress(request.url ?? '', options.allowedHosts)
+ /**
+ * The deployment's allowlist **plus** whatever this run's lease was granted
+ *.
+ *
+ * The lease's hosts come from the run's frozen persona snapshot, by way of a
+ * capability an operator attached — so reaching the open web is a property of a
+ * named agent rather than of the deployment. That is the whole difference between
+ * "web access is off by default" meaning something per agent and meaning nothing.
+ *
+ * Unioned, never substituted: a lease can only *add*, so no run can talk its way out
+ * of the base allowlist, and a lease with no grant behaves exactly as before.
+ */
+ const verdict = classifyEgress(request.url ?? '', [
+...options.allowedHosts,
+...lease.egressHosts,
+ ])
  if (!verdict.allowed) {
  refuse('403 Forbidden', verdict.reason)
  return

@@ -309,6 +309,13 @@
       "when": 1786599419644,
       "tag": "0043_wealthy_matthew_murdock",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1786601422759,
+      "tag": "0044_next_gauntlet",
+      "breakpoints": true
     }
   ]
 }

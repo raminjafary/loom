@@ -32,6 +32,7 @@ import {
  detectClaimsAgainstExisting,
  detectPathOverlaps,
  isHuman,
+ parseEgressHost,
  isPricedModel,
  isMergeQueueEntryTerminal,
  isRiskyTool,
@@ -681,10 +682,32 @@ export const createCapability = async (
  args?: string[]
  url?: string | null
  content?: string | null
+ /**
+ * Hosts a persona holding this may reach through the egress proxy.
+ *
+ * How web access is granted at all: there is no built-in for it and no persona ships
+ * with one, so reaching the open web means an operator registered something that says
+ * which hosts and attached it to a named agent. Per capability rather than per
+ * deployment, so the grant attenuates with the persona instead of opening a host for
+ * every run in the workspace.
+ */
+ egressHosts?: string[]
  },
 ): Promise<Capability> => {
  if (!isHuman(input.actor)) {
  throw new ForbiddenError('Only a human may register a capability')
+ }
+
+ /**
+ * Refused rather than sanitized. A pattern silently narrowed would be an allowlist
+ * entry that does not say what it does, on the one control that decides where a
+ * compromised agent can post a repository.
+ */
+ const egressHosts: string[] = []
+ for (const raw of input.egressHosts ?? []) {
+ const verdict = parseEgressHost(raw)
+ if (!verdict.ok) throw new ValidationError(verdict.reason)
+ egressHosts.push(verdict.host)
  }
 
  // Shape validation here rather than in the schema, because what a capability
@@ -718,6 +741,7 @@ export const createCapability = async (
  args: input.args ?? [],
  url: input.url ?? null,
  content: input.content ?? null,
+ egressHosts,
  })
 
  await deps.audit.record({
@@ -832,7 +856,12 @@ const resolveCapabilities = async (
  if (!capability) continue
 
  if (capability.kind === 'skill') {
- specs.push({ kind: 'skill', name: capability.name, content: capability.content ?? '' })
+ specs.push({
+ kind: 'skill',
+ name: capability.name,
+ content: capability.content ?? '',
+ egressHosts: capability.egressHosts,
+ })
  continue
  }
  if (!capability.transport) continue
@@ -845,6 +874,9 @@ const resolveCapabilities = async (
  url: capability.url,
  toolListHash: capability.toolListHash,
  allowedTools: attachment.allowedTools,
+ // Snapshotted with the rest of the spec, so revoking a host does not change what a
+ // run already in flight may reach and adding one does not silently widen it.
+ egressHosts: capability.egressHosts,
  })
  }
 

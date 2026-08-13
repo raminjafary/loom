@@ -34,6 +34,44 @@ export const DEFAULT_ALLOWED_EGRESS_HOSTS: readonly string[] = [
  'proxy.golang.org',
 ]
 
+/**
+ * Whether an operator-authored host pattern is one this policy can honour.
+ *
+ * The same grammar the default list uses and nothing wider: a leading dot means "this
+ * domain and its subdomains", anything else is an exact host. **No `*` patterns**, because
+ * `registry.npmjs.org.evil.com` matches one and is not the host anybody meant — and this
+ * list is now something a human types rather than a constant this repository reviews.
+ *
+ * Refused rather than sanitized. A pattern silently narrowed would be an allowlist entry
+ * that does not say what it does, on the one control that decides where a compromised
+ * agent can post a repository.
+ */
+export const parseEgressHost = (
+ raw: string,
+): { readonly ok: true; readonly host: string } | { readonly ok: false; readonly reason: string } => {
+ const host = raw.trim.toLowerCase
+ if (host.length === 0) return { ok: false, reason: 'An allowed host cannot be blank' }
+ if (host.includes('*')) {
+ return {
+ ok: false,
+ reason:
+ `"${host}" uses a wildcard, and this allowlist has none. A leading dot covers ` +
+ 'subdomains — ".example.com" — and anything else must be an exact host, because ' +
+ '"example.com.evil.test" matches a wildcard and is not the host you meant.',
+ }
+ }
+ if (host.includes('/') || host.includes(':')) {
+ return {
+ ok: false,
+ reason: `"${host}" is a host, not a URL — no scheme, no path, no port (443 only).`,
+ }
+ }
+ if (!/^\.?[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) {
+ return { ok: false, reason: `"${host}" is not a hostname` }
+ }
+ return { ok: true, host }
+}
+
 const ALLOWED_PORTS = new Set([443])
 
 const hostMatches = (host: string, pattern: string): boolean =>

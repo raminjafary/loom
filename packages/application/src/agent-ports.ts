@@ -503,6 +503,8 @@ export interface CapabilityRepositoryPort {
  args: string[]
  url: string | null
  content: string | null
+ /** Hosts this grant opens through the egress proxy, already validated. */
+ egressHosts: string[]
  }): Promise<Capability>
  findById(workspaceId: WorkspaceId, id: CapabilityId): Promise<Capability | null>
  listByWorkspace(workspaceId: WorkspaceId): Promise<Capability[]>

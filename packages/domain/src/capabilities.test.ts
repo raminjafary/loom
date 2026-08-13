@@ -24,9 +24,15 @@ const mcp = (name: string, allowedTools: string[] = []): CapabilitySpec => ({
  url: null,
  toolListHash: null,
  allowedTools,
+ egressHosts: [],
 })
 
-const skill = (name: string): CapabilitySpec => ({ kind: 'skill', name, content: '# skill' })
+const skill = (name: string): CapabilitySpec => ({
+ kind: 'skill',
+ name,
+ content: '# skill',
+ egressHosts: [],
+})
 
 describe('attenuateChildCapabilities', => {
  it('allows a child holding a subset of its parent', => {

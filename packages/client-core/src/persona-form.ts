@@ -54,8 +54,18 @@ export const SELECTABLE_TOOLS: ReadonlyArray<{
  { name: 'Write', acting: true, summary: 'Create or overwrite a file' },
  { name: 'NotebookEdit', acting: true, summary: 'Change a notebook cell' },
  { name: 'Bash', acting: true, summary: 'Run a shell command' },
- { name: 'WebFetch', acting: true, summary: 'Fetch a URL' },
- { name: 'WebSearch', acting: true, summary: 'Search the web' },
+ /**
+ * The two that reach outside the sandbox, and the summary says so.
+ *
+ * `WebFetch` goes through the egress proxy, so it reaches nothing until a capability
+ * an operator attached names the host — the tool alone is inert. `WebSearch` is
+ * executed by the model API rather than by the sandbox, so the allowlist never sees it
+ * and adding it here *is* the grant: metered like any other model call, and bounded by
+ * the run's budget cap, but not host-scoped. Saying which is which is the difference
+ * between an operator who knows what they turned on and one who assumed.
+ */
+ { name: 'WebFetch', acting: true, summary: 'Fetch a URL — only hosts a capability allows' },
+ { name: 'WebSearch', acting: true, summary: 'Search the web via the model API — not host-scoped' },
 ]
 
 /** Mirrors `PLANNER_READABLE_TOOLS`; the server refuses anything else on a planner. */

@@ -801,6 +801,14 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // Enforced at the proxy, snapshotted onto the run so a
  // mid-run persona edit cannot raise the ceiling of a run already in flight.
  budgetCapUsd: input.persona.budgetCapUsd,
+ /**
+ * What this persona's capabilities grant it beyond the deployment allowlist
+ *. Read from the same frozen snapshot the cap is, so a
+ * mid-run edit cannot widen where this run may talk.
+ */
+ egressHosts: (input.persona.capabilities ?? []).flatMap(
+ (capability) => capability.egressHosts ?? [],
+),
  })
 
  try {

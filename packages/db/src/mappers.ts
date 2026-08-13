@@ -249,6 +249,7 @@ export interface CapabilityRow {
  url: string | null
  toolListHash: string | null
  content: string | null
+ egressHosts: string[]
  createdAt: Date
  updatedAt: Date
 }
@@ -273,6 +274,7 @@ export const toCapability = (row: CapabilityRow): Capability => {
  url: row.url,
  toolListHash: row.toolListHash,
  content: row.content,
+ egressHosts: row.egressHosts,
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
  }

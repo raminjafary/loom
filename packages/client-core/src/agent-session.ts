@@ -414,6 +414,8 @@ export interface AgentSession {
  args?: string[]
  url?: string | null
  content?: string | null
+ /** Hosts this grant opens through the egress proxy. Empty means none. */
+ egressHosts?: string[]
  }): Promise<void>
  removeCapability(capabilityId: string): Promise<void>
  attachCapability(input: { personaId: string; capabilityId: string; allowedTools?: string[] }): Promise<void>

@@ -645,6 +645,14 @@ export const contract = {
  args: z.array(z.string.max(500)).max(50).optional,
  url: z.string.max(2_000).nullish,
  content: z.string.max(100_000).nullish,
+ /**
+ * Hosts a persona holding this may reach through the egress proxy.
+ *
+ * How an agent gets the open web at all — there is no built-in for it and no
+ * shipped persona has one. A leading dot covers subdomains; anything else is
+ * an exact host, and a wildcard is refused rather than narrowed.
+ */
+ egressHosts: z.array(z.string.min(1).max(253)).max(32).optional,
  }),
 )
 .output(CapabilitySchema),

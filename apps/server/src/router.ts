@@ -852,6 +852,7 @@ export const router = os.router({
  args: input.args ?? [],
  url: input.url ?? null,
  content: input.content ?? null,
+ egressHosts: input.egressHosts ?? [],
  }),
 ),
 ),

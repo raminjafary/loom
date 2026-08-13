@@ -424,6 +424,11 @@ export const capability = pgTable(
  url: text('url'),
  toolListHash: text('tool_list_hash'),
  content: text('content'),
+ // Hosts a persona holding this capability may reach through the egress proxy
+ //. Per capability rather than per deployment, so the allowlist
+ // attenuates with the persona instead of opening a host for every run in the
+ // workspace — which is what makes "off by default" true per agent.
+ egressHosts: jsonb('egress_hosts').$type<string[]>.notNull.default([]),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },

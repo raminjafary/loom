@@ -613,6 +613,115 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  * predecessor is retired, it is in the same tree on the same branch, and what the
  * platform observed travels beside what the predecessor claimed.
  */
+/**
+ * Web reach as an operator grant.
+ *
+ * The two facts this rests on, both checked rather than assumed: no shipped persona has a
+ * web tool, and the deployment allowlist is package registries only. So an agent reaches
+ * the open web when — and only when — an operator registers a capability naming the hosts
+ * and attaches it to a named persona.
+ */
+describe('runner-gateway: web reach is granted, never assumed', => {
+ it('carries a capability\'s hosts onto the run, and refuses a wildcard outright', async => {
+ const stamp = Date.now
+ const { socket, runnerId } = await pairFakeRunner(`egress-grant-${stamp}`)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: `egress-grant-${stamp}` })
+
+ // Refused rather than narrowed: an allowlist entry that does not say what it does is
+ // worse than no entry, on the control that decides where a compromised agent can post.
+ await expect(
+ client.capability.register({
+ kind: 'skill',
+ name: `bad-grant-${stamp}`,
+ description: 'wildcards are not a thing here',
+ content: '# nothing',
+ egressHosts: ['*.example.com'],
+ }),
+).rejects.toThrow(/wildcard/)
+
+ const grant = await client.capability.register({
+ kind: 'skill',
+ name: `web-search-${stamp}`,
+ description: 'lets this agent reach a search API',
+ content: '# how to search',
+ egressHosts: ['API.Search.Example', '.docs.example.com'],
+ })
+ // Normalized on the way in, so a typed capital cannot become a host that never matches.
+ expect(grant.egressHosts).toEqual(['api.search.example', '.docs.example.com'])
+
+ const surfer = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: surfer-${stamp}`,
+ 'description: Reads the web',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read, WebFetch]',
+ '---',
+ 'You read.',
+ ].join('\n'),
+ })
+
+ // Before the attachment: the tool is in the list and reaches nothing.
+ const beforeFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const dry = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: surfer.id,
+ })
+ const before = (await beforeFrame).persona as { capabilities?: { egressHosts: string[] }[] }
+ expect((before.capabilities ?? []).flatMap((c) => c.egressHosts)).toEqual([])
+
+ // Finished, so the second start is not refused for the persona already running.
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: dry.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'nothing to reach' },
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ if ((await client.agentRun.get({ agentRunId: dry.id })).status === 'completed') break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+
+ await client.capability.attach({ personaId: surfer.id, capabilityId: grant.id })
+
+ const afterFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const granted = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: surfer.id,
+ })
+ const after = (await afterFrame).persona as { capabilities?: { egressHosts: string[] }[] }
+ // On the frame, which is where the last three dropped fields were lost — the Runner
+ // reads this to lease its egress, so a field that stops here is a grant that never
+ // reaches the proxy and a run that silently cannot reach anything.
+ expect((after.capabilities ?? []).flatMap((c) => c.egressHosts)).toEqual([
+ 'api.search.example',
+ '.docs.example.com',
+ ])
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: granted.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'done' },
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ if ((await client.agentRun.get({ agentRunId: granted.id })).status === 'completed') break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+
+ await client.capability.remove({ capabilityId: grant.id })
+ await client.persona.delete({ personaId: surfer.id })
+ socket.close
+ })
+})
+
 describe('runner-gateway: warm handoff', => {
  /** Starts an ordinary run on an already-paired socket, and hands back its id. */
  const startOn = async (socket: WebSocket, threadId: string, repositoryId: string) => {

@@ -24,6 +24,16 @@ export interface Lease {
  * cannot slip another request through while its abort is still in flight.
  */
  exhausted: boolean
+ /**
+ * Hosts this run may reach **on top of** the deployment allowlist.
+ *
+ * On the lease rather than in the proxy's own config, because that is what makes the
+ * grant a property of the *agent*: a persona with no capability saying "the web" gets
+ * an empty list, and a persona that has one reaches only what its operator named. The
+ * lease is issued from the run's frozen persona snapshot, so a mid-run edit cannot
+ * widen it and a child cannot hold a host its parent could not.
+ */
+ readonly egressHosts: readonly string[]
  readonly createdAt: number
 }
 
@@ -76,7 +86,11 @@ export const createLeaseRegistry = (options: {
  const byRunId = new Map<string, Lease>
 
  return {
- issue(input: { runId: string; budgetCapUsd: number | null }): Lease {
+ issue(input: {
+ runId: string
+ budgetCapUsd: number | null
+ egressHosts?: readonly string[]
+ }): Lease {
  // Re-leasing the same run replaces the old token rather than adding a
  // second one, so a Runner restart cannot leave a live orphan token behind.
  const existing = byRunId.get(input.runId)
@@ -88,6 +102,10 @@ export const createLeaseRegistry = (options: {
 .toString('hex')
 .slice(0, TOKEN_LENGTH - TOKEN_PREFIX.length)}`,
  budgetCapUsd: input.budgetCapUsd,
+ // Replaced on a re-lease rather than carried over, unlike spend: the hosts come
+ // from the persona snapshot the Runner is starting with, and the newer snapshot
+ // is the authority on what this run was granted.
+ egressHosts: input.egressHosts ?? [],
  // Spend carries over across a re-lease: a run must not get a fresh
  // budget by reconnecting.
  spentUsd: existing?.spentUsd ?? 0,

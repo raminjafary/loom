@@ -470,6 +470,7 @@ export const capabilityRepository = (db: Database): CapabilityRepositoryPort => 
  args: input.args,
  url: input.url,
  content: input.content,
+ egressHosts: input.egressHosts,
  })
 .returning
  if (!row) throw new Error('capability insert returned no row')

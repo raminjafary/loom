@@ -29,6 +29,7 @@ const emit = defineEmits<{
  args?: string[]
  url?: string | null
  content?: string | null
+ egressHosts?: string[]
  }]
  remove: [capabilityId: string]
  attach: [input: { personaId: string; capabilityId: string; allowedTools?: string[] }]
@@ -43,6 +44,16 @@ const command = ref('')
 const args = ref('')
 const url = ref('')
 const content = ref('')
+/**
+ * Where a persona holding this may reach.
+ *
+ * **This is how an agent gets the open web, and it is off until an operator types
+ * here.** No shipped persona has web access and the deployment allowlist is package
+ * registries only, so a search or fetch tool in a persona's tool list reaches nothing
+ * until a capability names the hosts. Per capability rather than per deployment, so
+ * turning it on for one agent does not turn it on for every run in the workspace.
+ */
+const egressHosts = ref('')
 
 const attachPersona = ref('')
 const attachTools = ref('')
@@ -61,6 +72,10 @@ const submit = => {
  url: url.value.trim || null,
  }
 : { content: content.value }),
+ egressHosts: egressHosts.value
+.split(/[\s,]+/)
+.map((host) => host.trim)
+.filter((host) => host.length > 0),
  })
  name.value = ''
  description.value = ''
@@ -68,6 +83,7 @@ const submit = => {
  args.value = ''
  url.value = ''
  content.value = ''
+ egressHosts.value = ''
 }
 
 const personaName = (personaId: string) =>
@@ -115,6 +131,14 @@ const doAttach = (capabilityId: string) => {
  unpinned server is one whose tool list nobody has reviewed yet.
  -->
  <span class="pin">{{ capability.toolListHash ? 'pinned': 'not yet pinned' }}</span>
+ </p>
+ <!--
+ Said out loud on every capability that grants it, because "which of my agents
+ can reach the internet" is the question this table exists to answer and it is
+ not one anybody should have to infer from a tool list.
+ -->
+ <p v-if="capability.egressHosts.length > 0" class="reaches">
+ reaches {{ capability.egressHosts.join(', ') }}
  </p>
 
  <ul class="attached">
@@ -177,12 +201,38 @@ const doAttach = (capabilityId: string) => {
  aria-label="Skill content"
  ></textarea>
 
+ <input
+ v-model="egressHosts"
+ placeholder="hosts it may reach (blank = none) — e.g. api.search.example"
+ aria-label="Allowed egress hosts"
+ />
+ <p class="hint">
+ Leave blank and a persona holding this reaches nothing beyond the package
+ registries every run already gets. A leading dot covers subdomains
+ (<code>.example.com</code>); anything else must be an exact host, and a wildcard
+ is refused rather than quietly narrowed. This is the only way an agent reaches the
+ open web — no shipped persona has it.
+ </p>
+
  <button type="submit":disabled="!name.trim">Register</button>
  </form>
  </section>
 </template>
 
 <style scoped>
+.reaches {
+ margin: 0.1rem 0 0;
+ font-size: 0.68rem;
+ color: var(--warn, var(--text-faint));
+}
+
+.hint {
+ margin: 0;
+ font-size: 0.68rem;
+ color: var(--text-faint);
+ line-height: 1.55;
+}
+
 .panel {
  padding: 0.85rem 1rem;
  border: 1px solid var(--border);

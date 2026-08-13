@@ -60,7 +60,7 @@ const control = async (
 
 export const leaseEgressToken = async (
  config: EgressClientConfig,
- input: { runId: string; budgetCapUsd: number | null },
+ input: { runId: string; budgetCapUsd: number | null; egressHosts?: readonly string[] },
 ): Promise<string> => {
  const result = (await control(config, '/_control/lease', {
  method: 'POST',

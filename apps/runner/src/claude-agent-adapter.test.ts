@@ -109,6 +109,7 @@ describe('buildQueryOptions: the notes channel', => {
  url: null,
  toolListHash: null,
  allowedTools: ['create_merge_request'],
+ egressHosts: [],
  },
  ],
  }

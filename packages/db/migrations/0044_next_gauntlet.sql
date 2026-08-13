@@ -1,0 +1,1 @@
+ALTER TABLE "capability" ADD COLUMN "egress_hosts" jsonb DEFAULT '[]'::jsonb NOT NULL;

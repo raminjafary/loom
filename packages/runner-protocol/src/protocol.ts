@@ -26,8 +26,23 @@ export const CapabilitySpecSchema = z.discriminatedUnion('kind', [
  /** The pinned tool-list hash; null until a first observation is recorded. */
  toolListHash: z.string.nullable,
  allowedTools: z.array(z.string),
+ /**
+ * Hosts this grant opens through the egress proxy.
+ *
+ * Declared here as well as on the domain type and the port, because this schema is
+ * the frame — and this repository has three times shipped a field that existed
+ * everywhere except the place the value actually crosses. Defaulted rather than
+ * required so a Runner resuming from a state file written before this existed does
+ * not fail to parse its own run; the default is the closed one.
+ */
+ egressHosts: z.array(z.string).default([]),
  }),
- z.object({ kind: z.literal('skill'), name: z.string, content: z.string }),
+ z.object({
+ kind: z.literal('skill'),
+ name: z.string,
+ content: z.string,
+ egressHosts: z.array(z.string).default([]),
+ }),
 ])
 
 export const PersonaSpecSchema = z.object({

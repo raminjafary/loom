@@ -17,6 +17,14 @@ const LeaseRequestSchema = z.object({
  runId: z.string.min(1),
  /** Null or absent means unmetered: no cap to enforce. */
  budgetCapUsd: z.number.positive.nullish,
+ /**
+ * Hosts this run may reach beyond the deployment allowlist.
+ *
+ * Bounded here as well as validated server-side, because this endpoint is the boundary
+ * a compromised Runner would push through: the control secret authenticates the
+ * Runner, and a Runner is a machine an operator paired, not a trusted author of policy.
+ */
+ egressHosts: z.array(z.string.min(1).max(253)).max(32).optional,
 })
 
 /** Null clears the token, e.g. when the Runner finds the host is no longer logged in. */
@@ -72,6 +80,7 @@ export const createControlServer = (options: {
  const lease = options.leases.issue({
  runId: parsed.data.runId,
  budgetCapUsd: parsed.data.budgetCapUsd ?? null,
+ egressHosts: parsed.data.egressHosts ?? [],
  })
  // The token is the only thing that crosses into the sandbox. The real
  // credential stays in this process.
