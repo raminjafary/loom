@@ -208,6 +208,56 @@ const citationLine = (nodeId: string): string => {
 )
 }
 
+/** Collapsed by default: teaching is occasional, and reading what was learned is not. */
+const teachOpen = ref(false)
+
+/**
+ * Whether this expertise is worth having, in one sentence.
+ *
+ * The trial answers this and the panel used to make a human read a two-row table to
+ * find out. The sentence has to survive the case the table hid: *undecided* is not "no",
+ * and a map on trial is being measured rather than found wanting — Phase 3b makes this
+ * the gate on everything after the map, and "improves over time" is the claim most likely
+ * to be believed without evidence, because a growing map *looks* like progress.
+ */
+const worthLine = computed( => {
+ const view = props.view
+ if (!view) return ''
+ const { retrieved, withheld, verdict } = view.effect
+ const decided = retrieved.decided + withheld.decided
+ if (decided === 0) {
+ return 'Nothing has finished with this map yet, so nothing says whether it helps.'
+ }
+ if (verdict === 'helps') {
+ return `Runs handed this map do better than runs deliberately denied it — ${retrieved.merged}/${retrieved.decided} against ${withheld.merged}/${withheld.decided}.`
+ }
+ if (verdict === 'no-better') {
+ return `Runs handed this map do no better than runs deliberately denied it — ${retrieved.merged}/${retrieved.decided} against ${withheld.merged}/${withheld.decided}. It is not earning its place.`
+ }
+ return `Still measuring: ${retrieved.decided} run(s) read it, ${withheld.decided} were deliberately denied it. Undecided is not the same as no.`
+})
+
+/**
+ * The claims a worker would actually be shown first, best-scored first.
+ *
+ * The map's *head*, not all of it. A ranking nobody can see is a ranking nobody can argue
+ * with, and this one decides which claims survive the context budget — so the few that
+ * win are worth naming, with the runs they earned it from beside them.
+ */
+const bestClaims = computed( => {
+ const view = props.view
+ if (!view) return []
+ return view.nodes
+.filter((node) => node.invalidatedAt === null)
+.map((node) => ({ node, outcomes: view.claimOutcomes[node.id] }))
+.filter((entry) => (entry.outcomes?.decided ?? 0) > 0)
+.sort(
+ (a, b) =>
+ (b.outcomes!.merged - b.outcomes!.discarded) - (a.outcomes!.merged - a.outcomes!.discarded),
+)
+.slice(0, 5)
+})
+
 const strokeFor = (provenance: string): string =>
  provenance === 'extracted' ? 'var(--map-parsed)': 'var(--map-inferred)'
 
@@ -239,7 +289,15 @@ const dashFor = (provenance: string): string | undefined =>
  </div>
  </header>
 
- <div v-if="personaId" class="start">
+ <!--
+ Teaching an agent is occasional; reading what it has learned is why this panel is
+ open. The form is folded away rather than stacked on top of the answer — it was
+ three selects, a chip row and a textarea between a human and the thing they came to
+ look at.
+ -->
+ <details v-if="personaId" class="fold":open="teachOpen || maps.length === 0">
+ <summary @click="teachOpen = !teachOpen">Teach this agent a subject</summary>
+ <div class="start">
  <div class="row">
  <select v-model="masterTarget" aria-label="Repository to master">
  <option value="" disabled>Repository to learn…</option>
@@ -317,6 +375,8 @@ const dashFor = (provenance: string): string | undefined =>
  </p>
  </div>
 
+ </details>
+
  <p v-if="error" class="error">{{ error }}</p>
 
  <p v-else-if="!personaId" class="empty">
@@ -377,6 +437,21 @@ const dashFor = (provenance: string): string | undefined =>
  <p v-if="loading" class="empty">Loading the map…</p>
 
  <template v-if="view && graph">
+ <!--
+ The answer first. Phase 3b makes the trial the gate on everything after the map,
+ and it used to be a two-row table below three other blocks — so the question a
+ human opens this to ask ("is this worth having?") was the last thing they reached.
+ -->
+ <div:class="['worth', view.retrievalState]">
+ <p class="badge">
+ <strong:title="RETRIEVAL_TITLE[view.retrievalState]">
+ {{ RETRIEVAL_LABEL[view.retrievalState] }}
+ </strong>
+ <span class="of">{{ view.map.subjectRef }}</span>
+ </p>
+ <p class="worth-line">{{ worthLine }}</p>
+ </div>
+
  <div class="summary">
  <p class="state">{{ state }}</p>
  <dl>
@@ -418,11 +493,8 @@ const dashFor = (provenance: string): string | undefined =>
  time" is the claim most likely to be believed without evidence — a growing map
  *looks* like progress.
  -->
- <div:class="['trial', view.retrievalState]">
- <div class="trial-head">
- <strong>{{ RETRIEVAL_LABEL[view.retrievalState] }}</strong>
- <span class="verdict">{{ view.effect.verdict.replace('-', ' ') }}</span>
- </div>
+ <details:class="['trial', 'fold', view.retrievalState]">
+ <summary>How that was measured, and overriding it</summary>
  <p class="sub">{{ view.effect.detail }}</p>
  <table class="arms">
  <thead>
@@ -476,7 +548,7 @@ const dashFor = (provenance: string): string | undefined =>
  Let the measurement decide
  </button>
  </div>
- </div>
+ </details>
 
  <!--
  The curation, where the map is being read. The proposals are the point: deleting
@@ -484,9 +556,33 @@ const dashFor = (provenance: string): string | undefined =>
  to drop is shown before it drops it — a proposal nobody can see is the same as no
  proposal at all.
  -->
- <div class="curation">
+ <!--
+ The head of the ranking, where a human can argue with it. A score that only
+ reorders a prompt is a score nobody can check; these are the claims that actually
+ win the context budget, with the runs they earned it from beside them.
+ -->
+ <section v-if="bestClaims.length > 0" class="earned">
+ <h5>Read first, and why</h5>
+ <ul>
+ <li v-for="entry in bestClaims":key="entry.node.id">
+ <span class="pkey">{{ entry.node.label }}</span>
+ <span class="preason">
+ {{ entry.outcomes!.merged }} merged / {{ entry.outcomes!.discarded }} discarded
+ across {{ entry.outcomes!.decided }} finished run(s)
+ </span>
+ </li>
+ </ul>
+ <p class="sub">
+ This orders what a worker sees when the map does not fit. It never changes what is
+ believed without checking.
+ </p>
+ </section>
+
+ <details class="curation fold">
+ <summary>
+ Upkeep<template v-if="proposed.length > 0"> — {{ proposed.length }} proposed for retirement</template>
+ </summary>
  <div class="curation-head">
- <strong>Upkeep</strong>
  <button type="button" @click="emit('curate', view.map.id)">Re-check now</button>
  </div>
  <p v-if="proposed.length > 0" class="sub">
@@ -505,7 +601,7 @@ const dashFor = (provenance: string): string | undefined =>
  {{ curation.retired }} retired, {{ curation.proposed }} newly proposed,
  {{ curation.withdrawn }} withdrawn.
  </p>
- </div>
+ </details>
 
  <div class="legend">
  <span><i class="swatch parsed"></i> parsed from the source — reliable</span>
@@ -1002,6 +1098,102 @@ svg {
 }
 
 .proposals.preason {
+ color: var(--text-faint);
+}
+
+/*
+ * The three disclosures. Teaching, the trial's arithmetic and upkeep are all things a
+ * human does occasionally; reading what an agent knows is why this panel is open, and it
+ * used to sit under all three.
+ */
+.fold > summary {
+ cursor: pointer;
+ font-size: 0.75rem;
+ color: var(--accent);
+ list-style: none;
+}
+
+.fold > summary::-webkit-details-marker {
+ display: none;
+}
+
+.fold > summary::before {
+ content: '+ ';
+}
+
+.fold[open] > summary::before {
+ content: '\2212 ';
+}
+
+/* The answer, above everything that explains it. */
+.worth {
+ display: flex;
+ flex-direction: column;
+ gap: 0.2rem;
+ padding: 0.55rem 0.65rem;
+ border: 1px solid var(--border);
+ border-left-width: 3px;
+ border-radius: 0.4rem;
+}
+
+.worth.on {
+ border-left-color: var(--ok);
+}
+
+.worth.trial {
+ border-left-color: var(--accent);
+}
+
+.worth.off {
+ border-left-color: var(--text-faint);
+}
+
+.worth.badge {
+ display: flex;
+ align-items: baseline;
+ gap: 0.4rem;
+ margin: 0;
+ font-size: 0.8rem;
+}
+
+.worth.of {
+ font-size: 0.7rem;
+ color: var(--text-faint);
+}
+
+.worth-line {
+ margin: 0;
+ font-size: 0.74rem;
+ line-height: 1.55;
+}
+
+/* The head of the ranking, so a score that reorders a prompt is one a human can argue with. */
+.earned h5 {
+ margin: 0 0 0.25rem;
+ font-size: 0.66rem;
+ font-weight: 600;
+ text-transform: uppercase;
+ letter-spacing: 0.05em;
+ color: var(--text-faint);
+}
+
+.earned ul {
+ margin: 0;
+ padding: 0;
+ list-style: none;
+ display: flex;
+ flex-direction: column;
+ gap: 0.15rem;
+ font-size: 0.72rem;
+}
+
+.earned li {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 0.4rem;
+}
+
+.earned.preason {
  color: var(--text-faint);
 }
 </style>
