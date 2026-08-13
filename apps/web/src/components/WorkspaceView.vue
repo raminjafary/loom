@@ -8,10 +8,12 @@ import type {
 } from '@loom/api-contract'
 import {
  areaLabelFromAnnouncement,
+ buildInboxBoard,
  buildThreadTrail,
  parseMention,
  SELECTABLE_MODELS,
  threadsByParentMessage,
+ waitingCount,
 } from '@loom/client-core'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ActiveRunsPanel from './ActiveRunsPanel.vue'
@@ -535,6 +537,25 @@ const openInbox = => {
 }
 
 /**
+ * The number on the Inbox button — the board's own count, not the length of the list the
+ * Inbox fetches.
+ *
+ * `needsAttention` is a *fetch*, and the board is a *reading* of it: a run whose branch is
+ * already queued for merge is in that fetch and is waiting on the queue rather than on a
+ * human, so counting the fetch overstated the badge by everything already in flight. The
+ * lanes decide, and `waitingCount` counts the three a human can act on.
+ */
+const inboxWaiting = computed( =>
+ waitingCount(
+ buildInboxBoard({
+ needsAttention: agentSnapshot.value.needsAttention,
+ settled: agentSnapshot.value.settledRuns,
+ mergeQueue: agentSnapshot.value.mergeQueue,
+ }),
+),
+)
+
+/**
  * Post-mortem: hand a finished run to the board and graph, which live in the workspace
  * sidebar.
  *
@@ -866,9 +887,7 @@ onBeforeUnmount( => {
  class="inbox-toggle"
  @click="openInbox"
  >
- Inbox<span v-if="agentSnapshot.needsAttention.length" class="badge">{{
- agentSnapshot.needsAttention.length
- }}</span>
+ Inbox<span v-if="inboxWaiting" class="badge">{{ inboxWaiting }}</span>
  </button>
  <button v-else type="button" class="inbox-toggle" @click="view = 'workspace'">
  Back to workspace

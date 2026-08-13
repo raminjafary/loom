@@ -165,4 +165,22 @@ describe('waitingCount', => {
  })
  expect(waitingCount(lanes)).toBe(3)
  })
+
+ /**
+ * The reason the badge could not stay `needsAttention.length`. That list is a *fetch*
+ * and the board is a *reading* of it: a run whose branch is already queued for merge is
+ * in the fetch and is waiting on the queue, not on a human.
+ */
+ it('is smaller than the fetch it reads when a branch is already in the queue', => {
+ const needsAttention = [
+ run({ id: 'gated', status: 'awaiting_approval' }),
+ run({ id: 'queued-already' }),
+ ]
+ const lanes = board({
+ needsAttention,
+ mergeQueue: [entry({ id: 'q1', agentRunId: 'queued-already', status: 'queued' })],
+ })
+ expect(waitingCount(lanes)).toBe(1)
+ expect(needsAttention.length).toBe(2)
+ })
 })
