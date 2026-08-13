@@ -8,6 +8,7 @@ import {
  UNTRUSTED_MAP_OPEN,
  type MapEdge,
  type MapNode,
+ type ExpertiseArmTally,
  type MasteryCheckpoint,
  type SubjectMap,
 } from '@loom/domain'
@@ -22,6 +23,10 @@ import {
  PENDING_REVISION,
  recordMapFragment,
  resolveMapRevision,
+ getMastery,
+ listExpertiseUsedByRun,
+ listPersonaMaps,
+ setRetrievalOverride,
  type MasteryDeps,
 } from './mastery-use-cases.js'
 
@@ -29,6 +34,8 @@ const workspaceId = asWorkspaceId('w1')
 const personaId = asAgentPersonaId('p1')
 const repositoryId = asRepositoryId('r1')
 const runId = asAgentRunId('run1')
+/** An ordinary run, distinct from the mastery run — the one retrieval is *for*. */
+const otherRunId = asAgentRunId('run2')
 
 /**
  * An in-memory `SubjectMapRepositoryPort` — same reasoning as `FakeStore`:
@@ -64,6 +71,7 @@ class FakeMaps implements SubjectMapRepositoryPort {
  subjectRef: input.subjectRef,
  revision: input.revision,
  status: input.status,
+ retrievalOverride: existing?.retrievalOverride ?? null,
  masteryRunId: input.masteryRunId,
  createdAt: existing?.createdAt ?? new Date('2026-08-01T00:00:00Z'),
  updatedAt: new Date('2026-08-01T01:00:00Z'),
@@ -176,6 +184,77 @@ class FakeMaps implements SubjectMapRepositoryPort {
 
  async listCheckpoints(_w: typeof workspaceId, mapId: SubjectMap['id']) {
  return this.checkpoints.filter((entry) => entry.mapId === mapId)
+ }
+
+ /** The trial. The rows *are* the measurement, so the fake keeps them all. */
+ uses: {
+ mapId: string
+ agentRunId: string
+ arm: 'retrieved' | 'withheld'
+ nodesShown: number
+ edgesShown: number
+ }[] = []
+ /** What `tallyExpertiseOutcomes` would return; set by a test that wants a verdict. */
+ tallies: Record<string, ExpertiseArmTally[]> = {}
+
+ async setRetrievalOverride(
+ _w: typeof workspaceId,
+ mapId: SubjectMap['id'],
+ override: SubjectMap['retrievalOverride'],
+) {
+ const map = this.maps.find((entry) => entry.id === mapId)
+ if (!map) return null
+ const next = {...map, retrievalOverride: override }
+ this.maps = this.maps.map((entry) => (entry.id === mapId ? next: entry))
+ return next
+ }
+
+ async recordExpertiseUse(input: {
+ mapId: SubjectMap['id']
+ agentRunId: string
+ arm: 'retrieved' | 'withheld'
+ nodesShown: number
+ edgesShown: number
+ }) {
+ // Idempotent per (run, map), like the real one: a run is on one arm.
+ if (this.uses.some((use) => use.mapId === input.mapId && use.agentRunId === input.agentRunId)) {
+ return
+ }
+ this.uses = [
+...this.uses,
+ {
+ mapId: input.mapId,
+ agentRunId: input.agentRunId,
+ arm: input.arm,
+ nodesShown: input.nodesShown,
+ edgesShown: input.edgesShown,
+ },
+ ]
+ }
+
+ async countExpertiseUses(_w: typeof workspaceId, mapId: SubjectMap['id']) {
+ const forMap = this.uses.filter((use) => use.mapId === mapId)
+ return {
+ retrieved: forMap.filter((use) => use.arm === 'retrieved').length,
+ withheld: forMap.filter((use) => use.arm === 'withheld').length,
+ }
+ }
+
+ async tallyExpertiseOutcomes(_w: typeof workspaceId, mapIds: readonly SubjectMap['id'][]) {
+ return Object.fromEntries(
+ mapIds.map((mapId) => [mapId as string, this.tallies[mapId as string] ?? []]),
+)
+ }
+
+ async listExpertiseUsesForRun(_w: typeof workspaceId, agentRunId: string) {
+ return this.uses
+.filter((use) => use.agentRunId === agentRunId)
+.map((use) => ({
+ mapId: use.mapId,
+ arm: use.arm,
+ nodesShown: use.nodesShown,
+ edgesShown: use.edgesShown,
+ }))
  }
 }
 
@@ -358,13 +437,33 @@ describe('buildMapContext — what a working run is handed', => {
  return map
  }
 
- it('renders a ready map inside the untrusted fence', async => {
+ /**
+ * The trial changed what "a ready map" means for the *first* run against it: a
+ * tie goes to the baseline, so the very first eligible run measures the unaided case.
+ * The map is rendered on the next one — and both are recorded, which is the point.
+ */
+ it('renders a ready map inside the untrusted fence, once the trial reaches that arm', async => {
  await readyMapWithNode
 
- const context = await buildMapContext(deps, { workspaceId, personaId, repositoryId })
+ const baseline = await buildMapContext(deps, {
+ workspaceId,
+ personaId,
+ repositoryId,
+ agentRunId: otherRunId,
+ })
+ expect(baseline).toBe('')
+ expect(maps.uses.map((use) => use.arm)).toEqual(['withheld'])
+
+ const context = await buildMapContext(deps, {
+ workspaceId,
+ personaId,
+ repositoryId,
+ agentRunId: asAgentRunId('run3'),
+ })
 
  expect(context).toContain('Checkout flow')
  expect(context).toContain(UNTRUSTED_MAP_OPEN)
+ expect(maps.uses.map((use) => use.arm)).toEqual(['withheld', 'retrieved'])
  })
 
  it('withholds a map of another repository — an expert on the wrong codebase is worse than none', async => {
@@ -374,6 +473,7 @@ describe('buildMapContext — what a working run is handed', => {
  workspaceId,
  personaId,
  repositoryId: asRepositoryId('hotel'),
+ agentRunId: otherRunId,
  })
 
  expect(context).toBe('')
@@ -383,7 +483,7 @@ describe('buildMapContext — what a working run is handed', => {
  const map = await readyMapWithNode
  await maps.setStatus(workspaceId, map.id, 'mastering')
 
- expect(await buildMapContext(deps, { workspaceId, personaId, repositoryId })).toBe('')
+ expect(await buildMapContext(deps, { workspaceId, personaId, repositoryId, agentRunId: otherRunId })).toBe('')
  })
 
  it("never hands a mastery run its own in-progress map back", async => {
@@ -393,7 +493,7 @@ describe('buildMapContext — what a working run is handed', => {
  workspaceId,
  personaId,
  repositoryId,
- excludeRunId: runId,
+ agentRunId: runId,
  })
 
  expect(context).toBe('')
@@ -450,5 +550,167 @@ describe('invalidateMapsForMerge — the merge queue keeps a map honest', => {
  })
 
  expect(result.invalidated).toBe(0)
+ })
+})
+
+/**
+ * The gate: an expertise is off for a pairing until it has beaten the unaided
+ * baseline, and Phase 3b makes that the gate on curation, the Colosseum and handoff.
+ *
+ * The domain tests cover what the verdict means. These cover the half that could silently
+ * not happen: that both arms are *recorded*, that an `off` map records nothing, and that
+ * a human's answer beats the measurement.
+ */
+describe('the expertise trial', => {
+ const readyMap = async => {
+ const map = await openMap(deps, {
+ workspaceId,
+ personaId,
+ subjectKind: 'repository',
+ repositoryId,
+ subjectRef: 'flight',
+ revision: 'abc123',
+ masteryRunId: runId,
+ })
+ await recordMapFragment(deps, {
+ workspaceId,
+ agentRunId: runId,
+ fragment: { nodes: [{ key: 'checkout', kind: 'concept', label: 'Checkout flow' }] },
+ })
+ await maps.setStatus(workspaceId, map.id, 'ready')
+ return map
+ }
+
+ const runContext = (agentRunId: string) =>
+ buildMapContext(deps, {
+ workspaceId,
+ personaId,
+ repositoryId,
+ agentRunId: asAgentRunId(agentRunId),
+ })
+
+ it('alternates, so the baseline it is judged against actually accumulates', async => {
+ await readyMap
+ for (const id of ['a', 'b', 'c', 'd']) await runContext(id)
+
+ expect(maps.uses.map((use) => use.arm)).toEqual([
+ 'withheld',
+ 'retrieved',
+ 'withheld',
+ 'retrieved',
+ ])
+ })
+
+ it('records what a retrieved run was actually shown, not merely that it was shown one', async => {
+ await readyMap
+ await runContext('a')
+ await runContext('b')
+
+ const retrieved = maps.uses.find((use) => use.arm === 'retrieved')!
+ expect(retrieved.nodesShown).toBe(1)
+ // A withheld run's row is the baseline, and it saw nothing — recording a count here
+ // would make the two arms indistinguishable in the one field that says what happened.
+ expect(maps.uses.find((use) => use.arm === 'withheld')!.nodesShown).toBe(0)
+ })
+
+ it('is idempotent per run, so one run cannot be counted twice in an arm', async => {
+ await readyMap
+ await runContext('a')
+ await runContext('a')
+
+ expect(maps.uses).toHaveLength(1)
+ })
+
+ it('hands over the map every time once the measurement says it helps', async => {
+ const map = await readyMap
+ maps.tallies = {
+ [map.id]: [
+ { arm: 'retrieved', decided: 5, merged: 5, discarded: 0, failed: 0, costUsdTotal: 1 },
+ { arm: 'withheld', decided: 5, merged: 1, discarded: 4, failed: 0, costUsdTotal: 1 },
+ ],
+ }
+
+ expect(await runContext('a')).toContain('Checkout flow')
+ expect(await runContext('b')).toContain('Checkout flow')
+ expect(maps.uses.every((use) => use.arm === 'retrieved')).toBe(true)
+ })
+
+ /**
+ * The reason `off` records nothing: withheld rows for a map nobody retrieves from would
+ * inflate the baseline it is judged against, so the decision could never be revisited.
+ * Off has to be reversible, not merely permanent.
+ */
+ it('records nothing at all for a map the measurement turned off', async => {
+ const map = await readyMap
+ maps.tallies = {
+ [map.id]: [
+ { arm: 'retrieved', decided: 5, merged: 1, discarded: 4, failed: 0, costUsdTotal: 1 },
+ { arm: 'withheld', decided: 5, merged: 5, discarded: 0, failed: 0, costUsdTotal: 1 },
+ ],
+ }
+
+ expect(await runContext('a')).toBe('')
+ expect(maps.uses).toEqual([])
+ })
+
+ it('lets a human turn a map on against the measurement, and off against it', async => {
+ const map = await readyMap
+ maps.tallies = {
+ [map.id]: [
+ { arm: 'retrieved', decided: 5, merged: 1, discarded: 4, failed: 0, costUsdTotal: 1 },
+ { arm: 'withheld', decided: 5, merged: 5, discarded: 0, failed: 0, costUsdTotal: 1 },
+ ],
+ }
+
+ await setRetrievalOverride(deps, { workspaceId, mapId: map.id, override: 'on' })
+ expect(await runContext('a')).toContain('Checkout flow')
+
+ await setRetrievalOverride(deps, { workspaceId, mapId: map.id, override: 'off' })
+ expect(await runContext('b')).toBe('')
+
+ // Cleared is a third act: the measurement decides again, and it says off.
+ await setRetrievalOverride(deps, { workspaceId, mapId: map.id, override: null })
+ expect(await runContext('c')).toBe('')
+ })
+
+ it('reports the trial with the map, so a human can see whether it earned its place', async => {
+ const map = await readyMap
+ maps.tallies = {
+ [map.id]: [
+ { arm: 'retrieved', decided: 5, merged: 4, discarded: 1, failed: 0, costUsdTotal: 1 },
+ { arm: 'withheld', decided: 5, merged: 1, discarded: 4, failed: 0, costUsdTotal: 1 },
+ ],
+ }
+
+ const view = await getMastery(deps, { workspaceId, mapId: map.id })
+ expect(view.effect.verdict).toBe('helps')
+ expect(view.retrievalState).toBe('on')
+
+ const listed = await listPersonaMaps(deps, { workspaceId, personaId })
+ expect(listed[0]?.retrievalState).toBe('on')
+ expect(listed[0]?.decided).toEqual({ retrieved: 5, withheld: 5 })
+ })
+
+ /**
+ * The operator's badge, at its strongest reading: not "this persona holds a map" but
+ * "this run read it". Only the trial rows can answer that.
+ */
+ it('answers which expertise one run actually read', async => {
+ await readyMap
+ await runContext('a')
+ await runContext('b')
+
+ const denied = await listExpertiseUsedByRun(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId('a'),
+ })
+ const read = await listExpertiseUsedByRun(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId('b'),
+ })
+
+ expect(denied[0]?.arm).toBe('withheld')
+ expect(read[0]?.arm).toBe('retrieved')
+ expect(read[0]?.map.subjectRef).toBe('flight')
  })
 })

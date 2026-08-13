@@ -737,6 +737,7 @@ export interface SubjectMapRow {
  subjectRef: string
  revision: string
  status: string
+ retrievalOverride?: string | null
  masteryRunId: string | null
  createdAt: Date
  updatedAt: Date
@@ -791,6 +792,12 @@ export const toSubjectMap = (row: SubjectMapRow): SubjectMap => {
  subjectRef: row.subjectRef,
  revision: row.revision,
  status,
+ // Anything that is not one of the two answers reads as "nobody has decided", which
+ // is the state every map written before this column existed is really in.
+ retrievalOverride:
+ row.retrievalOverride === 'on' || row.retrievalOverride === 'off'
+ ? row.retrievalOverride
+: null,
  masteryRunId: row.masteryRunId === null ? null: asAgentRunId(row.masteryRunId),
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,

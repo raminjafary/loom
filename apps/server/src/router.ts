@@ -47,7 +47,10 @@ import {
  listRunners,
  listRunsNeedingAttention,
  getMastery,
+ listExpertiseUsedByRun,
  listPersonaMaps,
+ listRepositoryMaps,
+ setRetrievalOverride,
  listTreeNotes,
  delegationMatrixForWorkspace,
  delegationPreviewForPersona,
@@ -443,10 +446,29 @@ export const router = os.router({
 
  listForRepository: os.mastery.listForRepository.handler(({ context, input }) =>
  guard( =>
- context.deps.subjectMaps.listMapsForRepository(
- context.principal.workspaceId,
- asRepositoryId(input.repositoryId),
+ listRepositoryMaps(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ repositoryId: asRepositoryId(input.repositoryId),
+ }),
 ),
+),
+
+ usedByRun: os.mastery.usedByRun.handler(({ context, input }) =>
+ guard( =>
+ listExpertiseUsedByRun(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ agentRunId: asAgentRunId(input.agentRunId),
+ }),
+),
+),
+
+ setRetrieval: os.mastery.setRetrieval.handler(({ context, input }) =>
+ guard( =>
+ setRetrievalOverride(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ mapId: asSubjectMapId(input.mapId),
+ override: input.override,
+ }),
 ),
 ),
 

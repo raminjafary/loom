@@ -817,6 +817,17 @@ export const subjectMap = pgTable(
  // Mastery: "a map with no commit is a rumour."
  revision: text('revision').notNull,
  status: text('status').notNull.default('mastering'),
+ /**
+ * A human's standing answer about whether this map is used — `'on'`, `'off'`, or
+ * null for "let the measurement decide".
+ *
+ * The *verdict* is deliberately not stored: it is recomputed from `expertise_use`
+ * on every read, because a map re-mastered at a newer revision is a different
+ * artifact and a flag written last month would keep answering for it. This column
+ * holds only the part that is a human's, which domain expertise and mastery both insist is where
+ * promotion lives.
+ */
+ retrievalOverride: text('retrieval_override'),
  masteryRunId: uuid('mastery_run_id').references(: AnyPgColumn => agentRun.id, {
  onDelete: 'set null',
  }),
@@ -931,6 +942,53 @@ export const masteryCheckpoint = pgTable(
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  },
  (t) => [index('mastery_checkpoint_map_idx').on(t.workspaceId, t.mapId, t.seq)],
+)
+
+/**
+ * One run's side of an expertise trial.
+ *
+ * **The withheld rows are the point.** the honest default is that an expertise
+ * stays off until it has beaten the unaided baseline, and that default cannot be
+ * implemented literally: a map nothing retrieves from is a map nothing can measure. So
+ * the platform alternates while the question is open, and a run *deliberately denied* a
+ * map it was eligible for gets a row saying so. A baseline nobody wrote down is not a
+ * baseline — it is the absence of one, which is what "unmeasured" meant here before.
+ *
+ * The outcome is not stored on this row. It is joined from the run at read time, because
+ * a run's disposition is set minutes or hours after it started and copying it here would
+ * mean a second write that can be missed — the same reasoning that keeps the merge
+ * queue's verdict on the entry rather than on the branch.
+ *
+ * Both ends cascade: a row about a deleted run or a deleted map is a measurement of
+ * nothing, and keeping it would let a re-created map inherit a verdict earned by a
+ * different one.
+ */
+export const expertiseUse = pgTable(
+ 'expertise_use',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ mapId: uuid('map_id')
+.notNull
+.references( => subjectMap.id, { onDelete: 'cascade' }),
+ agentRunId: uuid('agent_run_id')
+.notNull
+.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+ // 'retrieved' | 'withheld'.
+ arm: text('arm').notNull,
+ /** What the run was actually shown, so a thin retrieval is not read as a full one. */
+ nodesShown: integer('nodes_shown').notNull.default(0),
+ edgesShown: integer('edges_shown').notNull.default(0),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ // One decision per run per map: a run is on one arm, and a second row would count
+ // one run twice in whichever arm it landed in.
+ uniqueIndex('expertise_use_run_map_idx').on(t.workspaceId, t.agentRunId, t.mapId),
+ index('expertise_use_map_idx').on(t.workspaceId, t.mapId, t.arm),
+ ],
 )
 
 /**

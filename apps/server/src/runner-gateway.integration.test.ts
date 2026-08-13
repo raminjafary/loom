@@ -257,9 +257,11 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  await runPromise
 
  const maps = await client.mastery.listForPersona({ personaId: testPersonaId })
- expect(maps.some((map) => map.subjectRef === 'test repo' && map.revision === 'pending')).toBe(
- true,
-)
+ expect(
+ maps.some(
+ (entry) => entry.map.subjectRef === 'test repo' && entry.map.revision === 'pending',
+),
+).toBe(true)
  socket.close
  })
 
@@ -312,8 +314,22 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
 )
  await new Promise((resolve) => setTimeout(resolve, 250))
 
+ /**
+ * The trial, at the frame. The *first* eligible run is deliberately denied the
+ * map — a tie goes to the baseline, so a pairing used once has measured the unaided
+ * case rather than handing a run an untested map and learning nothing. Both runs are
+ * recorded, and the withheld row is the baseline the map is later judged against.
+ */
+ const baselineFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const baselineRun = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ expect((await baselineFrame).mapContext).toBeUndefined
+
  const secondFrame = nextFrame(socket, (v) => v.type === 'start_run')
- await client.agentRun.start({
+ const readingRun = await client.agentRun.start({
  threadId: created.rootThread.id,
  repositoryId: repo.id,
  personaId: testPersonaId,
@@ -325,6 +341,15 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  expect(second.mapContext).toContain(UNTRUSTED_MAP_OPEN)
  // And not offered `record_map`: an ordinary run may read a map, never write one.
  expect(second.mastery).toBeUndefined
+
+ // The measurement exists on both sides, which is the half that could silently not
+ // happen: a baseline nobody wrote down is not a baseline.
+ const denied = await client.mastery.usedByRun({ agentRunId: baselineRun.id })
+ const read = await client.mastery.usedByRun({ agentRunId: readingRun.id })
+ expect(denied[0]?.arm).toBe('withheld')
+ expect(denied[0]?.nodesShown).toBe(0)
+ expect(read[0]?.arm).toBe('retrieved')
+ expect(read[0]?.nodesShown).toBeGreaterThan(0)
  socket.close
  })
 
@@ -408,11 +433,11 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
 )
 
  const maps = await client.mastery.listForPersona({ personaId: testPersonaId })
- const map = maps.find((entry) => entry.subjectRef === 'test repo')!
- let view = await client.mastery.get({ mapId: map.id })
+ const listing = maps.find((entry) => entry.map.subjectRef === 'test repo')!
+ let view = await client.mastery.get({ mapId: listing.map.id })
  for (let i = 0; i < 20 && view.progress === null; i += 1) {
  await new Promise((r) => setTimeout(r, 50))
- view = await client.mastery.get({ mapId: map.id })
+ view = await client.mastery.get({ mapId: listing.map.id })
  }
 
  expect(view.progress).not.toBeNull

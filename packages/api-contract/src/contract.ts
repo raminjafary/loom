@@ -27,6 +27,7 @@ import {
  SwarmBoardSchema,
  ThreadSchema,
  MasteryViewSchema,
+ SubjectMapListingSchema,
  SubjectMapSchema,
  WorkerNoteSchema,
 } from './schemas.js'
@@ -317,7 +318,7 @@ export const contract = {
  /** Every subject this persona has a map of — what makes an expert legible before it is used. */
  listForPersona: oc
 .input(z.object({ personaId: z.string }))
-.output(z.array(SubjectMapSchema)),
+.output(z.array(SubjectMapListingSchema)),
 
  /** One map whole: nodes, edges, measured progress, and the computed hubs. */
  get: oc.input(z.object({ mapId: z.string })).output(MasteryViewSchema),
@@ -332,7 +333,45 @@ export const contract = {
  */
  listForRepository: oc
 .input(z.object({ repositoryId: z.string }))
-.output(z.array(SubjectMapSchema)),
+.output(z.array(SubjectMapListingSchema)),
+
+ /**
+ * Which maps one run was handed, and which it was deliberately denied.
+ *
+ * The stronger half of the operator's "which agents adopted which expertise": a
+ * persona's map list says what it *holds*, and only this says what a particular piece
+ * of work actually read. A run on the withheld arm is reported too, because a badge
+ * that showed only retrievals would make the baseline invisible and the measurement
+ * look like a feature that sometimes forgets to fire.
+ */
+ usedByRun: oc
+.input(z.object({ agentRunId: z.string }))
+.output(
+ z.array(
+ z.object({
+ map: SubjectMapSchema,
+ arm: z.enum(['retrieved', 'withheld']),
+ nodesShown: z.number.int,
+ edgesShown: z.number.int,
+ }),
+),
+),
+
+ /**
+ * A human's standing answer about whether a map is used.
+ *
+ * Promotion is a human act, and so is demotion — an operator watching a map produce
+ * bad advice should not have to wait for five more runs to agree with them. `null`
+ * hands the decision back to the measurement, which is a third act.
+ */
+ setRetrieval: oc
+.input(
+ z.object({
+ mapId: z.string,
+ override: z.enum(['on', 'off']).nullable,
+ }),
+)
+.output(SubjectMapSchema),
 
  /**
  * Start a mastery run.

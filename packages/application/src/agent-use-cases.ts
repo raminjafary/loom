@@ -1710,7 +1710,7 @@ export const startAgentRun = async (
  workspaceId: input.workspaceId,
  personaId: persona.id,
  repositoryId: repository.id,
- excludeRunId: run.id,
+ agentRunId: run.id,
  })
  } catch {
  // Deliberately swallowed — see above.

@@ -4,7 +4,7 @@ import type {
  Capability,
  DirectoryListing,
  MasteryView,
- SubjectMap,
+ SubjectMapListing,
  PersonaCapability,
  PersonaDraft,
  PersonaGroup,
@@ -39,7 +39,7 @@ const props = defineProps<{
  lastPairing: { runnerId: string; name: string; rawToken: string } | null
  /** The expertise tab — fetched on demand, so never part of the session snapshot. */
  masteryPersonaId: string | null
- masteryMaps: SubjectMap[]
+ masteryMaps: SubjectMapListing[]
  masteryView: MasteryView | null
  masteryLoading: boolean
  masteryError: string | null
@@ -55,6 +55,8 @@ const emit = defineEmits<{
  'select-map': [mapId: string]
  'refresh-maps': []
  master: [repositoryId: string]
+ /** Portable expertise: a human's standing answer about whether a map is used. */
+ 'set-retrieval': [input: { mapId: string; override: 'on' | 'off' | null }]
  'create-pairing-token': [name: string]
  bind: [input: { runnerId: string; path: string; displayName: string }]
  'create-repository': [
@@ -216,6 +218,7 @@ onMounted( => scrim.value?.focus)
  @select="(mapId) => emit('select-map', mapId)"
  @refresh="emit('refresh-maps')"
  @master="(repositoryId) => emit('master', repositoryId)"
+ @set-retrieval="(input) => emit('set-retrieval', input)"
  />
  </template>
 

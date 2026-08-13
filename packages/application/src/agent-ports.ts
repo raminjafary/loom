@@ -1,4 +1,7 @@
 import type {
+ ExpertiseArm,
+ ExpertiseArmTally,
+ RetrievalOverride,
  ApprovalMode,
  ChannelId,
  AgentPersona,
@@ -998,6 +1001,67 @@ export interface SubjectMapRepositoryPort {
  spendUsd: number
  }): Promise<MasteryCheckpoint>
  listCheckpoints(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<MasteryCheckpoint[]>
+
+ /**
+ * A human's standing answer about whether a map is used. Null hands
+ * the decision back to the measurement, which is a third state and not the same as
+ * `'off'` — one says "I have decided", the other says "keep measuring".
+ */
+ setRetrievalOverride(
+ workspaceId: WorkspaceId,
+ mapId: SubjectMapId,
+ override: RetrievalOverride,
+): Promise<SubjectMap | null>
+
+ /**
+ * Records which side of the trial one run was on.
+ *
+ * Idempotent per (run, map): a run is on one arm, and a second row would count it twice
+ * in whichever arm it landed in — which is exactly the way an A/B measurement quietly
+ * stops being one.
+ */
+ recordExpertiseUse(input: {
+ workspaceId: WorkspaceId
+ mapId: SubjectMapId
+ agentRunId: AgentRunId
+ arm: ExpertiseArm
+ nodesShown: number
+ edgesShown: number
+ }): Promise<void>
+
+ /**
+ * How many runs are on each arm of a map's trial so far, including undecided ones.
+ *
+ * Separate from `tallyExpertiseOutcomes` because the two answer different questions at
+ * different moments: this one decides where the *next* run goes and must count runs
+ * that have not finished, while the tally judges the map and must count only runs that
+ * have reached a disposition. Folding them together would let a burst of in-flight runs
+ * all land on the same arm.
+ */
+ countExpertiseUses(
+ workspaceId: WorkspaceId,
+ mapId: SubjectMapId,
+): Promise<{ retrieved: number; withheld: number }>
+
+ /**
+ * Each arm's outcomes, joined against the runs at read time.
+ *
+ * One query for many maps, because the list surfaces need the effective retrieval state
+ * per map and a query per map would make opening a persona's expertise list cost a
+ * round trip per subject.
+ */
+ tallyExpertiseOutcomes(
+ workspaceId: WorkspaceId,
+ mapIds: readonly SubjectMapId[],
+): Promise<Record<string, ExpertiseArmTally[]>>
+
+ /** Which maps a run was handed, and which it was deliberately denied. */
+ listExpertiseUsesForRun(
+ workspaceId: WorkspaceId,
+ agentRunId: AgentRunId,
+): Promise<
+ { mapId: string; arm: ExpertiseArm; nodesShown: number; edgesShown: number }[]
+ >
 }
 
 /**

@@ -47,6 +47,10 @@ export const useAgentStore = defineStore('agent', => {
  listPersonaMaps: (personaId: string) => session.listPersonaMaps(personaId),
  getMastery: (mapId: string) => session.getMastery(mapId),
  listRepositoryMaps: (repositoryId: string) => session.listRepositoryMaps(repositoryId),
+ /** Which maps one run read, and which it was deliberately denied. */
+ listExpertiseUsedByRun: (agentRunId: string) => session.listExpertiseUsedByRun(agentRunId),
+ setMapRetrieval: (mapId: string, override: 'on' | 'off' | null) =>
+ session.setMapRetrieval(mapId, override),
  startMastery: (input: {
  threadId: string
  personaId: string

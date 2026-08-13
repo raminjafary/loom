@@ -7,6 +7,7 @@ import type {
  DirectoryListing,
  MasteryView,
  SubjectMap,
+ SubjectMapListing,
  PersonaCapability,
  MergeQueueEntry,
  NotificationConfig,
@@ -262,9 +263,20 @@ export interface AgentSession {
  * workspace has many, so folding every map into the snapshot would put an unbounded
  * read on the path that opens the app. These are fetched when a human looks.
  */
- listPersonaMaps(personaId: string): Promise<SubjectMap[]>
+ listPersonaMaps(personaId: string): Promise<SubjectMapListing[]>
  getMastery(mapId: string): Promise<MasteryView | null>
- listRepositoryMaps(repositoryId: string): Promise<SubjectMap[]>
+ listRepositoryMaps(repositoryId: string): Promise<SubjectMapListing[]>
+ /**
+ * Which maps one run was handed, and which it was deliberately denied.
+ *
+ * Returns `[]` on failure, like `listRepositoryMaps`: it decorates a run that is
+ * otherwise complete, so a failure here should cost the badge and never the view.
+ */
+ listExpertiseUsedByRun(agentRunId: string): Promise<
+ { map: SubjectMap; arm: 'retrieved' | 'withheld'; nodesShown: number; edgesShown: number }[]
+ >
+ /** A human's standing answer about whether a map is used. */
+ setMapRetrieval(mapId: string, override: 'on' | 'off' | null): Promise<void>
  /**
  * Starts a mastery run, which
  * means it is subject to the concurrency limit, the kill switch and the budget cap
@@ -998,6 +1010,28 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  return await options.api.mastery.listForRepository({ repositoryId })
  } catch {
  return []
+ }
+ },
+
+ async listExpertiseUsedByRun(agentRunId) {
+ try {
+ return await options.api.mastery.usedByRun({ agentRunId })
+ } catch {
+ return []
+ }
+ },
+
+ /**
+ * Keeps the session banner, unlike the reads above: this is an *action* a human took
+ * — overruling a measurement — and an action that silently failed would leave the
+ * panel showing the state the human thought they had just changed.
+ */
+ async setMapRetrieval(mapId, override) {
+ patch({ error: null })
+ try {
+ await options.api.mastery.setRetrieval({ mapId, override })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
  }
  },
 

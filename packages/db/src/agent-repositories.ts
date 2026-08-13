@@ -16,7 +16,14 @@ import type {
  WorkerNoteRepositoryPort,
  WorkspaceRunControlRepositoryPort,
 } from '@loom/application'
-import { NotFoundError, asAgentRunId, asRunnerId, asThreadId, primaryToolArgument } from '@loom/domain'
+import {
+ NotFoundError,
+ asAgentRunId,
+ asRunnerId,
+ asThreadId,
+ primaryToolArgument,
+ type ExpertiseArmTally,
+} from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
@@ -67,6 +74,7 @@ import {
  repository,
  runner,
  thread,
+ expertiseUse,
  masteryCheckpoint,
  noteReadEdge,
  subjectMap,
@@ -1660,6 +1668,116 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  nodeCount: row.nodeCount,
  edgeCount: row.edgeCount,
  spendUsd: row.spendUsd,
+ }))
+ },
+
+ async setRetrievalOverride(workspaceId, mapId, override) {
+ const [row] = await db
+.update(subjectMap)
+.set({ retrievalOverride: override, updatedAt: new Date })
+.where(and(eq(subjectMap.workspaceId, workspaceId), eq(subjectMap.id, mapId)))
+.returning
+ return row ? toSubjectMap(row as SubjectMapRow): null
+ },
+
+ async recordExpertiseUse(input) {
+ await db
+.insert(expertiseUse)
+.values({
+ workspaceId: input.workspaceId,
+ mapId: input.mapId,
+ agentRunId: input.agentRunId,
+ arm: input.arm,
+ nodesShown: input.nodesShown,
+ edgesShown: input.edgesShown,
+ })
+ /**
+ * A run is on one arm. `doNothing` rather than an update because the first
+ * assignment is the real one: a retry that re-recorded a different arm would move a
+ * run between the groups it is being counted in, which is the way an A/B
+ * measurement quietly stops being one.
+ */
+.onConflictDoNothing({
+ target: [expertiseUse.workspaceId, expertiseUse.agentRunId, expertiseUse.mapId],
+ })
+ },
+
+ async countExpertiseUses(workspaceId, mapId) {
+ const rows = await db
+.select({ arm: expertiseUse.arm, count: sql<number>`count(*)::int` })
+.from(expertiseUse)
+.where(and(eq(expertiseUse.workspaceId, workspaceId), eq(expertiseUse.mapId, mapId)))
+.groupBy(expertiseUse.arm)
+
+ const find = (arm: string) => rows.find((row) => row.arm === arm)?.count ?? 0
+ return { retrieved: find('retrieved'), withheld: find('withheld') }
+ },
+
+ async tallyExpertiseOutcomes(workspaceId, mapIds) {
+ if (mapIds.length === 0) return {}
+
+ /**
+ * Joined against the run rather than copied onto the use row, because a disposition
+ * is set long after the run started — a copy would be a second write that can be
+ * missed, which is how a measurement ends up describing runs nobody decided about.
+ *
+ * `decided` counts only runs a human (or the merge queue) has ruled on, plus runs
+ * that failed outright: a run still in flight is not evidence either way, and
+ * counting it as an unmerged one would make every arm look worse the busier the
+ * workspace is.
+ */
+ const rows = await db
+.select({
+ mapId: expertiseUse.mapId,
+ arm: expertiseUse.arm,
+ decided: sql<number>`count(*) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed')::int`,
+ merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+ discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
+ failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
+ costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed'), 0)::double precision`,
+ })
+.from(expertiseUse)
+.innerJoin(agentRun, eq(agentRun.id, expertiseUse.agentRunId))
+.where(
+ and(
+ eq(expertiseUse.workspaceId, workspaceId),
+ inArray(expertiseUse.mapId, [...mapIds]),
+),
+)
+.groupBy(expertiseUse.mapId, expertiseUse.arm)
+
+ const byMap: Record<string, ExpertiseArmTally[]> = {}
+ for (const row of rows) {
+ if (row.arm !== 'retrieved' && row.arm !== 'withheld') continue
+ byMap[row.mapId] = [
+...(byMap[row.mapId] ?? []),
+ {
+ arm: row.arm,
+ decided: row.decided,
+ merged: row.merged,
+ discarded: row.discarded,
+ failed: row.failed,
+ costUsdTotal: row.costUsdTotal,
+ },
+ ]
+ }
+ return byMap
+ },
+
+ async listExpertiseUsesForRun(workspaceId, agentRunId) {
+ const rows = await db
+.select
+.from(expertiseUse)
+.where(
+ and(eq(expertiseUse.workspaceId, workspaceId), eq(expertiseUse.agentRunId, agentRunId)),
+)
+ return rows
+.filter((row) => row.arm === 'retrieved' || row.arm === 'withheld')
+.map((row) => ({
+ mapId: row.mapId,
+ arm: row.arm as 'retrieved' | 'withheld',
+ nodesShown: row.nodesShown,
+ edgesShown: row.edgesShown,
  }))
  },
 })

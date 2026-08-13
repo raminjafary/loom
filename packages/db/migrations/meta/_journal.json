@@ -260,6 +260,13 @@
       "when": 1786574807844,
       "tag": "0036_ambitious_tinkerer",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1786578882212,
+      "tag": "0037_white_terror",
+      "breakpoints": true
     }
   ]
 }

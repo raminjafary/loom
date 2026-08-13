@@ -7,7 +7,13 @@ import {
  undrawnNodeCount,
  type MapGraphNode,
 } from '@loom/client-core'
-import type { AgentPersona, MasteryView, Repository, SubjectMap } from '@loom/api-contract'
+import type {
+ AgentPersona,
+ MasteryView,
+ Repository,
+ SubjectMap,
+ SubjectMapListing,
+} from '@loom/api-contract'
 
 /**
  * A persona's expertise, drawn.
@@ -27,7 +33,7 @@ const props = defineProps<{
  personas: AgentPersona[]
  personaId: string | null
  repositories: Repository[]
- maps: SubjectMap[]
+ maps: SubjectMapListing[]
  view: MasteryView | null
  loading: boolean
  error: string | null
@@ -42,7 +48,31 @@ const emit = defineEmits<{
  select: [mapId: string]
  refresh: []
  master: [repositoryId: string]
+ /**
+ * A human's standing answer about whether a map is used. `null`
+ * hands the decision back to the measurement, which is a third act and a real state.
+ */
+ 'set-retrieval': [input: { mapId: string; override: 'on' | 'off' | null }]
 }>
+
+/**
+ * What the platform is doing with a map right now, in three words.
+ *
+ * The badge the operator asked for, at the honest reading. "Expert in this repository" is
+ * what a map's *existence* says; this says whether any run is actually being handed it,
+ * which is the difference between an expertise and a row in a table.
+ */
+const RETRIEVAL_LABEL: Record<string, string> = {
+ on: 'in use',
+ trial: 'on trial',
+ off: 'withheld',
+}
+
+const RETRIEVAL_TITLE: Record<string, string> = {
+ on: 'Runs against this subject are handed this map — it beat the unaided baseline, or a human said so.',
+ trial: 'Being measured: some runs are handed this map and some are deliberately not, so the two can be compared.',
+ off: 'Not handed to any run. It did not beat the unaided baseline, or a human turned it off.',
+}
 
 const masterTarget = ref('')
 
@@ -137,21 +167,37 @@ const dashFor = (provenance: string): string | undefined =>
  </p>
 
  <ul v-if="maps.length > 0" class="subjects">
- <li v-for="map in maps":key="map.id">
+ <li v-for="listing in maps":key="listing.map.id">
  <button
  type="button"
-:class="{ active: view?.map.id === map.id }"
+:class="{ active: view?.map.id === listing.map.id }"
  @click="
  => {
  selectedKey = null
- emit('select', map.id)
+ emit('select', listing.map.id)
  }
  "
  >
- <span class="ref">{{ map.subjectRef }}</span>
+ <span class="ref">
+ {{ listing.map.subjectRef }}
+ <!--
+ Portable expertise: an expertise has to be legible *before* it is used. A row that
+ said "expert in this repository" while the platform was quietly withholding
+ the map would be the surface lying, which is the same class of dishonesty as
+ a canvas drawing an edge the runtime refuses.
+ -->
+ <em
+:class="['retrieval', listing.retrievalState]"
+:title="RETRIEVAL_TITLE[listing.retrievalState]"
+ >{{ RETRIEVAL_LABEL[listing.retrievalState] }}</em
+ >
+ </span>
  <span class="meta">
- {{ map.subjectKind }} · {{ repositoryName(map) }} ·
- <span:class="['status', map.status]">{{ map.status }}</span>
+ {{ listing.map.subjectKind }} · {{ repositoryName(listing.map) }} ·
+ <span:class="['status', listing.map.status]">{{ listing.map.status }}</span>
+ <template v-if="listing.decided.retrieved + listing.decided.withheld > 0">
+ · {{ listing.decided.retrieved }} with / {{ listing.decided.withheld }} without
+ </template>
  </span>
  <!--
  Stated rather than implied. Putting the flight expert on a team bound to the
@@ -159,7 +205,7 @@ const dashFor = (provenance: string): string | undefined =>
  this expertise contributes nothing here, and a human should know that before
  reading a confident-looking graph.
  -->
- <span v-if="!liveHere(map)" class="not-live">
+ <span v-if="!liveHere(listing.map)" class="not-live">
  not used on the repository in view
  </span>
  </button>
@@ -202,6 +248,72 @@ const dashFor = (provenance: string): string | undefined =>
  Coverage is still climbing but nothing new is being recorded — it is reading
  without learning.
  </p>
+ </div>
+
+ <!--
+ The gate, where the human who cares about it is already looking. Phase 3b
+ makes this the gate on curation, the Colosseum and handoff, and "improves over
+ time" is the claim most likely to be believed without evidence — a growing map
+ *looks* like progress.
+ -->
+ <div:class="['trial', view.retrievalState]">
+ <div class="trial-head">
+ <strong>{{ RETRIEVAL_LABEL[view.retrievalState] }}</strong>
+ <span class="verdict">{{ view.effect.verdict.replace('-', ' ') }}</span>
+ </div>
+ <p class="sub">{{ view.effect.detail }}</p>
+ <table class="arms">
+ <thead>
+ <tr>
+ <th>arm</th>
+ <th>decided</th>
+ <th>merged</th>
+ <th>mean cost</th>
+ </tr>
+ </thead>
+ <tbody>
+ <tr>
+ <th scope="row">read the map</th>
+ <td>{{ view.effect.retrieved.decided }}</td>
+ <td>{{ view.effect.retrieved.merged }}</td>
+ <td>${{ view.effect.retrieved.meanCostUsd.toFixed(4) }}</td>
+ </tr>
+ <tr>
+ <th scope="row">denied it</th>
+ <td>{{ view.effect.withheld.decided }}</td>
+ <td>{{ view.effect.withheld.merged }}</td>
+ <td>${{ view.effect.withheld.meanCostUsd.toFixed(4) }}</td>
+ </tr>
+ </tbody>
+ </table>
+ <!--
+ Promotion is a human act, and so is demotion — an operator watching a map
+ produce bad advice should not have to wait for five more runs to agree.
+ "Let the measurement decide" is a third button because it is a third state.
+ -->
+ <div class="overrides">
+ <button
+ type="button"
+:class="{ chosen: view.map.retrievalOverride === 'on' }"
+ @click="emit('set-retrieval', { mapId: view.map.id, override: 'on' })"
+ >
+ Always use it
+ </button>
+ <button
+ type="button"
+:class="{ chosen: view.map.retrievalOverride === 'off' }"
+ @click="emit('set-retrieval', { mapId: view.map.id, override: 'off' })"
+ >
+ Never use it
+ </button>
+ <button
+ type="button"
+:class="{ chosen: view.map.retrievalOverride === null }"
+ @click="emit('set-retrieval', { mapId: view.map.id, override: null })"
+ >
+ Let the measurement decide
+ </button>
+ </div>
  </div>
 
  <div class="legend">
@@ -500,5 +612,95 @@ svg {
  opacity: 0.7;
  font-family: ui-monospace, monospace;
  word-break: break-all;
+}
+
+.retrieval {
+ margin-left: 0.4rem;
+ padding: 0.02rem 0.3rem;
+ border-radius: 0.7rem;
+ font-style: normal;
+ font-size: 0.62rem;
+ text-transform: uppercase;
+ letter-spacing: 0.03em;
+ border: 1px solid currentcolor;
+}
+
+.retrieval.on {
+ color: var(--ok);
+}
+
+.retrieval.trial {
+ color: var(--text-muted);
+}
+
+.retrieval.off {
+ color: var(--text-faint);
+}
+
+.trial {
+ display: flex;
+ flex-direction: column;
+ gap: 0.35rem;
+ padding: 0.55rem 0.65rem;
+ border: 1px solid var(--border);
+ border-radius: 0.4rem;
+}
+
+.trial.on {
+ border-color: var(--ok);
+}
+
+.trial-head {
+ display: flex;
+ align-items: baseline;
+ gap: 0.5rem;
+}
+
+.verdict {
+ font-size: 0.68rem;
+ color: var(--text-faint);
+ text-transform: uppercase;
+ letter-spacing: 0.04em;
+}
+
+.arms {
+ border-collapse: collapse;
+ font-size: 0.72rem;
+}
+
+.arms th,
+.arms td {
+ text-align: left;
+ padding: 0.1rem 0.6rem 0.1rem 0;
+ font-weight: 400;
+}
+
+.arms thead th {
+ color: var(--text-faint);
+ font-size: 0.65rem;
+ text-transform: uppercase;
+ letter-spacing: 0.03em;
+}
+
+.overrides {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 0.35rem;
+}
+
+.overrides button {
+ padding: 0.15rem 0.45rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text-muted);
+ font: inherit;
+ font-size: 0.7rem;
+ cursor: pointer;
+}
+
+.overrides button.chosen {
+ border-color: var(--accent);
+ color: var(--accent);
 }
 </style>

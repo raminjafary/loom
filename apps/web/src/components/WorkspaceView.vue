@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MasteryView, ResponseStyle, SubjectMap } from '@loom/api-contract'
+import type { MasteryView, ResponseStyle, SubjectMapListing } from '@loom/api-contract'
 import {
  areaLabelFromAnnouncement,
  buildThreadTrail,
@@ -86,7 +86,7 @@ const settingsOpen = ref(false)
  * never open.
  */
 const masteryPersonaId = ref<string | null>(null)
-const masteryMaps = ref<SubjectMap[]>([])
+const masteryMaps = ref<SubjectMapListing[]>([])
 const masteryView = ref<MasteryView | null>(null)
 const masteryLoading = ref(false)
 const masteryError = ref<string | null>(null)
@@ -123,7 +123,13 @@ const loadMastery = async (mapId: string) => {
  * the later read and carries the same row, so there is nothing to fetch.
  */
  if (view) {
- masteryMaps.value = masteryMaps.value.map((map) => (map.id === view.map.id ? view.map: map))
+ masteryMaps.value = masteryMaps.value.map((listing) =>
+ listing.map.id === view.map.id
+ ? // The view is the later read, and it carries the trial as well as the row —
+ // so the list's badge and the panel underneath it cannot disagree.
+ {...listing, map: view.map, retrievalState: view.retrievalState }
+: listing,
+)
  }
  } catch (error) {
  masteryError.value = error instanceof Error ? error.message: String(error)
@@ -183,7 +189,13 @@ onBeforeUnmount( => window.clearInterval(masteryFollowTimer))
  * is session state the graph module deliberately does not import.
  */
 const graphExpertise = ref<
- { mapId: string; subjectRef: string; subjectKind: string; personaName: string }[]
+ {
+ mapId: string
+ subjectRef: string
+ subjectKind: string
+ personaName: string
+ retrievalState: 'trial' | 'on' | 'off'
+ }[]
 >([])
 
 const loadGraphExpertise = async => {
@@ -195,18 +207,24 @@ const loadGraphExpertise = async => {
  const nameById = new Map(agentSnapshot.value.personas.map((p) => [p.id, p.name]))
  const maps = await agent.listRepositoryMaps(repositoryId)
  graphExpertise.value = maps
-.filter((map) => map.status === 'ready')
-.flatMap((map) => {
- const personaName = nameById.get(map.personaId)
+.filter((listing) => listing.map.status === 'ready')
+.flatMap((listing) => {
+ const personaName = nameById.get(listing.map.personaId)
  // A map whose persona no longer exists is dropped rather than drawn under a uuid.
  // The byline lesson: a label that resolves to an id says less than none.
  return personaName
  ? [
  {
- mapId: map.id,
- subjectRef: map.subjectRef,
- subjectKind: map.subjectKind,
+ mapId: listing.map.id,
+ subjectRef: listing.map.subjectRef,
+ subjectKind: listing.map.subjectKind,
  personaName,
+ /**
+ * Whether the platform is actually handing this map to runs. A
+ * band that said "expert" while the map was withheld would be the graph
+ * claiming an expertise nobody is carrying.
+ */
+ retrievalState: listing.retrievalState,
  },
  ]
 : []
@@ -231,6 +249,21 @@ const startMastery = async (repositoryId: string) => {
  await selectExpertisePersona(personaId)
  }
 }
+/**
+ * A human overruling the measurement.
+ *
+ * Both surfaces are refreshed afterwards, and the reason is the same defect this panel
+ * already had once: the list row and the open view are two reads taken at different
+ * moments, so changing the state and refreshing only one leaves a badge disagreeing with
+ * the panel underneath it.
+ */
+const setMapRetrieval = async (input: { mapId: string; override: 'on' | 'off' | null }) => {
+ await agent.setMapRetrieval(input.mapId, input.override)
+ const personaId = masteryPersonaId.value
+ if (personaId) await selectExpertisePersona(personaId)
+ await loadMastery(input.mapId)
+}
+
 const composerOpen = ref(false)
 
 const CONNECTION_LABEL: Record<string, string> = {
@@ -960,6 +993,7 @@ onBeforeUnmount( => {
  @select-map="loadMastery"
  @refresh-maps=" => masteryPersonaId && selectExpertisePersona(masteryPersonaId)"
  @master="startMastery"
+ @set-retrieval="setMapRetrieval"
  @create-pairing-token="(name) => agent.createPairingToken(name)"
  @remove-runner="(runnerId, done) => void agent.removeRunner(runnerId).then(done)"
  @unbind="(input, done) => void agent.unbindRepository(input).then(done)"

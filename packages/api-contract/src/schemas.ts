@@ -281,9 +281,52 @@ export const SubjectMapSchema = z.object({
  /** Mastery: "a map with no commit is a rumour." */
  revision: z.string,
  status: z.enum(['mastering', 'ready', 'failed']),
+ /**
+ * A human's standing answer about whether this map is used. Null hands the
+ * decision back to the measurement, which is a third state and not the same as 'off'.
+ */
+ retrievalOverride: z.enum(['on', 'off']).nullable,
  masteryRunId: z.string.nullable,
  createdAt: z.date,
  updatedAt: z.date,
+})
+
+/**
+ * One arm of an expertise trial. The `withheld` arm is the baseline —
+ * runs deliberately denied a map they were eligible for — and it is the half that makes
+ * "does this help" answerable at all.
+ */
+export const ExpertiseArmSummarySchema = z.object({
+ arm: z.enum(['retrieved', 'withheld']),
+ decided: z.number.int,
+ merged: z.number.int,
+ discarded: z.number.int,
+ failed: z.number.int,
+ costUsdTotal: z.number,
+ successRate: z.number,
+ meanCostUsd: z.number,
+})
+
+export const ExpertiseEffectSchema = z.object({
+ retrieved: ExpertiseArmSummarySchema,
+ withheld: ExpertiseArmSummarySchema,
+ verdict: z.enum(['undecided', 'helps', 'no-better']),
+ /** One sentence naming the numbers the verdict rests on, for a human to disagree with. */
+ detail: z.string,
+})
+
+/**
+ * A map as a list shows it: what it is, and what the platform is *doing* with it.
+ *
+ * The state travels with the list because that is what makes an expertise legible before
+ * it is used. A badge reading "expert in this repository" while the platform is
+ * quietly withholding the map would be the surface lying — the same class of dishonesty
+ * as a canvas drawing an edge the runtime refuses.
+ */
+export const SubjectMapListingSchema = z.object({
+ map: SubjectMapSchema,
+ retrievalState: z.enum(['trial', 'on', 'off']),
+ decided: z.object({ retrieved: z.number.int, withheld: z.number.int }),
 })
 
 export const MapNodeSchema = z.object({
@@ -363,6 +406,9 @@ export const MasteryViewSchema = z.object({
  edges: z.array(MapEdgeSchema),
  progress: MasteryProgressSchema.nullable,
  hubs: z.array(z.object({ key: z.string, degree: z.number })),
+ /** Whether reading this map has been shown to help, and what is being done about it. */
+ effect: ExpertiseEffectSchema,
+ retrievalState: z.enum(['trial', 'on', 'off']),
 })
 
 /** One card on the kanban — a *run*, since the board and the ledger are one object. */
@@ -794,6 +840,8 @@ export type Repository = z.infer<typeof RepositorySchema>
 export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
 export type WorkerNote = z.infer<typeof WorkerNoteSchema>
 export type SubjectMap = z.infer<typeof SubjectMapSchema>
+export type SubjectMapListing = z.infer<typeof SubjectMapListingSchema>
+export type ExpertiseEffect = z.infer<typeof ExpertiseEffectSchema>
 export type MapNode = z.infer<typeof MapNodeSchema>
 export type MapEdge = z.infer<typeof MapEdgeSchema>
 export type MasteryView = z.infer<typeof MasteryViewSchema>

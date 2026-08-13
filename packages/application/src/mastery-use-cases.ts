@@ -3,8 +3,12 @@ import {
  MAX_NODES_PER_MAP,
  NotFoundError,
  ValidationError,
+ asSubjectMapId,
  computeMasteryProgress,
  findHubNodes,
+ retrievalStateFor,
+ summarizeExpertiseEffect,
+ trialAssignment,
  parseMapFragment,
  renderMapForPrompt,
  selectMapForContext,
@@ -13,8 +17,11 @@ import {
  type AgentRunId,
  type MapEdge,
  type MapNode,
+ type ExpertiseEffect,
  type MapSubjectKind,
  type MasteryProgress,
+ type RetrievalOverride,
+ type RetrievalState,
  type RepositoryId,
  type SubjectMap,
  type SubjectMapId,
@@ -279,6 +286,14 @@ export interface MasteryView {
  readonly nodes: MapNode[]
  readonly edges: MapEdge[]
  readonly progress: MasteryProgress | null
+ /**
+ * Whether reading this map has been shown to help, and what the
+ * platform is currently doing about it. On the view rather than a separate procedure
+ * because a human looking at a map is exactly the human who should see whether it has
+ * earned its place — Phase 3b makes this the gate on everything after the map.
+ */
+ readonly effect: ExpertiseEffect
+ readonly retrievalState: RetrievalState
  /** The god nodes — computed from the graph, never asked of a model. */
  readonly hubs: { readonly key: string; readonly degree: number }[]
 }
@@ -290,10 +305,11 @@ export const getMastery = async (
  const map = await deps.subjectMaps.getMap(input.workspaceId, input.mapId)
  if (!map) throw new NotFoundError('SubjectMap')
 
- const [nodes, edges, checkpoints] = await Promise.all([
+ const [nodes, edges, checkpoints, trial] = await Promise.all([
  deps.subjectMaps.listNodes(input.workspaceId, map.id),
  deps.subjectMaps.listEdges(input.workspaceId, map.id),
  deps.subjectMaps.listCheckpoints(input.workspaceId, map.id),
+ expertiseEffectFor(deps, { workspaceId: input.workspaceId, map }),
  ])
 
  return {
@@ -302,6 +318,8 @@ export const getMastery = async (
  edges,
  progress: computeMasteryProgress(checkpoints),
  hubs: findHubNodes(nodes, edges),
+ effect: trial.effect,
+ retrievalState: trial.state,
  }
 }
 
@@ -327,29 +345,123 @@ export const buildMapContext = async (
  workspaceId: WorkspaceId
  personaId: AgentPersonaId
  repositoryId: RepositoryId | null
- excludeRunId?: AgentRunId
+ /**
+ * The run being started. Named rather than optional now: it is both the map to skip
+ * (a mastery run must not read back its own in-progress claims) **and** the subject
+ * of the trial record, and a caller that omitted it would silently produce a run
+ * nobody measured.
+ */
+ agentRunId: AgentRunId
  },
 ): Promise<string> => {
  const maps = (await deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId))
 .filter((map) => map.status === 'ready')
-.filter((map) => map.masteryRunId === null || map.masteryRunId !== input.excludeRunId)
+.filter((map) => map.masteryRunId === null || map.masteryRunId !== input.agentRunId)
 .filter((map) => map.repositoryId === null || map.repositoryId === input.repositoryId)
+
+ /**
+ * The effective retrieval state per map. One aggregate query for
+ * every candidate, rather than a query per map: this is on the dispatch path, and a
+ * persona with four subjects would otherwise pay four round trips before a run starts.
+ */
+ const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(
+ input.workspaceId,
+ maps.map((map) => map.id),
+)
 
  const rendered: string[] = []
  for (const map of maps) {
+ const effect = summarizeExpertiseEffect(tallies[map.id] ?? [])
+ const state = retrievalStateFor(map.retrievalOverride, effect.verdict)
+ const used = await deps.subjectMaps.countExpertiseUses(input.workspaceId, map.id)
+ const arm = trialAssignment(state, used)
+
+ // `off` — nothing offered and nothing recorded. See `trialAssignment`: writing
+ // withheld rows for an off map would inflate the baseline it is judged against and
+ // make the decision unreachable rather than reversible.
+ if (arm === null) continue
+
  const [nodes, edges] = await Promise.all([
  deps.subjectMaps.listNodes(input.workspaceId, map.id),
  deps.subjectMaps.listEdges(input.workspaceId, map.id),
  ])
  const selected = selectMapForContext(nodes, edges)
- const text = renderMapForPrompt(map, selected.nodes, selected.edges, {
+ const text =
+ arm === 'withheld'
+ ? ''
+: renderMapForPrompt(map, selected.nodes, selected.edges, {
  nodes: selected.elidedNodes,
  edges: selected.elidedEdges,
  })
+
+ /**
+ * Recorded for **both** arms, which is the whole measurement. A run deliberately
+ * denied a map it was eligible for is the baseline; without a row saying so, the
+ * comparison is against runs that were never candidates, which is not a baseline —
+ * it is a different population.
+ *
+ * Best-effort, like the retrieval it describes: a run whose measurement could not be
+ * written is worse recorded, not broken, and failing a start over a bookkeeping row
+ * would tie throughput to the least important write in the system.
+ */
+ try {
+ await deps.subjectMaps.recordExpertiseUse({
+ workspaceId: input.workspaceId,
+ mapId: map.id,
+ agentRunId: input.agentRunId,
+ arm,
+ nodesShown: arm === 'retrieved' ? selected.nodes.length: 0,
+ edgesShown: arm === 'retrieved' ? selected.edges.length: 0,
+ })
+ } catch {
+ // Deliberately swallowed — see above.
+ }
+
  if (text !== '') rendered.push(text)
  }
 
  return rendered.join('\n\n')
+}
+
+/**
+ * What one map's trial says so far, and what the platform is doing
+ * about it.
+ *
+ * Computed on every read rather than stored, for the reason in `expertise-trial.ts`: a
+ * map re-mastered at a newer revision is a different artifact, and a verdict written last
+ * month would keep answering for it.
+ */
+export const expertiseEffectFor = async (
+ deps: MasteryDeps,
+ input: { workspaceId: WorkspaceId; map: SubjectMap },
+): Promise<{ effect: ExpertiseEffect; state: RetrievalState }> => {
+ const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(input.workspaceId, [input.map.id])
+ const effect = summarizeExpertiseEffect(tallies[input.map.id] ?? [])
+ return { effect, state: retrievalStateFor(input.map.retrievalOverride, effect.verdict) }
+}
+
+/**
+ * A human's standing answer about whether a map is used.
+ *
+ * Promotion is a human act, and so is demotion: an operator watching a map produce bad
+ * advice should not have to wait for five more runs to agree with them. Clearing it hands
+ * the decision back to the measurement, which is a third act and not the same as `off`.
+ */
+export const setRetrievalOverride = async (
+ deps: MasteryDeps,
+ input: {
+ workspaceId: WorkspaceId
+ mapId: SubjectMapId
+ override: RetrievalOverride
+ },
+): Promise<SubjectMap> => {
+ const map = await deps.subjectMaps.setRetrievalOverride(
+ input.workspaceId,
+ input.mapId,
+ input.override,
+)
+ if (!map) throw new NotFoundError('SubjectMap')
+ return map
 }
 
 /**
@@ -390,7 +502,95 @@ export const invalidateMapsForMerge = async (
  return { invalidated }
 }
 
+export interface SubjectMapListing {
+ readonly map: SubjectMap
+ /** What the platform is doing with this map right now. */
+ readonly retrievalState: RetrievalState
+ /** How many decided runs are behind that, per arm — the evidence, in two numbers. */
+ readonly decided: { readonly retrieved: number; readonly withheld: number }
+}
+
+/**
+ * Every subject a persona holds a map of, with what the platform is doing with each.
+ *
+ * The state travels with the list rather than being fetched per map, because that is what
+ * makes an expertise **legible before it is used**: a badge that says "expert
+ * in this repository" while the platform is quietly withholding the map is the surface
+ * lying, and it is the same class of dishonesty as a canvas drawing an edge the runtime
+ * refuses. One aggregate query serves the whole list.
+ */
+const listingsFor = async (
+ deps: MasteryDeps,
+ workspaceId: WorkspaceId,
+ maps: readonly SubjectMap[],
+): Promise<SubjectMapListing[]> => {
+ const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(
+ workspaceId,
+ maps.map((map) => map.id),
+)
+ return maps.map((map) => {
+ const arms = tallies[map.id] ?? []
+ const effect = summarizeExpertiseEffect(arms)
+ return {
+ map,
+ retrievalState: retrievalStateFor(map.retrievalOverride, effect.verdict),
+ decided: {
+ retrieved: effect.retrieved.decided,
+ withheld: effect.withheld.decided,
+ },
+ }
+ })
+}
+
 export const listPersonaMaps = async (
  deps: MasteryDeps,
  input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
-): Promise<SubjectMap[]> => deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId)
+): Promise<SubjectMapListing[]> =>
+ listingsFor(
+ deps,
+ input.workspaceId,
+ await deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId),
+)
+
+export const listRepositoryMaps = async (
+ deps: MasteryDeps,
+ input: { workspaceId: WorkspaceId; repositoryId: RepositoryId },
+): Promise<SubjectMapListing[]> =>
+ listingsFor(
+ deps,
+ input.workspaceId,
+ await deps.subjectMaps.listMapsForRepository(input.workspaceId, input.repositoryId),
+)
+
+/**
+ * Which maps one run was handed, and which it was deliberately denied.
+ *
+ * The badge the operator asked for is built on this: "which agents adopted which
+ * expertise" is answerable per *persona* from the map list, and per *run* only from here
+ * — and the second is the stronger claim, because it says what a particular piece of work
+ * actually read rather than what its persona happens to hold.
+ */
+export const listExpertiseUsedByRun = async (
+ deps: MasteryDeps,
+ input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
+): Promise<
+ {
+ readonly map: SubjectMap
+ readonly arm: 'retrieved' | 'withheld'
+ readonly nodesShown: number
+ readonly edgesShown: number
+ }[]
+> => {
+ const uses = await deps.subjectMaps.listExpertiseUsesForRun(input.workspaceId, input.agentRunId)
+ const out: {
+ map: SubjectMap
+ arm: 'retrieved' | 'withheld'
+ nodesShown: number
+ edgesShown: number
+ }[] = []
+ for (const use of uses) {
+ const map = await deps.subjectMaps.getMap(input.workspaceId, asSubjectMapId(use.mapId))
+ if (map) out.push({ map, arm: use.arm, nodesShown: use.nodesShown, edgesShown: use.edgesShown })
+ }
+ return out
+}

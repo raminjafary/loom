@@ -43,6 +43,7 @@
  * test can name it.
  */
 
+import type { RetrievalOverride } from './expertise-trial.js'
 import type { AgentPersonaId, AgentRunId, RepositoryId, SubjectMapId, WorkspaceId } from './ids.js'
 import { UNTRUSTED_NOTE_CLOSE, UNTRUSTED_NOTE_OPEN } from './worker-notes.js'
 
@@ -171,6 +172,12 @@ export interface SubjectMap {
  /** The revision the map was derived at. Mastery: "a map with no commit is a rumour." */
  readonly revision: string
  readonly status: SubjectMapStatus
+ /**
+ * A human's standing answer about whether this map is retrieved into ordinary runs
+ *. Null hands the decision to the measurement — a third state, and
+ * not the same as `'off'`: one says "I have decided", the other says "keep measuring".
+ */
+ readonly retrievalOverride: RetrievalOverride
  /** The mastery run that produced it, for attribution and for the audit trail. */
  readonly masteryRunId: AgentRunId | null
  readonly createdAt: Date
