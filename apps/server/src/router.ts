@@ -47,6 +47,7 @@ import {
  listRunners,
  listRunsNeedingAttention,
  getMastery,
+ curateMap,
  listExpertiseUsedByRuns,
  listPersonaMaps,
  listRepositoryMaps,
@@ -452,6 +453,15 @@ export const router = os.router({
  listRepositoryMaps(context.deps, {
  workspaceId: context.principal.workspaceId,
  repositoryId: asRepositoryId(input.repositoryId),
+ }),
+),
+),
+
+ curate: os.mastery.curate.handler(({ context, input }) =>
+ guard( =>
+ curateMap(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ mapId: asSubjectMapId(input.mapId),
  }),
 ),
 ),

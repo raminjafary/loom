@@ -203,6 +203,12 @@ export interface MapNode {
  /** Bi-temporal: set rather than deleted when superseded. */
  readonly invalidatedAt: Date | null
  readonly invalidatedReason: string | null
+ /**
+ * A curation pass's intent to retire this claim. Null when nothing has
+ * been proposed — which is every claim, most of the time.
+ */
+ readonly retirementProposedAt: Date | null
+ readonly retirementReason: string | null
 }
 
 export interface MapEdge {

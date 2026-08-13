@@ -874,6 +874,17 @@ export const subjectMapNode = pgTable(
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
  invalidatedReason: text('invalidated_reason'),
+ /**
+ * A curation pass's intent to retire this claim.
+ *
+ * Deleting memory is the one self-modification with no diff to review, so a pass
+ * writes down what it means to drop and drops it on the next pass unless something
+ * contradicts it in between. Two columns rather than a side table because a proposal
+ * is a property of the claim and is cleared by the same write that acts on it — a
+ * table would let a proposal outlive the node it describes.
+ */
+ retirementProposedAt: timestamp('retirement_proposed_at', { withTimezone: true }),
+ retirementReason: text('retirement_reason'),
  },
  (t) => [
  uniqueIndex('subject_map_node_live_key_idx')

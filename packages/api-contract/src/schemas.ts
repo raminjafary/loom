@@ -361,6 +361,15 @@ export const MapNodeSchema = z.object({
  /** Set rather than deleted when superseded — history, not absence. */
  invalidatedAt: z.date.nullable,
  invalidatedReason: z.string.nullable,
+ /**
+ * A curation pass intends to retire this claim on its next run.
+ *
+ * On the wire because that is the whole point of proposing first: deleting memory is
+ * the one self-modification with no diff to review, and a proposal nobody can see is
+ * the same as no proposal at all.
+ */
+ retirementProposedAt: z.date.nullable,
+ retirementReason: z.string.nullable,
 })
 
 export const MapEdgeSchema = z.object({

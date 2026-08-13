@@ -297,6 +297,28 @@ const setMapRetrieval = async (input: { mapId: string; override: 'on' | 'off' | 
  await loadMastery(input.mapId)
 }
 
+/**
+ * What the last curation pass did, for the panel to report.
+ *
+ * Held here rather than in the panel because the panel is re-rendered whenever the map
+ * reloads, and a report that vanished the moment its own effect landed would be a result
+ * a human never got to read.
+ */
+const masteryCuration = ref<{
+ checked: number
+ kept: number
+ retired: number
+ proposed: number
+ withdrawn: number
+} | null>(null)
+
+const curateMap = async (mapId: string) => {
+ masteryCuration.value = await agent.curateMap(mapId)
+ // Reloaded, because a pass changes what the map holds — a report saying two claims were
+ // retired above a graph still drawing them is the surface disagreeing with itself.
+ await loadMastery(mapId)
+}
+
 const composerOpen = ref(false)
 
 /**
@@ -1057,7 +1079,9 @@ onBeforeUnmount( => {
  @select-map="loadMastery"
  @refresh-maps=" => masteryPersonaId && selectExpertisePersona(masteryPersonaId)"
  @master="startMastery"
+:mastery-curation="masteryCuration"
  @set-retrieval="setMapRetrieval"
+ @curate="curateMap"
  @create-pairing-token="(name) => agent.createPairingToken(name)"
  @remove-runner="(runnerId, done) => void agent.removeRunner(runnerId).then(done)"
  @unbind="(input, done) => void agent.unbindRepository(input).then(done)"

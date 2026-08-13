@@ -6,6 +6,8 @@ import {
  asSubjectMapId,
  computeMasteryProgress,
  findHubNodes,
+ proposeRetirements,
+ splitProposals,
  retrievalStateFor,
  summarizeExpertiseEffect,
  trialAssignment,
@@ -17,6 +19,7 @@ import {
  type AgentRunId,
  type MapEdge,
  type MapNode,
+ type CurationReport,
  type ExpertiseEffect,
  type MapSubjectKind,
  type MasteryProgress,
@@ -27,7 +30,11 @@ import {
  type SubjectMapId,
  type WorkspaceId,
 } from '@loom/domain'
-import type { AgentRunRepositoryPort, SubjectMapRepositoryPort } from './agent-ports.js'
+import type {
+ AgentRunRepositoryPort,
+ SubjectMapRepositoryPort,
+ WorkspaceRunControlRepositoryPort,
+} from './agent-ports.js'
 
 /**
  * Mastery — how a persona comes to know a subject, and what a later run gets for it
@@ -551,6 +558,137 @@ export const listPersonaMaps = async (
  input.workspaceId,
  await deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId),
 )
+
+/**
+ * One curation pass over one map.
+ *
+ * **Nothing here asks a model**, which is the decision that shapes the rest. Every rule is
+ * computed from the graph and the revision the map is derived at, so the pass is on the
+ * trusted side of the provenance line and is free to re-run after every invalidation. A
+ * curation pass that asked a model what to forget would be a model editing the memory
+ * every future run reads — the poisoning risk wearing a maintenance label.
+ *
+ * **Trimming is a proposal until it has run once.** Deleting memory is the one
+ * self-modification with no diff to review, so the first pass writes down what it means
+ * to drop and the next one carries it out — unless something contradicted it in between,
+ * in which case the proposal is *withdrawn*. That withdrawal is what makes the window
+ * real rather than ceremonial.
+ */
+export const curateMap = async (
+ deps: MasteryDeps,
+ input: { workspaceId: WorkspaceId; mapId: SubjectMapId },
+): Promise<CurationReport> => {
+ const map = await deps.subjectMaps.getMap(input.workspaceId, input.mapId)
+ if (!map) throw new NotFoundError('SubjectMap')
+
+ const [nodes, edges] = await Promise.all([
+ deps.subjectMaps.listNodes(input.workspaceId, map.id),
+ deps.subjectMaps.listEdges(input.workspaceId, map.id),
+ ])
+
+ const live = nodes.filter((node) => node.invalidatedAt === null)
+ const proposals = proposeRetirements(live, edges, map.revision)
+ const alreadyProposed = new Set(
+ live.filter((node) => node.retirementProposedAt !== null).map((node) => node.id),
+)
+ const split = splitProposals(proposals, alreadyProposed)
+
+ /**
+ * Retired with the reason the *proposal* carried, not with a fresh one. The stored
+ * reason is what a human had the chance to disagree with, and rewriting it at the
+ * moment of the act would mean the observable window described something else.
+ */
+ for (const proposal of split.retire) {
+ await deps.subjectMaps.invalidateNodes(
+ input.workspaceId,
+ [proposal.nodeId],
+ proposal.detail,
+)
+ }
+ for (const proposal of split.propose) {
+ await deps.subjectMaps.proposeRetirement(
+ input.workspaceId,
+ [proposal.nodeId],
+ proposal.detail,
+)
+ }
+ if (split.withdraw.length > 0) {
+ await deps.subjectMaps.proposeRetirement(input.workspaceId, split.withdraw, null)
+ }
+
+ return {
+ checked: live.length,
+ kept: live.length - split.retire.length - split.propose.length,
+ retired: split.retire.length,
+ proposed: split.propose.length,
+ withdrawn: split.withdraw.length,
+ }
+}
+
+/**
+ * Curation across the workspace, gated on the platform being idle.
+ *
+ * Mastery is explicit that curation "never competes with work a human is waiting for", and
+ * that kill switch must stop it like any other agent-initiated work. Both are checked
+ * here rather than by the caller, because the caller is a timer and a timer cannot be
+ * trusted to remember a safety rule.
+ *
+ * `activeRuns` is passed in rather than read here so the one caller that already has the
+ * number — the background sweep, which reaps against the same list — does not fetch it
+ * twice.
+ */
+export const curateIdleMaps = async (
+ deps: MasteryDeps & { runControl: WorkspaceRunControlRepositoryPort },
+ input: { workspaceId: WorkspaceId; activeRuns: number },
+): Promise<{ maps: number; report: CurationReport }> => {
+ const empty: CurationReport = { checked: 0, kept: 0, retired: 0, proposed: 0, withdrawn: 0 }
+
+ // Idle means idle. A workspace with anything running is a workspace where a human is
+ // waiting for something, and this pass is never that thing.
+ if (input.activeRuns > 0) return { maps: 0, report: empty }
+ if ((await deps.runControl.get(input.workspaceId)).paused) return { maps: 0, report: empty }
+
+ const maps = (await deps.subjectMaps.listAllMaps(input.workspaceId)).filter(
+ (map) => map.status === 'ready',
+)
+
+ let total = {...empty }
+ for (const map of maps) {
+ const report = await curateMap(deps, { workspaceId: input.workspaceId, mapId: map.id })
+ total = {
+ checked: total.checked + report.checked,
+ kept: total.kept + report.kept,
+ retired: total.retired + report.retired,
+ proposed: total.proposed + report.proposed,
+ withdrawn: total.withdrawn + report.withdrawn,
+ }
+ }
+ return { maps: maps.length, report: total }
+}
+
+/**
+ * The idle sweep, across every workspace holding a map.
+ *
+ * Process-wide like the reaper, and gated per workspace rather than globally: one busy
+ * tenant must not stop another's memory being maintained, and "idle" is a property of the
+ * workspace whose runs are competing for attention.
+ */
+export const curateIdleWorkspaces = async (
+ deps: MasteryDeps & { runControl: WorkspaceRunControlRepositoryPort },
+): Promise<{ workspaces: number; maps: number; retired: number; proposed: number }> => {
+ const workspaces = await deps.subjectMaps.listWorkspacesWithMaps
+ let maps = 0
+ let retired = 0
+ let proposed = 0
+ for (const workspaceId of workspaces) {
+ const active = await deps.agentRuns.listActiveByWorkspace(workspaceId)
+ const result = await curateIdleMaps(deps, { workspaceId, activeRuns: active.length })
+ maps += result.maps
+ retired += result.report.retired
+ proposed += result.report.proposed
+ }
+ return { workspaces: workspaces.length, maps, retired, proposed }
+}
 
 export const listWorkspaceMaps = async (
  deps: MasteryDeps,

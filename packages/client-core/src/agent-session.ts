@@ -290,6 +290,17 @@ export interface AgentSession {
  /** A human's standing answer about whether a map is used. */
  setMapRetrieval(mapId: string, override: 'on' | 'off' | null): Promise<void>
  /**
+ * One curation pass over one map. Returns what it did, which is the whole
+ * content of the act: what was re-checked, kept, retired, and proposed for next time.
+ */
+ curateMap(mapId: string): Promise<{
+ checked: number
+ kept: number
+ retired: number
+ proposed: number
+ withdrawn: number
+ } | null>
+ /**
  * Starts a mastery run, which
  * means it is subject to the concurrency limit, the kill switch and the budget cap
  * like anything else. Returns null and sets the session error on refusal, the same
@@ -1033,6 +1044,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  return await options.api.mastery.listForRepository({ repositoryId })
  } catch {
  return []
+ }
+ },
+
+ async curateMap(mapId) {
+ patch({ error: null })
+ try {
+ return await options.api.mastery.curate({ mapId })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return null
  }
  },
 

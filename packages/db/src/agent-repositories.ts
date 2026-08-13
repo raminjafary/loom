@@ -23,6 +23,7 @@ import {
  asThreadId,
  primaryToolArgument,
  type ExpertiseArmTally,
+ type WorkspaceId,
 } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
@@ -1461,6 +1462,14 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  return rows.map((row) => toSubjectMap(row as SubjectMapRow))
  },
 
+ async listWorkspacesWithMaps {
+ const rows = await db
+.selectDistinct({ workspaceId: subjectMap.workspaceId })
+.from(subjectMap)
+.where(eq(subjectMap.status, 'ready'))
+ return rows.map((row) => row.workspaceId as WorkspaceId)
+ },
+
  async listAllMaps(workspaceId) {
  const rows = await db
 .select
@@ -1630,6 +1639,27 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  and(
  eq(subjectMapNode.workspaceId, workspaceId),
  inArray(subjectMapNode.id, [...nodeIds]),
+ isNull(subjectMapNode.invalidatedAt),
+),
+)
+.returning({ id: subjectMapNode.id })
+ return rows.length
+ },
+
+ async proposeRetirement(workspaceId, nodeIds, reason) {
+ if (nodeIds.length === 0) return 0
+ const rows = await db
+.update(subjectMapNode)
+.set({
+ retirementProposedAt: reason === null ? null: new Date,
+ retirementReason: reason,
+ })
+.where(
+ and(
+ eq(subjectMapNode.workspaceId, workspaceId),
+ inArray(subjectMapNode.id, [...nodeIds]),
+ // Never re-stamps a claim already retired: a proposal to retire something that
+ // is gone would keep resurfacing in every report as work nobody can do.
  isNull(subjectMapNode.invalidatedAt),
 ),
 )

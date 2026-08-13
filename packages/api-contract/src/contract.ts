@@ -346,6 +346,26 @@ export const contract = {
  listAll: oc.output(z.array(SubjectMapListingSchema)),
 
  /**
+ * One curation pass over one map.
+ *
+ * Offered to a human as well as run on the idle sweep, because a pass is cheap,
+ * computed rather than asked of a model, and the report is exactly what someone
+ * looking at a map wants: what was re-checked, what was kept, what was retired, and
+ * what has been *proposed* for retirement next time.
+ */
+ curate: oc
+.input(z.object({ mapId: z.string }))
+.output(
+ z.object({
+ checked: z.number.int,
+ kept: z.number.int,
+ retired: z.number.int,
+ proposed: z.number.int,
+ withdrawn: z.number.int,
+ }),
+),
+
+ /**
  * Which maps one run was handed, and which it was deliberately denied.
  *
  * The stronger half of the operator's "which agents adopted which expertise": a

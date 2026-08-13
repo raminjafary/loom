@@ -34,6 +34,8 @@ const node = (over: Partial<MapNode> & Pick<MapNode, 'id' | 'key'>): MapNode => 
  createdAt: new Date('2026-08-01T00:00:00Z'),
  invalidatedAt: null,
  invalidatedReason: null,
+ retirementProposedAt: null,
+ retirementReason: null,
 ...over,
 })
 

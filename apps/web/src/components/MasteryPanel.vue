@@ -31,6 +31,14 @@ import type {
  */
 
 const props = defineProps<{
+ /** What the last curation pass did, when a human ran one from here. */
+ curation?: {
+ checked: number
+ kept: number
+ retired: number
+ proposed: number
+ withdrawn: number
+ } | null
  personas: AgentPersona[]
  personaId: string | null
  repositories: Repository[]
@@ -62,6 +70,8 @@ const emit = defineEmits<{
  * hands the decision back to the measurement, which is a third act and a real state.
  */
  'set-retrieval': [input: { mapId: string; override: 'on' | 'off' | null }]
+ /** One curation pass over this map. */
+ curate: [mapId: string]
 }>
 
 /**
@@ -151,6 +161,16 @@ const graph = computed( => (props.view ? buildMapGraph(props.view): null))
 const undrawn = computed( => (props.view ? undrawnNodeCount(props.view): 0))
 const coverage = computed( => (props.view ? coveragePercent(props.view): null))
 const state = computed( => (props.view ? describeMasteryState(props.view): ''))
+
+/**
+ * Claims a pass intends to retire. Live only — a proposal against something already
+ * retired would be work nobody can do, resurfacing in every report.
+ */
+const proposed = computed( =>
+ (props.view?.nodes ?? []).filter(
+ (node) => node.invalidatedAt === null && node.retirementProposedAt !== null,
+),
+)
 
 const selected = computed<MapGraphNode | null>(
  => graph.value?.nodes.find((node) => node.key === selectedKey.value) ?? null,
@@ -435,6 +455,35 @@ const dashFor = (provenance: string): string | undefined =>
  Let the measurement decide
  </button>
  </div>
+ </div>
+
+ <!--
+ The curation, where the map is being read. The proposals are the point: deleting
+ memory is the one self-modification with no diff to review, so what a pass *means*
+ to drop is shown before it drops it — a proposal nobody can see is the same as no
+ proposal at all.
+ -->
+ <div class="curation">
+ <div class="curation-head">
+ <strong>Upkeep</strong>
+ <button type="button" @click="emit('curate', view.map.id)">Re-check now</button>
+ </div>
+ <p v-if="proposed.length > 0" class="sub">
+ {{ proposed.length }} claim(s) are proposed for retirement and will be retired on
+ the next pass unless something contradicts that first:
+ </p>
+ <ul v-if="proposed.length > 0" class="proposals">
+ <li v-for="node in proposed":key="node.id">
+ <span class="pkey">{{ node.label }}</span>
+ <span class="preason">{{ node.retirementReason }}</span>
+ </li>
+ </ul>
+ <p v-else class="sub">Nothing is proposed for retirement.</p>
+ <p v-if="curation" class="sub">
+ Last pass: {{ curation.checked }} checked, {{ curation.kept }} kept,
+ {{ curation.retired }} retired, {{ curation.proposed }} newly proposed,
+ {{ curation.withdrawn }} withdrawn.
+ </p>
  </div>
 
  <div class="legend">
@@ -876,5 +925,55 @@ svg {
  font: inherit;
  font-size: 0.75rem;
  resize: vertical;
+}
+
+.curation {
+ display: flex;
+ flex-direction: column;
+ gap: 0.3rem;
+ padding: 0.5rem 0.6rem;
+ border: 1px solid var(--border);
+ border-radius: 0.4rem;
+}
+
+.curation-head {
+ display: flex;
+ align-items: baseline;
+ justify-content: space-between;
+ gap: 0.5rem;
+}
+
+.curation-head button {
+ padding: 0.12rem 0.45rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text-muted);
+ font: inherit;
+ font-size: 0.7rem;
+ cursor: pointer;
+}
+
+.proposals {
+ margin: 0;
+ padding: 0;
+ list-style: none;
+ display: flex;
+ flex-direction: column;
+ gap: 0.15rem;
+ font-size: 0.72rem;
+}
+
+.proposals li {
+ display: flex;
+ gap: 0.4rem;
+}
+
+.proposals.pkey {
+ color: var(--text);
+}
+
+.proposals.preason {
+ color: var(--text-faint);
 }
 </style>

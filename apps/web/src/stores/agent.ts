@@ -49,6 +49,7 @@ export const useAgentStore = defineStore('agent', => {
  listRepositoryMaps: (repositoryId: string) => session.listRepositoryMaps(repositoryId),
  /** Which maps one run read, and which it was deliberately denied. */
  listWorkspaceMaps: => session.listWorkspaceMaps,
+ curateMap: (mapId: string) => session.curateMap(mapId),
  listExpertiseUsedByRuns: (agentRunIds: readonly string[]) =>
  session.listExpertiseUsedByRuns(agentRunIds),
  setMapRetrieval: (mapId: string, override: 'on' | 'off' | null) =>

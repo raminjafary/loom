@@ -43,6 +43,14 @@ const props = defineProps<{
  masteryView: MasteryView | null
  masteryLoading: boolean
  masteryError: string | null
+ /** What the last curation pass did. */
+ masteryCuration: {
+ checked: number
+ kept: number
+ retired: number
+ proposed: number
+ withdrawn: number
+ } | null
 }>
 
 const repositoryNames = computed( =>
@@ -65,6 +73,8 @@ const emit = defineEmits<{
  ]
  /** Portable expertise: a human's standing answer about whether a map is used. */
  'set-retrieval': [input: { mapId: string; override: 'on' | 'off' | null }]
+ /** One curation pass over one map. */
+ curate: [mapId: string]
  'create-pairing-token': [name: string]
  bind: [input: { runnerId: string; path: string; displayName: string }]
  'create-repository': [
@@ -227,6 +237,8 @@ onMounted( => scrim.value?.focus)
  @refresh="emit('refresh-maps')"
  @master="(input) => emit('master', input)"
  @set-retrieval="(input) => emit('set-retrieval', input)"
+:curation="masteryCuration"
+ @curate="(mapId) => emit('curate', mapId)"
  />
  </template>
 

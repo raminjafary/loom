@@ -985,6 +985,14 @@ export interface SubjectMapRepositoryPort {
  */
  listAllMaps(workspaceId: WorkspaceId): Promise<SubjectMap[]>
  /**
+ * Workspaces holding at least one map worth curating.
+ *
+ * The idle sweep is process-wide and has no workspace registry to walk — the reaper
+ * gets away with `listAllActive` because a run carries its workspace, and a curation
+ * pass is per map. One `distinct` beats inventing a second way to enumerate tenants.
+ */
+ listWorkspacesWithMaps: Promise<WorkspaceId[]>
+ /**
  * Writes one fragment, bi-temporally.
  *
  * A live node whose content is unchanged is *re-confirmed* at the new revision rather
@@ -1009,6 +1017,18 @@ export interface SubjectMapRepositoryPort {
  workspaceId: WorkspaceId,
  nodeIds: readonly string[],
  reason: string,
+): Promise<number>
+ /**
+ * Writes down what a curation pass intends to retire.
+ *
+ * `reason` null withdraws the proposal, which is a distinct act and the half that makes
+ * the window real: a proposal that stopped being true is taken back rather than carried
+ * out.
+ */
+ proposeRetirement(
+ workspaceId: WorkspaceId,
+ nodeIds: readonly string[],
+ reason: string | null,
 ): Promise<number>
  appendCheckpoint(input: {
  workspaceId: WorkspaceId

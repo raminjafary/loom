@@ -744,6 +744,8 @@ export interface SubjectMapRow {
 }
 
 export interface SubjectMapNodeRow {
+ retirementProposedAt?: Date | null
+ retirementReason?: string | null
  id: string
  workspaceId: string
  mapId: string
@@ -826,6 +828,10 @@ export const toMapNode = (row: SubjectMapNodeRow): MapNode => {
  createdAt: row.createdAt,
  invalidatedAt: row.invalidatedAt,
  invalidatedReason: row.invalidatedReason,
+ // Null for every row written before curation existed, which is the same state as
+ // "nothing has been proposed" — the honest default, and the ordinary one.
+ retirementProposedAt: row.retirementProposedAt ?? null,
+ retirementReason: row.retirementReason ?? null,
  }
 }
 

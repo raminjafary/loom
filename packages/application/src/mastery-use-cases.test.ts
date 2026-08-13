@@ -23,6 +23,8 @@ import {
  PENDING_REVISION,
  recordMapFragment,
  resolveMapRevision,
+ curateIdleMaps,
+ curateMap,
  getMastery,
  listExpertiseUsedByRuns,
  listPersonaMaps,
@@ -132,6 +134,8 @@ class FakeMaps implements SubjectMapRepositoryPort {
  paths: node.paths,
  observationCount: node.observationCount,
  derivedAtRevision: input.revision,
+ retirementProposedAt: null,
+ retirementReason: null,
  createdAt: new Date,
  invalidatedAt: null,
  invalidatedReason: null,
@@ -182,8 +186,30 @@ class FakeMaps implements SubjectMapRepositoryPort {
  return checkpoint
  }
 
+ async proposeRetirement(
+ _w: typeof workspaceId,
+ nodeIds: readonly string[],
+ reason: string | null,
+) {
+ let touched = 0
+ this.nodes = this.nodes.map((node) => {
+ if (!nodeIds.includes(node.id) || node.invalidatedAt !== null) return node
+ touched += 1
+ return {
+...node,
+ retirementProposedAt: reason === null ? null: new Date,
+ retirementReason: reason,
+ }
+ })
+ return touched
+ }
+
  async listAllMaps(_w: typeof workspaceId) {
  return this.maps
+ }
+
+ async listWorkspacesWithMaps {
+ return [...new Set(this.maps.filter((map) => map.status === 'ready').map((m) => m.workspaceId))]
  }
 
  async listCheckpoints(_w: typeof workspaceId, mapId: SubjectMap['id']) {
@@ -359,6 +385,8 @@ describe('recordMapFragment — the model may not write trusted structure', => {
  createdAt: new Date,
  invalidatedAt: new Date,
  invalidatedReason: 'superseded',
+ retirementProposedAt: null,
+ retirementReason: null,
  })
  }
 
@@ -714,5 +742,122 @@ describe('the expertise trial', => {
  const read = uses.find((use) => use.agentRunId === 'b')
  expect(read?.arm).toBe('retrieved')
  expect(read?.map.subjectRef).toBe('flight')
+ })
+})
+
+/**
+ * Idle curation.
+ *
+ * The domain tests cover which claims a pass would propose. These cover the half that
+ * decides whether it is safe: that the first pass only *proposes*, that the second
+ * carries it out, that a proposal which stopped being true is withdrawn, and that the
+ * whole thing declines to run while a human is waiting for something.
+ */
+describe('curateMap and the idle gate', => {
+ const openReadyMap = async (revision: string) => {
+ const map = await openMap(deps, {
+ workspaceId,
+ personaId,
+ subjectKind: 'repository',
+ repositoryId,
+ subjectRef: 'flight',
+ revision,
+ masteryRunId: runId,
+ })
+ await maps.setStatus(workspaceId, map.id, 'ready')
+ return map
+ }
+
+ it('proposes on the first pass and retires nothing', async => {
+ const map = await openReadyMap('rev1')
+ await recordMapFragment(deps, {
+ workspaceId,
+ agentRunId: runId,
+ fragment: { nodes: [{ key: 'guess', kind: 'concept', label: 'A guess' }] },
+ })
+ // Re-mastered at a newer revision without re-confirming the claim.
+ await maps.upsertMap({
+ workspaceId,
+ personaId,
+ subjectKind: 'repository',
+ repositoryId,
+ subjectRef: 'flight',
+ revision: 'rev2',
+ status: 'ready',
+ masteryRunId: runId,
+ })
+
+ const first = await curateMap(deps, { workspaceId, mapId: map.id })
+ expect(first).toMatchObject({ checked: 1, retired: 0, proposed: 1 })
+ expect(maps.nodes[0]?.invalidatedAt).toBeNull
+ expect(maps.nodes[0]?.retirementReason).toContain('not re-confirmed')
+
+ const second = await curateMap(deps, { workspaceId, mapId: map.id })
+ expect(second).toMatchObject({ retired: 1, proposed: 0 })
+ expect(maps.nodes[0]?.invalidatedAt).not.toBeNull
+ // Retired with the reason the *proposal* carried — that is what a human had the
+ // chance to disagree with.
+ expect(maps.nodes[0]?.invalidatedReason).toContain('not re-confirmed')
+ })
+
+ it('withdraws a proposal that stopped being true instead of carrying it out', async => {
+ const map = await openReadyMap('rev1')
+ await recordMapFragment(deps, {
+ workspaceId,
+ agentRunId: runId,
+ fragment: { nodes: [{ key: 'guess', kind: 'concept', label: 'A guess' }] },
+ })
+ await maps.upsertMap({
+ workspaceId,
+ personaId,
+ subjectKind: 'repository',
+ repositoryId,
+ subjectRef: 'flight',
+ revision: 'rev2',
+ status: 'ready',
+ masteryRunId: runId,
+ })
+ await curateMap(deps, { workspaceId, mapId: map.id })
+
+ // A later mastery run re-confirms it at the current revision, which is exactly the
+ // case the window exists for.
+ maps.nodes = maps.nodes.map((node) => ({...node, derivedAtRevision: 'rev2' }))
+
+ const next = await curateMap(deps, { workspaceId, mapId: map.id })
+ expect(next).toMatchObject({ retired: 0, withdrawn: 1 })
+ expect(maps.nodes[0]?.invalidatedAt).toBeNull
+ expect(maps.nodes[0]?.retirementProposedAt).toBeNull
+ })
+
+ /**
+ * Mastery: "idle means idle — curation never competes with work a human is waiting for."
+ * Checked in the use case rather than by its caller, because the caller is a timer and
+ * a timer cannot be trusted to remember a safety rule.
+ */
+ it('declines to run while anything in the workspace is running', async => {
+ await openReadyMap('rev1')
+ const result = await curateIdleMaps(
+ {...deps, runControl: { get: async => ({ paused: false }) } as never },
+ { workspaceId, activeRuns: 1 },
+)
+ expect(result.maps).toBe(0)
+ })
+
+ it('declines to run while the kill switch is down', async => {
+ await openReadyMap('rev1')
+ const result = await curateIdleMaps(
+ {...deps, runControl: { get: async => ({ paused: true }) } as never },
+ { workspaceId, activeRuns: 0 },
+)
+ expect(result.maps).toBe(0)
+ })
+
+ it('runs over every ready map when nothing is competing with it', async => {
+ await openReadyMap('rev1')
+ const result = await curateIdleMaps(
+ {...deps, runControl: { get: async => ({ paused: false }) } as never },
+ { workspaceId, activeRuns: 0 },
+)
+ expect(result.maps).toBe(1)
  })
 })

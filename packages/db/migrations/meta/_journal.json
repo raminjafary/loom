@@ -267,6 +267,13 @@
       "when": 1786578882212,
       "tag": "0037_white_terror",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1786583057127,
+      "tag": "0038_bitter_boomer",
+      "breakpoints": true
     }
   ]
 }

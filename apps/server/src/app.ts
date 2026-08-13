@@ -1,5 +1,6 @@
 import {
  advanceMergeQueue,
+ curateIdleWorkspaces,
  expireStaleApprovals,
  reapStuckRuns,
  seedBuiltinPersonas,
@@ -167,6 +168,17 @@ export const buildApp = async (
  // after the reapers means a run this sweep just failed is already
  // terminal when the queue looks at its entry.
  await advanceMergeQueue(deps, { mergeStuckMs: config.MERGE_STUCK_TIMEOUT_MS })
+ /**
+ * Curation, last and only while nothing is running.
+ *
+ * Mastery is explicit that a curation pass "never competes with work a human is
+ * waiting for", so the gate is the count of active runs — checked *after* the
+ * reapers, which is what makes it meaningful: a run this sweep just failed is
+ * already terminal by the time it is counted. `curateIdleMaps` re-checks the
+ * kill switch itself, because a timer cannot be trusted to remember a safety
+ * rule.
+ */
+ await curateIdleWorkspaces(deps)
  }).catch((error) => {
  fastify.log.error({ error }, 'background safety sweep failed')
  })
