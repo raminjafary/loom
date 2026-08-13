@@ -103,6 +103,14 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  ledger: z.string.optional,
  error: z.string.optional,
  }),
+ /** The atlas's leads, in answer to the agent's `atlas_request`. */
+ z.object({
+ t: z.literal('atlas_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ leads: z.string.optional,
+ error: z.string.optional,
+ }),
  /**
  * A human's reply to `ask_human`. `answer` absent means nobody
  * answered — denied, or the SLA expired — and the tool must still return, or the
@@ -184,6 +192,12 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  }),
  /** The agent asking for its tree's ledger mid-run, answered by `notes_result`. */
  z.object({ t: z.literal('notes_request'), requestId: z.string }),
+ /**
+ * What other subjects in this workspace know about a topic.
+ * A request rather than something handed over at start, because the atlas is unbounded
+ * by construction and a prompt is not — see `atlas-tool.ts`.
+ */
+ z.object({ t: z.literal('atlas_request'), requestId: z.string, topic: z.string.max(500) }),
  /**
  * One map fragment the agent wrote, crossing out as it is
  * written for the same reason a note does — and more so, since a mastery run is the

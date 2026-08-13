@@ -1068,6 +1068,36 @@ export interface SubjectMapRepositoryPort {
  edges: readonly MapFragmentEdge[]
  }): Promise<{ nodesWritten: number; edgesWritten: number; superseded: number }>
  listNodes(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<MapNode[]>
+ /**
+ * Every live `concept` node in the workspace, with the subject and persona it came from
+ * — the atlas's read side.
+ *
+ * One statement rather than a map list followed by a node read per map, because the
+ * number of maps grows with the number of projects and this is called from a *tool* a
+ * run may reach for at any moment. A per-map loop would put an unbounded number of
+ * round-trips behind one model call.
+ *
+ * Concepts only, and that is the boundary rather than an optimisation: "extracted
+ * structure never crosses a subject boundary", so a file or a symbol from another
+ * repository has no business being offered here at all. What crosses is a concept, which
+ * is `inferred` by construction.
+ *
+ * `excludeRepositoryId` drops the run's own subject, which it has already been handed.
+ */
+ listConceptsAcrossSubjects(
+ workspaceId: WorkspaceId,
+ options: { excludeRepositoryId?: RepositoryId; limit: number },
+): Promise<
+ {
+ nodeId: string
+ mapId: SubjectMapId
+ label: string
+ summary: string
+ subjectRef: string
+ personaName: string
+ createdAt: Date
+ }[]
+ >
  listEdges(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<MapEdge[]>
  /** Live counts, which is what `MAX_NODES_PER_MAP` bounds. */
  countLive(

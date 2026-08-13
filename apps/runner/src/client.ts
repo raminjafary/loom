@@ -47,6 +47,7 @@ import {
  shouldCheckpoint,
  createCoverageTracker,
 } from './mastery-progress.js'
+import { createAtlasTool } from './atlas-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
@@ -116,6 +117,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const pendingHandoffs = new Map<
  string,
  (result: { ok: boolean; reason?: string | undefined }) => void
+ >
+ /**
+ * `look_across_projects` round-trips. Same shape and bound as
+ * a note read, because it is the same kind of thing: a question to the platform whose
+ * answer the platform renders.
+ */
+ const pendingAtlasReads = new Map<
+ string,
+ (result: { ok: boolean; leads?: string | undefined; error?: string | undefined }) => void
  >
  /** `ask_human` round-trips, keyed by the id the answer comes back on. */
  const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
@@ -597,6 +607,35 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  }
 
+ /**
+ * The atlas channel, given to every ordinary run and to a Planner.
+ *
+ * Not a capability, for the same reason a note is not: asking what another subject
+ * recorded has no effect the platform does not decide for itself, and the answer is
+ * data the platform assembled and fenced. What it deliberately is *not* is context —
+ * see `atlas-tool.ts`, where the reason is written down.
+ */
+ const onAtlasRequest = (
+ topic: string,
+): Promise<{ ok: true; leads: string } | { ok: false; error: string }> => {
+ const requestId = nextNoteRequestId
+ send({ type: 'atlas_requested', runId: input.runId, requestId, topic })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingAtlasReads.delete(requestId)
+ resolve({ ok: false, error: 'the platform did not answer in time' })
+ }, NOTE_TIMEOUT_MS)
+ pendingAtlasReads.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok
+ ? { ok: true, leads: result.leads ?? '' }
+: { ok: false, error: result.error ?? 'the platform could not read it' },
+)
+ })
+ })
+ }
+
  // Skills are written into the run's HOME before the SDK starts, so the
  // registry — not the clone — is where a run's skills come from. HOME is
  // run-scoped and destroyed with the run, so nothing outlives it.
@@ -610,6 +649,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // The notes channel is given to every run, planner included: a note is not a
  // capability, so it does not weaken `tools: []` (see notes-tool.ts).
  const notesTool = createNotesTool({ writeNote: onNote, readNotes: onNotesRequest })
+ const atlasTool = createAtlasTool({ lookAcross: onAtlasRequest })
  /**
  * The mapping channel, present **only on a mastery run**.
  *
@@ -752,6 +792,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  ? { plannerTool: { server: deltaTool.server, toolName: PLAN_DELTA_TOOL_NAME } }
 : {}),
  notesTool,
+ atlasTool,
  handoffTool,
 ...(mapTool ? { mapTool }: {}),
  questionTool: questionTool.server,
@@ -847,6 +888,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 : {}),
  onNote,
  onNotesRequest,
+ onAtlasRequest,
 ...(mapTool
  ? {
  onMapWrite: (fragment: Record<string, unknown>) =>
@@ -1336,6 +1378,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const resolve = pendingNoteReads.get(frame.requestId)
  if (resolve) {
  pendingNoteReads.delete(frame.requestId)
+ resolve(frame)
+ }
+ return
+ }
+
+ case 'atlas_result': {
+ const resolve = pendingAtlasReads.get(frame.requestId)
+ if (resolve) {
+ pendingAtlasReads.delete(frame.requestId)
  resolve(frame)
  }
  return

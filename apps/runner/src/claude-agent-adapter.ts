@@ -12,6 +12,7 @@ import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
 import { MAP_SERVER_NAME, MAP_TOOL_NAMES } from './map-tool.js'
 import { HANDOFF_SERVER_NAME, HANDOFF_TOOL_NAMES } from './handoff-tool.js'
+import { ATLAS_SERVER_NAME, ATLAS_TOOL_NAMES } from './atlas-tool.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
 import { PLANNER_SERVER_NAME } from './planner-tool.js'
@@ -165,6 +166,12 @@ export interface RunAgentOptions {
  */
  readonly notesTool?: McpSdkServerConfigWithInstance
  /**
+ * The atlas channel — what *other* subjects in this workspace know,
+ * fetched on demand. Optional like the rest; see `atlas-tool.ts` for why it is a tool
+ * and not context.
+ */
+ readonly atlasTool?: McpSdkServerConfigWithInstance
+ /**
  * `ask_human`. Present for every run the
  * platform starts, including a Planner: asking is not a capability, and a
  * `tools: []` Planner still holds no filesystem and no shell.
@@ -301,6 +308,7 @@ export const buildQueryOptions = (
  | 'resumeSessionId'
  | 'plannerTool'
  | 'notesTool'
+ | 'atlasTool'
  | 'questionTool'
  | 'mapTool'
  | 'handoffTool'
@@ -315,6 +323,7 @@ export const buildQueryOptions = (
  if (options.plannerTool) mcpServers[PLANNER_SERVER_NAME] = options.plannerTool.server
  // The shared-context channel, in-process for the same reason.
  if (options.notesTool) mcpServers[NOTES_SERVER_NAME] = options.notesTool
+ if (options.atlasTool) mcpServers[ATLAS_SERVER_NAME] = options.atlasTool
  if (options.mapTool) mcpServers[MAP_SERVER_NAME] = options.mapTool
  if (options.handoffTool) mcpServers[HANDOFF_SERVER_NAME] = options.handoffTool
  if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
@@ -348,6 +357,7 @@ export const buildQueryOptions = (
  const platformTools = [
 ...(options.plannerTool ? [options.plannerTool.toolName]: []),
 ...(options.notesTool ? NOTES_TOOL_NAMES: []),
+...(options.atlasTool ? ATLAS_TOOL_NAMES: []),
 ...(options.mapTool ? MAP_TOOL_NAMES: []),
 ...(options.handoffTool ? HANDOFF_TOOL_NAMES: []),
 ...(options.questionTool ? [ASK_HUMAN_TOOL_NAME]: []),

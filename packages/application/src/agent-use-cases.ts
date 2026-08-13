@@ -121,6 +121,7 @@ import { conveneCrunchForDrift } from './colosseum-use-cases.js'
 import {
  buildMapContext,
  closeMap,
+ findAtlasLeads,
  invalidateMapsForMerge,
  openMap,
  PENDING_REVISION,
@@ -695,6 +696,30 @@ export const seedBuiltinTeams = async (
  fleet,
  })
  }
+}
+
+/**
+ * The atlas, for one run.
+ *
+ * Here rather than in `mastery-use-cases` because it needs the *run* — specifically the
+ * repository it is working on, which is the one subject its answer must leave out. A run
+ * has already been handed that map, and repeating it here would spend the window twice on
+ * one thing while making a duplicate look like a discovery.
+ *
+ * A run that has gone missing gets the workspace-wide answer rather than an error: the
+ * exclusion is an improvement to the answer, not a permission check, and the workspace
+ * boundary is enforced by the query itself.
+ */
+export const readAtlasLeads = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; topic: string },
+): Promise<string> => {
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ return findAtlasLeads(deps, {
+ workspaceId: input.workspaceId,
+ repositoryId: run?.repositoryId ?? null,
+ topic: input.topic,
+ })
 }
 
 export const listPersonas = (

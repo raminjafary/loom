@@ -60,6 +60,7 @@ COPY apps/runner/src/path-check.ts src/
 # src/sandbox-closure.ts.
 COPY apps/runner/src/handoff-tool.ts src/
 COPY apps/runner/src/map-tool.ts src/
+COPY apps/runner/src/atlas-tool.ts src/
 COPY apps/runner/src/notes-tool.ts src/
 COPY apps/runner/src/question-tool.ts src/
 COPY apps/runner/src/planner-tool.ts src/

@@ -29,6 +29,7 @@ const renderMasteryFraming = (mastery: {
 import {
  applyPlanDelta,
  applySubmittedPlan,
+ readAtlasLeads,
  readContextLedger,
  reconcileRunnerRuns,
  recordAgentEvent,
@@ -917,6 +918,33 @@ export const createRunnerGateway = (
  })
  } catch {
  // Deliberately swallowed — see above.
+ }
+ return
+ }
+
+ /**
+ * A run asking the atlas what other subjects in this workspace know.
+ *
+ * Rendered here rather than on the Runner: the cap, the ranking and the untrusted
+ * fence are security properties, and a Runner assembling its own answer
+ * would be a second place for them to drift. It is also the only side that has the
+ * database — a sandboxed run has no network by design.
+ */
+ case 'atlas_requested': {
+ try {
+ const leads = await readAtlasLeads(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ topic: frame.topic,
+ })
+ send(from, { type: 'atlas_result', requestId: frame.requestId, ok: true, leads })
+ } catch (error) {
+ send(from, {
+ type: 'atlas_result',
+ requestId: frame.requestId,
+ ok: false,
+ error: error instanceof Error ? error.message: String(error),
+ })
  }
  return
  }

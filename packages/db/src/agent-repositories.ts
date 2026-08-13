@@ -18,6 +18,7 @@ import type {
  WorkspaceRunControlRepositoryPort,
 } from '@loom/application'
 import {
+ CONCEPT_NODE_KINDS,
  NotFoundError,
  asAgentRunId,
  asRunnerId,
@@ -1688,6 +1689,55 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
 .where(and(eq(subjectMapNode.workspaceId, workspaceId), eq(subjectMapNode.mapId, mapId)))
 .orderBy(subjectMapNode.createdAt, subjectMapNode.key)
  return rows.map((row) => toMapNode(row as SubjectMapNodeRow))
+ },
+
+ /**
+ * The atlas's read side — every live concept in the workspace, joined to
+ * the subject and persona it came from, in one statement.
+ *
+ * One query rather than a map list plus a node read per map: this backs a *tool* a run
+ * can reach for at any moment, and the number of maps grows with the number of projects,
+ * so a loop would put an unbounded number of round-trips behind one model call.
+ *
+ * `ready` maps only. A map still being mastered is a partial reading of its subject, and
+ * a lead drawn from one would point at a conclusion its own author had not finished.
+ */
+ async listConceptsAcrossSubjects(workspaceId, options) {
+ const rows = await db
+.select({
+ nodeId: subjectMapNode.id,
+ mapId: subjectMapNode.mapId,
+ label: subjectMapNode.label,
+ summary: subjectMapNode.summary,
+ subjectRef: subjectMap.subjectRef,
+ personaName: agentPersona.name,
+ createdAt: subjectMapNode.createdAt,
+ })
+.from(subjectMapNode)
+.innerJoin(subjectMap, eq(subjectMapNode.mapId, subjectMap.id))
+.innerJoin(agentPersona, eq(subjectMap.personaId, agentPersona.id))
+.where(
+ and(
+ eq(subjectMapNode.workspaceId, workspaceId),
+ isNull(subjectMapNode.invalidatedAt),
+ inArray(subjectMapNode.kind, [...CONCEPT_NODE_KINDS]),
+ eq(subjectMap.status, 'ready'),
+ options.excludeRepositoryId === undefined
+ ? sql`true`
+: sql`(${subjectMap.repositoryId} is null or ${subjectMap.repositoryId} <> ${options.excludeRepositoryId})`,
+),
+)
+.orderBy(desc(subjectMapNode.createdAt))
+.limit(options.limit)
+ return rows.map((row) => ({
+ nodeId: row.nodeId,
+ mapId: asSubjectMapId(row.mapId),
+ label: row.label,
+ summary: row.summary ?? '',
+ subjectRef: row.subjectRef,
+ personaName: row.personaName,
+ createdAt: row.createdAt,
+ }))
  },
 
  async listEdges(workspaceId, mapId) {

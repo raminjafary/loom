@@ -95,6 +95,13 @@ export interface SandboxOptions {
  { ok: true; ledger: string } | { ok: false; error: string }
  >
  /**
+ * The agent asking what other subjects in this workspace know.
+ * Answered on the host, where the database is; this process has no network by design.
+ */
+ readonly onAtlasRequest?: (
+ topic: string,
+) => Promise<{ ok: true; leads: string } | { ok: false; error: string }>
+ /**
  * The agent asking a human a question and blocking on the answer.
  * Resolves with `answer: null` when nobody answered — the run must continue either
  * way, or it blocks until the reaper takes it.
@@ -652,6 +659,20 @@ export const runAgentInSandbox = async (
  requestId: frame.requestId,
  ok: result.ok,
 ...(result.ok ? { ledger: result.ledger }: { error: result.error }),
+ })
+ })
+ return
+ case 'atlas_request':
+ void (async => {
+ const result = (await options.onAtlasRequest?.(frame.topic)) ?? {
+ ok: false,
+ error: 'this run has no atlas channel',
+ }
+ send({
+ t: 'atlas_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? { leads: result.leads }: { error: result.error }),
  })
  })
  return

@@ -297,6 +297,22 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  requestId: z.string,
  }),
  /**
+ * A run asking the **atlas** what other subjects in this workspace know about a topic
+ *.
+ *
+ * A request rather than a payload on `start_run`, and that is the design rather than an
+ * implementation detail: a map is injected because it is bounded to one repository, and
+ * the atlas spans every subject in the workspace — injecting it would fill a window with
+ * structure about code this run cannot see. It costs one line of tool description until
+ * a run actually reaches for it.
+ */
+ z.object({
+ type: z.literal('atlas_requested'),
+ runId: z.string,
+ requestId: z.string,
+ topic: z.string.max(500),
+ }),
+ /**
  * One fragment of a map a mastery run wrote, sent **as it is written**.
  *
  * Same requirement and same reasoning as `note_written`, and it bites harder here: a
@@ -751,6 +767,20 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  requestId: z.string,
  ok: z.boolean,
  ledger: z.string.optional,
+ error: z.string.optional,
+ }),
+ /**
+ * The atlas's answer — leads, already ranked, capped and fenced by the server.
+ *
+ * Rendered server-side for the same reason the ledger is: the fence, the cap and the
+ * "these are leads, not facts" framing are security properties, and a Runner that
+ * assembled its own would be a second place they could drift.
+ */
+ z.object({
+ type: z.literal('atlas_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ leads: z.string.optional,
  error: z.string.optional,
  }),
 ])

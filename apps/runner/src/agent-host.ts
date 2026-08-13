@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
 import { createHandoffTool } from './handoff-tool.js'
 import { createMapTool } from './map-tool.js'
+import { createAtlasTool } from './atlas-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import {
@@ -64,6 +65,11 @@ const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>
 const pendingNotes = new Map<
  string,
  (result: { ok: boolean; reason?: string | undefined }) => void
+>
+/** `look_across_projects` round-trips. */
+const pendingAtlasReads = new Map<
+ string,
+ (result: { ok: boolean; leads?: string | undefined; error?: string | undefined }) => void
 >
 const pendingNoteReads = new Map<
  string,
@@ -168,6 +174,15 @@ const main = async : Promise<void> => {
  return
  }
 
+ if (parsed.data.t === 'atlas_result') {
+ const resolveAtlas = pendingAtlasReads.get(parsed.data.requestId)
+ if (resolveAtlas) {
+ pendingAtlasReads.delete(parsed.data.requestId)
+ resolveAtlas(parsed.data)
+ }
+ return
+ }
+
  if (parsed.data.t === 'question_result') {
  const resolveQuestion = pendingQuestions.get(parsed.data.requestId)
  if (resolveQuestion) {
@@ -206,6 +221,28 @@ const main = async : Promise<void> => {
  * with no network and no database — which is also the reason the notes a worker
  * reads cannot be tampered with from in here.
  */
+ /**
+ * The atlas channel, round-tripping to the host for the same reason the
+ * ledger does: it is workspace-side state and this process is inside a sandbox with no
+ * network and no database — which is also why the leads a worker reads cannot be
+ * tampered with from in here.
+ */
+ const atlasTool = createAtlasTool({
+ lookAcross: (topic) => {
+ const requestId = nextRequestId
+ emit({ t: 'atlas_request', requestId, topic })
+ return new Promise((resolve) => {
+ pendingAtlasReads.set(requestId, (result) =>
+ resolve(
+ result.ok
+ ? { ok: true, leads: result.leads ?? '' }
+: { ok: false, error: result.error ?? 'the platform could not read it' },
+),
+)
+ })
+ },
+ })
+
  const notesTool = createNotesTool({
  writeNote: (note) => {
  const requestId = nextRequestId
@@ -298,6 +335,7 @@ const main = async : Promise<void> => {
 ...(command.task === undefined ? {}: { task: command.task }),
 ...(command.contextLedger === undefined ? {}: { contextLedger: command.contextLedger }),
  notesTool,
+ atlasTool,
 ...(mapTool ? { mapTool }: {}),
  handoffTool,
 ...(command.mapContext === undefined ? {}: { mapContext: command.mapContext }),

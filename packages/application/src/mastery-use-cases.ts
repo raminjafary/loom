@@ -29,6 +29,8 @@ import {
  type RetrievalOverride,
  type RetrievalState,
  type RepositoryId,
+ renderAtlasLeads,
+ selectAtlasLeads,
  type SubjectMap,
  type SubjectMapId,
  type WorkspaceId,
@@ -818,4 +820,92 @@ export const listExpertiseUsedByRuns = async (
  ]
 : []
  })
+}
+
+/**
+ * How many concepts the atlas reads before ranking them.
+ *
+ * A ceiling on the *query*, not on the answer — the answer is capped at
+ * `MAX_ATLAS_LEADS`, which is far smaller. This exists so the read stays bounded on a
+ * workspace with fifty subjects: ranking happens in memory, and a workspace that has
+ * recorded more concepts than this returns its most recent ones, which is the same
+ * fallback `selectMapForContext` makes when a map outgrows a window.
+ */
+export const MAX_ATLAS_CANDIDATES = 400
+
+/**
+ * What the workspace's *other* subjects know about a topic.
+ *
+ * **Called from a tool, never from a prompt**, and that is the whole design. A subject
+ * map is injected because it is bounded — one repository, at one revision, trimmed and
+ * reported. The atlas spans every subject in the workspace and grows with the number of
+ * projects, so injecting it would fill a window with confidently irrelevant structure
+ * about code the run cannot see. Reachable on demand costs one line of tool description
+ * until the moment somebody needs it.
+ *
+ * The run's own repository is excluded because it has already been handed that map: the
+ * atlas answers "somewhere else", and repeating the map here would spend the window twice
+ * and make a duplicate look like a discovery.
+ *
+ * Outcomes are read for the candidates that survive matching rather than for all of them,
+ * because the ranking only has to order what is going to be shown — tallying four
+ * hundred nodes to rank eight would be the expensive half of a cheap operation.
+ */
+export const findAtlasLeads = async (
+ deps: MasteryDeps,
+ input: {
+ workspaceId: WorkspaceId
+ /** The run asking, so its own subject can be left out. */
+ repositoryId: RepositoryId | null
+ topic: string
+ },
+): Promise<string> => {
+ const topic = input.topic.trim
+ if (topic.length === 0) {
+ return 'Ask about something: a concept, a mechanism, a problem you think another project here has already had.'
+ }
+
+ const rows = await deps.subjectMaps.listConceptsAcrossSubjects(input.workspaceId, {
+...(input.repositoryId === null ? {}: { excludeRepositoryId: input.repositoryId }),
+ limit: MAX_ATLAS_CANDIDATES,
+ })
+
+ const matched = selectAtlasLeads(
+ rows.map((row) => ({
+ nodeId: row.nodeId,
+ label: row.label,
+ summary: row.summary,
+ subjectRef: row.subjectRef,
+ personaName: row.personaName,
+ createdAt: row.createdAt,
+ })),
+ topic,
+)
+ if (matched.leads.length === 0) return renderAtlasLeads(topic, matched)
+
+ /**
+ * The "scored by outcome, not recency", applied to the leads that are going to be
+ * shown. Grouped by map because that is how the tally is keyed, and a workspace-wide
+ * tally would be a second query shape for the same answer.
+ */
+ const byMap = new Map<string, SubjectMapId>
+ for (const row of rows) byMap.set(row.nodeId, row.mapId)
+ const mapIds = [...new Set(matched.leads.map((lead) => byMap.get(lead.nodeId)))].filter(
+ (id): id is SubjectMapId => id !== undefined,
+)
+ const outcomes: Record<string, ClaimOutcomes> = {}
+ for (const mapId of mapIds) {
+ Object.assign(outcomes, await deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, mapId))
+ }
+
+ return renderAtlasLeads(
+ topic,
+ selectAtlasLeads(
+ matched.leads.map((lead) => ({
+...lead,
+...(outcomes[lead.nodeId] === undefined ? {}: { outcomes: outcomes[lead.nodeId] }),
+ })),
+ topic,
+),
+)
 }

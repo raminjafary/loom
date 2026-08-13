@@ -119,6 +119,29 @@ describe('buildQueryOptions: the notes channel', => {
  // And the narrowing it was actually asked for still applies.
  expect(options.allowedTools).toContain('mcp__gitlab__create_merge_request')
  })
+
+ /**
+ * The atlas, asserted at the allowlist for the reason the comment on
+ * `platformTools` gives: `AgentDefinition.tools` is *exhaustive*, so registering the
+ * server and forgetting the name ships a tool the model is never offered — a feature
+ * that passes every server-side test while being unreachable, which this repository has
+ * now done four times.
+ */
+ it('offers the atlas tool when the run has that channel, and nothing when it does not', => {
+ const withAtlas = buildQueryOptions({ persona, cwd: '/clone', atlasTool: fakeServer })
+ // `agents[name].tools` is the exhaustive list the model is offered — `allowedTools`
+ // only appears when an MCP capability narrowed scope, so asserting there would pass
+ // vacuously on the ordinary run this is about.
+ expect(withAtlas.agents?.[persona.name]?.tools).toContain(
+ 'mcp__loom_atlas__look_across_projects',
+)
+ expect(Object.keys(withAtlas.mcpServers ?? {})).toContain('loom_atlas')
+
+ const without = buildQueryOptions({ persona, cwd: '/clone', notesTool: fakeServer })
+ expect(without.agents?.[persona.name]?.tools ?? []).not.toContain(
+ 'mcp__loom_atlas__look_across_projects',
+)
+ })
 })
 
 describe('buildPrompt', => {
