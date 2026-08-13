@@ -650,6 +650,11 @@ const collisionCount = computed(
  <li><span class="swatch review"></span>review</li>
  <li><span class="swatch reconcile"></span>reconcile</li>
  <li><span class="swatch steer"></span>steer</li>
+ <!-- Only when one happened. A handoff is rare, and a legend entry for an
+ edge that is not on the canvas is a promise it is not keeping. -->
+ <li v-if="graph.edges.some((e) => e.kind === 'handoff')">
+ <span class="swatch handoff"></span>handed over — replaced, not delegated
+ </li>
  <li><span class="swatch collision"></span>path collision</li>
  <li><span class="swatch note_read"></span>read their notes</li>
  <!-- Only shown when there is a queue to explain: a legend entry for an
@@ -1166,6 +1171,14 @@ header button:disabled {
  border-top-style: dotted;
 }
 
+/* Thicker and solid, in the accent: a handoff is the one edge where the child is not
+ new work but a *replacement*, and it has to be the thing a human notices on a tree
+ they are scanning for delegations. */
+.swatch.handoff {
+ border-color: var(--warn, var(--accent));
+ border-top-width: 3px;
+}
+
 .swatch.collision {
  border-top-style: dashed;
  border-color: var(--danger);
@@ -1223,6 +1236,15 @@ header button:disabled {
 .edge.steer {
  stroke: var(--warn, var(--accent));
  stroke-dasharray: 2 3;
+}
+
+/* A warm handoff. Solid and heavier than a delegation, because the successor is
+ not work the predecessor asked for — it is the predecessor's replacement, on the same
+ task and the same branch. Mastery: "a silent identity swap mid-task is precisely the kind
+ of thing that destroys trust in a system that is otherwise doing the right thing." */
+.edge.handoff {
+ stroke: var(--warn, var(--accent));
+ stroke-width: 3;
 }
 
 /* The expertise band and its edges. Dotted and quiet: a map is context a run

@@ -595,6 +595,16 @@ export interface SwarmBoardCard {
  */
  readonly contextTokens: number | null
  readonly contextMaxTokens: number | null
+ /**
+ * When the platform told this run its window was filling, or null.
+ *
+ * Carried so a card can say the nudge *fired* rather than only how full the window is.
+ * Those are different facts and the second does not imply the first: an operator may
+ * have raised the threshold, the tree may have spent its handoffs, or the run may have
+ * been told and decided it was still doing fine — which is exactly the decision mastery
+ * leaves to the agent.
+ */
+ readonly handoffSuggestedAt: Date | null
 }
 
 export interface SwarmBoard {
@@ -733,6 +743,7 @@ export const getSwarmBoard = async (
  budgetCapUsd: entry.persona.budgetCapUsd,
  contextTokens: entry.contextTokens,
  contextMaxTokens: entry.contextMaxTokens,
+ handoffSuggestedAt: entry.handoffSuggestedAt,
  }
  })
 

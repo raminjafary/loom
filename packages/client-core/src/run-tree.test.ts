@@ -22,6 +22,7 @@ const card = (over: Partial<RunTreeCard> & { runId: string }): RunTreeCard => ({
  budgetCapUsd: null,
  contextTokens: null,
  contextMaxTokens: null,
+ handoffSuggestedAt: null,
 ...over,
 })
 

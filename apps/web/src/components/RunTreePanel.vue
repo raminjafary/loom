@@ -28,6 +28,21 @@ const totalUsd = computed( => totalCostUsd(props.board?.cards ?? []))
 const byRelation = computed( => costByRelation(props.board?.cards ?? []))
 
 const money = (usd: number) => `$${usd.toFixed(4)}`
+
+/**
+ * How many times this tree has been handed over, against the bound.
+ *
+ * Counted from the cards rather than fetched, for the same reason the tree itself is:
+ * `relation` is already on every card, and a second source for "how many handoffs" would
+ * be one more thing that can disagree with the tree a human is looking at.
+ *
+ * Shown only once one has happened. The honest failure mode here is thrash — agents
+ * passing work back and forth, each briefing the other — so the count next to its limit
+ * is the number that tells a human whether that is what they are watching.
+ */
+const handoffs = computed(
+ => (props.board?.cards ?? []).filter((card) => card.relation === 'handoff').length,
+)
 </script>
 
 <template>
@@ -89,6 +104,13 @@ const money = (usd: number) => `$${usd.toFixed(4)}`
 
  <footer>
  <span class="total">{{ money(totalUsd) }} total</span>
+ <span
+ v-if="handoffs > 0"
+ class="slice handoffs"
+ title="A run handed its work to a fresh one on the same branch and budget. Past the workspace's limit, nobody takes over."
+ >
+ {{ handoffs }} handoff<span v-if="handoffs > 1">s</span>
+ </span>
  <span v-for="[relation, usd] in byRelation":key="relation" class="slice">
  {{ relation }} {{ money(usd) }}
  </span>
@@ -179,6 +201,10 @@ header button {
 }
 
 .persona,
+.handoffs {
+ color: var(--warn, var(--text-faint));
+}
+
 .relation,
 .status,
 .cost {

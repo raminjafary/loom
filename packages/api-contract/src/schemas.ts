@@ -561,6 +561,14 @@ export const SwarmBoardCardSchema = z.object({
  */
  contextTokens: z.number.int.nullable,
  contextMaxTokens: z.number.int.nullable,
+ /**
+ * When the platform told this run its window was filling, or null.
+ *
+ * Distinct from the ratio beside it: a full window does not imply the run was told,
+ * and a run that was told may have decided it is still doing fine — which is the
+ * decision mastery deliberately leaves to the agent rather than to a number.
+ */
+ handoffSuggestedAt: wireDate.nullable,
 })
 
 /**

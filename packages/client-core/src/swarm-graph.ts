@@ -27,6 +27,17 @@ export type SwarmEdgeKind =
  | 'review'
  | 'reconcile'
  | 'steer'
+ /**
+ * A run was **replaced** by a fresh one carrying its brief.
+ *
+ * Its own kind because it is the only edge here where the child is not new work: the
+ * successor takes over the same task, the same branch and the same tree, and the
+ * predecessor stops. Drawn as a delegation it would make the tree say "this agent
+ * spawned a worker" when what happened was "this agent was replaced" — and the whole
+ * argument for making a handoff visible is that a silent identity swap mid-task destroys
+ * trust in a system that is otherwise doing the right thing.
+ */
+ | 'handoff'
  | 'collision'
  /**
  * One run was shown another's notes.
@@ -263,17 +274,18 @@ const depthOf = (card: BoardCard, byId: Map<string, BoardCard>): number => {
 }
 
 /**
- * `relation` describes what a child *is* to its parent, and the four are genuinely
+ * `relation` describes what a child *is* to its parent, and the five are genuinely
  * different edges: a reconciler is not a worker the planner asked for, a
- * reviewer's finding can gate a branch, and a steering run is a human's
- * re-planning turn hanging off the Planner it re-enters rather than work that
- * Planner handed down. Drawing them identically would hide the only structural
- * distinction the data carries.
+ * reviewer's finding can gate a branch, a steering run is a human's re-planning
+ * turn hanging off the Planner it re-enters rather than work that Planner handed
+ * down, and a handoff is a *replacement* rather than new work at all. Drawing them
+ * identically would hide the only structural distinction the data carries.
  */
 const edgeKindOf = (card: BoardCard): Exclude<SwarmEdgeKind, 'collision'> => {
  if (card.relation === 'review') return 'review'
  if (card.relation === 'reconcile') return 'reconcile'
  if (card.relation === 'steer') return 'steer'
+ if (card.relation === 'handoff') return 'handoff'
  return 'delegation'
 }
 

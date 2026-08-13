@@ -116,6 +116,27 @@ describe('buildSwarmGraph', => {
  expect(kinds.get('fixer')).toBe('reconcile')
  })
 
+ /**
+ * The roadmap asks for "a warm standby and its handoff edge, so a switch is something
+ * a human sees". Drawn as a delegation, the tree says "this agent spawned a worker" when
+ * what happened was "this agent was replaced" — a surface claiming something other than
+ * what the runtime did, which is the defect class this repository keeps paying for.
+ */
+ it('draws a handoff as its own edge — a replacement is not a delegation', => {
+ const graph = buildSwarmGraph(
+ board([
+ card({ runId: 'first' }),
+ card({ runId: 'successor', parentRunId: 'first', relation: 'handoff' }),
+ card({ runId: 'worker', parentRunId: 'first', relation: 'delegation' }),
+ ]),
+ [],
+)
+
+ const kinds = new Map(graph.edges.map((e) => [e.to, e.kind]))
+ expect(kinds.get('successor')).toBe('handoff')
+ expect(kinds.get('worker')).toBe('delegation')
+ })
+
  it('orders a layer stably, so a refresh mid-swarm does not reshuffle it', => {
  const cards = [
  card({ runId: 'planner' }),

@@ -194,6 +194,21 @@ const workingCount = computed(
  {{ capPercent(activityOf(card).contextUsedRatio ?? 0) }} of context
  </p>
 
+ <!--
+ The nudge, as a fact separate from the ratio above it. A full window
+ does not imply the run was told — the operator may have raised the
+ threshold, or the tree may have spent its handoffs — and a run that *was*
+ told may have decided it is still doing fine, which is the decision mastery
+ deliberately leaves to the agent rather than to a number.
+ -->
+ <p
+ v-if="card.handoffSuggestedAt"
+ class="nudged"
+ title="The platform told this run its window was filling. Whether to hand over is the run's own call."
+ >
+ told it could hand over
+ </p>
+
  <p v-if="card.branchName" class="branch":title="card.branchName">
  {{ shortBranchName(card.branchName) }}
  </p>
@@ -337,6 +352,15 @@ h3 {
 
 .cap.spent {
  color: var(--danger);
+}
+
+/* Said once, and quietly. It is a note about a conversation the platform had with the
+ run, not a state the run is in — a loud badge here would read as "this run is being
+ replaced", which is precisely what has not happened. */
+.nudged {
+ margin: 0.1rem 0 0;
+ font-size: 0.66rem;
+ color: var(--warn, var(--text-faint));
 }
 
 /* Context is a different pressure from spend, so it reads in a different colour until

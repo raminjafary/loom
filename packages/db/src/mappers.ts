@@ -420,6 +420,7 @@ export interface AgentRunRow {
  lastEventAt: Date | null
  contextTokens: number | null
  contextMaxTokens: number | null
+ handoffSuggestedAt: Date | null
  createdAt: Date
  completedAt: Date | null
 }
@@ -487,6 +488,7 @@ export const toAgentRun = (row: AgentRunRow): AgentRun => ({
  lastEventAt: row.lastEventAt,
  contextTokens: row.contextTokens,
  contextMaxTokens: row.contextMaxTokens,
+ handoffSuggestedAt: row.handoffSuggestedAt,
  createdAt: row.createdAt,
  completedAt: row.completedAt,
 })

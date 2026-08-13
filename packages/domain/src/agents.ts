@@ -391,6 +391,14 @@ export interface AgentRun {
  */
  readonly contextTokens: number | null
  readonly contextMaxTokens: number | null
+ /**
+ * When the platform told this run its window was filling, or null.
+ *
+ * On the run rather than derived from the thread, because it is the only way to tell a
+ * *declined* nudge from one that never fired — and those send a watcher to different
+ * places. It never means the run handed over; a handoff is a second run in the tree.
+ */
+ readonly handoffSuggestedAt: Date | null
  readonly createdAt: Date
  readonly completedAt: Date | null
 }
