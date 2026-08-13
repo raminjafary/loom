@@ -21,12 +21,26 @@ import { personaFormFromPersona, personaFormToMarkdown } from './persona-form.js
  * undelegatable, and a human discovers that one runtime error at a time."
  */
 
+/**
+ * Mirrors `@loom/domain`'s `PLATFORM_STARTED_PERSONAS` — see `composerNodes` for why it is
+ * duplicated rather than imported, and `models.ts` for the rule it follows.
+ */
+export const PLATFORM_STARTED_PERSONA_NAMES: readonly string[] = ['reconciler']
+
 export interface ComposerNode {
  readonly personaId: string
  readonly name: string
  readonly model: string
  readonly tools: readonly string[]
  readonly planner: boolean
+ /**
+ * Whether the **platform** starts this persona rather than a planner.
+ *
+ * Duplicated from `@loom/domain`'s `PLATFORM_STARTED_PERSONAS` by the caller rather than
+ * imported here, for the reason `models.ts` gives: this package depends on the contract and
+ * never on the domain. The caller passes the answer; this module only has to draw it.
+ */
+ readonly platformStarted?: boolean
  readonly position: { x: number; y: number }
  /**
  * Whether this persona may delegate to **another run of itself** — the * recursion, and the only way depth happens.
@@ -165,7 +179,21 @@ export const arrangeByTier = (
  * it is the canvas stopping short of a claim it was making falsely, which is the caution
  * about this surface read in the only direction that matters.
  */
-export type OrchestrationRole = 'orchestrator' | 'sub-planner' | 'worker' | 'unreachable'
+export type OrchestrationRole =
+ | 'orchestrator'
+ | 'sub-planner'
+ | 'worker'
+ | 'unreachable'
+ /**
+ * A persona the **platform** starts, which no chain from the root is supposed to reach
+ *.
+ *
+ * Distinct from `unreachable`, and the distinction is the whole point: unreachable means
+ * *nothing can start this and that is probably a mistake*, and a reconciler on a team is
+ * neither. The merge queue starts it. Drawing it as stranded would put a warning on every
+ * team that has one, which is how a real warning stops being read.
+ */
+ | 'platform'
 
 /**
  * How far below the deepest reachable tier an unreachable member is drawn.
@@ -300,11 +328,21 @@ export const orchestrate = (
  const seats: Record<string, OrchestrationSeat> = {}
  const tiers: Record<string, number> = {}
  const unreachable: string[] = []
+ /** Drawn on the same row as the stranded, and deliberately not warned about. */
+ const placedByPlatform: string[] = []
  for (const node of nodes) {
  const depth = depths[node.personaId]
  if (depth === undefined) {
- seats[node.personaId] = { depth: null, role: 'unreachable', canRecurse: false }
- unreachable.push(node.personaId)
+ /**
+ * A platform-started persona is *not* stranded, and must not be reported as one. See
+ * `OrchestrationRole`: the merge queue starts a reconciler, so "no chain from the root
+ * reaches it" is true and uninteresting — and a warning that fires on every team with
+ * one is a warning nobody reads.
+ */
+ const role: OrchestrationRole = node.platformStarted === true ? 'platform': 'unreachable'
+ seats[node.personaId] = { depth: null, role, canRecurse: false }
+ if (role === 'unreachable') unreachable.push(node.personaId)
+ else placedByPlatform.push(node.personaId)
  continue
  }
  const role: OrchestrationRole =
@@ -325,7 +363,9 @@ export const orchestrate = (
  * stranded member goes.
  */
  const deepest = Math.max(0,...Object.values(tiers))
- for (const personaId of unreachable) tiers[personaId] = deepest + UNREACHABLE_GAP
+ for (const personaId of [...unreachable,...placedByPlatform]) {
+ tiers[personaId] = deepest + UNREACHABLE_GAP
+ }
 
  return { orchestratorId, seats, tiers, outOfDepth, unreachable }
 }
@@ -350,6 +390,13 @@ export const composerNodes = (
  model: persona.model,
  tools: persona.tools,
  planner: persona.harnessPlanner,
+ /**
+ * Duplicated from `@loom/domain`'s `PLATFORM_STARTED_PERSONAS`, for the reason
+ * `models.ts` states: this package depends on the contract and never on the domain, and
+ * a one-name list is small enough to duplicate where a parser would not be. The domain
+ * remains the authority — this only decides how a node is *drawn*.
+ */
+ platformStarted: PLATFORM_STARTED_PERSONA_NAMES.includes(persona.name),
  position: layout[persona.id] ?? { x: 0, y: 0 },
  // Only a planner can recurse at all, and the matrix says whether this one may:
  // its own envelope has to admit its own tools, which a narrowed envelope can fail.

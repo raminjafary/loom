@@ -601,3 +601,80 @@ describe('reviews', => {
  expect(verdict.reason).toContain('cycle')
  })
 })
+
+/**
+ * Path ownership across repositories.
+ *
+ * A path is repository-relative, so the same string in two repositories is two files. These
+ * exist because the cross-repository feature introduced the bug and nothing else would have
+ * caught it: the warning would have fired on *every* cross-repository plan, and the * whole argument for it is that a human acts on it — a warning that is usually wrong is one
+ * they stop reading.
+ */
+describe('path overlaps across repositories', => {
+ const at = (repository: string | null, title: string, paths: string[]): PlanSubtask => ({
+ title,
+ task: 'do the thing',
+ personaName: 'swe',
+ paths,
+ dependsOn: [],
+ reviews: null,
+ repository,
+ })
+
+ it('does not call the same path in two repositories a collision', => {
+ expect(
+ detectPathOverlaps([
+ at(null, 'Here', ['src/index.ts']),
+ at('hotel-api', 'There', ['src/index.ts']),
+ ]),
+).toEqual([])
+ })
+
+ /** The within-repository case is unchanged, which is every single-repository plan. */
+ it('still catches a collision inside one repository', => {
+ const overlaps = detectPathOverlaps([
+ at(null, 'One', ['src/index.ts']),
+ at(null, 'Two', ['src/index.ts']),
+ ])
+ expect(overlaps).toHaveLength(1)
+ expect(overlaps[0]?.paths).toEqual(['src/index.ts'])
+ })
+
+ it('catches a collision inside a named repository, not only the default one', => {
+ expect(
+ detectPathOverlaps([
+ at('hotel-api', 'One', ['src/index.ts']),
+ at('hotel-api', 'Two', ['src/index.ts']),
+ ]),
+).toHaveLength(1)
+ })
+
+ /** The same rule across plans in one tree — where a cross-repository tree actually lands. */
+ it('ignores a prior claim from a different repository', => {
+ expect(
+ detectClaimsAgainstExisting(
+ [at('hotel-api', 'Mine', ['src/index.ts'])],
+ [{ title: 'Theirs', paths: ['src/index.ts'], repository: null }],
+),
+).toEqual([])
+ expect(
+ detectClaimsAgainstExisting(
+ [at('hotel-api', 'Mine', ['src/index.ts'])],
+ [{ title: 'Theirs', paths: ['src/index.ts'], repository: 'hotel-api' }],
+),
+).toHaveLength(1)
+ })
+
+ /**
+ * A claim recorded before cross-repository teams existed carries no repository, and reads as
+ * the tree's own — the state every such note was written in.
+ */
+ it('treats a claim with no repository as the default one', => {
+ expect(
+ detectClaimsAgainstExisting(
+ [at(null, 'Mine', ['src/index.ts'])],
+ [{ title: 'Theirs', paths: ['src/index.ts'] }],
+),
+).toHaveLength(1)
+ })
+})

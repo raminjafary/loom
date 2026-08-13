@@ -18,6 +18,13 @@
  * - **`reviews` is set wherever it makes sense**, because the reviewing relation is the
  * one worker-to-worker collaboration the runtime executes, and a team that does not use
  * it teaches an operator that work is only ever handed on, never checked.
+ * - **Every team includes the `reconciler`**, and it is not a member like the others. The
+ * merge queue starts it — `PLATFORM_STARTED_PERSONAS` keeps it off every delegation roster,
+ * so no planner can assign it work and no plan can name it. It is on the roster because it
+ * is a real participant in what happens to *this team's* branches, and a canvas that drew
+ * the team without it would be drawing a team whose conflicts are resolved by nobody. The
+ * composer gives it its own role rather than calling it unreachable, which it would
+ * otherwise be on every single team.
  * - **No repository and no layout.** The repository is the operator's choice and
  * the canvas arranges an unplaced team by tier on first open, which is exactly right for
  * one nobody has arranged. Seeding coordinates would be the platform pretending to a
@@ -78,7 +85,7 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  {
  name: 'ship-a-change',
  description: 'One scoped change, fanned out and checked. Reach for this by default.',
- members: ['planner', 'swe', 'qa'],
+ members: ['planner', 'swe', 'qa', 'reconciler'],
  orchestrator: 'planner',
  reviewers: { qa: ['swe'] },
  fleet: { swe: 2 },
@@ -92,7 +99,7 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  {
  name: 'front-and-back',
  description: 'A change that spans UI and API, split by boundary so the branches merge.',
- members: ['planner', 'frontend-engineer', 'backend-engineer', 'qa'],
+ members: ['planner', 'frontend-engineer', 'backend-engineer', 'qa', 'reconciler'],
  orchestrator: 'planner',
  reviewers: { qa: ['frontend-engineer', 'backend-engineer'] },
  },
@@ -105,7 +112,7 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  {
  name: 'spec-then-build',
  description: 'A goal too vague to hand out yet — scoped into a spec first, then built.',
- members: ['planner', 'product-manager', 'swe', 'qa'],
+ members: ['planner', 'product-manager', 'swe', 'qa', 'reconciler'],
  orchestrator: 'planner',
  reviewers: { qa: ['swe'] },
  },
@@ -135,7 +142,7 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  name: 'two-areas',
  description:
  'A goal with two areas — a root planner, a sub-planner owning one of them, and staff.',
- members: ['planner', 'area-planner', 'swe', 'qa'],
+ members: ['planner', 'area-planner', 'swe', 'qa', 'reconciler'],
  orchestrator: 'planner',
  reviewers: { qa: ['swe'] },
  fleet: { swe: 2 },
@@ -162,7 +169,7 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  {
  name: 'across-repositories',
  description: 'One goal spanning several repositories — split by repository first.',
- members: ['planner', 'swe', 'qa'],
+ members: ['planner', 'swe', 'qa', 'reconciler'],
  orchestrator: 'planner',
  reviewers: { qa: ['swe'] },
  fleet: { swe: 2 },

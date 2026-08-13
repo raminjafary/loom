@@ -2650,7 +2650,19 @@ export const applySubmittedPlan = async (
  await deps.workerNotes.listByTree(input.workspaceId, await resolveTreeRunId(deps, planner))
 )
 .filter((note) => note.kind === 'path_ownership' && note.agentRunId !== planner.id)
-.map((note) => ({ title: note.title, paths: note.paths }))
+ /**
+ * The repository is recovered from the note's body, which is where it was written
+ *. A note is append-only and carries no structured repository field —
+ * adding one for this would be a schema change to make a *comparison* work, when the
+ * comparison only has to be able to tell "same repository" from "different".
+ *
+ * Null when absent, which is a note from before cross-repository teams and reads as the
+ * tree's own repository — the state every such note was written in.
+ */
+.map((note) => {
+ const named = / in ([^.]+)\. Avoid editing/.exec(note.body)?.[1] ?? null
+ return { title: note.title, paths: note.paths, repository: named }
+ })
  const crossWarning = describeCrossPlanOverlaps(
  detectClaimsAgainstExisting(verdict.decomposition.subtasks, priorClaims),
 )
@@ -2660,7 +2672,18 @@ export const applySubmittedPlan = async (
  await recordRunPlatformNote(deps, planner, {
  kind: 'path_ownership',
  title: subtask.title,
- body: `Assigned to ${subtask.personaName}. Owns: ${subtask.paths.join(', ')}. Avoid editing these paths unless your own task names them.`,
+ /**
+ * The repository is named in the body when the subtask chose one, because a worker reading this ledger is in *one* repository and a claim on
+ * `src/index.ts` means nothing to it unless it knows which `src/index.ts`.
+ *
+ * The ledger is per-tree and a cross-repository plan puts several repositories in one
+ * tree, so without this a worker in the hotel repository reads a flight-repository claim
+ * as a warning about its own files — which is the opposite of what path ownership is for.
+ */
+ body:
+ `Assigned to ${subtask.personaName}. Owns: ${subtask.paths.join(', ')}` +
+ `${subtask.repository === null ? '': ` in ${subtask.repository}`}. ` +
+ 'Avoid editing these paths unless your own task names them.',
  paths: subtask.paths,
  })
  }

@@ -212,6 +212,20 @@ export const detectPathOverlaps = (subtasks: readonly PlanSubtask[]): PathOverla
  const first = subtasks[i]
  const second = subtasks[j]
  if (!first || !second) continue
+ /**
+ * **Only within one repository**.
+ *
+ * A path is repository-relative, so `src/index.ts` in two different repositories is two
+ * different files. Comparing across them reports a collision that cannot exist — and it
+ * would fire on *every* cross-repository plan, since a monorepo-shaped pair of services
+ * shares most of its layout. Worse than noise: the whole argument for this
+ * warning is that a human acts on it before tokens are spent, and a warning that is
+ * usually wrong is one they stop reading.
+ *
+ * Null is the planner's own repository, so two nulls are the same repository — which is
+ * every plan a single-repository team writes, and this comparison is unchanged for them.
+ */
+ if (first.repository !== second.repository) continue
  const collided = first.paths.filter((path) =>
  second.paths.some((other) => pathsOverlap(path, other)),
 )
@@ -233,6 +247,15 @@ export const detectPathOverlaps = (subtasks: readonly PlanSubtask[]): PathOverla
 export interface PathClaim {
  readonly title: string
  readonly paths: readonly string[]
+ /**
+ * Which repository the claim is in, or null for the tree's own.
+ *
+ * Optional because the claims come from `path_ownership` notes, and every note written
+ * before a team could span repositories carries no repository — which reads as null, the
+ * same as a subtask that named none. That is the right default: before cross-repository
+ * teams existed, a tree was one repository.
+ */
+ readonly repository?: string | null
 }
 
 /**
@@ -256,6 +279,9 @@ export const detectClaimsAgainstExisting = (
  const overlaps: PathOverlap[] = []
  for (const subtask of subtasks) {
  for (const claim of existing) {
+ // Same rule as within a plan, and for the same reason: a path is repository-relative,
+ // so the same string in two repositories is two files. See `detectPathOverlaps`.
+ if (subtask.repository !== (claim.repository ?? null)) continue
  const collided = subtask.paths.filter((path) =>
  claim.paths.some((other) => pathsOverlap(path, other)),
 )

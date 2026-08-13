@@ -172,3 +172,33 @@ describe('BUILTIN_TEAMS across repositories', => {
  }
  })
 })
+
+/**
+ * The reconciler on every team, which is a different kind of membership
+ * from the rest and has to stay that way.
+ */
+describe('BUILTIN_TEAMS and the reconciler', => {
+ it('puts the reconciler on every team', => {
+ for (const team of BUILTIN_TEAMS) {
+ expect(team.members, team.name).toContain('reconciler')
+ }
+ })
+
+ /**
+ * Nothing may point at it. `PLATFORM_STARTED_PERSONAS` keeps it off every delegation roster,
+ * so a reporting line or a review edge naming it would be a control the runtime ignores —
+ * and it is the merge queue, not a planner, that starts it.
+ */
+ it('never makes the reconciler somebody’s staff or somebody’s reviewer', => {
+ for (const team of BUILTIN_TEAMS) {
+ expect(Object.keys(team.reportsTo ?? {}), team.name).not.toContain('reconciler')
+ expect(Object.values(team.reportsTo ?? {}), team.name).not.toContain('reconciler')
+ expect(Object.keys(team.reviewers ?? {}), team.name).not.toContain('reconciler')
+ for (const reviewed of Object.values(team.reviewers ?? {})) {
+ expect([...reviewed], team.name).not.toContain('reconciler')
+ }
+ expect(team.orchestrator, team.name).not.toBe('reconciler')
+ expect(Object.keys(team.fleet ?? {}), team.name).not.toContain('reconciler')
+ }
+ })
+})
