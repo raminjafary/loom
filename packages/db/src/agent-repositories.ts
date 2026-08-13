@@ -945,6 +945,24 @@ export const agentRunEventRepository = (db: Database): AgentRunEventRepositoryPo
  return row?.seq ?? 0
  },
 
+ async writtenPaths(workspaceId, agentRunId) {
+ /**
+ * The writing tools only. A `Read` is not evidence of a change, and counting one
+ * would make the check pass for a brief that claimed to have edited everything it
+ * looked at — which is exactly the confusion this is meant to catch.
+ */
+ const rows = await db.execute<{ path: string | null }>(sql`
+ select distinct payload->'input'->>'file_path' as path
+ from agent_run_event
+ where workspace_id = ${workspaceId}
+ and agent_run_id = ${agentRunId}
+ and kind = 'tool_call'
+ and payload->>'toolName' in ('Write', 'Edit', 'NotebookEdit')
+ and payload->'input'->>'file_path' is not null
+ `)
+ return [...rows].flatMap((row) => (row.path === null ? []: [row.path]))
+ },
+
  async liveActivity(workspaceId, agentRunIds) {
  if (agentRunIds.length === 0) return new Map
 

@@ -1,6 +1,8 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
 import {
+ agentRunActor,
  authorCorpusInstruction,
+ systemActor,
  renderMasteryDirective,
  type MapSubjectKind,
  type MasteryDirective,
@@ -40,6 +42,9 @@ import {
  recordRunHeartbeat,
  recordRunWorkspace,
  askClarifyingQuestion,
+ handOverToSuccessor,
+ resolveTreeRunId,
+ startAgentRun,
  requestApproval,
 } from '@loom/application'
 import {
@@ -706,6 +711,109 @@ export const createRunnerGateway = (
  } catch (error) {
  send(from, {
  type: 'note_result',
+ requestId: frame.requestId,
+ ok: false,
+ reason: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
+ /**
+ * A run handing its work to a successor.
+ *
+ * The successor is started **before** the predecessor is retired, and the
+ * predecessor is retired only if that succeeded — a tree with no live run and a
+ * branch nobody owns is the one outcome worse than a degraded agent carrying on,
+ * which is why this is the last thing mastery builds.
+ *
+ * The successor is a child of the predecessor with `relation: 'handoff'`: same tree,
+ * same persona, same ledger. Mastery: "continuity for the human is the tree, not the
+ * process."
+ */
+ case 'handoff_requested': {
+ try {
+ const predecessor = await deps.agentRuns.findById(
+ workspaceId,
+ asAgentRunId(frame.runId),
+)
+ if (!predecessor) throw new Error('the run handing over no longer exists')
+
+ const personaIdByName = async (name: string) => {
+ const personas = await deps.personas.listByWorkspace(workspaceId)
+ const persona = personas.find((entry) => entry.name === name)
+ if (!persona) throw new Error(`no persona named ${name} to take over`)
+ return persona.id
+ }
+
+ const result = await handOverToSuccessor(
+ {
+ agentRuns: deps.agentRuns as never,
+ agentRunEvents: deps.agentRunEvents,
+ resolveTreeRunId: async => resolveTreeRunId(deps, predecessor),
+ startSuccessor: async ({ brief, task }) => {
+ const successor = await startAgentRun(deps, {
+ workspaceId,
+ /**
+ * The predecessor is the actor, and the successor is its child.
+ *
+ * Not `systemActor`, which `startAgentRun` refuses outright: a human
+ * may always start a run and an agent may start one only as a child of
+ * itself, and that second rule is exactly what a handoff is. It is also
+ * the honest attribution — the predecessor asked for this by calling
+ * `hand_over`, so the successor inherits its attenuation rather than
+ * arriving from nowhere with the platform's authority.
+ */
+ actor: agentRunActor(predecessor.id),
+ threadId: predecessor.threadId,
+ repositoryId: predecessor.repositoryId,
+ /**
+ * By name, resolved to the id: the run carries a persona *snapshot*
+ * with no id on it, and a name is the address this platform resolves
+ * everything else by. A persona renamed since the predecessor started
+ * would fail here rather than start a successor with a different
+ * identity, which is the right failure.
+ */
+ personaId: await personaIdByName(predecessor.persona.name),
+ parentRunId: predecessor.id,
+ relation: 'handoff',
+ /**
+ * The brief goes in as the task, ahead of the original goal. It is
+ * fenced inside `renderHandoffBrief`, and the platform's own facts sit
+ * outside that fence and above it — the ordering is the mitigation.
+ */
+ task: task === null ? brief: `${brief}\n\nThe original task was: ${task}`,
+ })
+ return successor.id
+ },
+ announce: async ({ successorRunId, reason }) => {
+ await deps.messages.append({
+ workspaceId,
+ threadId: predecessor.threadId,
+ author: systemActor,
+ body: {
+ kind: 'system',
+ text:
+ `${predecessor.persona.name} handed this work to a fresh run because ` +
+ `${reason}. The successor is on the same branch and the same budget; ` +
+ `run ${successorRunId}.`,
+ },
+ })
+ },
+ limits: {},
+ },
+ { workspaceId, agentRunId: asAgentRunId(frame.runId), brief: frame.brief },
+)
+
+ send(from, {
+ type: 'handoff_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? {}: { reason: result.reason }),
+ })
+ } catch (error) {
+ send(from, {
+ type: 'handoff_result',
  requestId: frame.requestId,
  ok: false,
  reason: error instanceof Error ? error.message: String(error),

@@ -2,6 +2,7 @@ import { classifyToolEffect, isRiskyTool } from '@loom/domain'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
+import { createHandoffTool } from './handoff-tool.js'
 import { createMapTool } from './map-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
@@ -69,6 +70,10 @@ const pendingNoteReads = new Map<
  (result: { ok: boolean; ledger?: string | undefined; error?: string | undefined }) => void
 >
 /** `record_map` round-trips, same shape as a note write. */
+const pendingHandoffs = new Map<
+ string,
+ (result: { ok: boolean; reason?: string | undefined }) => void
+>
 const pendingMapWrites = new Map<
  string,
  (result: {
@@ -137,6 +142,14 @@ const main = async : Promise<void> => {
  return
  }
 
+ if (parsed.data.t === 'handoff_result') {
+ const resolveHandoff = pendingHandoffs.get(parsed.data.requestId)
+ if (resolveHandoff) {
+ pendingHandoffs.delete(parsed.data.requestId)
+ resolveHandoff(parsed.data)
+ }
+ return
+ }
  if (parsed.data.t === 'map_result') {
  const resolveMap = pendingMapWrites.get(parsed.data.requestId)
  if (resolveMap) {
@@ -248,6 +261,27 @@ const main = async : Promise<void> => {
  })
 : null
 
+ /**
+ * The handover channel, round-tripping to the host for the same reason
+ * the notes channel does: starting a successor is workspace-side work, and this process
+ * has no network and no database.
+ */
+ const handoffTool = createHandoffTool({
+ handOver: (brief) => {
+ const requestId = nextRequestId
+ emit({ t: 'handoff', requestId, brief })
+ return new Promise((resolve) => {
+ pendingHandoffs.set(requestId, (result) =>
+ resolve(
+ result.ok
+ ? { ok: true }
+: { ok: false, reason: result.reason ?? 'the platform refused it' },
+),
+)
+ })
+ },
+ })
+
  const questionTool = createQuestionTool({
  askHuman: (question) => {
  const requestId = nextRequestId
@@ -265,6 +299,7 @@ const main = async : Promise<void> => {
 ...(command.contextLedger === undefined ? {}: { contextLedger: command.contextLedger }),
  notesTool,
 ...(mapTool ? { mapTool }: {}),
+ handoffTool,
 ...(command.mapContext === undefined ? {}: { mapContext: command.mapContext }),
 ...(command.mastery === undefined ? {}: { mastery: command.mastery }),
  questionTool: questionTool.server,

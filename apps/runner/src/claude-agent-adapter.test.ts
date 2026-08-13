@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { HAND_OVER_TOOL_NAME } from './handoff-tool.js'
 import { RECORD_MAP_TOOL_NAME } from './map-tool.js'
 import {
  buildPrompt,
@@ -281,6 +282,33 @@ describe('buildQueryOptions: the mapping channel', => {
  it('offers nothing to an ordinary run — a map is not something any worker may write', => {
  const options = buildQueryOptions({ persona, cwd: '/clone' })
  expect(options.agents[persona.name]?.tools ?? []).not.toContain(RECORD_MAP_TOOL_NAME)
+ })
+})
+
+/**
+ * The handover channel. Guarded here for the reason `record_map` is: a tool that exists
+ * everywhere except the list the model sees is a feature that runs, costs money and does
+ * nothing — three times now.
+ */
+describe('buildQueryOptions: the handover channel', => {
+ it('names hand_over in the tool list, which is what makes it reachable', => {
+ const options = buildQueryOptions({
+ persona,
+ cwd: '/clone',
+ handoffTool: {} as never,
+ })
+ expect(options.agents[persona.name]?.tools).toContain(HAND_OVER_TOOL_NAME)
+ })
+
+ /**
+ * Offered to every run, unlike `record_map`. A map is persona-level state every later
+ * run reads; a brief is read by one successor in one tree and is fenced when it gets
+ * there, and the cost of withholding it is an agent that knows it is running out of
+ * room and cannot say what it knows.
+ */
+ it('is not a mastery-only channel', => {
+ const options = buildQueryOptions({ persona, cwd: '/clone' })
+ expect(options.agents[persona.name]?.tools ?? []).not.toContain(HAND_OVER_TOOL_NAME)
  })
 })
 

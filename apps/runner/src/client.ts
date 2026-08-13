@@ -40,6 +40,7 @@ import { mergeRunBranch } from './merge.js'
 import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
+import { createHandoffTool } from './handoff-tool.js'
 import { createMapTool } from './map-tool.js'
 import {
  CHECKPOINT_INTERVAL_MS,
@@ -110,6 +111,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  edgesWritten?: number | undefined
  superseded?: number | undefined
  }) => void
+ >
+ /** `hand_over` round-trips. Same shape as a note write. */
+ const pendingHandoffs = new Map<
+ string,
+ (result: { ok: boolean; reason?: string | undefined }) => void
  >
  /** `ask_human` round-trips, keyed by the id the answer comes back on. */
  const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
@@ -634,6 +640,34 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  }
  const mapTool = input.mastery !== undefined ? createMapTool({ recordMap: onMapWrite }): null
+
+ /**
+ * The handover. Offered to every run, unlike `record_map` — see `handoff-tool.ts`
+ * for why the blast radius makes that the right trade.
+ */
+ const onHandOver = (brief: {
+ done: string[]
+ branchState: string
+ openQuestions: string[]
+ nextStep: string
+ changedPaths: string[]
+ }): Promise<{ ok: true } | { ok: false; reason: string }> => {
+ const requestId = nextNoteRequestId
+ send({ type: 'handoff_requested', runId: input.runId, requestId, brief })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingHandoffs.delete(requestId)
+ resolve({ ok: false, reason: 'the platform did not answer in time — carry on' })
+ }, NOTE_TIMEOUT_MS)
+ pendingHandoffs.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok ? { ok: true }: { ok: false, reason: result.reason ?? 'it was refused' },
+)
+ })
+ })
+ }
+ const handoffTool = createHandoffTool({ handOver: onHandOver })
  // `ask_human`, on the same reasoning and the same round-trip. No
  // timeout here, unlike a notes read: this one is *meant* to block for as long as a
  // human takes, and the approval SLA is what bounds it — a second, shorter clock in
@@ -710,6 +744,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  ? { plannerTool: { server: deltaTool.server, toolName: PLAN_DELTA_TOOL_NAME } }
 : {}),
  notesTool,
+ handoffTool,
 ...(mapTool ? { mapTool }: {}),
  questionTool: questionTool.server,
 ...(input.task === undefined ? {}: { task: input.task }),
@@ -798,6 +833,19 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onMapWrite(fragment as { nodes: unknown[]; edges: unknown[] }),
  }
 : {}),
+ // Unconditional, unlike the map channel: every run may hand over, and a
+ // sandboxed run that could not would be the one place the feature silently
+ // did not exist.
+ onHandOver: (brief: Record<string, unknown>) =>
+ onHandOver(
+ brief as {
+ done: string[]
+ branchState: string
+ openQuestions: string[]
+ nextStep: string
+ changedPaths: string[]
+ },
+),
  onQuestion: (question) =>
  new Promise<{ answer: string | null }>((resolve) => {
  const requestId = nextNoteRequestId
@@ -1224,6 +1272,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  if (resolve) {
  pendingPermissions.delete(frame.toolUseId)
  resolve(frame.decision)
+ }
+ return
+ }
+
+ case 'handoff_result': {
+ const resolve = pendingHandoffs.get(frame.requestId)
+ if (resolve) {
+ pendingHandoffs.delete(frame.requestId)
+ resolve(frame)
  }
  return
  }

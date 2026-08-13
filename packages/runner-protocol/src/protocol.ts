@@ -313,6 +313,20 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  filesRead: z.number.int.nonnegative,
  filesInScope: z.number.int.nonnegative,
  }),
+ /**
+ * A run handing its work to a successor.
+ *
+ * `brief` is unvalidated here on purpose, exactly like `map_written`'s fragment: the
+ * domain's `parseBrief` is the one validator, and it is the only place that knows a
+ * brief without a next step is a summary. A second schema on the wire would be a second
+ * answer to that question.
+ */
+ z.object({
+ type: z.literal('handoff_requested'),
+ runId: z.string,
+ requestId: z.string,
+ brief: z.record(z.string, z.unknown),
+ }),
  z.object({
  type: z.literal('raw_transcript_chunk'),
  runId: z.string,
@@ -680,6 +694,17 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  */
  z.object({
  type: z.literal('note_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ reason: z.string.optional,
+ }),
+ /**
+ * The server's verdict on a handover. Same shape and same reason as
+ * `note_result` — and it matters more here, because the refusals are things the model
+ * can fix: a brief with no next step, or a tree that has already handed off twice.
+ */
+ z.object({
+ type: z.literal('handoff_result'),
  requestId: z.string,
  ok: z.boolean,
  reason: z.string.optional,

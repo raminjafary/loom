@@ -257,7 +257,14 @@ export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed' | 'merge
  * *about*, but it is not work that Planner delegated and it must not be summed into
  * the aggregation, counted as delegation depth, or drawn as another worker.
  */
-export type AgentRunRelation = 'delegation' | 'review' | 'reconcile' | 'steer'
+/**
+ * `handoff` is the warm successor: a new run in the *same tree*, on the same branch,
+ * against the same ledger. Its own relation because it is none of the others — it is not
+ * work handed down, not a review of a branch, not a rebase, and not a human re-entering a
+ * plan — and because a silent identity swap mid-task is exactly what mastery says must be
+ * visible.
+ */
+export type AgentRunRelation = 'delegation' | 'review' | 'reconcile' | 'steer' | 'handoff'
 
 export interface AgentRun {
  readonly id: AgentRunId

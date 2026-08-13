@@ -11,6 +11,7 @@ import {
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
 import { MAP_SERVER_NAME, MAP_TOOL_NAMES } from './map-tool.js'
+import { HANDOFF_SERVER_NAME, HANDOFF_TOOL_NAMES } from './handoff-tool.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
 import { PLANNER_SERVER_NAME } from './planner-tool.js'
@@ -204,6 +205,15 @@ export interface RunAgentOptions {
  /** The `record_map`, offered only on a mastery run. */
  readonly mapTool?: McpSdkServerConfigWithInstance
  /**
+ * The handover channel, offered to every run.
+ *
+ * Unlike `mapTool`, which is a mastery run's alone: a map is persona-level state every
+ * later run reads, and a brief is read by exactly one successor in one tree and is
+ * fenced when it gets there. The cost of withholding it is worse than the risk — an
+ * agent that knows it is running out of room and has no way to say what it knows.
+ */
+ readonly handoffTool?: McpSdkServerConfigWithInstance
+ /**
  * Hands the caller the run's delivery channel.
  *
  * Called once, synchronously, before the agent loop starts. What comes through it
@@ -293,6 +303,7 @@ export const buildQueryOptions = (
  | 'notesTool'
  | 'questionTool'
  | 'mapTool'
+ | 'handoffTool'
  >,
  settingSources: SettingSourceName[] = settingSourcesFromEnv,
 ) => {
@@ -305,6 +316,7 @@ export const buildQueryOptions = (
  // The shared-context channel, in-process for the same reason.
  if (options.notesTool) mcpServers[NOTES_SERVER_NAME] = options.notesTool
  if (options.mapTool) mcpServers[MAP_SERVER_NAME] = options.mapTool
+ if (options.handoffTool) mcpServers[HANDOFF_SERVER_NAME] = options.handoffTool
  if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
  const skills = capabilities
 .filter((capability) => capability.kind === 'skill')
@@ -337,6 +349,7 @@ export const buildQueryOptions = (
 ...(options.plannerTool ? [options.plannerTool.toolName]: []),
 ...(options.notesTool ? NOTES_TOOL_NAMES: []),
 ...(options.mapTool ? MAP_TOOL_NAMES: []),
+...(options.handoffTool ? HANDOFF_TOOL_NAMES: []),
 ...(options.questionTool ? [ASK_HUMAN_TOOL_NAME]: []),
  ]
 

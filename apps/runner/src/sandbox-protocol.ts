@@ -88,6 +88,13 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  edgesWritten: z.number.int.nonnegative.optional,
  superseded: z.number.int.nonnegative.optional,
  }),
+ /** The host's verdict on a handover. */
+ z.object({
+ t: z.literal('handoff_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ reason: z.string.optional,
+ }),
  /** The tree's ledger, in answer to the agent's `notes_request`. */
  z.object({
  t: z.literal('notes_result'),
@@ -186,6 +193,17 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  t: z.literal('map'),
  requestId: z.string,
  fragment: z.record(z.string, z.unknown),
+ }),
+ /**
+ * The agent handing its work to a successor.
+ *
+ * Off the event queue like `map` and `note`: it is not part of the transcript sequence,
+ * and the agent's tool call is held open on the answer.
+ */
+ z.object({
+ t: z.literal('handoff'),
+ requestId: z.string,
+ brief: z.record(z.string, z.unknown),
  }),
  /** The agent asking a human a question, answered by `question_result`. */
  z.object({ t: z.literal('question_request'), requestId: z.string, question: z.string }),

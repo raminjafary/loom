@@ -458,6 +458,7 @@ const AGENT_RUN_RELATIONS: readonly AgentRunRelation[] = [
  'review',
  'reconcile',
  'steer',
+ 'handoff',
 ]
 
 const toAgentRunRelation = (value: string | null): AgentRunRelation | null => {

@@ -840,7 +840,19 @@ export const AgentRunStatusSchema = z.enum([
 export const AgentRunBranchDispositionSchema = z.enum(['kept', 'discarded', 'pushed', 'merged'])
 
 /** How a child run attaches to its parent — see AgentRunRelation. */
-export const AgentRunRelationSchema = z.enum(['delegation', 'review', 'reconcile', 'steer'])
+/**
+ * `handoff` is the warm successor — a new run in the same tree, on the same branch,
+ * against the same ledger. On the wire because mastery requires the swap to be *visible*: a
+ * silent identity change mid-task is what destroys trust in a system otherwise doing the
+ * right thing.
+ */
+export const AgentRunRelationSchema = z.enum([
+ 'delegation',
+ 'review',
+ 'reconcile',
+ 'steer',
+ 'handoff',
+])
 
 export const AgentRunSchema = z.object({
  id: z.string,

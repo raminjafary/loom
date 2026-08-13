@@ -109,6 +109,16 @@ export interface SandboxOptions {
  | { ok: true; nodesWritten: number; edgesWritten: number; superseded: number }
  | { ok: false; reason: string }
  >
+ /**
+ * The agent handing its work to a successor.
+ *
+ * Present on every run, unlike `onMapWrite`: a brief is read by one successor in one
+ * tree and is fenced when it gets there, so withholding the channel would only mean an
+ * agent that knows it is running out of room and cannot say what it knows.
+ */
+ readonly onHandOver?: (
+ brief: Record<string, unknown>,
+) => Promise<{ ok: true } | { ok: false; reason: string }>
  /** The tree's ledger at start, rendered and fenced server-side. */
  readonly contextLedger?: string
  /** What the persona already knows about this subject, rendered server-side. */
@@ -588,6 +598,20 @@ export const runAgentInSandbox = async (
  }
  send({
  t: 'note_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? {}: { reason: result.reason }),
+ })
+ })
+ return
+ case 'handoff':
+ void (async => {
+ const result = (await options.onHandOver?.(frame.brief)) ?? {
+ ok: false,
+ reason: 'this Runner cannot hand over — carry on',
+ }
+ send({
+ t: 'handoff_result',
  requestId: frame.requestId,
  ok: result.ok,
 ...(result.ok ? {}: { reason: result.reason }),

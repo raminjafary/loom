@@ -649,6 +649,14 @@ export interface AgentRunEventRepositoryPort {
  workspaceId: WorkspaceId,
  agentRunIds: readonly AgentRunId[],
 ): Promise<Map<string, RunLiveActivity>>
+ /**
+ * Repository-relative paths this run was **observed** writing.
+ *
+ * From the persisted `tool_call` events rather than from anything the run said, which
+ * is the whole point: the brief is written by a model that is by hypothesis running low
+ * on room, and the check is only worth having if its other side is independent of it.
+ */
+ writtenPaths(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<string[]>
 }
 
 /**

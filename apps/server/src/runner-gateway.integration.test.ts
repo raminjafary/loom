@@ -556,6 +556,111 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  * nobody knows anything is refused, so a test that could convene one without a map would
  * be testing a venue this platform does not have.
  */
+/**
+ * Warm handoff — the only item in that section that can lose work.
+ *
+ * The order of operations is what is being asserted: the successor exists before the
+ * predecessor is retired, it is in the same tree on the same branch, and what the
+ * platform observed travels beside what the predecessor claimed.
+ */
+describe('runner-gateway: warm handoff', => {
+ /** Starts an ordinary run on an already-paired socket, and hands back its id. */
+ const startOn = async (socket: WebSocket, threadId: string, repositoryId: string) => {
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({
+ threadId,
+ repositoryId,
+ personaId: testPersonaId,
+ })
+ await startRun
+ return runPromise
+ }
+
+ const handOver = async (socket: WebSocket, runId: string, brief: Record<string, unknown>) => {
+ const requestId = `handoff-${Math.random.toString(36).slice(2)}`
+ const result = nextFrame(
+ socket,
+ (v) => v.type === 'handoff_result' && v.requestId === requestId,
+)
+ socket.send(JSON.stringify({ type: 'handoff_requested', runId, requestId, brief }))
+ return result
+ }
+
+ it('starts a successor in the same tree and retires the predecessor', async => {
+ const stamp = Date.now
+ const { socket, runnerId } = await pairFakeRunner(`handoff-${stamp}`)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: `handoff-${stamp}` })
+ const run = await startOn(socket, created.rootThread.id, repo.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: run.id,
+ clonePath: '/tmp/clone',
+ branchName: 'loom/run-handoff',
+ }),
+)
+
+ const successorStart = nextFrame(socket, (v) => v.type === 'start_run')
+ const result = await handOver(socket, run.id, {
+ done: ['Wired the refund path'],
+ branchState: 'committed, tests not run',
+ openQuestions: ['Does the fee apply to partial refunds?'],
+ nextStep: 'Run the payments suite',
+ changedPaths: ['src/refund.ts'],
+ })
+ expect(result.reason ?? '').toBe('')
+ expect(result.ok).toBe(true)
+
+ const frame = await successorStart
+ // The brief travels as the task, and the platform's own facts are outside its fence
+ // and above it — the ordering is the mitigation, not a layout choice.
+ expect(frame.task).toContain('what the platform itself observed')
+ expect(frame.task).toContain('loom/run-handoff')
+ expect(frame.task).toContain('Run the payments suite')
+ expect(frame.task).toContain('LOOM_UNTRUSTED_HANDOFF_BRIEF')
+ // The claim the platform could not corroborate is named, not dropped.
+ expect(frame.task).toContain('Check before you build on it')
+
+ const children = await client.agentRun.listChildren({ agentRunId: run.id })
+ const successor = children.find((child) => child.relation === 'handoff')
+ expect(successor).toBeDefined
+ // Same tree, same persona: continuity for the human is the tree, not the process.
+ expect(successor?.persona.name).toBe(run.persona.name)
+
+ // The predecessor is retired only after the successor exists.
+ for (let i = 0; i < 40; i += 1) {
+ const listed = await client.agentRun.get({ agentRunId: run.id })
+ if (listed.status === 'completed') break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('completed')
+
+ // And it is said out loud — a silent identity swap mid-task is what mastery forbids.
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ expect(page.messages.some((m) => m.body.text?.includes('handed this work'))).toBe(true)
+
+ socket.close
+ })
+
+ it('refuses a brief with no next step, and the run carries on', async => {
+ const stamp = Date.now
+ const { socket, runnerId } = await pairFakeRunner(`handoff-summary-${stamp}`)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: `handoff-summary-${stamp}` })
+ const run = await startOn(socket, created.rootThread.id, repo.id)
+
+ const result = await handOver(socket, run.id, { done: ['a lot'], branchState: 'clean' })
+ expect(result.ok).toBe(false)
+ expect(String(result.reason)).toContain('summary')
+
+ // Refused, so nothing was retired: the run is still the one doing the work.
+ expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('running')
+ socket.close
+ })
+})
+
 describe('runner-gateway: the Colosseum', => {
  /** Runs a mastery run to completion so the persona ends up holding a ready map. */
  const giveMap = async (
