@@ -47,7 +47,13 @@ import {
  listRunners,
  listRunsNeedingAttention,
  getMastery,
+ concludeSession,
+ conveneSession,
  curateMap,
+ getSession as getColosseumSession,
+ listSessions,
+ recordOpeningClaim,
+ settleSessionClaim,
  listExpertiseUsedByRuns,
  listPersonaMaps,
  listRepositoryMaps,
@@ -564,6 +570,69 @@ export const router = os.router({
  },
  })
  }),
+),
+ },
+
+ /** The venue. Nothing here writes a map — a session's output is claims with verdicts. */
+ colosseum: {
+ list: os.colosseum.list.handler(({ context }) =>
+ guard( => listSessions(context.deps, { workspaceId: context.principal.workspaceId })),
+),
+
+ get: os.colosseum.get.handler(({ context, input }) =>
+ guard( =>
+ getColosseumSession(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ sessionId: input.sessionId,
+ }),
+),
+),
+
+ convene: os.colosseum.convene.handler(({ context, input }) =>
+ guard( =>
+ conveneSession(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ threadId: asThreadId(input.threadId),
+ repositoryId: input.repositoryId === null ? null: asRepositoryId(input.repositoryId),
+ purpose: input.purpose,
+ subject: input.subject,
+ question: input.question,
+ personaIds: input.personaIds.map(asAgentPersonaId),
+...(input.turnCap === undefined ? {}: { turnCap: input.turnCap }),
+...(input.spendCapUsd === undefined ? {}: { spendCapUsd: input.spendCapUsd }),
+ }),
+),
+),
+
+ recordClaim: os.colosseum.recordClaim.handler(({ context, input }) =>
+ guard( =>
+ recordOpeningClaim(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ sessionId: input.sessionId,
+ personaId: asAgentPersonaId(input.personaId),
+ statement: input.statement,
+ }),
+),
+),
+
+ settleClaim: os.colosseum.settleClaim.handler(({ context, input }) =>
+ guard( =>
+ settleSessionClaim(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ claimId: input.claimId,
+ verdict: input.verdict,
+ citation: input.citation,
+ }),
+),
+),
+
+ conclude: os.colosseum.conclude.handler(({ context, input }) =>
+ guard( =>
+ concludeSession(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ sessionId: input.sessionId,
+ }),
+),
 ),
  },
 

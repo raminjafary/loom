@@ -26,6 +26,9 @@ import {
  CostSummarySchema,
  SwarmBoardSchema,
  ThreadSchema,
+ ColosseumClaimSchema,
+ ColosseumSessionSchema,
+ ColosseumViewSchema,
  MasteryViewSchema,
  SubjectMapListingSchema,
  SubjectMapSchema,
@@ -446,6 +449,66 @@ export const contract = {
  }),
 )
 .output(AgentRunSchema),
+ },
+
+ /**
+ * The Colosseum — a bounded, budgeted, recorded session with a fixed
+ * roster and a verdict.
+ *
+ * There is deliberately no procedure that merges a session's conclusions into a map.
+ * Mastery: "a session's output is a set of claims with verdicts, never a merged map;
+ * nothing a session says is written into a trusted layer by the session itself."
+ */
+ colosseum: {
+ list: oc.output(z.array(ColosseumSessionSchema)),
+
+ get: oc.input(z.object({ sessionId: z.string })).output(ColosseumViewSchema),
+
+ /**
+ * Convenes one. The roster is fixed here and never added to — the "no agent pulls
+ * in another mid-session" is enforced by there being no way to.
+ */
+ convene: oc
+.input(
+ z.object({
+ threadId: z.string,
+ repositoryId: z.string.nullable,
+ purpose: z.enum(['consultation', 'contention', 'crunching', 'warm_up']),
+ subject: z.string.min(1).max(200),
+ question: z.string.min(1).max(2_000),
+ personaIds: z.array(z.string).min(2).max(5),
+ turnCap: z.number.int.min(1).max(12).optional,
+ spendCapUsd: z.number.nonnegative.nullable.optional,
+ }),
+)
+.output(ColosseumSessionSchema),
+
+ /** A claim held *before* the first exchange. Refused once the session has started. */
+ recordClaim: oc
+.input(
+ z.object({
+ sessionId: z.string,
+ personaId: z.string,
+ statement: z.string.min(1).max(2_000),
+ }),
+)
+.output(ColosseumClaimSchema),
+
+ /**
+ * Settles a claim with the check that settled it. A verdict with no citation is
+ * refused — the arbiter is the repository, and nothing is settled by vote.
+ */
+ settleClaim: oc
+.input(
+ z.object({
+ claimId: z.string,
+ verdict: z.enum(['upheld', 'refuted']),
+ citation: z.string.min(1).max(1_000),
+ }),
+)
+.output(ColosseumClaimSchema),
+
+ conclude: oc.input(z.object({ sessionId: z.string })).output(ColosseumViewSchema),
  },
 
  /**

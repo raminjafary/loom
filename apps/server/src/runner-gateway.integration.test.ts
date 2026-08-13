@@ -547,6 +547,184 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  })
 })
 
+/**
+ * The venue, end to end.
+ *
+ * Here rather than in `app.integration.test.ts` because a session's roster is resolved
+ * from the maps its participants hold, and a map only exists after a mastery run — which
+ * needs a Runner. That dependency is the feature, not an inconvenience: a roster where
+ * nobody knows anything is refused, so a test that could convene one without a map would
+ * be testing a venue this platform does not have.
+ */
+describe('runner-gateway: the Colosseum', => {
+ /** Runs a mastery run to completion so the persona ends up holding a ready map. */
+ const giveMap = async (
+ socket: WebSocket,
+ threadId: string,
+ repositoryId: string,
+ personaId: string,
+ key: string,
+) => {
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.mastery.start({ threadId, repositoryId, personaId })
+ await startRun
+
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: run.id,
+ clonePath: '/tmp/clone',
+ branchName: 'loom/mastery',
+ headSha: 'deadbeef1234',
+ }),
+)
+ const mapResult = nextFrame(socket, (v) => v.type === 'map_result')
+ socket.send(
+ JSON.stringify({
+ type: 'map_written',
+ runId: run.id,
+ requestId: `frag-${key}`,
+ fragment: { nodes: [{ key, kind: 'concept', label: key, summary: '' }] },
+ }),
+)
+ expect((await mapResult).ok).toBe(true)
+
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: run.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'mapped' },
+ }),
+)
+ // The map is only `ready` once the run's terminal event has been processed.
+ for (let i = 0; i < 40; i += 1) {
+ const maps = await client.mastery.listForPersona({ personaId })
+ if (maps.some((entry) => entry.map.status === 'ready')) return
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ throw new Error('the map never became ready')
+ }
+
+ it('convenes a roster, records opening claims, and settles only with a check', async => {
+ const stamp = Date.now
+ const { socket, runnerId } = await pairFakeRunner(`colosseum-${stamp}`)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: `colosseum-${stamp}` })
+
+ await giveMap(socket, created.rootThread.id, repo.id, testPersonaId, 'checkout')
+
+ // A second voice: no map of its own, which is the consultation case — a worker
+ // putting a bounded question to a domain expert.
+ const worker = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: colosseum-worker-${stamp}`,
+ 'description: Asks',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'You ask.',
+ ].join('\n'),
+ })
+
+ const session = await client.colosseum.convene({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ purpose: 'consultation',
+ subject: 'test repo',
+ question: 'Does the refund path double-convert minor units?',
+ personaIds: [testPersonaId, worker.id],
+ })
+ expect(session.status).toBe('convened')
+ expect(session.distinctSubjects).toBe(1)
+
+ const claim = await client.colosseum.recordClaim({
+ sessionId: session.id,
+ personaId: testPersonaId,
+ statement: 'refundFor re-applies the conversion',
+ })
+ // Recorded before anyone spoke — the field that makes attrition measurable.
+ expect(claim.originalHolderPersonaId).toBe(testPersonaId)
+ expect(claim.verdict).toBe('unsettled')
+
+ // Nothing is settled by vote: a verdict needs a check the repository can answer.
+ await expect(
+ client.colosseum.settleClaim({ claimId: claim.id, verdict: 'upheld', citation: '' }),
+).rejects.toThrow
+
+ const settled = await client.colosseum.settleClaim({
+ claimId: claim.id,
+ verdict: 'upheld',
+ citation: 'fareFor(10) is 1000 and refundFor(1000) is 50000',
+ })
+ expect(settled.verdict).toBe('upheld')
+
+ const view = await client.colosseum.get({ sessionId: session.id })
+ expect(view.participants).toHaveLength(2)
+ expect(view.outcome).toMatchObject({ upheld: 1, unsettled: 0, lostGround: false })
+
+ // Concluding writes no map and promotes nothing — the output is the claims.
+ const concluded = await client.colosseum.conclude({ sessionId: session.id })
+ expect(concluded.session.status).toBe('concluded')
+
+ await expect(
+ client.colosseum.recordClaim({
+ sessionId: session.id,
+ personaId: testPersonaId,
+ statement: 'said afterwards',
+ }),
+).rejects.toThrow(/before the first exchange/)
+
+ await client.persona.delete({ personaId: worker.id })
+ socket.close
+ })
+
+ it('refuses a roster where nobody knows anything', async => {
+ const stamp = Date.now
+ const { socket } = await pairFakeRunner(`colosseum-empty-${stamp}`)
+ const created = await client.channel.create({ name: `colosseum-empty-${stamp}` })
+
+ const one = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: colosseum-a-${stamp}`,
+ 'description: Knows nothing',
+ 'model: claude-sonnet-5',
+ 'tools: [Read]',
+ '---',
+ 'You know nothing.',
+ ].join('\n'),
+ })
+ const two = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: colosseum-b-${stamp}`,
+ 'description: Knows nothing either',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'You know nothing either.',
+ ].join('\n'),
+ })
+
+ await expect(
+ client.colosseum.convene({
+ threadId: created.rootThread.id,
+ repositoryId: null,
+ purpose: 'contention',
+ subject: 'anything',
+ question: 'Well?',
+ personaIds: [one.id, two.id],
+ }),
+).rejects.toThrow(/nobody knows anything/)
+
+ await client.persona.delete({ personaId: one.id })
+ await client.persona.delete({ personaId: two.id })
+ socket.close
+ })
+})
+
 describe('runner-gateway: agent run event ingest', => {
  it('dispatches start_run and renders streamed events as thread messages', async => {
  const { socket, runnerId } = await pairFakeRunner('run-test')

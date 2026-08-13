@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import type { MasteryView, ResponseStyle, SubjectMapListing } from '@loom/api-contract'
+import type {
+ ColosseumSession,
+ ColosseumView,
+ MasteryView,
+ ResponseStyle,
+ SubjectMapListing,
+} from '@loom/api-contract'
 import {
  areaLabelFromAnnouncement,
  buildThreadTrail,
@@ -317,6 +323,41 @@ const curateMap = async (mapId: string) => {
  // Reloaded, because a pass changes what the map holds — a report saying two claims were
  // retired above a graph still drawing them is the surface disagreeing with itself.
  await loadMastery(mapId)
+}
+
+/**
+ * The venue, fetched when its tab is opened rather than on the snapshot: a session is
+ * convened rarely and read deliberately, and putting it on the poll would add a query to
+ * every tick of a surface nobody has open.
+ */
+const colosseumSessions = ref<ColosseumSession[]>([])
+const colosseumView = ref<ColosseumView | null>(null)
+
+const refreshColosseum = async => {
+ colosseumSessions.value = await agent.listColosseumSessions
+}
+
+const selectColosseumSession = async (sessionId: string) => {
+ colosseumView.value = await agent.getColosseumSession(sessionId)
+}
+
+const conveneColosseum = async (input: {
+ purpose: 'consultation' | 'contention' | 'crunching' | 'warm_up'
+ subject: string
+ question: string
+ personaIds: string[]
+}) => {
+ const threadId = snapshot.value.activeThread?.id
+ // A session is watched where the work is, and there is deliberately no invented thread:
+ // The "a session is a thing on the board, not a gap in the record".
+ if (!threadId) return
+ const sessionId = await agent.conveneColosseum({
+ threadId,
+ repositoryId: agentSnapshot.value.activeRun?.repositoryId ?? null,
+...input,
+ })
+ await refreshColosseum
+ if (sessionId) await selectColosseumSession(sessionId)
 }
 
 const composerOpen = ref(false)
@@ -1080,6 +1121,27 @@ onBeforeUnmount( => {
  @refresh-maps=" => masteryPersonaId && selectExpertisePersona(masteryPersonaId)"
  @master="startMastery"
 :mastery-curation="masteryCuration"
+:colosseum-sessions="colosseumSessions"
+:colosseum-view="colosseumView"
+ @colosseum-select="(sessionId) => void selectColosseumSession(sessionId)"
+ @colosseum-refresh=" => void refreshColosseum"
+ @colosseum-convene="(input) => void conveneColosseum(input)"
+ @colosseum-claim="
+ (input) =>
+ void agent
+.recordColosseumClaim(input)
+.then( => selectColosseumSession(input.sessionId))
+ "
+ @colosseum-settle="
+ (input) =>
+ void agent
+.settleColosseumClaim(input)
+.then( => colosseumView && selectColosseumSession(colosseumView.session.id))
+ "
+ @colosseum-conclude="
+ (sessionId) =>
+ void agent.concludeColosseum(sessionId).then( => selectColosseumSession(sessionId))
+ "
  @set-retrieval="setMapRetrieval"
  @curate="curateMap"
  @create-pairing-token="(name) => agent.createPairingToken(name)"

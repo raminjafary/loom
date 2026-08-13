@@ -3,6 +3,7 @@ import type {
  AgentRunRepositoryPort,
  ApprovalRepositoryPort,
  CapabilityRepositoryPort,
+ ColosseumRepositoryPort,
  MergeQueueRepositoryPort,
  NotificationTargetRepositoryPort,
  PersonaGroupRepositoryPort,
@@ -22,6 +23,12 @@ import {
  asRunnerId,
  asThreadId,
  primaryToolArgument,
+ asAgentPersonaId,
+ asRepositoryId,
+ asSubjectMapId,
+ asWorkspaceId,
+ type ColosseumClaim,
+ type ColosseumSession,
  type ExpertiseArmTally,
  type WorkspaceId,
 } from '@loom/domain'
@@ -75,6 +82,10 @@ import {
  repository,
  runner,
  thread,
+ colosseumClaim,
+ colosseumParticipant,
+ colosseumSession,
+ colosseumTurn,
  expertiseUse,
  masteryCheckpoint,
  noteReadEdge,
@@ -1825,6 +1836,231 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  }))
  },
 })
+
+/**
+ * The Colosseum. Convening writes the roster once and never again — the
+ * fixed roster is not a rule enforced at read time, it is the absence of an add method.
+ */
+export const colosseumRepository = (db: Database): ColosseumRepositoryPort => {
+ const toSession = (row: typeof colosseumSession.$inferSelect): ColosseumSession => ({
+ id: row.id,
+ workspaceId: asWorkspaceId(row.workspaceId),
+ threadId: asThreadId(row.threadId),
+ repositoryId: row.repositoryId === null ? null: asRepositoryId(row.repositoryId),
+ purpose: row.purpose as ColosseumSession['purpose'],
+ subject: row.subject,
+ question: row.question,
+ status: row.status as ColosseumSession['status'],
+ turnCap: row.turnCap,
+ spendCapUsd: row.spendCapUsd,
+ distinctSubjects: row.distinctSubjects,
+ distinctModels: row.distinctModels,
+ createdAt: row.createdAt,
+ concludedAt: row.concludedAt,
+ })
+
+ const toClaim = (row: typeof colosseumClaim.$inferSelect): ColosseumClaim => ({
+ id: row.id,
+ statement: row.statement,
+ originalHolderPersonaId: asAgentPersonaId(row.originalHolderPersonaId),
+ verdict: row.verdict as ColosseumClaim['verdict'],
+ citation: row.citation,
+ droppedAt: row.droppedAt,
+ })
+
+ return {
+ async convene(input) {
+ const [row] = await db
+.insert(colosseumSession)
+.values({
+ workspaceId: input.workspaceId,
+ threadId: input.threadId,
+ repositoryId: input.repositoryId,
+ purpose: input.purpose,
+ subject: input.subject,
+ question: input.question,
+ turnCap: input.turnCap,
+ spendCapUsd: input.spendCapUsd,
+ distinctSubjects: input.diversity.subjects,
+ distinctModels: input.diversity.models,
+ })
+.returning
+ if (!row) throw new Error('colosseum_session insert returned no row')
+
+ await db.insert(colosseumParticipant).values(
+ input.participants.map((participant) => ({
+ workspaceId: input.workspaceId,
+ sessionId: row.id,
+ personaId: participant.personaId,
+ personaName: participant.personaName,
+ mapId: participant.mapId,
+ model: participant.model,
+ subjectRef: participant.subjectRef,
+ })),
+)
+ return toSession(row)
+ },
+
+ async getSession(workspaceId, sessionId) {
+ const [row] = await db
+.select
+.from(colosseumSession)
+.where(
+ and(eq(colosseumSession.workspaceId, workspaceId), eq(colosseumSession.id, sessionId)),
+)
+ return row ? toSession(row): null
+ },
+
+ async listSessions(workspaceId) {
+ const rows = await db
+.select
+.from(colosseumSession)
+.where(eq(colosseumSession.workspaceId, workspaceId))
+.orderBy(desc(colosseumSession.createdAt))
+ return rows.map(toSession)
+ },
+
+ async listParticipants(workspaceId, sessionId) {
+ const rows = await db
+.select
+.from(colosseumParticipant)
+.where(
+ and(
+ eq(colosseumParticipant.workspaceId, workspaceId),
+ eq(colosseumParticipant.sessionId, sessionId),
+),
+)
+ return rows.map((row) => ({
+ personaId: asAgentPersonaId(row.personaId),
+ personaName: row.personaName,
+ mapId: row.mapId === null ? null: asSubjectMapId(row.mapId),
+ model: row.model,
+ subjectRef: row.subjectRef,
+ }))
+ },
+
+ async setStatus(workspaceId, sessionId, status) {
+ const [row] = await db
+.update(colosseumSession)
+.set({
+ status,
+ // Stamped by the transition rather than by a caller: "when did this end" has
+ // exactly one right answer and it is not a parameter.
+...(status === 'concluded' || status === 'abandoned' ? { concludedAt: new Date }: {}),
+ })
+.where(
+ and(eq(colosseumSession.workspaceId, workspaceId), eq(colosseumSession.id, sessionId)),
+)
+.returning
+ return row ? toSession(row): null
+ },
+
+ async recordClaim(input) {
+ const [row] = await db
+.insert(colosseumClaim)
+.values({
+ workspaceId: input.workspaceId,
+ sessionId: input.sessionId,
+ statement: input.statement,
+ originalHolderPersonaId: input.originalHolderPersonaId,
+ })
+.returning
+ if (!row) throw new Error('colosseum_claim insert returned no row')
+ return toClaim(row)
+ },
+
+ async listClaims(workspaceId, sessionId) {
+ const rows = await db
+.select
+.from(colosseumClaim)
+.where(
+ and(eq(colosseumClaim.workspaceId, workspaceId), eq(colosseumClaim.sessionId, sessionId)),
+)
+.orderBy(colosseumClaim.createdAt)
+ return rows.map(toClaim)
+ },
+
+ async settleClaim(input) {
+ const [row] = await db
+.update(colosseumClaim)
+.set({ verdict: input.verdict, citation: input.citation })
+.where(
+ and(
+ eq(colosseumClaim.workspaceId, input.workspaceId),
+ eq(colosseumClaim.id, input.claimId),
+),
+)
+.returning
+ return row ? toClaim(row): null
+ },
+
+ async dropClaim(workspaceId, claimId) {
+ const [row] = await db
+.update(colosseumClaim)
+.set({ droppedAt: new Date })
+.where(and(eq(colosseumClaim.workspaceId, workspaceId), eq(colosseumClaim.id, claimId)))
+.returning
+ return row ? toClaim(row): null
+ },
+
+ async appendTurn(input) {
+ /**
+ * The sequence is taken from what is already there rather than from a counter the
+ * caller keeps: two turns racing would otherwise both be "turn 3", and the unique
+ * index would reject one — which is the right failure, but a caller-side counter
+ * makes it a failure at all.
+ */
+ const [existing] = await db
+.select({ max: sql<number>`coalesce(max(${colosseumTurn.seq}), 0)::int` })
+.from(colosseumTurn)
+.where(
+ and(
+ eq(colosseumTurn.workspaceId, input.workspaceId),
+ eq(colosseumTurn.sessionId, input.sessionId),
+),
+)
+ const seq = (existing?.max ?? 0) + 1
+
+ await db.insert(colosseumTurn).values({
+ seq,
+ workspaceId: input.workspaceId,
+ sessionId: input.sessionId,
+ personaId: input.personaId,
+ personaName: input.personaName,
+ agentRunId: input.agentRunId,
+ text: input.text,
+ })
+ return { seq }
+ },
+
+ async listTurns(workspaceId, sessionId) {
+ const rows = await db
+.select
+.from(colosseumTurn)
+.where(
+ and(eq(colosseumTurn.workspaceId, workspaceId), eq(colosseumTurn.sessionId, sessionId)),
+)
+.orderBy(colosseumTurn.seq)
+ return rows.map((row) => ({
+ seq: row.seq,
+ personaName: row.personaName,
+ agentRunId: row.agentRunId,
+ text: row.text,
+ createdAt: row.createdAt,
+ }))
+ },
+
+ async countTurns(workspaceId, sessionId) {
+ const [row] = await db
+.select({ total: count })
+.from(colosseumTurn)
+.where(
+ and(eq(colosseumTurn.workspaceId, workspaceId), eq(colosseumTurn.sessionId, sessionId)),
+)
+ return row?.total ?? 0
+ },
+ }
+}
 
 /**
  * Note-read edges. See the `note_read_edge` table for why this is an edge

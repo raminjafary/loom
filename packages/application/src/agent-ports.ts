@@ -1,6 +1,12 @@
 import type {
+ ColosseumClaim,
+ ColosseumSession,
+ ColosseumParticipant,
+ ColosseumPurpose,
+ ColosseumStatus,
  ExpertiseArm,
  MasteryDirective,
+ RosterDiversity,
  ExpertiseArmTally,
  RetrievalOverride,
  ApprovalMode,
@@ -1114,6 +1120,75 @@ export interface SubjectMapRepositoryPort {
  edgesShown: number
  }[]
  >
+}
+
+/**
+ * The Colosseum's four properties, stored: a fixed roster, a spend
+ * ceiling, a transcript and a verdict.
+ *
+ * Its own port because a session is not a run and not a map: it has participants, turns
+ * and claims, and folding it into either would make half the fields on that port null for
+ * everything else that uses it.
+ */
+export interface ColosseumRepositoryPort {
+ convene(input: {
+ workspaceId: WorkspaceId
+ threadId: ThreadId
+ repositoryId: RepositoryId | null
+ purpose: ColosseumPurpose
+ subject: string
+ question: string
+ turnCap: number
+ spendCapUsd: number | null
+ diversity: RosterDiversity
+ participants: readonly ColosseumParticipant[]
+ }): Promise<ColosseumSession>
+ getSession(workspaceId: WorkspaceId, sessionId: string): Promise<ColosseumSession | null>
+ listSessions(workspaceId: WorkspaceId): Promise<ColosseumSession[]>
+ listParticipants(workspaceId: WorkspaceId, sessionId: string): Promise<ColosseumParticipant[]>
+ setStatus(
+ workspaceId: WorkspaceId,
+ sessionId: string,
+ status: ColosseumStatus,
+): Promise<ColosseumSession | null>
+
+ /** An opening claim, recorded before the first exchange. */
+ recordClaim(input: {
+ workspaceId: WorkspaceId
+ sessionId: string
+ statement: string
+ originalHolderPersonaId: AgentPersonaId
+ }): Promise<ColosseumClaim>
+ listClaims(workspaceId: WorkspaceId, sessionId: string): Promise<ColosseumClaim[]>
+ settleClaim(input: {
+ workspaceId: WorkspaceId
+ claimId: string
+ verdict: 'upheld' | 'refuted'
+ citation: string
+ }): Promise<ColosseumClaim | null>
+ dropClaim(workspaceId: WorkspaceId, claimId: string): Promise<ColosseumClaim | null>
+
+ appendTurn(input: {
+ workspaceId: WorkspaceId
+ sessionId: string
+ personaId: AgentPersonaId | null
+ personaName: string
+ agentRunId: AgentRunId | null
+ text: string
+ }): Promise<{ seq: number }>
+ listTurns(
+ workspaceId: WorkspaceId,
+ sessionId: string,
+): Promise<
+ {
+ seq: number
+ personaName: string
+ agentRunId: string | null
+ text: string
+ createdAt: Date
+ }[]
+ >
+ countTurns(workspaceId: WorkspaceId, sessionId: string): Promise<number>
 }
 
 /**

@@ -274,6 +274,13 @@
       "when": 1786583057127,
       "tag": "0038_bitter_boomer",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1786583878089,
+      "tag": "0039_sturdy_talkback",
+      "breakpoints": true
     }
   ]
 }

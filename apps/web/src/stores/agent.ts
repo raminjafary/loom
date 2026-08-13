@@ -49,6 +49,15 @@ export const useAgentStore = defineStore('agent', => {
  listRepositoryMaps: (repositoryId: string) => session.listRepositoryMaps(repositoryId),
  /** Which maps one run read, and which it was deliberately denied. */
  listWorkspaceMaps: => session.listWorkspaceMaps,
+ listColosseumSessions: => session.listColosseumSessions,
+ getColosseumSession: (sessionId: string) => session.getColosseumSession(sessionId),
+ conveneColosseum: (input: Parameters<typeof session.conveneColosseum>[0]) =>
+ session.conveneColosseum(input),
+ recordColosseumClaim: (input: Parameters<typeof session.recordColosseumClaim>[0]) =>
+ session.recordColosseumClaim(input),
+ settleColosseumClaim: (input: Parameters<typeof session.settleColosseumClaim>[0]) =>
+ session.settleColosseumClaim(input),
+ concludeColosseum: (sessionId: string) => session.concludeColosseum(sessionId),
  curateMap: (mapId: string) => session.curateMap(mapId),
  listExpertiseUsedByRuns: (agentRunIds: readonly string[]) =>
  session.listExpertiseUsedByRuns(agentRunIds),

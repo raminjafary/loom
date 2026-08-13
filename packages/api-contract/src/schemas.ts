@@ -420,6 +420,73 @@ export const MasteryViewSchema = z.object({
  retrievalState: z.enum(['trial', 'on', 'off']),
 })
 
+/**
+ * A convened session.
+ *
+ * The four properties mastery says make it a venue rather than a feature are all here: the
+ * roster (its own array), the spend ceiling, the transcript, and the verdicts.
+ */
+export const ColosseumSessionSchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ threadId: z.string,
+ repositoryId: z.string.nullable,
+ purpose: z.enum(['consultation', 'contention', 'crunching', 'warm_up']),
+ subject: z.string,
+ question: z.string,
+ status: z.enum(['convened', 'running', 'concluded', 'abandoned']),
+ turnCap: z.number.int,
+ spendCapUsd: z.number.nullable,
+ /** Roster diversity as convened — correlated errors are the mechanism, so this is data. */
+ distinctSubjects: z.number.int,
+ distinctModels: z.number.int,
+ createdAt: z.date,
+ concludedAt: z.date.nullable,
+})
+
+export const ColosseumClaimSchema = z.object({
+ id: z.string,
+ statement: z.string,
+ /** Recorded before the first exchange — what makes attrition measurable. */
+ originalHolderPersonaId: z.string,
+ verdict: z.enum(['unsettled', 'upheld', 'refuted']),
+ /** What settled it. Empty on an unsettled claim, and required to leave that state. */
+ citation: z.string,
+ droppedAt: z.date.nullable,
+})
+
+export const ColosseumViewSchema = z.object({
+ session: ColosseumSessionSchema,
+ participants: z.array(
+ z.object({
+ personaId: z.string,
+ personaName: z.string,
+ mapId: z.string.nullable,
+ model: z.string,
+ subjectRef: z.string,
+ }),
+),
+ claims: z.array(ColosseumClaimSchema),
+ /** The transcript. Model-authored throughout — untrusted text. */
+ turns: z.array(
+ z.object({
+ seq: z.number.int,
+ personaName: z.string,
+ agentRunId: z.string.nullable,
+ text: z.string,
+ createdAt: z.date,
+ }),
+),
+ outcome: z.object({
+ upheld: z.number.int,
+ refuted: z.number.int,
+ /** Not a failure count: an unsettled disagreement is a successful outcome. */
+ unsettled: z.number.int,
+ dropped: z.number.int,
+ lostGround: z.boolean,
+ }),
+})
+
 /** One card on the kanban — a *run*, since the board and the ledger are one object. */
 export const SwarmBoardCardSchema = z.object({
  runId: z.string,
@@ -867,6 +934,8 @@ export type Repository = z.infer<typeof RepositorySchema>
 export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
 export type WorkerNote = z.infer<typeof WorkerNoteSchema>
 export type SubjectMap = z.infer<typeof SubjectMapSchema>
+export type ColosseumSession = z.infer<typeof ColosseumSessionSchema>
+export type ColosseumView = z.infer<typeof ColosseumViewSchema>
 export type SubjectMapListing = z.infer<typeof SubjectMapListingSchema>
 export type ExpertiseEffect = z.infer<typeof ExpertiseEffectSchema>
 export type MapNode = z.infer<typeof MapNodeSchema>

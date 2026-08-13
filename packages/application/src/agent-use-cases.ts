@@ -100,6 +100,7 @@ import type {
  AgentRunRepositoryPort,
  ApprovalRepositoryPort,
  CapabilityRepositoryPort,
+ ColosseumRepositoryPort,
  MergeQueueRepositoryPort,
  PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
@@ -140,6 +141,8 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
  readonly personas: PersonaRepositoryPort
  readonly personaGroups: PersonaGroupRepositoryPort
  readonly runControl: WorkspaceRunControlRepositoryPort
+ /** The venue — a session is not a run and not a map, so it has its own port. */
+ readonly colosseum: ColosseumRepositoryPort
  /** The DAG — the subtasks of a plan that have not started yet. */
  readonly planSubtasks: PlanSubtaskRepositoryPort
  /** The raw transcript tier's store. */

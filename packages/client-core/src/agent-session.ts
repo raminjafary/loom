@@ -6,6 +6,8 @@ import type {
  CostSummary,
  DirectoryListing,
  MasteryView,
+ ColosseumSession,
+ ColosseumView,
  SubjectMap,
  SubjectMapListing,
  PersonaCapability,
@@ -287,6 +289,33 @@ export interface AgentSession {
  edgesShown: number
  }[]
  >
+ /**
+ * The venue. Read-only from the client except for convening, recording an opening
+ * claim and settling one — there is deliberately no path that writes a map from a
+ * session, because a session's output is claims with verdicts and promotion is a
+ * human act.
+ */
+ listColosseumSessions: Promise<ColosseumSession[]>
+ getColosseumSession(sessionId: string): Promise<ColosseumView | null>
+ conveneColosseum(input: {
+ threadId: string
+ repositoryId: string | null
+ purpose: 'consultation' | 'contention' | 'crunching' | 'warm_up'
+ subject: string
+ question: string
+ personaIds: string[]
+ }): Promise<string | null>
+ recordColosseumClaim(input: {
+ sessionId: string
+ personaId: string
+ statement: string
+ }): Promise<void>
+ settleColosseumClaim(input: {
+ claimId: string
+ verdict: 'upheld' | 'refuted'
+ citation: string
+ }): Promise<void>
+ concludeColosseum(sessionId: string): Promise<void>
  /** A human's standing answer about whether a map is used. */
  setMapRetrieval(mapId: string, override: 'on' | 'off' | null): Promise<void>
  /**
@@ -1054,6 +1083,64 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  } catch (error) {
  patch({ error: errorMessage(error) })
  return null
+ }
+ },
+
+ async listColosseumSessions {
+ try {
+ return await options.api.colosseum.list
+ } catch {
+ return []
+ }
+ },
+
+ async getColosseumSession(sessionId) {
+ try {
+ return await options.api.colosseum.get({ sessionId })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return null
+ }
+ },
+
+ async conveneColosseum(input) {
+ patch({ error: null })
+ try {
+ const session = await options.api.colosseum.convene({...input })
+ return session.id
+ } catch (error) {
+ // Kept on the banner: convening is refused for reasons a human has to read —
+ // "nobody knows anything", "the same persona twice" — and a silent failure would
+ // look like the button doing nothing.
+ patch({ error: errorMessage(error) })
+ return null
+ }
+ },
+
+ async recordColosseumClaim(input) {
+ patch({ error: null })
+ try {
+ await options.api.colosseum.recordClaim(input)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async settleColosseumClaim(input) {
+ patch({ error: null })
+ try {
+ await options.api.colosseum.settleClaim(input)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async concludeColosseum(sessionId) {
+ patch({ error: null })
+ try {
+ await options.api.colosseum.conclude({ sessionId })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
  }
  },
 

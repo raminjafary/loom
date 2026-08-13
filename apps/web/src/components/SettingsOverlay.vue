@@ -4,6 +4,8 @@ import type {
  Capability,
  DirectoryListing,
  MasteryView,
+ ColosseumSession,
+ ColosseumView,
  SubjectMapListing,
  PersonaCapability,
  PersonaDraft,
@@ -11,8 +13,9 @@ import type {
  Repository,
  Runner,
 } from '@loom/api-contract'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import CapabilityPanel from './CapabilityPanel.vue'
+import ColosseumPanel from './ColosseumPanel.vue'
 import MasteryPanel from './MasteryPanel.vue'
 import PersonaEditor from './PersonaEditor.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
@@ -51,6 +54,9 @@ const props = defineProps<{
  proposed: number
  withdrawn: number
  } | null
+ /** The venue — sessions and the one being read, fetched when the tab opens. */
+ colosseumSessions: ColosseumSession[]
+ colosseumView: ColosseumView | null
 }>
 
 const repositoryNames = computed( =>
@@ -75,6 +81,21 @@ const emit = defineEmits<{
  'set-retrieval': [input: { mapId: string; override: 'on' | 'off' | null }]
  /** One curation pass over one map. */
  curate: [mapId: string]
+ 'colosseum-select': [sessionId: string]
+ 'colosseum-refresh': []
+ 'colosseum-convene': [
+ input: {
+ purpose: 'consultation' | 'contention' | 'crunching' | 'warm_up'
+ subject: string
+ question: string
+ personaIds: string[]
+ },
+ ]
+ 'colosseum-claim': [input: { sessionId: string; personaId: string; statement: string }]
+ 'colosseum-settle': [
+ input: { claimId: string; verdict: 'upheld' | 'refuted'; citation: string },
+ ]
+ 'colosseum-conclude': [sessionId: string]
  'create-pairing-token': [name: string]
  bind: [input: { runnerId: string; path: string; displayName: string }]
  'create-repository': [
@@ -119,16 +140,26 @@ const emit = defineEmits<{
  compose: []
 }>
 
-type Tab = 'infrastructure' | 'personas' | 'expertise' | 'capabilities'
+type Tab = 'infrastructure' | 'personas' | 'expertise' | 'colosseum' | 'capabilities'
 
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
  { id: 'infrastructure', label: 'Runners & repositories' },
  { id: 'personas', label: 'Personas & groups' },
  { id: 'expertise', label: 'Expertise' },
+ { id: 'colosseum', label: 'Colosseum' },
  { id: 'capabilities', label: 'Capabilities' },
 ]
 
 const tab = ref<Tab>('infrastructure')
+
+/**
+ * Fetched when its tab is first opened rather than on mount: a session is convened
+ * rarely, and loading it for everyone who opens Settings would put a query on a surface
+ * most sessions never look at — the same discipline live swarm observability applies to the swarm graph.
+ */
+watch(tab, (next) => {
+ if (next === 'colosseum') emit('colosseum-refresh')
+})
 
 const onKeydown = (event: KeyboardEvent) => {
  if (event.key === 'Escape') emit('close')
@@ -239,6 +270,20 @@ onMounted( => scrim.value?.focus)
  @set-retrieval="(input) => emit('set-retrieval', input)"
 :curation="masteryCuration"
  @curate="(mapId) => emit('curate', mapId)"
+ />
+ </template>
+
+ <template v-else-if="tab === 'colosseum'">
+ <ColosseumPanel
+:personas="personas"
+:sessions="colosseumSessions"
+:view="colosseumView"
+ @select="(sessionId) => emit('colosseum-select', sessionId)"
+ @refresh="emit('colosseum-refresh')"
+ @convene="(input) => emit('colosseum-convene', input)"
+ @claim="(input) => emit('colosseum-claim', input)"
+ @settle="(input) => emit('colosseum-settle', input)"
+ @conclude="(sessionId) => emit('colosseum-conclude', sessionId)"
  />
  </template>
 

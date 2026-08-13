@@ -1003,6 +1003,141 @@ export const expertiseUse = pgTable(
 )
 
 /**
+ * A convened session.
+ *
+ * Mastery calls it "a venue rather than a feature because everything in it needs the same
+ * four properties — a fixed roster, a spend ceiling, a transcript, and a verdict — and
+ * scattering those across ad-hoc agent-to-agent calls is how a swarm becomes
+ * unauditable". These four columns are those four properties; the roster is fixed by
+ * being written once at convening and never added to.
+ */
+export const colosseumSession = pgTable(
+ 'colosseum_session',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ /** Where it is watched and where its transcript lands — a session is not a gap in the record. */
+ threadId: uuid('thread_id')
+.notNull
+.references( => thread.id, { onDelete: 'cascade' }),
+ repositoryId: uuid('repository_id').references( => repository.id, { onDelete: 'set null' }),
+ // 'consultation' | 'contention' | 'crunching' | 'warm_up'.
+ purpose: text('purpose').notNull,
+ subject: text('subject').notNull,
+ question: text('question').notNull,
+ // 'convened' | 'running' | 'concluded' | 'abandoned'.
+ status: text('status').notNull.default('convened'),
+ turnCap: integer('turn_cap').notNull,
+ spendCapUsd: doublePrecision('spend_cap_usd'),
+ /**
+ * Roster diversity, snapshotted at convening. Stored rather than recomputed because the personas can change
+ * afterwards, and what matters is how different the roster was when it was fixed.
+ */
+ distinctSubjects: integer('distinct_subjects').notNull.default(0),
+ distinctModels: integer('distinct_models').notNull.default(0),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ concludedAt: timestamp('concluded_at', { withTimezone: true }),
+ },
+ (t) => [index('colosseum_session_workspace_idx').on(t.workspaceId, t.createdAt)],
+)
+
+/**
+ * Who was in the room, fixed at convening.
+ *
+ * `model` and `subjectRef` are snapshots for the same reason the diversity counts are:
+ * they are what the roster *was*, and a persona edited afterwards must not rewrite the
+ * record of who argued with whom.
+ */
+export const colosseumParticipant = pgTable(
+ 'colosseum_participant',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ sessionId: uuid('session_id')
+.notNull
+.references( => colosseumSession.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ personaName: text('persona_name').notNull,
+ mapId: uuid('map_id').references( => subjectMap.id, { onDelete: 'set null' }),
+ model: text('model').notNull,
+ subjectRef: text('subject_ref').notNull.default(''),
+ },
+ (t) => [
+ uniqueIndex('colosseum_participant_unique_idx').on(t.sessionId, t.personaId),
+ index('colosseum_participant_session_idx').on(t.workspaceId, t.sessionId),
+ ],
+)
+
+/**
+ * One claim, and what settled it.
+ *
+ * `originalHolderPersonaId` is written **before the first exchange** and is the single
+ * field that makes factual attrition detectable afterwards: without it, a claim that
+ * quietly vanished over three rounds is indistinguishable from one nobody ever made.
+ *
+ * `citation` is what a verdict rests on, and a row may not leave `unsettled` without one
+ * — the arbiter is the repository, and a verdict with no check behind it is the
+ * conversation marking its own homework.
+ */
+export const colosseumClaim = pgTable(
+ 'colosseum_claim',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ sessionId: uuid('session_id')
+.notNull
+.references( => colosseumSession.id, { onDelete: 'cascade' }),
+ statement: text('statement').notNull,
+ originalHolderPersonaId: uuid('original_holder_persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ // 'unsettled' | 'upheld' | 'refuted'.
+ verdict: text('verdict').notNull.default('unsettled'),
+ citation: text('citation').notNull.default(''),
+ droppedAt: timestamp('dropped_at', { withTimezone: true }),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [index('colosseum_claim_session_idx').on(t.workspaceId, t.sessionId)],
+)
+
+/**
+ * The transcript. One row per turn, capped by the session's `turnCap`.
+ *
+ * `agentRunId` is the run that produced it, because a turn in this venue is an ordinary
+ * run — same sandbox, same metering, same kill switch — and the accounting has to be
+ * traceable to it. Null only for a turn the platform itself narrated.
+ */
+export const colosseumTurn = pgTable(
+ 'colosseum_turn',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ seq: integer('seq').notNull,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ sessionId: uuid('session_id')
+.notNull
+.references( => colosseumSession.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id').references( => agentPersona.id, { onDelete: 'set null' }),
+ personaName: text('persona_name').notNull,
+ agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ text: text('text').notNull,
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [uniqueIndex('colosseum_turn_seq_idx').on(t.sessionId, t.seq)],
+)
+
+/**
  * Who read whose notes.
  *
  * Live swarm observability names this gap exactly: "The tree renders parentage; what it does not render is
