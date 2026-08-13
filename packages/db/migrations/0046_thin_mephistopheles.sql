@@ -1,0 +1,1 @@
+ALTER TABLE "repository" ADD COLUMN "reconciler_enabled" boolean DEFAULT true NOT NULL;

@@ -3678,6 +3678,52 @@ export const setRepositoryVerifyCommand = async (
 }
 
 /**
+ * Turns agent-led reconciliation on or off for one repository.
+ *
+ * Human-only, like the other two repository settings: it decides whether a model gets to
+ * touch a conflicted branch before a person does, which is exactly the kind of thing no
+ * run should be able to decide about itself.
+ *
+ * It does not remove `LOOM_RECONCILER_ENABLED`, and the two are not redundant. The env
+ * var is the operator's machine-level switch — one deployment, every workspace, no
+ * database — and this is the policy a team's canvas can show and a human can change
+ * without a restart. Off in either place is off, which is the only composition that
+ * keeps the env var an actual off switch.
+ */
+export const setRepositoryReconcilerEnabled = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ repositoryId: RepositoryId
+ enabled: boolean
+ },
+): Promise<Repository> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError("Only a human may change a repository's reconciliation policy")
+ }
+ const repository = await deps.repositories.findById(input.workspaceId, input.repositoryId)
+ if (!repository) throw new NotFoundError('Repository')
+
+ const updated = await deps.repositories.setReconcilerEnabled(
+ input.workspaceId,
+ input.repositoryId,
+ input.enabled,
+)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'repository.reconciler_set',
+ subjectType: 'repository',
+ subjectId: repository.id,
+ metadata: { enabled: updated.reconcilerEnabled },
+ })
+
+ return updated
+}
+
+/**
  * Sets what warms this repository's dependency cache.
  *
  * Human-only for the same reason `setVerifyCommand` is: this string is executed, and
@@ -3993,7 +4039,12 @@ const RECONCILER_PERSONA_NAME = 'reconciler'
  * warmed cache, a repository whose tests need an install step still has no verification
  * command that can succeed, and this agent's work merges unverified.
  *
- * `LOOM_RECONCILER_ENABLED=0` turns it off.
+ * **Two switches, and both must allow it.** `LOOM_RECONCILER_ENABLED=0` is the
+ * operator's machine-level off switch — one deployment, every workspace, no database —
+ * and `repository.reconcilerEnabled` is the per-repository policy the canvas design needs, because
+ * a team's canvas may only draw what the runtime reads and an env var is not that. Off in
+ * either place is off; that is what keeps the env var an actual off switch rather than a
+ * default some row can override.
  */
 export const reconcilerEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
  env.LOOM_RECONCILER_ENABLED !== '0'
@@ -4017,6 +4068,16 @@ const startReconciler = async (
  run: AgentRun,
 ): Promise<void> => {
  if (!reconcilerEnabled) return
+ /**
+ * The repository's own policy. Read before anything else costs
+ * anything: a repository that has turned this off must not have a persona looked up or
+ * a message posted on its behalf.
+ *
+ * A repository that has gone missing reads as off rather than as on. Everything after
+ * this point starts a run against it.
+ */
+ const repository = await deps.repositories.findById(entry.workspaceId, entry.repositoryId)
+ if (!repository?.reconcilerEnabled) return
  // Never reconcile a reconciliation, and never twice. Without this a branch that
  // conflicts again after being reconciled would start another reconciler, and so on —
  // an unbounded spend loop driven by whatever keeps failing to merge.

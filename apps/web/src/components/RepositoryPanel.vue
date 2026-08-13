@@ -14,6 +14,11 @@ const emit = defineEmits<{
  create: [input: { runnerId: string; parentPath: string; name: string; displayName: string }]
  list: [input: { runnerId: string; path: string }, done: (listing: DirectoryListing) => void]
  'set-verify-command': [repositoryId: string, verifyCommand: string | null]
+ /**
+ * Whether a reconciler may attempt a conflicted branch here. Here as well as on the team canvas, because a repository no team has
+ * claimed would otherwise have no surface at all now that it is no longer an env var.
+ */
+ 'set-reconciler-enabled': [repositoryId: string, enabled: boolean]
  'set-install-command': [repositoryId: string, installCommand: string | null]
  'warm-cache': [repositoryId: string, done: (result: { ok: boolean; detail: string | null }) => void]
  unbind: [
@@ -133,6 +138,23 @@ const submit = => {
  <button v-else type="button" class="link verify" @click="startEditingInstall(repo)">
  {{ repo.installCommand ? `install: ${repo.installCommand}`: 'no install command — set one to warm the cache' }}
  </button>
+
+ <label class="reconciler">
+ <input
+ type="checkbox"
+:checked="repo.reconcilerEnabled"
+ @change="
+ emit('set-reconciler-enabled', repo.id, ($event.target as HTMLInputElement).checked)
+ "
+ />
+ <span>
+ {{
+ repo.reconcilerEnabled
+ ? 'a reconciler may try a conflict before a human does'
+: 'conflicts wait for a human'
+ }}
+ </span>
+ </label>
 
  <!--
  Warming needs the install command, so the button says so rather than failing
@@ -337,6 +359,14 @@ h3 {
 .bind-form button:disabled {
  opacity: 0.45;
  cursor: not-allowed;
+}
+
+.reconciler {
+ display: flex;
+ align-items: center;
+ gap: 0.35rem;
+ font-size: 0.75rem;
+ color: var(--text-faint);
 }
 
 .unbind-row {

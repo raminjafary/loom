@@ -1187,6 +1187,9 @@ onBeforeUnmount( => {
  @create-repository="(input) => agent.createRepository(input)"
  @list="(input, done) => agent.listDirectory(input).then(done)"
  @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
+ @set-reconciler-enabled="
+ (repositoryId, enabled) => agent.setReconcilerEnabled(repositoryId, enabled)
+ "
  @set-install-command="(repositoryId, command) => agent.setInstallCommand(repositoryId, command)"
  @warm-cache="(repositoryId, done) => void agent.warmCache(repositoryId).then(done)"
  @create-persona="(markdownSource) => agent.createPersona(markdownSource)"
@@ -1221,8 +1224,11 @@ onBeforeUnmount( => {
  (input) => void agent.createPersona(input.markdownSource).then(input.done)
  "
  @create-group="(input) => agent.createPersonaGroup(input)"
- @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
  @save-group="(input) => agent.updatePersonaGroup(input)"
+ @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
+ @set-reconciler-enabled="
+ (repositoryId, enabled) => agent.setReconcilerEnabled(repositoryId, enabled)
+ "
  @update-persona="(input) => agent.updatePersona(input)"
  />
  </div>

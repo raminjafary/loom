@@ -529,6 +529,11 @@ export interface AgentSession {
  }): Promise<void>
  /** What the merge queue runs before merging into this repository; null merges unverified. */
  setVerifyCommand(repositoryId: string, verifyCommand: string | null): Promise<void>
+ /**
+ * Whether a reconciler may attempt a conflicted branch in this repository. The operator-wide `LOOM_RECONCILER_ENABLED` still wins when it is
+ * off — this is the policy, not an override of the switch.
+ */
+ setReconcilerEnabled(repositoryId: string, enabled: boolean): Promise<void>
  /** What warms this repository's dependency cache. */
  setInstallCommand(repositoryId: string, installCommand: string | null): Promise<void>
  /** Runs it. Resolves with the failure detail when the install did not succeed. */
@@ -1557,6 +1562,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  await options.api.repository.setVerifyCommand({ repositoryId, verifyCommand })
+ patch({ repositories: await options.api.repository.list })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async setReconcilerEnabled(repositoryId, enabled) {
+ patch({ error: null })
+ try {
+ await options.api.repository.setReconcilerEnabled({ repositoryId, enabled })
  patch({ repositories: await options.api.repository.list })
  } catch (error) {
  patch({ error: errorMessage(error) })

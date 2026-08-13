@@ -763,6 +763,7 @@ describe('contract completeness', => {
  'setInstallCommand',
  'warmCache',
  'setVerifyCommand',
+ 'setReconcilerEnabled',
  'unbind',
  ])
  expect(Object.keys(contract.mergeQueue)).toEqual(['list', 'enqueue', 'cancel'])

@@ -103,6 +103,15 @@ export interface RepositoryRepositoryPort {
  id: RepositoryId,
  installCommand: string | null,
 ): Promise<Repository>
+ /**
+ * Whether a reconciler may attempt a conflicted branch here — the per-repository half of what `LOOM_RECONCILER_ENABLED` used to decide
+ * for a whole process.
+ */
+ setReconcilerEnabled(
+ workspaceId: WorkspaceId,
+ id: RepositoryId,
+ enabled: boolean,
+): Promise<Repository>
 }
 
 /**

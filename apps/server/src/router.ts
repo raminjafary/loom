@@ -73,6 +73,7 @@ import {
  resumeAllRuns,
  setHandoffPolicy,
  setRepositoryInstallCommand,
+ setRepositoryReconcilerEnabled,
  setRepositoryVerifyCommand,
  warmRepositoryCache,
  startAgentRun,
@@ -386,6 +387,17 @@ export const router = os.router({
  actor: context.principal.actor,
  repositoryId: asRepositoryId(input.repositoryId),
  verifyCommand: input.verifyCommand,
+ }),
+),
+),
+
+ setReconcilerEnabled: os.repository.setReconcilerEnabled.handler(({ context, input }) =>
+ guard( =>
+ setRepositoryReconcilerEnabled(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ repositoryId: asRepositoryId(input.repositoryId),
+ enabled: input.enabled,
  }),
 ),
 ),

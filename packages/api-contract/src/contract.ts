@@ -228,6 +228,17 @@ export const contract = {
 .output(RepositorySchema),
 
  /**
+ * Whether a reconciler may attempt a conflicted branch here.
+ *
+ * On the contract because it moved off `LOOM_RECONCILER_ENABLED`: an env var can be
+ * drawn on a canvas but never changed from one, and the rule is that this canvas may
+ * only show what the runtime executes. The env var remains the machine-level switch.
+ */
+ setReconcilerEnabled: oc
+.input(z.object({ repositoryId: z.string, enabled: z.boolean }))
+.output(RepositorySchema),
+
+ /**
  * Unbinds a repository. Its runs and their recorded spend go with it, so this is
  * refused while any is live and refused again unless the loss is acknowledged.
  */

@@ -176,6 +176,15 @@ export const RepositorySchema = z.object({
  * configured.
  */
  installCommand: z.string.nullable,
+ /**
+ * Whether a reconciler may attempt a conflicted branch here. On by default.
+ *
+ * On the wire because it moved from `LOOM_RECONCILER_ENABLED` — an operator-wide env
+ * var no client could read — precisely so a team's canvas could show it. The rule for
+ * that canvas is that it may only draw what the runtime executes, so the drawing and
+ * the field the runtime consults have to be the same thing.
+ */
+ reconcilerEnabled: z.boolean,
  createdAt: z.date,
 })
 

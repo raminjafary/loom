@@ -143,7 +143,7 @@ const bindViaFakeRunner = async (
  socket: WebSocket,
  runnerId: string,
  path = '/tmp/repo',
-): Promise<{ id: string; defaultBranch: string }> => {
+): Promise<{ id: string; defaultBranch: string; reconcilerEnabled: boolean }> => {
  const checkPath = nextFrame(socket, (v) => v.type === 'check_path')
  const bindPromise = client.repository.bindExisting({
  runnerId,
@@ -2388,6 +2388,37 @@ describe('runner-gateway: serialized merge queue', => {
  const repo = await bindViaFakeRunner(socket, runnerId)
  const created = await client.channel.create({ name: 'recon-off' })
  const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/recon-off-1')
+
+ await client.mergeQueue.enqueue({ agentRunId: run.id })
+ const failing = sweep
+ await answerMerge(socket, { ok: false, reason: 'conflict', detail: 'a.md' })
+ await failing
+
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toEqual([])
+ socket.close
+ })
+ })
+
+ /**
+ * The per-repository half. The env var is the operator's machine-level switch;
+ * this is the policy a team's canvas shows — and the rule for that canvas is that it
+ * may only draw what the runtime reads, so what is asserted here is the reading.
+ */
+ it('can be turned off for one repository, with everything else left on', async => {
+ await withReconciler(async => {
+ const { socket, runnerId } = await pairFakeRunner('recon-repo-off')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ // On out of the box, which is what every repository had before the column.
+ expect(repo.reconcilerEnabled).toBe(true)
+
+ const off = await client.repository.setReconcilerEnabled({
+ repositoryId: repo.id,
+ enabled: false,
+ })
+ expect(off.reconcilerEnabled).toBe(false)
+
+ const created = await client.channel.create({ name: 'recon-repo-off' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/recon-repo-off-1')
 
  await client.mergeQueue.enqueue({ agentRunId: run.id })
  const failing = sweep

@@ -150,6 +150,19 @@ export const repository = pgTable(
  // Operator-authored and run with no agent involved — that is what makes the warmed
  // cache safe to hand to runs, since nothing a model produced ever wrote to it.
  installCommand: text('install_command'),
+ /**
+ * Whether an agent may attempt a conflicted branch here before the human sees it
+ *.
+ *
+ * Per repository rather than per process: it was `LOOM_RECONCILER_ENABLED`, an
+ * operator-wide env var, which meant a team's canvas could only have *drawn* it —
+ * and the rule for that canvas is that it may not draw what the runtime does not
+ * read. The env var stays as the machine-level off switch; this is the policy.
+ *
+ * Defaults to on, which is what every repository had before the column existed and
+ * what the measurement argues for.
+ */
+ reconcilerEnabled: boolean('reconciler_enabled').notNull.default(true),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  },
  (t) => [index('repository_workspace_idx').on(t.workspaceId)],

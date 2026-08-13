@@ -52,6 +52,16 @@ export interface Repository {
  * warmed cache can be shared with runs at all.
  */
  readonly installCommand: string | null
+ /**
+ * Whether a reconciler may attempt a conflicted branch here before the human sees it
+ *.
+ *
+ * On by default, for the reason the roadmap gives: the parallel-branch measurement measured a third of parallel branches
+ * needing ~50 seconds of human attention each, on conflicts requiring no judgement.
+ * Per repository because that is the only form in which a team's canvas can show it —
+ * an operator-wide env var drawn as team policy would be a decoration.
+ */
+ readonly reconcilerEnabled: boolean
  readonly createdAt: Date
 }
 

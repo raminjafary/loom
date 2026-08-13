@@ -193,6 +193,16 @@ export const repositoryRepository = (db: Database): RepositoryRepositoryPort => 
  if (!row) throw new NotFoundError('Repository')
  return toRepository(row as RepositoryRow)
  },
+
+ async setReconcilerEnabled(workspaceId, id, enabled) {
+ const [row] = await db
+.update(repository)
+.set({ reconcilerEnabled: enabled })
+.where(and(eq(repository.workspaceId, workspaceId), eq(repository.id, id)))
+.returning
+ if (!row) throw new NotFoundError('Repository')
+ return toRepository(row as RepositoryRow)
+ },
 })
 
 export const mergeQueueRepository = (db: Database): MergeQueueRepositoryPort => ({

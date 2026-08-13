@@ -222,6 +222,7 @@ export interface RepositoryRow {
  defaultBranch: string
  verifyCommand: string | null
  installCommand: string | null
+ reconcilerEnabled?: boolean
  createdAt: Date
 }
 
@@ -234,6 +235,9 @@ export const toRepository = (row: RepositoryRow): Repository => ({
  defaultBranch: row.defaultBranch,
  verifyCommand: row.verifyCommand,
  installCommand: row.installCommand,
+ // Defaulted to on for a row read before the column existed, which is the behaviour
+ // every repository had then and the one measurement argues for.
+ reconcilerEnabled: row.reconcilerEnabled ?? true,
  createdAt: row.createdAt,
 })
 

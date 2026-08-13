@@ -122,6 +122,15 @@ const emit = defineEmits<{
  * agreed with the real one until it did not.
  */
  'set-verify-command': [repositoryId: string, verifyCommand: string | null]
+ /**
+ * Whether a reconciler may attempt a conflicted branch in this team's repository
+ *.
+ *
+ * The third and last of this canvas's policy items, and the one that needed the
+ * runtime moved before it could be drawn at all: it was an operator-wide env var, and
+ * The rule is that this canvas may not draw what the runtime does not read.
+ */
+ 'set-reconciler-enabled': [repositoryId: string, enabled: boolean]
  'update-persona': [input: { personaId: string; markdownSource: string }]
  /**
  * Author a new persona from the canvas.
@@ -545,6 +554,21 @@ const saveVerifyCommand = => {
 watch(repositoryId, => {
  editingVerify.value = false
 })
+
+/**
+ * Whether a conflict here is handed to a reconciler before it is handed to a human
+ *.
+ *
+ * On by default, because the parallel-branch measurement measured the cost of not having it: a third of parallel
+ * branches needed roughly fifty seconds of human attention each, on conflicts requiring
+ * no judgement. The safety case does not rest on the agent being right — the entry has
+ * already failed and the branch is already back with its owner before a reconciler starts.
+ */
+const setReconciler = (enabled: boolean) => {
+ const repo = chosenRepository.value
+ if (!repo) return
+ emit('set-reconciler-enabled', repo.id, enabled)
+}
 
 /**
  * Saved on drag *stop* rather than on every frame. A position is a fact worth
@@ -1063,6 +1087,31 @@ const onKeydown = (event: KeyboardEvent) => {
  >
  No install command, and verification runs with the network closed — if
  those tests need dependencies, warm the cache in Settings first.
+ </p>
+
+ <!--
+ The third policy item. It needed the runtime moved first: this was
+ an operator-wide env var, and a canvas may not draw what the runtime does
+ not read. The env var is still the machine-level switch, and off there is
+ off everywhere — which is why this says "may" rather than "will".
+ -->
+ <label class="reconciler">
+ <input
+ type="checkbox"
+:checked="chosenRepository.reconcilerEnabled"
+ @change="setReconciler(($event.target as HTMLInputElement).checked)"
+ />
+ <span>Let a reconciler try a conflict first</span>
+ </label>
+ <p class="fine">
+ <template v-if="chosenRepository.reconcilerEnabled">
+ A conflicted branch goes back to its run <em>and then</em> an agent
+ attempts it — the merge queue still rebases and verifies whatever comes
+ back.
+ </template>
+ <template v-else>
+ A conflicted branch goes back to its run and waits for a human.
+ </template>
  </p>
  </template>
  </section>
@@ -1627,6 +1676,13 @@ header h2 {
 .verify-form {
  display: flex;
  gap: 0.25rem;
+}
+
+.reconciler {
+ display: flex;
+ align-items: center;
+ gap: 0.35rem;
+ font-size: 0.75rem;
 }
 
 .verify-form input {

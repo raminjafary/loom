@@ -110,6 +110,7 @@ const emit = defineEmits<{
  ]
  list: [input: { runnerId: string; path: string }, done: (listing: DirectoryListing) => void]
  'set-verify-command': [repositoryId: string, command: string | null]
+ 'set-reconciler-enabled': [repositoryId: string, enabled: boolean]
  'set-install-command': [repositoryId: string, command: string | null]
  'warm-cache': [
  repositoryId: string,
@@ -230,6 +231,9 @@ onMounted( => scrim.value?.focus)
  @create="(input) => emit('create-repository', input)"
  @list="(input, done) => emit('list', input, done)"
  @set-verify-command="(id, command) => emit('set-verify-command', id, command)"
+ @set-reconciler-enabled="
+ (id, enabled) => emit('set-reconciler-enabled', id, enabled)
+ "
  @set-install-command="(id, command) => emit('set-install-command', id, command)"
  @warm-cache="(id, done) => emit('warm-cache', id, done)"
  @unbind="(input, done) => emit('unbind', input, done)"

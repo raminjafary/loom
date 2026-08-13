@@ -86,7 +86,11 @@ const VueFlowStub = {
 const repository = (
  id: string,
  displayName: string,
- overrides: { verifyCommand?: string | null; installCommand?: string | null } = {},
+ overrides: {
+ verifyCommand?: string | null
+ installCommand?: string | null
+ reconcilerEnabled?: boolean
+ } = {},
 ) =>
  ({
  id,
@@ -97,6 +101,7 @@ const repository = (
  defaultBranch: 'main',
  verifyCommand: overrides.verifyCommand ?? null,
  installCommand: overrides.installCommand ?? null,
+ reconcilerEnabled: overrides.reconcilerEnabled ?? true,
  createdAt: new Date(0),
  }) as unknown as Repository
 
@@ -619,6 +624,37 @@ describe('TeamComposer', => {
  repositories: [repository('r1', 'loom', { verifyCommand: 'pnpm -r test' })],
  })
  expect(without.get('.lands').text).toContain('network closed')
+ })
+ })
+
+ /**
+ * The third policy item, and the one that needed the runtime moved before it
+ * could be drawn: it was `LOOM_RECONCILER_ENABLED`, an operator-wide env var, and a
+ * canvas may not draw what the runtime does not read.
+ */
+ describe('reconciliation as team policy', => {
+ it('says what happens to a conflict, both ways', => {
+ const on = composer({ groups: [group({ repositoryId: 'r1' })] })
+ expect(on.get('.lands').text).toContain('an agent attempts it')
+
+ const off = composer({
+ groups: [group({ repositoryId: 'r1' })],
+ repositories: [repository('r1', 'loom', { reconcilerEnabled: false })],
+ })
+ expect(off.get('.lands').text).toContain('waits for a human')
+ })
+
+ it('turns it off for this repository, through the field the runtime reads', async => {
+ const wrapper = composer({ groups: [group({ repositoryId: 'r1' })] })
+ await wrapper.get('.reconciler input').setValue(false)
+ expect(wrapper.emitted('set-reconciler-enabled')?.[0]).toEqual(['r1', false])
+ })
+
+ /** Nothing to show and nothing to set when the team has not said where it lands. */
+ it('offers no policy at all until a repository is chosen', => {
+ const wrapper = composer
+ expect(wrapper.find('.reconciler').exists).toBe(false)
+ expect(wrapper.find('.verify-form').exists).toBe(false)
  })
  })
 
