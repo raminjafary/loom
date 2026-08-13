@@ -140,6 +140,23 @@ const main = async => {
  LOOM_PAIRING_TOKEN: rawToken,
  LOOM_ALLOWED_ROOTS: REPO_ARG ? join(repoPath, '..'): tmpdir,
  LOOM_SANDBOX_ENABLED: process.env.LOOM_SANDBOX_ENABLED ?? '0',
+ /**
+ * Without this the Runner refuses every unsandboxed run, and the refusal is not
+ * loud: three runs "finish" in two seconds having spent $0.0000, and the merge
+ * queue then merges three empty branches and reports **0 branches needing hands** —
+ * a perfect the riskiest assumption result produced by nothing happening at all.
+ *
+ * That is why this driver had never been run successfully despite being listed as
+ * ready three handoffs running. Withheld when the sandbox was actually asked for,
+ * because supplying it unconditionally turns `LOOM_SANDBOX_ENABLED=1` into a silent
+ * downgrade — the same rule the other drivers state.
+ */
+...(process.env.LOOM_SANDBOX_ENABLED === '1'
+ ? {}
+: {
+ LOOM_ALLOW_UNSANDBOXED:
+ process.env.LOOM_ALLOW_UNSANDBOXED ?? 'i-understand-the-agent-gets-my-privileges',
+ }),
  LOOM_RUNNER_STATE_DIR: join(tmpdir, `experiment-state-${Date.now}`),
  },
  stdio: ['ignore', 'pipe', 'pipe'],
@@ -272,6 +289,25 @@ const main = async => {
 )
  const cost = runs.reduce((sum: number, r: any) => sum + (r.totalCostUsd ?? 0), 0)
  const failedRuns = runs.filter((r: any) => r.status !== 'completed')
+
+ /**
+ * A result nobody paid for is not a result.
+ *
+ * Every worker failing produces a *clean* headline — three empty branches merge
+ * without conflict and "branches needing hands" reads 0 — which is the most
+ * dangerous possible output for a driver whose whole job is deciding whether half
+ * the product is worth building. Said first, and loudly.
+ */
+ if (cost === 0) {
+ console.log('\n' + '!'.repeat(64))
+ console.log('NO WORK WAS DONE — every run cost $0.0000, so nothing below means anything.')
+ for (const run of runs) {
+ // The run's own reason, which is the thing that was missing: a driver that prints
+ // "3 failed" and not *why* costs a full experiment to learn one line of text.
+ console.log(` ${run.id.slice(0, 8)} ${run.status}: ${run.errorMessage ?? 'no reason recorded'}`)
+ }
+ console.log('!'.repeat(64))
+ }
 
  console.log('\n' + '='.repeat(64))
  console.log(`the riskiest assumption RESULT — ${MODE}`)
