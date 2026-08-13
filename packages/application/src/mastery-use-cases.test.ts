@@ -24,7 +24,7 @@ import {
  recordMapFragment,
  resolveMapRevision,
  getMastery,
- listExpertiseUsedByRun,
+ listExpertiseUsedByRuns,
  listPersonaMaps,
  setRetrievalOverride,
  type MasteryDeps,
@@ -182,6 +182,10 @@ class FakeMaps implements SubjectMapRepositoryPort {
  return checkpoint
  }
 
+ async listAllMaps(_w: typeof workspaceId) {
+ return this.maps
+ }
+
  async listCheckpoints(_w: typeof workspaceId, mapId: SubjectMap['id']) {
  return this.checkpoints.filter((entry) => entry.mapId === mapId)
  }
@@ -246,10 +250,11 @@ class FakeMaps implements SubjectMapRepositoryPort {
 )
  }
 
- async listExpertiseUsesForRun(_w: typeof workspaceId, agentRunId: string) {
+ async listExpertiseUsesForRuns(_w: typeof workspaceId, agentRunIds: readonly string[]) {
  return this.uses
-.filter((use) => use.agentRunId === agentRunId)
+.filter((use) => agentRunIds.includes(use.agentRunId))
 .map((use) => ({
+ agentRunId: use.agentRunId,
  mapId: use.mapId,
  arm: use.arm,
  nodesShown: use.nodesShown,
@@ -700,17 +705,14 @@ describe('the expertise trial', => {
  await runContext('a')
  await runContext('b')
 
- const denied = await listExpertiseUsedByRun(deps, {
+ const uses = await listExpertiseUsedByRuns(deps, {
  workspaceId,
- agentRunId: asAgentRunId('a'),
- })
- const read = await listExpertiseUsedByRun(deps, {
- workspaceId,
- agentRunId: asAgentRunId('b'),
+ agentRunIds: [asAgentRunId('a'), asAgentRunId('b')],
  })
 
- expect(denied[0]?.arm).toBe('withheld')
- expect(read[0]?.arm).toBe('retrieved')
- expect(read[0]?.map.subjectRef).toBe('flight')
+ expect(uses.find((use) => use.agentRunId === 'a')?.arm).toBe('withheld')
+ const read = uses.find((use) => use.agentRunId === 'b')
+ expect(read?.arm).toBe('retrieved')
+ expect(read?.map.subjectRef).toBe('flight')
  })
 })

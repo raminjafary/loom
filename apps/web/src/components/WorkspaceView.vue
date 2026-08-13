@@ -198,12 +198,31 @@ const graphExpertise = ref<
  }[]
 >([])
 
+/**
+ * Which runs on the watched tree actually read which map.
+ *
+ * Fetched with the band, in the same round and on the same schedule — holding a map and
+ * having been handed one are different facts, and only the second answers "which of these
+ * agents adopted this expertise".
+ */
+const graphExpertiseUses = ref<
+ { agentRunId: string; mapId: string; arm: 'retrieved' | 'withheld' }[]
+>([])
+
 const loadGraphExpertise = async => {
  const repositoryId = agentSnapshot.value.activeRun?.repositoryId ?? null
  if (!repositoryId) {
  graphExpertise.value = []
+ graphExpertiseUses.value = []
  return
  }
+
+ const runIds = (agentSnapshot.value.swarmBoard?.cards ?? []).map((card) => card.runId)
+ graphExpertiseUses.value = (await agent.listExpertiseUsedByRuns(runIds)).map((use) => ({
+ agentRunId: use.agentRunId,
+ mapId: use.map.id,
+ arm: use.arm,
+ }))
  const nameById = new Map(agentSnapshot.value.personas.map((p) => [p.id, p.name]))
  const maps = await agent.listRepositoryMaps(repositoryId)
  graphExpertise.value = maps
@@ -265,6 +284,36 @@ const setMapRetrieval = async (input: { mapId: string; override: 'on' | 'off' | 
 }
 
 const composerOpen = ref(false)
+
+/**
+ * What each persona is expert in, for the design canvas.
+ *
+ * Fetched when the composer opens rather than carried on the snapshot, for the same
+ * reason the graph's band is: expertise changes when a mastery run writes to a map, which
+ * is rare and has its own surface. Not filtered to a repository — a team has no
+ * repository, and picking one would be the canvas claiming a fact the platform
+ * does not hold.
+ */
+const composerExpertise = ref<
+ {
+ personaId: string
+ subjectRef: string
+ subjectKind: string
+ retrievalState: 'trial' | 'on' | 'off'
+ }[]
+>([])
+
+watch(composerOpen, async (isOpen) => {
+ if (!isOpen) return
+ composerExpertise.value = (await agent.listWorkspaceMaps)
+.filter((listing) => listing.map.status === 'ready')
+.map((listing) => ({
+ personaId: listing.map.personaId,
+ subjectRef: listing.map.subjectRef,
+ subjectKind: listing.map.subjectKind,
+ retrievalState: listing.retrievalState,
+ }))
+})
 
 const CONNECTION_LABEL: Record<string, string> = {
  open: 'Live',
@@ -897,6 +946,7 @@ onBeforeUnmount( => {
 :open-signal="revealGraph"
 :activity="agentSnapshot.recentActivity"
 :expertise="graphExpertise"
+:expertise-uses="graphExpertiseUses"
  @review="(agentRunId) => reviewFromGraph(agentRunId)"
  @steer="(agentRunId) => steerFromGraph(agentRunId)"
  @open="(agentRunId) => openRunThread(agentRunId)"
@@ -1029,6 +1079,7 @@ onBeforeUnmount( => {
 :groups="agentSnapshot.personaGroups"
 :matrix="agentSnapshot.delegationMatrix"
 :max-delegation-depth="snapshot.limits?.maxDelegationDepth"
+:expertise="composerExpertise"
  @close="composerOpen = false"
  @create-persona="
  (input) => void agent.createPersona(input.markdownSource).then(input.done)

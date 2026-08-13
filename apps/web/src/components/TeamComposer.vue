@@ -4,11 +4,11 @@ import { MAX_FLEET_SIZE } from '@loom/domain'
 import {
  arrangeByTier,
  composerEdges,
+ derivedPersonaMarkdown,
  composerNodes,
  connectVerdict,
  layoutForGroup,
  orchestrate,
- plannerLikeMarkdown,
  removeDelegateVerdict,
  withoutDelegate,
  withWiderEnvelope,
@@ -46,6 +46,22 @@ const props = defineProps<{
  groups: PersonaGroup[]
  matrix: DelegationEdge[]
  /**
+ * What each member is expert in, and what the platform is doing with each map
+ *. Keyed by persona id.
+ *
+ * Portable expertise asks this canvas to show, per member, what it knows — because a roster of
+ * names with no expertise on it is what made "two security reviewers, one of which
+ * learned this subsystem" impossible to see. Not filtered to a repository, because a
+ * team has no repository, and inventing one would be the canvas claiming a
+ * fact the platform does not hold.
+ */
+ expertise?: readonly {
+ personaId: string
+ subjectRef: string
+ subjectKind: string
+ retrievalState: 'trial' | 'on' | 'off'
+ }[]
+ /**
  * How deep delegation may go in this workspace. From the session
  * rather than assumed, because it is server configuration — a canvas that hard-coded
  * it would report depths against a rule the server does not have. Defaulted only so a
@@ -56,6 +72,17 @@ const props = defineProps<{
 }>
 
 const maxDepth = computed( => props.maxDelegationDepth ?? 2)
+
+const expertiseFor = (personaId: string) =>
+ (props.expertise ?? []).filter((entry) => entry.personaId === personaId)
+
+/** Short marks for the node label: `on` counts, the rest are named in the roster. */
+const expertiseMark = (personaId: string): string => {
+ const held = expertiseFor(personaId)
+ if (held.length === 0) return ''
+ const inUse = held.filter((entry) => entry.retrievalState === 'on').length
+ return inUse > 0 ? `◆${inUse}`: '◇'
+}
 
 const emit = defineEmits<{
  close: []
@@ -252,6 +279,9 @@ const flowNodes = computed( =>
  // then refused — the mark is a claim about what the runtime would do.
  orchestration.value.seats[node.personaId]?.canRecurse ? '↻': '',
  orchestration.value.seats[node.personaId]?.role === 'orchestrator' ? '★ root': '',
+ // The badge: a filled mark counts the subjects actually being handed to runs,
+ // a hollow one says this member holds maps that nothing is currently reading.
+ expertiseMark(node.personaId),
  ]
 .filter(Boolean)
 .join(' '),
@@ -550,14 +580,26 @@ const onFleetInput = (personaId: string, event: Event) => {
 }
 
 /**
- * The planner a new one is modelled on: the team's own, so the copy inherits the envelope
- * the rest of this team was designed against. Null on a team with no planner, where
- * "another planner" is not the thing being asked for.
+ * The member a new one is modelled on. Defaults to the team's planner when it has one,
+ * because a planner is the persona with the most that can be got wrong — its envelope
+ * decides what its whole subtree may hold, and one authored narrower than its siblings
+ * produces refusals two hops from the mistake.
  */
-const plannerTemplate = computed( => members.value.find((persona) => persona.harnessPlanner) ?? null)
-
-const plannerName = ref('')
+const deriveFromId = ref('')
+const derivedName = ref('')
+const derivedModel = ref('')
 const creatingPlanner = ref(false)
+
+watch(
+ members,
+ (list) => {
+ if (list.some((persona) => persona.id === deriveFromId.value)) return
+ deriveFromId.value = (list.find((persona) => persona.harnessPlanner) ?? list[0])?.id ?? ''
+ },
+ { immediate: true },
+)
+
+const canDerive = computed( => deriveFromId.value !== '' && derivedName.value.trim !== '')
 
 /**
  * Creates the persona and puts it on the team in one gesture. Two steps rather than one
@@ -565,20 +607,24 @@ const creatingPlanner = ref(false)
  * team uses it — and conflating them would make a persona that could not be authored
  * without joining a team.
  */
-const addPlanner = => {
- const template = plannerTemplate.value
- const name = plannerName.value.trim
+const addDerived = => {
+ const template = members.value.find((persona) => persona.id === deriveFromId.value)
+ const name = derivedName.value.trim
  if (!template || name === '' || creatingPlanner.value) return
  creatingPlanner.value = true
  emit('create-persona', {
- markdownSource: plannerLikeMarkdown(template, {
+ markdownSource: derivedPersonaMarkdown(template, {
  name,
- description: `Plans and delegates one area, modelled on ${template.name}.`,
+ description: template.harnessPlanner
+ ? `Plans and delegates one area, modelled on ${template.name}.`
+: `Modelled on ${template.name}, to be given its own expertise.`,
+ model: derivedModel.value.trim,
  }),
  done: (personaId) => {
  creatingPlanner.value = false
  if (personaId === null) return
- plannerName.value = ''
+ derivedName.value = ''
+ derivedModel.value = ''
  addMember(personaId)
  },
  })
@@ -899,7 +945,8 @@ const onKeydown = (event: KeyboardEvent) => {
  <section>
  <h3>On this team</h3>
  <ul class="chips">
- <li v-for="persona in members":key="persona.id">
+ <template v-for="persona in members":key="persona.id">
+ <li>
  <span:class="{ planner: persona.harnessPlanner }">{{ persona.name }}</span>
  <!--
  The width, edited where the roster is. The node carries the
@@ -942,34 +989,71 @@ const onKeydown = (event: KeyboardEvent) => {
  </select>
  <button type="button" class="link" @click="removeMember(persona.id)">remove</button>
  </li>
+ <!--
+ What this member knows. Its own row rather than a tooltip: it is
+ the difference between two members that otherwise look identical, which is
+ exactly the case the operator described.
+ -->
+ <li
+ v-for="subject in expertiseFor(persona.id)"
+:key="`${persona.id}:${subject.subjectRef}`"
+ class="knows"
+ >
+ <span class="subject">{{ subject.subjectRef }}</span>
+ <span:class="['retrieval', subject.retrievalState]">{{
+ subject.retrievalState === 'on'
+ ? 'in use'
+: subject.retrievalState === 'trial'
+ ? 'on trial'
+: 'withheld'
+ }}</span>
+ </li>
+ </template>
  <li v-if="members.length === 0" class="none">Nobody yet.</li>
  </ul>
  </section>
 
  <!--
- The fleet design: several planners on a team are several planner *personas*, one per
- area, and authoring the second one belongs here. Offered only when the team
- already has a planner to copy, because the copy is the point — a planner
- authored with a narrower envelope than its siblings produces refusals two hops
- from the mistake, and this is the surface where that is visible.
+ The fleet design for planners, portable expertise for everyone else: a second expert in one role is
+ a second *persona*, because expertise attaches to an identity and not to a slot
+ on a team. Authoring it belongs here, from a member already on the roster — the
+ copy inherits the tools, the envelope and the approval mode this team was
+ designed against, so the only difference between the two is the one a human
+ meant to introduce.
  -->
- <section v-if="plannerTemplate">
- <h3>Another planner</h3>
+ <section v-if="members.length > 0">
+ <h3>Another like one of these</h3>
  <p class="fine">
- One planner per area. This copies
- <strong>{{ plannerTemplate.name }}</strong>'s model, tools and delegation
- envelope, so the new area can do what that one can — edit it afterwards like
- any persona.
+ Copies a member's model, tools and delegation envelope under a new name. Point
+ it at a different subject afterwards and you have two of the same role that
+ know different things — which is the only way to have that, since a map hangs
+ off a persona and travels with it onto every team.
  </p>
- <form class="new-planner" @submit.prevent="addPlanner">
+ <form class="new-planner" @submit.prevent="addDerived">
+ <select v-model="deriveFromId" aria-label="Member to copy">
+ <option value="" disabled>copy…</option>
+ <option v-for="persona in members":key="persona.id":value="persona.id">
+ {{ persona.name }}
+ </option>
+ </select>
  <input
- v-model="plannerName"
+ v-model="derivedName"
  type="text"
- placeholder="e.g. backend-planner"
- aria-label="Name for the new planner"
+ placeholder="e.g. security-reviewer-payments"
+ aria-label="Name for the new agent"
  />
- <button type="submit":disabled="!plannerName.trim || creatingPlanner">
- {{ creatingPlanner ? 'Creating…': 'Add planner' }}
+ <!--
+ The other axis a human varies between two otherwise identical experts (the cost model:
+ worker model choice is the cost lever). Empty keeps the template's.
+ -->
+ <input
+ v-model="derivedModel"
+ type="text"
+ placeholder="model (optional)"
+ aria-label="Model for the new agent"
+ />
+ <button type="submit":disabled="!canDerive || creatingPlanner">
+ {{ creatingPlanner ? 'Creating…': 'Add' }}
  </button>
  </form>
  </section>
@@ -1655,5 +1739,47 @@ header h2 {
 button:disabled {
  opacity: 0.45;
  cursor: not-allowed;
+}
+
+/* What a member knows, indented under it: it is a fact about that row, not a
+ sibling of it. */
+.chips li.knows {
+ padding-left: 0.9rem;
+ font-size: 0.7rem;
+ color: var(--text-faint);
+ justify-content: flex-start;
+ gap: 0.4rem;
+}
+
+.chips li.knows.retrieval {
+ padding: 0 0.25rem;
+ border: 1px solid currentcolor;
+ border-radius: 0.7rem;
+ font-size: 0.6rem;
+ text-transform: uppercase;
+}
+
+.chips li.knows.retrieval.on {
+ color: var(--ok);
+}
+
+.chips li.knows.retrieval.off {
+ color: var(--text-faint);
+}
+
+.new-planner select {
+ flex: 0 1 8rem;
+ min-width: 0;
+ padding: 0.25rem 0.3rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text);
+ font: inherit;
+ font-size: 0.72rem;
+}
+
+.new-planner {
+ flex-wrap: wrap;
 }
 </style>

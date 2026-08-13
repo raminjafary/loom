@@ -44,6 +44,15 @@ export type SwarmEdgeKind =
  * cannot tell which of these workers actually knows the codebase.
  */
  | 'knows'
+ /**
+ * A run that was **deliberately denied** a map its persona holds.
+ *
+ * Its own kind rather than a missing edge, because the absence is the measurement. A
+ * withheld run is one arm of the trial that decides whether the map is worth handing to
+ * anyone, and drawing nothing there would make the platform look like it sometimes
+ * forgets to fire — which is exactly how "unmeasured" reads to someone watching.
+ */
+ | 'withheld'
  /** A run's branch to the merge-queue entry holding it. */
  | 'queue'
  /** That entry to its verification. */
@@ -168,6 +177,14 @@ export interface SwarmKnowledgeNode {
  readonly personaName: string
  /** Runs on this board carrying it, so a renderer can place it near them. */
  readonly runIds: string[]
+ /**
+ * What the platform is doing with this map. A band that said
+ * "expertise in play" while the map was being withheld would be the graph claiming an
+ * expertise nobody is carrying.
+ */
+ readonly retrievalState: 'trial' | 'on' | 'off'
+ /** Runs here that were actually handed it — the strong reading of "adopted". */
+ readonly readByRunIds: string[]
  readonly order: number
 }
 
@@ -276,8 +293,17 @@ export const buildSwarmGraph = (
  subjectRef: string
  subjectKind: string
  personaName: string
+ retrievalState: 'trial' | 'on' | 'off'
  }[] = [],
  now: Date = new Date,
+ /**
+ * Which runs on this board actually read which map, and which were denied it.
+ *
+ * Distinct from `expertise`, which is per *persona*: holding a map and having been given
+ * one are different facts, and only the second is a claim about the work in front of
+ * you. Fetched in the same round as the band, so watching still costs no per-tick query.
+ */
+ uses: readonly { agentRunId: string; mapId: string; arm: 'retrieved' | 'withheld' }[] = [],
 ): SwarmGraph => {
  const cards = board?.cards ?? []
  const byId = new Map(cards.map((card) => [card.runId, card]))
@@ -484,25 +510,43 @@ export const buildSwarmGraph = (
  for (const card of cards) {
  runsByPersona.set(card.personaName, [...(runsByPersona.get(card.personaName) ?? []), card.runId])
  }
+ /**
+ * What each run was actually given, keyed by run and map. A run with no row was never a
+ * candidate — its persona holds the map but the run predates the trial, or the map was
+ * off — and it gets the weaker "holds" edge rather than a claim either way.
+ */
+ const armByRunAndMap = new Map(uses.map((use) => [`${use.agentRunId}:${use.mapId}`, use.arm]))
+
  let knowledgeOrder = 0
  for (const map of expertise) {
  const runIds = runsByPersona.get(map.personaName) ?? []
  if (runIds.length === 0) continue
+ const readByRunIds = runIds.filter(
+ (runId) => armByRunAndMap.get(`${runId}:${map.mapId}`) === 'retrieved',
+)
  knowledge.push({
  mapId: map.mapId,
  subjectRef: map.subjectRef,
  subjectKind: map.subjectKind,
  personaName: map.personaName,
  runIds,
+ retrievalState: map.retrievalState,
+ readByRunIds,
  order: knowledgeOrder,
  })
  knowledgeOrder += 1
  for (const runId of runIds) {
+ const arm = armByRunAndMap.get(`${runId}:${map.mapId}`)
  edges.push({
  from: runId,
  to: `map:${map.mapId}`,
- kind: 'knows',
- detail: `knows ${map.subjectRef}`,
+ kind: arm === 'withheld' ? 'withheld': 'knows',
+ detail:
+ arm === 'retrieved'
+ ? `read ${map.subjectRef}`
+: arm === 'withheld'
+ ? `denied ${map.subjectRef} — this run is the baseline the map is measured against`
+: `knows ${map.subjectRef}`,
  })
  }
  }

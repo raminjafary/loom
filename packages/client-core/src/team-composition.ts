@@ -615,15 +615,57 @@ export const withoutDelegate = (planner: AgentPersona, tools: readonly string[])
 export const plannerLikeMarkdown = (
  template: AgentPersona,
  input: { name: string; description: string },
+): string => derivedPersonaMarkdown(template, {...input, planner: true })
+
+/**
+ * A second persona derived from any member of the team — the generalization of the
+ * planner case above, and the operator's ask: *"two security reviewers, one of which
+ * adopted the expertise of a specific report or concept."*
+ *
+ * **The answer to "one role, two experts" is two personas, and that is not a workaround.**
+ * Portable expertise is explicit that expertise attaches to the *persona*, and that the instinct to
+ * add a `team_expertise` join table is the bug — it would make the same expert on two
+ * teams two different experts, the second starting from zero. The same reasoning applies
+ * one level down: expertise scoped to a *slot on a team* rather than to an identity would
+ * mean the security reviewer that learned the payments subsystem forgets it the moment
+ * someone puts it on another team. So the second expert is a second persona that carries
+ * its own maps everywhere it goes, exactly as the answer to "several planners" is
+ * several planner personas.
+ *
+ * What makes that cheap enough to be the answer is doing it *here*, on the canvas, from a
+ * member already on the team: the copy inherits the tools, the envelope and the approval
+ * mode that the rest of the team was designed against, so the only difference between the
+ * two experts is the one a human meant to introduce — what each of them knows, and
+ * optionally what it costs to run.
+ *
+ * `model` is offered because it is the other axis a human wants to vary between two
+ * otherwise identical experts (the cost model: worker model choice is the 8x cost lever), and because
+ * a derived reviewer on a cheaper tier is the ordinary case rather than an exotic one.
+ * Everything else stays editable through the persona form afterwards — this writes
+ * markdown through the same serializer that form does, so there is one write path.
+ */
+export const derivedPersonaMarkdown = (
+ template: AgentPersona,
+ input: {
+ name: string
+ description: string
+ /** Overridden only when asked; otherwise the copy runs on what the template runs on. */
+ model?: string
+ /**
+ * Forced only by the planner case, which offers this beside a planner. Left alone
+ * otherwise: a copy of a worker is a worker, and a copy that claimed to be a planner
+ * would be refused by the server for holding acting tools — a confusing way to
+ * learn the template was wrong.
+ */
+ planner?: boolean
+ },
 ): string => {
  const form = personaFormFromPersona(template)
  return personaFormToMarkdown({
 ...form,
  name: input.name,
  description: input.description,
- // Asserted rather than assumed: the caller offers this beside a planner, and a copy
- // of a worker that claimed to be a planner would be refused by the server for holding
- // acting tools — a confusing way to learn the template was wrong.
- planner: true,
+...(input.model === undefined || input.model === '' ? {}: { model: input.model }),
+...(input.planner === undefined ? {}: { planner: input.planner }),
  })
 }

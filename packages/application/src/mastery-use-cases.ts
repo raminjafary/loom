@@ -552,6 +552,12 @@ export const listPersonaMaps = async (
  await deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId),
 )
 
+export const listWorkspaceMaps = async (
+ deps: MasteryDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<SubjectMapListing[]> =>
+ listingsFor(deps, input.workspaceId, await deps.subjectMaps.listAllMaps(input.workspaceId))
+
 export const listRepositoryMaps = async (
  deps: MasteryDeps,
  input: { workspaceId: WorkspaceId; repositoryId: RepositoryId },
@@ -570,27 +576,43 @@ export const listRepositoryMaps = async (
  * — and the second is the stronger claim, because it says what a particular piece of work
  * actually read rather than what its persona happens to hold.
  */
-export const listExpertiseUsedByRun = async (
+export const listExpertiseUsedByRuns = async (
  deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
+ input: { workspaceId: WorkspaceId; agentRunIds: readonly AgentRunId[] },
 ): Promise<
  {
+ readonly agentRunId: string
  readonly map: SubjectMap
  readonly arm: 'retrieved' | 'withheld'
  readonly nodesShown: number
  readonly edgesShown: number
  }[]
 > => {
- const uses = await deps.subjectMaps.listExpertiseUsesForRun(input.workspaceId, input.agentRunId)
- const out: {
- map: SubjectMap
- arm: 'retrieved' | 'withheld'
- nodesShown: number
- edgesShown: number
- }[] = []
- for (const use of uses) {
- const map = await deps.subjectMaps.getMap(input.workspaceId, asSubjectMapId(use.mapId))
- if (map) out.push({ map, arm: use.arm, nodesShown: use.nodesShown, edgesShown: use.edgesShown })
+ const uses = await deps.subjectMaps.listExpertiseUsesForRuns(
+ input.workspaceId,
+ input.agentRunIds,
+)
+ // One read per distinct map rather than per use: a tree of twenty runs against one
+ // repository names the same two or three maps over and over.
+ const mapIds = [...new Set(uses.map((use) => use.mapId))]
+ const maps = new Map<string, SubjectMap>
+ for (const mapId of mapIds) {
+ const map = await deps.subjectMaps.getMap(input.workspaceId, asSubjectMapId(mapId))
+ if (map) maps.set(mapId, map)
  }
- return out
+
+ return uses.flatMap((use) => {
+ const map = maps.get(use.mapId)
+ return map
+ ? [
+ {
+ agentRunId: use.agentRunId,
+ map,
+ arm: use.arm,
+ nodesShown: use.nodesShown,
+ edgesShown: use.edgesShown,
+ },
+ ]
+: []
+ })
 }

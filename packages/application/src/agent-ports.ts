@@ -965,6 +965,15 @@ export interface SubjectMapRepositoryPort {
  listMapsForPersona(workspaceId: WorkspaceId, personaId: AgentPersonaId): Promise<SubjectMap[]>
  listMapsForRepository(workspaceId: WorkspaceId, repositoryId: RepositoryId): Promise<SubjectMap[]>
  /**
+ * Every map in the workspace.
+ *
+ * For the design canvas, which draws personas rather than runs and therefore has no
+ * repository to filter by — the "a team has no repository" is still true. Cheap
+ * because a workspace holds one map per (persona, subject), which is tens of rows, not
+ * thousands.
+ */
+ listAllMaps(workspaceId: WorkspaceId): Promise<SubjectMap[]>
+ /**
  * Writes one fragment, bi-temporally.
  *
  * A live node whose content is unchanged is *re-confirmed* at the new revision rather
@@ -1055,12 +1064,24 @@ export interface SubjectMapRepositoryPort {
  mapIds: readonly SubjectMapId[],
 ): Promise<Record<string, ExpertiseArmTally[]>>
 
- /** Which maps a run was handed, and which it was deliberately denied. */
- listExpertiseUsesForRun(
+ /**
+ * Which maps these runs were handed, and which they were deliberately denied.
+ *
+ * Takes a list rather than one run because both callers want a set: the swarm graph
+ * draws a whole tree's expertise in one fetch when it opens, and the cost rule is
+ * that watching a swarm must not add a query per node.
+ */
+ listExpertiseUsesForRuns(
  workspaceId: WorkspaceId,
- agentRunId: AgentRunId,
+ agentRunIds: readonly AgentRunId[],
 ): Promise<
- { mapId: string; arm: ExpertiseArm; nodesShown: number; edgesShown: number }[]
+ {
+ agentRunId: string
+ mapId: string
+ arm: ExpertiseArm
+ nodesShown: number
+ edgesShown: number
+ }[]
  >
 }
 

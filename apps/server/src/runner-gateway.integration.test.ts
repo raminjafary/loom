@@ -344,12 +344,15 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
 
  // The measurement exists on both sides, which is the half that could silently not
  // happen: a baseline nobody wrote down is not a baseline.
- const denied = await client.mastery.usedByRun({ agentRunId: baselineRun.id })
- const read = await client.mastery.usedByRun({ agentRunId: readingRun.id })
- expect(denied[0]?.arm).toBe('withheld')
- expect(denied[0]?.nodesShown).toBe(0)
- expect(read[0]?.arm).toBe('retrieved')
- expect(read[0]?.nodesShown).toBeGreaterThan(0)
+ const uses = await client.mastery.usedByRuns({
+ agentRunIds: [baselineRun.id, readingRun.id],
+ })
+ const denied = uses.find((use) => use.agentRunId === baselineRun.id)
+ const read = uses.find((use) => use.agentRunId === readingRun.id)
+ expect(denied?.arm).toBe('withheld')
+ expect(denied?.nodesShown).toBe(0)
+ expect(read?.arm).toBe('retrieved')
+ expect(read?.nodesShown).toBeGreaterThan(0)
  socket.close
  })
 

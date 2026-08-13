@@ -267,13 +267,25 @@ export interface AgentSession {
  getMastery(mapId: string): Promise<MasteryView | null>
  listRepositoryMaps(repositoryId: string): Promise<SubjectMapListing[]>
  /**
+ * Every map in the workspace — what the design canvas shows per
+ * member. Returns `[]` on failure, like the other decorating reads: a canvas without
+ * its badges is worse, not broken.
+ */
+ listWorkspaceMaps: Promise<SubjectMapListing[]>
+ /**
  * Which maps one run was handed, and which it was deliberately denied.
  *
  * Returns `[]` on failure, like `listRepositoryMaps`: it decorates a run that is
  * otherwise complete, so a failure here should cost the badge and never the view.
  */
- listExpertiseUsedByRun(agentRunId: string): Promise<
- { map: SubjectMap; arm: 'retrieved' | 'withheld'; nodesShown: number; edgesShown: number }[]
+ listExpertiseUsedByRuns(agentRunIds: readonly string[]): Promise<
+ {
+ agentRunId: string
+ map: SubjectMap
+ arm: 'retrieved' | 'withheld'
+ nodesShown: number
+ edgesShown: number
+ }[]
  >
  /** A human's standing answer about whether a map is used. */
  setMapRetrieval(mapId: string, override: 'on' | 'off' | null): Promise<void>
@@ -1013,9 +1025,18 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  }
  },
 
- async listExpertiseUsedByRun(agentRunId) {
+ async listWorkspaceMaps {
  try {
- return await options.api.mastery.usedByRun({ agentRunId })
+ return await options.api.mastery.listAll
+ } catch {
+ return []
+ }
+ },
+
+ async listExpertiseUsedByRuns(agentRunIds) {
+ if (agentRunIds.length === 0) return []
+ try {
+ return await options.api.mastery.usedByRuns({ agentRunIds: [...agentRunIds] })
  } catch {
  return []
  }

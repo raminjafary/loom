@@ -1461,6 +1461,15 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  return rows.map((row) => toSubjectMap(row as SubjectMapRow))
  },
 
+ async listAllMaps(workspaceId) {
+ const rows = await db
+.select
+.from(subjectMap)
+.where(eq(subjectMap.workspaceId, workspaceId))
+.orderBy(subjectMap.subjectRef)
+ return rows.map((row) => toSubjectMap(row as SubjectMapRow))
+ },
+
  async listMapsForRepository(workspaceId, repositoryId) {
  const rows = await db
 .select
@@ -1764,16 +1773,21 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  return byMap
  },
 
- async listExpertiseUsesForRun(workspaceId, agentRunId) {
+ async listExpertiseUsesForRuns(workspaceId, agentRunIds) {
+ if (agentRunIds.length === 0) return []
  const rows = await db
 .select
 .from(expertiseUse)
 .where(
- and(eq(expertiseUse.workspaceId, workspaceId), eq(expertiseUse.agentRunId, agentRunId)),
+ and(
+ eq(expertiseUse.workspaceId, workspaceId),
+ inArray(expertiseUse.agentRunId, [...agentRunIds]),
+),
 )
  return rows
 .filter((row) => row.arm === 'retrieved' || row.arm === 'withheld')
 .map((row) => ({
+ agentRunId: row.agentRunId,
  mapId: row.mapId,
  arm: row.arm as 'retrieved' | 'withheld',
  nodesShown: row.nodesShown,

@@ -422,6 +422,7 @@ describe('buildSwarmGraph: expertise on the tree', => {
  subjectRef: 'booking',
  subjectKind: 'repository',
  personaName: 'swe',
+ retrievalState: 'on' as const,
  }
 
  it('joins a map to every run carrying that persona', => {
@@ -455,5 +456,37 @@ describe('buildSwarmGraph: expertise on the tree', => {
 
  expect(graph.knowledge[0]?.runIds).toEqual(['child', 'child-2'])
  expect(graph.edges.filter((e) => e.kind === 'knows')).toHaveLength(2)
+ })
+
+ /**
+ * The trial, on the graph. Holding a map and having been *given* one are
+ * different facts, and only the second is a claim about the work in front of you —
+ * "which of these agents adopted this expertise" is answerable per run or not at all.
+ */
+ it('distinguishes a run that read the map from one deliberately denied it', => {
+ const wide = {
+...board,
+ cards: [
+...board.cards,
+ card({ runId: 'child-2', parentRunId: 'root', personaName: 'swe' }),
+ ],
+ }
+ const graph = buildSwarmGraph(wide, [], [map], new Date, [
+ { agentRunId: 'child', mapId: 'm1', arm: 'retrieved' },
+ { agentRunId: 'child-2', mapId: 'm1', arm: 'withheld' },
+ ])
+
+ expect(graph.knowledge[0]?.readByRunIds).toEqual(['child'])
+ expect(graph.edges.find((e) => e.from === 'child' && e.to === 'map:m1')?.kind).toBe('knows')
+ // The absence is the measurement, so it is drawn rather than omitted.
+ const denied = graph.edges.find((e) => e.from === 'child-2' && e.to === 'map:m1')
+ expect(denied?.kind).toBe('withheld')
+ expect(denied?.detail).toContain('baseline')
+ })
+
+ it('falls back to "knows" for a run with no trial row, claiming neither arm', => {
+ const graph = buildSwarmGraph(board, [], [map], new Date, [])
+ expect(graph.edges.find((e) => e.to === 'map:m1')?.detail).toBe('knows booking')
+ expect(graph.knowledge[0]?.readByRunIds).toEqual([])
  })
 })

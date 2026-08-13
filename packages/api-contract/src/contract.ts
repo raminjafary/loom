@@ -336,6 +336,16 @@ export const contract = {
 .output(z.array(SubjectMapListingSchema)),
 
  /**
+ * Every map in the workspace.
+ *
+ * For the design canvas, which draws personas and has no repository to filter by —
+ * and which portable expertise asks to show, per member, what that member is expert in. A
+ * roster of names with no expertise on it is the surface that made "two security
+ * reviewers, one of which learned this subsystem" impossible to see.
+ */
+ listAll: oc.output(z.array(SubjectMapListingSchema)),
+
+ /**
  * Which maps one run was handed, and which it was deliberately denied.
  *
  * The stronger half of the operator's "which agents adopted which expertise": a
@@ -344,11 +354,12 @@ export const contract = {
  * that showed only retrievals would make the baseline invisible and the measurement
  * look like a feature that sometimes forgets to fire.
  */
- usedByRun: oc
-.input(z.object({ agentRunId: z.string }))
+ usedByRuns: oc
+.input(z.object({ agentRunIds: z.array(z.string).max(500) }))
 .output(
  z.array(
  z.object({
+ agentRunId: z.string,
  map: SubjectMapSchema,
  arm: z.enum(['retrieved', 'withheld']),
  nodesShown: z.number.int,

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
  composerEdges,
  composerNodes,
+ derivedPersonaMarkdown,
  plannerLikeMarkdown,
  connectVerdict,
  layoutForGroup,
@@ -657,5 +658,68 @@ describe('arrangeByTier — the layout the chain implies', => {
 
  expect(layout.lead).toEqual({ x: 999, y: 999 })
  expect(layout.swe?.y).toBeGreaterThan(0)
+ })
+})
+
+/**
+ * The answer to "two agents in one role, one of which learned this subsystem": two
+ * personas, because a map hangs off a persona and travels with it. Expertise scoped to a
+ * slot on a team would be the same bug as the `team_expertise` join table one level down —
+ * the expert that learned something would forget it on the next team.
+ */
+describe('derivedPersonaMarkdown — a second expert from one role', => {
+ const reviewer = persona({
+ id: 'sec',
+ name: 'security-reviewer',
+ model: 'claude-haiku-4-5-20251001',
+ tools: ['Read', 'Grep'],
+ markdownSource: [
+ '---',
+ 'name: security-reviewer',
+ 'description: Reviews for security',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read, Grep]',
+ 'harness:',
+ ' approvalMode: ask',
+ '---',
+ '',
+ 'You review.',
+ ].join('\n'),
+ })
+
+ it('keeps everything the team was designed against, and takes the new name', => {
+ const markdown = derivedPersonaMarkdown(reviewer, {
+ name: 'security-reviewer-payments',
+ description: 'Reviews payments for security',
+ })
+
+ expect(markdown).toContain('name: security-reviewer-payments')
+ expect(markdown).toContain('tools: [Read, Grep]')
+ expect(markdown).toContain('model: claude-haiku-4-5-20251001')
+ expect(markdown.endsWith('You review.')).toBe(true)
+ })
+
+ it('overrides the model only when one is asked for', => {
+ expect(
+ derivedPersonaMarkdown(reviewer, { name: 'a', description: 'd', model: 'claude-sonnet-5' }),
+).toContain('model: claude-sonnet-5')
+ // Empty is "leave it alone", not "clear it" — the field is required downstream.
+ expect(derivedPersonaMarkdown(reviewer, { name: 'a', description: 'd', model: '' })).toContain(
+ 'model: claude-haiku-4-5-20251001',
+)
+ })
+
+ /**
+ * A copy of a worker is a worker. Forcing `planner: true` on one would be refused by
+ * the server for holding acting tools, which is a confusing way to learn the
+ * template was wrong.
+ */
+ it('does not make a planner out of a worker', => {
+ expect(derivedPersonaMarkdown(reviewer, { name: 'a', description: 'd' })).not.toContain(
+ 'planner: true',
+)
+ expect(plannerLikeMarkdown(reviewer, { name: 'a', description: 'd' })).toContain(
+ 'planner: true',
+)
  })
 })

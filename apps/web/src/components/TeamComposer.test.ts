@@ -82,6 +82,12 @@ const composer = (options: {
  groups?: PersonaGroup[]
  matrix?: DelegationEdge[]
  maxDelegationDepth?: number
+ expertise?: {
+ personaId: string
+ subjectRef: string
+ subjectKind: string
+ retrievalState: 'trial' | 'on' | 'off'
+ }[]
 } = {}) =>
  mount(TeamComposer, {
  props: {
@@ -89,6 +95,7 @@ const composer = (options: {
  groups: options.groups ?? [group],
  matrix: options.matrix ?? [],
  maxDelegationDepth: options.maxDelegationDepth ?? 2,
+ expertise: options.expertise ?? [],
  },
  global: { stubs: { VueFlow: VueFlowStub } },
  })
@@ -455,6 +462,63 @@ describe('TeamComposer', => {
  const wrapper = composer({ personas, groups: [stranded], matrix: noReach })
  expect(wrapper.get('.chain').text).toContain('lead')
  expect(wrapper.get('.chain').text).toContain('nothing the root plans can start them')
+ })
+ })
+
+ /**
+ * Portable expertise, and the operator's case: two agents in one role, one of which learned a
+ * particular subsystem. The answer is two *personas* — expertise attaches to an
+ * identity, never to a slot on a team — and the canvas has to make that visible and
+ * cheap, or the two are indistinguishable names.
+ */
+ describe('expertise on the roster', => {
+ const expertise = [
+ {
+ personaId: 'swe',
+ subjectRef: 'payments',
+ subjectKind: 'repository',
+ retrievalState: 'on' as const,
+ },
+ {
+ personaId: 'swe',
+ subjectRef: 'billing-docs',
+ subjectKind: 'corpus',
+ retrievalState: 'off' as const,
+ },
+ ]
+
+ it('names each subject under the member, with what is being done with it', => {
+ const wrapper = composer({ expertise })
+ const rows = wrapper.findAll('.chips li.knows')
+
+ expect(rows).toHaveLength(2)
+ expect(rows[0]?.text).toContain('payments')
+ expect(rows[0]?.text).toContain('in use')
+ // A withheld map is said to be withheld rather than shown as ordinary expertise.
+ expect(rows[1]?.text).toContain('withheld')
+ })
+
+ it('marks the node, counting only what is actually being handed to runs', => {
+ const nodes = flow(composer({ expertise })).props('nodes') as {
+ id: string
+ label: string
+ }[]
+ expect(nodes.find((node) => node.id === 'swe')?.label).toContain('◆1')
+ expect(nodes.find((node) => node.id === 'lead')?.label).not.toContain('◆')
+ })
+
+ it('derives a second agent from a member, keeping its tools and taking a new model', async => {
+ const wrapper = composer
+ await wrapper.get('.new-planner select').setValue('swe')
+ await wrapper.get('.new-planner input[type="text"]').setValue('swe-payments')
+ await wrapper.findAll('.new-planner input')[1]?.setValue('claude-sonnet-5')
+ await wrapper.get('.new-planner').trigger('submit')
+
+ const emitted = wrapper.emitted('create-persona')?.[0]?.[0] as { markdownSource: string }
+ expect(emitted.markdownSource).toContain('name: swe-payments')
+ expect(emitted.markdownSource).toContain('model: claude-sonnet-5')
+ // The copy is the point: it inherits what this team was designed against.
+ expect(emitted.markdownSource).toContain('tools: [Read]')
  })
  })
 })

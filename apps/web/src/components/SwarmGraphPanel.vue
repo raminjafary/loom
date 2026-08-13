@@ -50,7 +50,17 @@ const props = defineProps<{
  subjectRef: string
  subjectKind: string
  personaName: string
+ retrievalState: 'trial' | 'on' | 'off'
  }[]
+ /**
+ * Which runs on this tree actually read which map, and which were denied it
+ *. Fetched with `expertise`, in the same round.
+ *
+ * Separate from it because they are different facts: `expertise` is per persona and
+ * says what an agent *holds*, and this is per run and says what a particular piece of
+ * work was *given*. Only the second answers "which of these agents adopted it".
+ */
+ expertiseUses?: readonly { agentRunId: string; mapId: string; arm: 'retrieved' | 'withheld' }[]
  /**
  * The run currently being watched, so the canvas can say which node that is.
  *
@@ -150,7 +160,13 @@ onUnmounted( => {
 })
 
 const graph = computed( =>
- buildSwarmGraph(props.board, props.mergeQueue, props.expertise ?? [], tick.value),
+ buildSwarmGraph(
+ props.board,
+ props.mergeQueue,
+ props.expertise ?? [],
+ tick.value,
+ props.expertiseUses ?? [],
+),
 )
 
 /**
@@ -594,7 +610,10 @@ const collisionCount = computed(
  absent band is a promise the canvas is not keeping. -->
  <li v-if="graph.queue.length > 0"><span class="swatch queue"></span>merge queue</li>
  <li v-if="graph.knowledge.length > 0">
- <span class="swatch knows"></span>expertise in play
+ <span class="swatch knows"></span>read this map
+ </li>
+ <li v-if="graph.edges.some((e) => e.kind === 'withheld')">
+ <span class="swatch withheld"></span>denied it — the baseline
  </li>
  </ul>
  <button type="button" @click="emit('refresh')">Refresh</button>
@@ -786,13 +805,35 @@ const collisionCount = computed(
 :transform="`translate(${knowledgeLeft(knode)} ${knowledgeY - KNOWLEDGE_H / 2})`"
  >
  <rect:width="NODE_W":height="KNOWLEDGE_H" rx="8" class="box" />
- <text class="ksubject" x="10" y="16">{{ knode.subjectRef }}</text>
+ <text class="ksubject" x="10" y="16">
+ {{ knode.subjectRef }}
+ <!--
+ Portable expertise: what the platform is *doing* with this map. A band reading
+ "expertise in play" over a map being withheld would claim an
+ expertise nobody here is carrying.
+ -->
+ <tspan:class="['kstate', knode.retrievalState]">{{
+ knode.retrievalState === 'on'
+ ? '· in use'
+: knode.retrievalState === 'trial'
+ ? '· on trial'
+: '· withheld'
+ }}</tspan>
+ </text>
  <text class="kmeta" x="10" y="30">
- {{ knode.personaName }} knows this {{ knode.subjectKind }}
+ {{ knode.personaName }} ·
+ {{
+ knode.readByRunIds.length > 0
+ ? `read by ${knode.readByRunIds.length} of ${knode.runIds.length} run(s)`
+: `knows this ${knode.subjectKind}`
+ }}
  </text>
  <title>
  {{ knode.personaName }} holds a map of {{ knode.subjectRef }}, carried by
- {{ knode.runIds.length }} run(s) on this tree.
+ {{ knode.runIds.length }} run(s) on this tree, of which
+ {{ knode.readByRunIds.length }} were handed it. A run drawn with a faint
+ edge was deliberately denied it — that run is the baseline this map is
+ measured against.
  </title>
  </g>
 
@@ -1119,6 +1160,34 @@ header button:disabled {
  opacity: 0.6;
 }
 
+/* A run deliberately denied a map its persona holds. Drawn rather than
+ omitted, because the absence *is* the measurement — but at the faintest weight on the
+ canvas, since nothing happened along it. */
+.edge.withheld {
+ stroke: var(--text-faint);
+ stroke-dasharray: 1 6;
+ stroke-width: 1;
+ opacity: 0.4;
+}
+
+.knode.kstate {
+ font-size: 9px;
+ font-weight: 400;
+ letter-spacing: 0.03em;
+}
+
+.knode.kstate.on {
+ fill: var(--ok);
+}
+
+.knode.kstate.trial {
+ fill: var(--text-muted);
+}
+
+.knode.kstate.off {
+ fill: var(--text-faint);
+}
+
 .knode.box {
  fill: var(--surface-2, transparent);
  stroke: var(--accent);
@@ -1140,6 +1209,11 @@ header button:disabled {
 .swatch.knows {
  border-top-style: dotted;
  border-color: var(--accent);
+}
+
+.swatch.withheld {
+ border-top-style: dotted;
+ border-color: var(--text-faint);
 }
 
 /* Faint and dashed: a note-read says what a swarm already shared. It is deliberately
