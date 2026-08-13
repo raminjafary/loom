@@ -11,10 +11,13 @@ import type {
  PersonaDraft,
  PersonaGroup,
  Repository,
+ RunControl,
  Runner,
 } from '@loom/api-contract'
+import { DEFAULT_HANDOFF_CAP_PER_TREE, DEFAULT_HANDOFF_THRESHOLD } from '@loom/domain'
 import { computed, onMounted, ref, watch } from 'vue'
 import CapabilityPanel from './CapabilityPanel.vue'
+import HandoffPolicyPanel from './HandoffPolicyPanel.vue'
 import ColosseumPanel from './ColosseumPanel.vue'
 import MasteryPanel from './MasteryPanel.vue'
 import PersonaEditor from './PersonaEditor.vue'
@@ -57,6 +60,8 @@ const props = defineProps<{
  /** The venue — sessions and the one being read, fetched when the tab opens. */
  colosseumSessions: ColosseumSession[]
  colosseumView: ColosseumView | null
+ /** The workspace's own policy row — where the handoff threshold and cap live. */
+ runControl: RunControl | null
 }>
 
 const repositoryNames = computed( =>
@@ -96,6 +101,7 @@ const emit = defineEmits<{
  input: { claimId: string; verdict: 'upheld' | 'refuted'; citation: string },
  ]
  'colosseum-take-turn': [input: { sessionId: string; personaId?: string }]
+ 'set-handoff-policy': [input: { threshold: number | null; capPerTree: number | null }]
  'colosseum-conclude': [sessionId: string]
  'create-pairing-token': [name: string]
  bind: [input: { runnerId: string; path: string; displayName: string }]
@@ -227,6 +233,12 @@ onMounted( => scrim.value?.focus)
  @set-install-command="(id, command) => emit('set-install-command', id, command)"
  @warm-cache="(id, done) => emit('warm-cache', id, done)"
  @unbind="(input, done) => emit('unbind', input, done)"
+ />
+ <HandoffPolicyPanel
+:control="runControl"
+:default-threshold="DEFAULT_HANDOFF_THRESHOLD"
+:default-cap-per-tree="DEFAULT_HANDOFF_CAP_PER_TREE"
+ @save="(input) => emit('set-handoff-policy', input)"
  />
  </template>
 

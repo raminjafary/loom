@@ -302,6 +302,13 @@
       "when": 1786598632991,
       "tag": "0042_motionless_spitfire",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1786599419644,
+      "tag": "0043_wealthy_matthew_murdock",
+      "breakpoints": true
     }
   ]
 }

@@ -753,7 +753,12 @@ describe('contract completeness', => {
  'steer',
  'listNeedsAttention',
  ])
- expect(Object.keys(contract.runControl)).toEqual(['get', 'pauseAll', 'resume'])
+ expect(Object.keys(contract.runControl)).toEqual([
+ 'get',
+ 'pauseAll',
+ 'resume',
+ 'setHandoffPolicy',
+ ])
  expect(Object.keys(contract.notification)).toEqual(['config', 'subscribe', 'unsubscribe'])
  expect(Object.keys(contract.approval)).toEqual(['listPending', 'decide'])
  })

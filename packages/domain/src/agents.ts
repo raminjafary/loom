@@ -227,6 +227,81 @@ export interface WorkspaceRunControl {
  readonly paused: boolean
  readonly pausedAt: Date | null
  readonly pausedByUserId: string | null
+ /**
+ * When the platform *suggests* a handoff, and how many times a tree may do it.
+ *
+ * Travels with the kill switch rather than in a settings table of its own for two
+ * reasons. It is the same kind of thing — workspace policy an operator sets, persisted
+ * so a redeploy cannot silently undo it — and the heartbeat needs the threshold on a
+ * path that already reads this row and cannot afford a second query.
+ *
+ * Null means "the platform's default", which is deliberately distinct from a value that
+ * happens to equal it: an operator who has not chosen should inherit a better default
+ * later, and one who chose 0.8 should keep 0.8.
+ */
+ readonly handoff: {
+ readonly threshold: number | null
+ readonly capPerTree: number | null
+ }
+}
+
+/**
+ * The band a handoff threshold may sit in.
+ *
+ * The bounds are the own argument made enforceable. Too low and the platform nudges an
+ * agent that has barely started, which trains a run to ignore the notice. Too high and it
+ * asks a model to summarize its own work at the precise moment it has the least room to do
+ * so — the failure the whole mechanism exists to avoid, and the reason the default is 0.8
+ * rather than something closer to the limit.
+ */
+export const MIN_HANDOFF_THRESHOLD = 0.5
+export const MAX_HANDOFF_THRESHOLD = 0.95
+export const MAX_HANDOFF_CAP_PER_TREE = 5
+
+export type HandoffPolicyVerdict =
+ | { readonly ok: true; readonly threshold: number | null; readonly capPerTree: number | null }
+ | { readonly ok: false; readonly reason: string }
+
+/**
+ * Validates what an operator typed, and refuses with the reason rather than clamping.
+ *
+ * Clamping would accept "0.99" and store 0.95, so the setting would say something the
+ * operator did not choose — the shape of surface-lies this repository has already paid for
+ * twice.
+ */
+export const parseHandoffPolicy = (input: {
+ threshold: number | null
+ capPerTree: number | null
+}): HandoffPolicyVerdict => {
+ if (input.threshold !== null) {
+ if (!Number.isFinite(input.threshold)) {
+ return { ok: false, reason: 'A threshold is a fraction of the window, like 0.8' }
+ }
+ if (input.threshold < MIN_HANDOFF_THRESHOLD || input.threshold > MAX_HANDOFF_THRESHOLD) {
+ return {
+ ok: false,
+ reason:
+ `A handoff threshold sits between ${MIN_HANDOFF_THRESHOLD} and ${MAX_HANDOFF_THRESHOLD}. ` +
+ 'Lower and the platform interrupts an agent that has barely started; higher and it ' +
+ 'asks one to write a handover with no room left to write it in.',
+ }
+ }
+ }
+ if (input.capPerTree !== null) {
+ if (!Number.isInteger(input.capPerTree) || input.capPerTree < 1) {
+ return { ok: false, reason: 'A tree may hand off at least once, or the setting means nothing' }
+ }
+ if (input.capPerTree > MAX_HANDOFF_CAP_PER_TREE) {
+ return {
+ ok: false,
+ reason:
+ `At most ${MAX_HANDOFF_CAP_PER_TREE} handoffs per tree. Past that the failure mode is ` +
+ 'thrash — agents passing work back and forth, each briefing the other, spending the ' +
+ 'budget on continuity rather than on the work.',
+ }
+ }
+ }
+ return { ok: true, threshold: input.threshold, capPerTree: input.capPerTree }
 }
 
 export type AgentRunStatus =

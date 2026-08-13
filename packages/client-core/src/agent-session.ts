@@ -538,6 +538,14 @@ export interface AgentSession {
  /** Lifts the pause. Never restarts what the pause cancelled. */
  resumeAllRuns: Promise<void>
  /**
+ * When the platform *suggests* a handoff, and how many one tree may make.
+ *
+ * Neither setting swaps an agent: the threshold decides when a filling run is told its
+ * own number, and the cap is the one bound the platform enforces on its own. Null on
+ * either restores the platform's default.
+ */
+ setHandoffPolicy(input: { threshold: number | null; capPerTree: number | null }): Promise<void>
+ /**
  * Tells this session that something happened in the workspace *now* — called with
  * every realtime frame the workspace session receives.
  *
@@ -1585,6 +1593,15 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ activeRun: run, pendingApprovals: [] })
  }
  await fetchInbox
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async setHandoffPolicy(input) {
+ patch({ error: null })
+ try {
+ patch({ runControl: await options.api.runControl.setHandoffPolicy(input) })
  } catch (error) {
  patch({ error: errorMessage(error) })
  }

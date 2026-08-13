@@ -896,6 +896,18 @@ export const RunControlSchema = z.object({
  paused: z.boolean,
  pausedAt: z.date.nullable,
  pausedByUserId: z.string.nullable,
+ /**
+ * When the platform *suggests* a handoff, and how many one tree may make.
+ *
+ * Neither swaps an agent. The threshold decides when a filling run is told its own
+ * number; the cap is the one bound the platform enforces on its own. Null means the
+ * platform's default, which a surface must render as "not set" rather than as the
+ * number it currently resolves to.
+ */
+ handoff: z.object({
+ threshold: z.number.nullable,
+ capPerTree: z.number.int.nullable,
+ }),
 })
 
 /**

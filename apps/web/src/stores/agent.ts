@@ -128,6 +128,8 @@ export const useAgentStore = defineStore('agent', => {
  session.unregisterNotificationTarget(endpoint),
  pauseAllRuns: => session.pauseAllRuns,
  resumeAllRuns: => session.resumeAllRuns,
+ setHandoffPolicy: (input: Parameters<typeof session.setHandoffPolicy>[0]) =>
+ session.setHandoffPolicy(input),
  getRawTranscript: (agentRunId: string) => session.getRawTranscript(agentRunId),
  refreshInbox: => session.refreshInbox,
  inspectRun: (agentRunId: string) => session.inspectRun(agentRunId),

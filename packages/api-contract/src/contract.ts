@@ -851,6 +851,22 @@ export const contract = {
 ),
 
  resume: oc.output(RunControlSchema),
+
+ /**
+ * When the platform suggests a handoff, and how many one tree may make.
+ *
+ * Null on either field restores the platform's default rather than writing the
+ * current default down — "I have not chosen" and "I chose 0.8" are different answers,
+ * and only one of them should inherit a better default later.
+ */
+ setHandoffPolicy: oc
+.input(
+ z.object({
+ threshold: z.number.nullable,
+ capPerTree: z.number.int.nullable,
+ }),
+)
+.output(RunControlSchema),
  },
 
  /**

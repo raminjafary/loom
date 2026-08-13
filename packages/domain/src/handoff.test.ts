@@ -11,6 +11,7 @@ import {
  type HandoffBrief,
  type HandoffFacts,
 } from './handoff.js'
+import { parseHandoffPolicy } from './agents.js'
 import { UNTRUSTED_MAP_CLOSE } from './subject-map.js'
 
 /**
@@ -211,5 +212,51 @@ describe('renderHandoffNudge', => {
  it('says how close the tree is to the cap once one handoff has happened', => {
  expect(nudge({ handoffsInTree: 1 })).toContain('handed off 1 time(s) already')
  expect(nudge({ handoffsInTree: 0 })).toContain('Finish the thought you are on first')
+ })
+})
+
+describe('parseHandoffPolicy — a setting with a sane default', => {
+ it('accepts a threshold in the band, and a cap of at least one', => {
+ expect(parseHandoffPolicy({ threshold: 0.7, capPerTree: 3 })).toEqual({
+ ok: true,
+ threshold: 0.7,
+ capPerTree: 3,
+ })
+ })
+
+ /**
+ * Null is "I have not chosen", which is not the same answer as a number that happens to
+ * equal today's default — only one of them should inherit a better default later.
+ */
+ it('keeps null as null rather than writing the current default down', => {
+ expect(parseHandoffPolicy({ threshold: null, capPerTree: null })).toEqual({
+ ok: true,
+ threshold: null,
+ capPerTree: null,
+ })
+ })
+
+ /**
+ * Refused rather than clamped. Clamping would accept 0.99 and store 0.95, so the
+ * setting would say something the operator did not choose.
+ */
+ it('refuses a threshold with no room left to write a handover in', => {
+ const verdict = parseHandoffPolicy({ threshold: 0.99, capPerTree: null })
+ expect(verdict.ok).toBe(false)
+ if (!verdict.ok) expect(verdict.reason).toContain('no room left')
+ })
+
+ it('refuses a threshold that would interrupt a run that has barely started', => {
+ expect(parseHandoffPolicy({ threshold: 0.2, capPerTree: null }).ok).toBe(false)
+ })
+
+ it('refuses a cap high enough to be thrash', => {
+ const verdict = parseHandoffPolicy({ threshold: null, capPerTree: 9 })
+ expect(verdict.ok).toBe(false)
+ if (!verdict.ok) expect(verdict.reason).toContain('thrash')
+ })
+
+ it('refuses a tree that may never hand off — the setting would mean nothing', => {
+ expect(parseHandoffPolicy({ threshold: null, capPerTree: 0 }).ok).toBe(false)
  })
 })

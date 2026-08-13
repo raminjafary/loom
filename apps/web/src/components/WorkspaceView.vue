@@ -1132,6 +1132,8 @@ onBeforeUnmount( => {
 :mastery-curation="masteryCuration"
 :colosseum-sessions="colosseumSessions"
 :colosseum-view="colosseumView"
+:run-control="agentSnapshot.runControl"
+ @set-handoff-policy="(input) => void agent.setHandoffPolicy(input)"
  @colosseum-select="(sessionId) => void selectColosseumSession(sessionId)"
  @colosseum-refresh=" => void refreshColosseum"
  @colosseum-convene="(input) => void conveneColosseum(input)"

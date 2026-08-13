@@ -763,6 +763,46 @@ describe('runner-gateway: warm handoff', => {
  socket.close
  })
 
+ /**
+ * Mastery: "the threshold is a setting with a sane default." The plumbing was shaped for it
+ * — `limits?: { handoffThreshold?, handoffCapPerTree? }` — and every caller passed `{}`,
+ * which is the smallest possible gap between what code is built for and what it does.
+ */
+ it('nudges at the operator\'s threshold rather than the platform default', async => {
+ const stamp = Date.now
+ const { socket, runnerId } = await pairFakeRunner(`handoff-threshold-${stamp}`)
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: `handoff-threshold-${stamp}` })
+
+ await client.runControl.setHandoffPolicy({ threshold: 0.55, capPerTree: null })
+ const run = await startOn(socket, created.rootThread.id, repo.id)
+
+ // Well under the platform's 0.8, and over the operator's 0.55.
+ const delivered = nextFrame(socket, (v) => v.type === 'deliver_context')
+ socket.send(
+ JSON.stringify({
+ type: 'heartbeat',
+ runId: run.id,
+ contextTokens: 60_000,
+ contextMaxTokens: 100_000,
+ }),
+)
+ expect((await delivered).text).toContain('60%')
+
+ // Refused rather than clamped: a setting that stored something other than what was
+ // typed would say something the operator did not choose.
+ await expect(
+ client.runControl.setHandoffPolicy({ threshold: 0.99, capPerTree: null }),
+).rejects.toThrow(/no room left/)
+
+ // And null hands the decision back to the platform's default rather than freezing
+ // today's number in the row.
+ const cleared = await client.runControl.setHandoffPolicy({ threshold: null, capPerTree: null })
+ expect(cleared.handoff.threshold).toBeNull
+
+ socket.close
+ })
+
  it('refuses a brief with no next step, and the run carries on', async => {
  const stamp = Date.now
  const { socket, runnerId } = await pairFakeRunner(`handoff-summary-${stamp}`)

@@ -93,6 +93,7 @@ import {
  type RunnerId,
  type ThreadId,
  type WorkspaceId,
+ parseHandoffPolicy,
  type WorkspaceRunControl,
 } from '@loom/domain'
 import type {
@@ -129,7 +130,7 @@ import {
  type NoteDeps,
 } from './note-use-cases.js'
 import { recordSpokenTurn } from './colosseum-use-cases.js'
-import { suggestHandoffOnPressure } from './handoff-use-cases.js'
+import { handoffLimits, suggestHandoffOnPressure } from './handoff-use-cases.js'
 import { startThread, type Deps } from './use-cases.js'
 
 export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps {
@@ -3177,6 +3178,13 @@ export const recordRunHeartbeat = async (
  try {
  const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
  if (!run) return
+ /**
+ * The operator's threshold, from the row the kill switch already lives on. One primary-key read, and it has to come before the
+ * cheap gate rather than after it: the gate *is* the threshold, so deciding against
+ * the platform default and then re-deciding against the operator's would ignore
+ * anything they set below it.
+ */
+ const control = await deps.runControl.get(input.workspaceId)
  await suggestHandoffOnPressure(
  {
  agentRuns: deps.agentRuns,
@@ -3190,7 +3198,7 @@ export const recordRunHeartbeat = async (
  announce: async ({ text }) => {
  await postRunSystemMessage(deps, run, text)
  },
- limits: {},
+ limits: handoffLimits(control),
  },
  run,
 )
@@ -3421,6 +3429,56 @@ export const resumeAllRuns = async (
  action: 'workspace.runs_resumed',
  subjectType: 'workspace',
  subjectId: input.workspaceId,
+ })
+
+ return control
+}
+
+/**
+ * When the platform suggests a handoff, and how many a tree may make.
+ *
+ * **Neither value ever swaps an agent**, and the wording of this comment is the wording
+ * the surface has to use. The rule is that the threshold nudges, the agent asks and the
+ * cap refuses: the first decides when a notice is delivered to a run that is filling up,
+ * and the second is the one bound the platform enforces on its own. A setting described
+ * as automatic swapping would be a surface promising something the runtime deliberately
+ * does not do, which is the exact shape of the two operator reports that started the
+ * session before this one.
+ *
+ * Null restores the platform's default rather than writing the current default down,
+ * which is the difference between "I have not chosen" and "I chose 0.8".
+ */
+export const setHandoffPolicy = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ threshold: number | null
+ capPerTree: number | null
+ },
+): Promise<WorkspaceRunControl> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may set when the platform suggests a handoff')
+ }
+
+ const verdict = parseHandoffPolicy({
+ threshold: input.threshold,
+ capPerTree: input.capPerTree,
+ })
+ if (!verdict.ok) throw new ValidationError(verdict.reason)
+
+ const control = await deps.runControl.setHandoffPolicy(input.workspaceId, {
+ threshold: verdict.threshold,
+ capPerTree: verdict.capPerTree,
+ })
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'workspace.handoff_policy_set',
+ subjectType: 'workspace',
+ subjectId: input.workspaceId,
+ metadata: { threshold: verdict.threshold, capPerTree: verdict.capPerTree },
  })
 
  return control

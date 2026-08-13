@@ -70,6 +70,7 @@ import {
  registerNotificationTarget,
  resetPersonaToBuiltin,
  resumeAllRuns,
+ setHandoffPolicy,
  setRepositoryInstallCommand,
  setRepositoryVerifyCommand,
  warmRepositoryCache,
@@ -1072,6 +1073,18 @@ export const router = os.router({
  resumeAllRuns(context.deps, {
  workspaceId: context.principal.workspaceId,
  actor: context.principal.actor,
+ }),
+),
+),
+
+ /** When the platform *suggests* a handoff. It never swaps an agent on its own. */
+ setHandoffPolicy: os.runControl.setHandoffPolicy.handler(({ context, input }) =>
+ guard( =>
+ setHandoffPolicy(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ threshold: input.threshold,
+ capPerTree: input.capPerTree,
  }),
 ),
 ),

@@ -701,6 +701,18 @@ export interface WorkspaceRunControlRepositoryPort {
  workspaceId: WorkspaceId,
  patch: { paused: boolean; pausedByUserId: string | null },
 ): Promise<WorkspaceRunControl>
+ /**
+ * When the platform suggests a handoff, and how many a tree may make.
+ *
+ * A separate method from `set` rather than an optional field on it, because the two are
+ * different acts: one is the kill switch, which an operator hits in an emergency, and
+ * the other is policy they edit deliberately. A patch that could do both would let a
+ * pause quietly rewrite a threshold.
+ */
+ setHandoffPolicy(
+ workspaceId: WorkspaceId,
+ patch: { threshold: number | null; capPerTree: number | null },
+): Promise<WorkspaceRunControl>
 }
 
 export interface ApprovalRepositoryPort {

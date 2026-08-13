@@ -186,6 +186,23 @@ export const shouldSuggestHandoff = (
 ...(limits?.handoffCapPerTree === undefined ? {}: { cap: limits.handoffCapPerTree }),
  }).handOff
 
+/**
+ * The stored policy as the `limits` shape both handoff paths already accept.
+ *
+ * A null is *omitted* rather than passed through, because `handoffDecision` reads an
+ * absent field as "use the default" and an explicit `undefined` the same way — but only
+ * one of those survives an object spread into a caller that checks `in`. One converter,
+ * used by both callers, is what keeps "I have not chosen" meaning the same thing in both.
+ */
+export const handoffLimits = (control: {
+ handoff: { threshold: number | null; capPerTree: number | null }
+}): { handoffThreshold?: number; handoffCapPerTree?: number } => ({
+...(control.handoff.threshold === null ? {}: { handoffThreshold: control.handoff.threshold }),
+...(control.handoff.capPerTree === null
+ ? {}
+: { handoffCapPerTree: control.handoff.capPerTree }),
+})
+
 export interface SuggestHandoffDeps {
  readonly agentRuns: {
  markHandoffSuggested(workspaceId: WorkspaceId, id: AgentRunId): Promise<boolean>

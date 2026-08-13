@@ -36,6 +36,15 @@ export const workspace = pgTable(
  // No hard FK, same reasoning as approvalRequest.resolvedByUserId: who hit
  // the switch is an audit fact that must survive the user being removed.
  runsPausedByUserId: text('runs_paused_by_user_id'),
+ // When the platform *suggests* a handoff, and how often a tree may make one. Null means the platform's
+ // default, which is deliberately not the same as a value that happens to equal it: an
+ // operator who never chose should inherit a better default later.
+ //
+ // Neither of these ever swaps an agent. The rule is that the threshold nudges, the
+ // agent asks and the cap refuses — so the first is when a notice is delivered, and the
+ // second is the one bound the platform enforces on its own.
+ handoffThreshold: doublePrecision('handoff_threshold'),
+ handoffCapPerTree: integer('handoff_cap_per_tree'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  },
  (t) => [uniqueIndex('workspace_slug_idx').on(t.slug)],

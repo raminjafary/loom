@@ -31,6 +31,7 @@ import {
  type ColosseumSession,
  type ExpertiseArmTally,
  type WorkspaceId,
+ type WorkspaceRunControl,
 } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
@@ -1137,24 +1138,44 @@ export const approvalRepository = (db: Database): ApprovalRepositoryPort => ({
  * dedicated table — it's strictly 1:1 with a workspace, so a separate row would
  * add a join and a "does the row exist yet?" case for nothing.
  */
-export const workspaceRunControlRepository = (db: Database): WorkspaceRunControlRepositoryPort => ({
- async get(workspaceId) {
- const [row] = await db
-.select({
+/**
+ * One column list and one mapper, because three methods return this row and a fourth copy
+ * of the field list is how the pause and the handoff policy end up disagreeing.
+ */
+const CONTROL_COLUMNS = {
  runsPaused: workspace.runsPaused,
  runsPausedAt: workspace.runsPausedAt,
  runsPausedByUserId: workspace.runsPausedByUserId,
- })
-.from(workspace)
-.where(eq(workspace.id, workspaceId))
-.limit(1)
- if (!row) throw new NotFoundError('Workspace')
- return {
+ handoffThreshold: workspace.handoffThreshold,
+ handoffCapPerTree: workspace.handoffCapPerTree,
+}
+
+const toControl = (
+ workspaceId: WorkspaceId,
+ row: {
+ runsPaused: boolean
+ runsPausedAt: Date | null
+ runsPausedByUserId: string | null
+ handoffThreshold: number | null
+ handoffCapPerTree: number | null
+ },
+): WorkspaceRunControl => ({
  workspaceId,
  paused: row.runsPaused,
  pausedAt: row.runsPausedAt,
  pausedByUserId: row.runsPausedByUserId,
- }
+ handoff: { threshold: row.handoffThreshold, capPerTree: row.handoffCapPerTree },
+})
+
+export const workspaceRunControlRepository = (db: Database): WorkspaceRunControlRepositoryPort => ({
+ async get(workspaceId) {
+ const [row] = await db
+.select(CONTROL_COLUMNS)
+.from(workspace)
+.where(eq(workspace.id, workspaceId))
+.limit(1)
+ if (!row) throw new NotFoundError('Workspace')
+ return toControl(workspaceId, row)
  },
 
  async set(workspaceId, patch) {
@@ -1166,18 +1187,19 @@ export const workspaceRunControlRepository = (db: Database): WorkspaceRunControl
  runsPausedByUserId: patch.pausedByUserId,
  })
 .where(eq(workspace.id, workspaceId))
-.returning({
- runsPaused: workspace.runsPaused,
- runsPausedAt: workspace.runsPausedAt,
- runsPausedByUserId: workspace.runsPausedByUserId,
- })
+.returning(CONTROL_COLUMNS)
  if (!row) throw new NotFoundError('Workspace')
- return {
- workspaceId,
- paused: row.runsPaused,
- pausedAt: row.runsPausedAt,
- pausedByUserId: row.runsPausedByUserId,
- }
+ return toControl(workspaceId, row)
+ },
+
+ async setHandoffPolicy(workspaceId, patch) {
+ const [row] = await db
+.update(workspace)
+.set({ handoffThreshold: patch.threshold, handoffCapPerTree: patch.capPerTree })
+.where(eq(workspace.id, workspaceId))
+.returning(CONTROL_COLUMNS)
+ if (!row) throw new NotFoundError('Workspace')
+ return toControl(workspaceId, row)
  },
 })
 

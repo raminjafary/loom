@@ -43,6 +43,7 @@ import {
  recordRunWorkspace,
  askClarifyingQuestion,
  handOverToSuccessor,
+ handoffLimits,
  resolveTreeRunId,
  startAgentRun,
  requestApproval,
@@ -800,7 +801,10 @@ export const createRunnerGateway = (
  },
  })
  },
- limits: {},
+ // The operator's cap, not the platform default. This is the refusal half of the rule, so it has to read
+ // the same setting the nudge does or a workspace could be told one number
+ // and enforced against another.
+ limits: handoffLimits(await deps.runControl.get(workspaceId)),
  },
  { workspaceId, agentRunId: asAgentRunId(frame.runId), brief: frame.brief },
 )
