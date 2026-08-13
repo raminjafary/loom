@@ -3442,6 +3442,27 @@ Decompose and delegate.`
  * would bury the tree they hang off. A decision governs everyone after it and a
  * blocker is asking for help.
  */
+ /**
+ * Where a card is running.
+ *
+ * Asserted end to end because that is where the names come from — two workspace-wide
+ * lists and a thread lookup that only exist on the real deps. A unit test with a fake
+ * board would assert that a `Map` works.
+ */
+ it('says which runner and which channel every card is on', async => {
+ const { socket, runnerId } = await pairFakeRunner('board-where')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'board-where' })
+ const { run } = await startRunVia(socket, created.rootThread.id, repo.id, testPersonaId)
+
+ const board = await client.workerNote.board({ agentRunId: run.id })
+ const card = board.cards.find((entry) => entry.runId === run.id)
+ expect(card?.runnerName).toBe('board-where')
+ expect(card?.channelName).toBe('board-where')
+
+ socket.close
+ })
+
  it('puts decisions and blockers on the board as objects, and leaves findings off it', async => {
  const { socket, runnerId } = await pairFakeRunner('notes-as-objects')
  const repo = await bindViaFakeRunner(socket, runnerId)

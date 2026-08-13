@@ -586,6 +586,17 @@ export const SwarmBoardCardSchema = z.object({
  /** Agent- or human-authored, so untrusted text — render it as such. */
  latestNoteTitle: z.string.nullable,
  blockerCount: z.number.int,
+ /**
+ * Where this card is running — the runner's name and the channel the
+ * work is watched in. The inbox has both; the board and the active-runs panel did not, and
+ * those are the surfaces a human uses while arbitrating several agents.
+ *
+ * Empty rather than the id when unresolvable: "which machine" is how somebody decides
+ * whether a stuck run is stuck on *this* box, and a uuid answers that worse than a blank,
+ * because it looks like an answer.
+ */
+ runnerName: z.string,
+ channelName: z.string,
 
  /**
  * Live observability. Every field is projected from events the platform

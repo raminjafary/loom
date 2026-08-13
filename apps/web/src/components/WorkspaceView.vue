@@ -1047,6 +1047,8 @@ onBeforeUnmount( => {
  <ActiveRunsPanel
 :runs="agentSnapshot.activeRuns"
 :watched-run-id="agentSnapshot.activeRun?.id ?? null"
+:runners="agentSnapshot.runners"
+:channels="snapshot.channels"
  @watch="(agentRunId) => agent.watchRun(agentRunId)"
  />
  <DiffView

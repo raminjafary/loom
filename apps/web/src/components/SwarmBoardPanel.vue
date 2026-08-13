@@ -139,6 +139,20 @@ const workingCount = computed(
  <span v-if="money(card.totalCostUsd)" class="cost">{{ money(card.totalCostUsd) }}</span>
  </p>
  <!--
+ Where this card is running. The inbox has both
+ and the board did not, and the board is the surface a human uses while
+ arbitrating several agents — "which machine" is how they decide whether a
+ stuck run is stuck on *this* box.
+
+ Its own line rather than more chips on the meta row: the meta row answers
+ "what is this", and this answers "where is it", which is the question asked
+ second and only about the card already being looked at.
+ -->
+ <p v-if="card.runnerName || card.channelName" class="where">
+ <span v-if="card.runnerName" class="runner">{{ card.runnerName }}</span>
+ <span v-if="card.channelName" class="channel">#{{ card.channelName }}</span>
+ </p>
+ <!--
  What this worker is doing at this second. A tool name is the platform's own record of the call it
  dispatched, not a model's account of itself, which is why this line sits
  above the agent-note line and carries no "claimed" tag.
@@ -466,6 +480,20 @@ header button {
  font-size: 0.75rem;
  line-height: 1.3;
  overflow-wrap: anywhere;
+}
+
+/* Quieter than `.meta` — it answers a question asked second. */
+.where {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 0.4rem;
+ margin: 0.15rem 0 0;
+ font-size: 0.62rem;
+ color: var(--text-faint);
+}
+
+.where.runner::before {
+ content: '⌂ ';
 }
 
 .meta {

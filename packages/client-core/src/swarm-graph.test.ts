@@ -18,6 +18,8 @@ const card = (over: Partial<BoardCard> & { runId: string }): BoardCard =>
  noteCount: 0,
  latestNoteTitle: null,
  blockerCount: 0,
+ runnerName: '',
+ channelName: '',
  currentToolName: null,
  currentToolTarget: null,
  openCallCount: 0,

@@ -24,8 +24,10 @@ import type {
  AgentRunRepositoryPort,
  NoteReadRepositoryPort,
  RunDispatchPort,
+ RunnerRepositoryPort,
  WorkerNoteRepositoryPort,
 } from './agent-ports.js'
+import type { ChannelRepositoryPort, ThreadRepositoryPort } from './ports.js'
 
 /**
  * The worker-notes ledger's use cases — and, since "the ledger
@@ -60,6 +62,27 @@ export interface NoteDeps {
  * read.
  */
  readonly noteReads?: NoteReadRepositoryPort
+}
+
+/**
+ * What the board needs on top of a ledger — where each card is
+ * *running*: the runner's machine and the channel the work is watched in.
+ *
+ * Its own type rather than three more fields on `NoteDeps`, and not only to avoid a clash
+ * with `Deps`: nothing else in this file reads a runner or a channel, and a note has no
+ * business knowing about either. Optional, like `dispatch` and `noteReads` — a board
+ * assembles with or without them and a caller that has neither gets the board it got
+ * before, with both names empty. A name nobody could resolve must never fail the read a
+ * human is waiting on.
+ *
+ * Two workspace-wide lists plus one lookup per *thread* rather than per card: a workspace
+ * holds a handful of runners and channels, a tree lives in one thread, and the cost
+ * discipline is that the board stays one fetch on a socket nudge rather than a query per row.
+ */
+export interface BoardDeps extends NoteDeps {
+ readonly runners?: RunnerRepositoryPort
+ readonly channels?: ChannelRepositoryPort
+ readonly threads?: ThreadRepositoryPort
 }
 
 /**
@@ -557,6 +580,21 @@ export interface SwarmBoardCard {
  /** The most recent agent- or human-authored note, for the card's subtitle. Untrusted text. */
  readonly latestNoteTitle: string | null
  readonly blockerCount: number
+ /**
+ * Where this card is *running* — the runner's machine and the
+ * channel the work is watched in.
+ *
+ * On the card rather than folded up to the board, which is forward-looking rather than
+ * pessimistic: every run in a tree shares its parent's repository today, so both names are
+ * constant across a board — and the cross-repository fleet is exactly the
+ * arrangement where they stop being. A board that had folded them to the top would then be
+ * quietly wrong rather than merely repetitive.
+ *
+ * Empty rather than the id when unresolvable: "which machine" is how a human decides
+ * whether a stuck run is stuck on *this* box, and a uuid answers that worse than a blank.
+ */
+ readonly runnerName: string
+ readonly channelName: string
 
  // --- Live observability. Projections of persisted events and of the
  // run's own snapshot; nothing here asks the agent to cooperate, and nothing here
@@ -664,7 +702,7 @@ export interface SwarmBoard {
 export const MAX_NOTE_NODES = 24
 
 export const getSwarmBoard = async (
- deps: NoteDeps,
+ deps: BoardDeps,
  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
 ): Promise<SwarmBoard> => {
  const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
@@ -701,6 +739,45 @@ export const getSwarmBoard = async (
  runs.map((entry) => entry.id),
 )
 
+ /**
+ * Where each card is running — the runner's name and the
+ * channel the thread belongs to.
+ *
+ * Per *card* rather than per board, and that is a forward-looking choice rather than a
+ * pessimistic one: every run in a tree shares its parent's repository today, so the two
+ * names are constant across a board — but the cross-repository fleet is
+ * exactly the arrangement where they stop being, and a board that had folded them up to
+ * the top would then be quietly wrong instead of merely repetitive.
+ *
+ * Resolved from workspace-wide lists, all in this one read: a workspace holds a handful
+ * of runners, channels and threads, and live swarm observability forbids a query per row.
+ */
+ const distinctThreadIds = [...new Set(runs.map((entry) => entry.threadId))]
+ const [runnerRows, channelRows, threadRows] = await Promise.all([
+ deps.runners?.listByWorkspace(input.workspaceId) ?? Promise.resolve([]),
+ deps.channels?.listByWorkspace(input.workspaceId) ?? Promise.resolve([]),
+ /**
+ * By distinct **thread**, not by card. `ThreadRepositoryPort` has no workspace-wide
+ * list and does not need one for this: a tree lives in the thread its root was started
+ * in, so this is one lookup in practice and is bounded by the number of threads a tree
+ * touches rather than by the number of runs in it.
+ */
+ Promise.all(
+ distinctThreadIds.map((threadId) =>
+ deps.threads?.findById(input.workspaceId, threadId) ?? Promise.resolve(null),
+),
+),
+ ])
+ const runnerNameById = new Map(runnerRows.map((runner) => [runner.id as string, runner.name]))
+ const channelNameById = new Map(
+ channelRows.map((channel) => [channel.id as string, channel.name]),
+)
+ const channelIdByThread = new Map(
+ threadRows.flatMap((thread) =>
+ thread === null ? []: [[thread.id as string, thread.channelId as string]],
+),
+)
+
  const cards = runs.map((entry) => {
  const live = activity.get(entry.id)
  const own = notes.filter((note) => note.agentRunId === entry.id)
@@ -733,6 +810,14 @@ export const getSwarmBoard = async (
  noteCount: own.length,
  latestNoteTitle: authored.at(-1)?.title ?? null,
  blockerCount: authored.filter((note) => note.kind === 'blocker').length,
+ /**
+ * Empty rather than null when unresolvable, and rather than the id. The * reason for the field is that "which machine" is how a human decides whether a stuck
+ * run is stuck on *this* box — and a uuid answers that question worse than a blank
+ * does, because it looks like an answer.
+ */
+ runnerName: runnerNameById.get(entry.runnerId as string) ?? '',
+ channelName:
+ channelNameById.get(channelIdByThread.get(entry.threadId as string) ?? '') ?? '',
  // A terminal run has nothing in flight. Without this a run that died mid-call —
  // reaped, cancelled, out of budget — would keep advertising that call forever,
  // which is the same lie the thread told before pairing was fixed.

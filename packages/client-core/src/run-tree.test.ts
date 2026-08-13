@@ -15,6 +15,8 @@ const card = (over: Partial<RunTreeCard> & { runId: string }): RunTreeCard => ({
  noteCount: 0,
  latestNoteTitle: null,
  blockerCount: 0,
+ runnerName: '',
+ channelName: '',
  currentToolName: null,
  currentToolTarget: null,
  openCallCount: 0,
