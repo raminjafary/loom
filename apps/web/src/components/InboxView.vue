@@ -484,10 +484,11 @@ const onKeydown = (event: KeyboardEvent) => {
  inset: 0;
  z-index: 40;
  display: flex;
- align-items: flex-start;
- justify-content: center;
- padding: 3rem 1rem 1rem;
- background: rgba(0, 0, 0, 0.55);
+ /* A drawer off the right edge, not a modal in the middle: the board stays where it was,
+ so closing the review puts a human back exactly where they were reading. */
+ align-items: stretch;
+ justify-content: flex-end;
+ background: rgba(0, 0, 0, 0.45);
 }
 
 /*
@@ -497,12 +498,11 @@ const onKeydown = (event: KeyboardEvent) => {
  */
 .sheet {
  position: relative;
- width: min(52rem, 100%);
- max-height: 100%;
+ width: min(34rem, 100%);
+ height: 100%;
  overflow-y: auto;
  padding: 1.1rem 1.2rem;
- border: 1px solid var(--border);
- border-radius: 0.6rem;
+ border-left: 1px solid var(--border);
  background: var(--bg);
  display: flex;
  flex-direction: column;
@@ -526,9 +526,11 @@ const onKeydown = (event: KeyboardEvent) => {
  display: flex;
  align-items: flex-start;
  justify-content: space-between;
- gap: 1rem;
+ gap: 0.6rem 1rem;
  flex-wrap: wrap;
- padding-bottom: 0.6rem;
+ /* Room for the close button, which is pinned to the sheet's corner and would otherwise
+ sit on top of whichever fact happened to be last. */
+ padding: 0 1.6rem 0.6rem 0;
  border-bottom: 1px solid var(--border);
 }
 
@@ -566,7 +568,8 @@ const onKeydown = (event: KeyboardEvent) => {
 
 .facts {
  display: flex;
- gap: 1.25rem;
+ flex-wrap: wrap;
+ gap: 0.4rem 1.25rem;
  margin: 0;
 }
 
