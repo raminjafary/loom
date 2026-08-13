@@ -236,6 +236,54 @@ export const conveneRoster = (
  }
  }
 
+ /**
+ * **A crunch is convened over N drifting maps of one subject, so its vantage points are
+ * the maps — not the (subject, model) pairs the other purposes are measured by.**
+ *
+ * Read literally, `voices` would refuse every crunch a single-backend workspace could
+ * ever hold: the participants are by definition experts in the *same* subject, so their
+ * `subjectRef`s are identical, and one configured model then makes every roster one
+ * voice. That is the same trap the own note found in reading "different subjects is
+ * the minimum" as a refusal, and it would make this purpose unbuildable rather than
+ * safe.
+ *
+ * The mechanism the refusals exist for is **correlated errors**, and two maps built by
+ * separate mastery runs are not one body of knowledge however alike the models that
+ * wrote them: the disagreement a crunch is looking for is already a fact about the
+ * artifacts before anybody speaks. That is what makes it different from a contention,
+ * where the disagreement has to be produced in the room.
+ *
+ * So the rule is: everybody brings a map, and no two bring the *same* map. A
+ * participant with nothing to reconcile is an audience, and one map counted twice is
+ * the self-agreement every other refusal here is written against.
+ */
+ if (purpose === 'crunching') {
+ const diversity = rosterDiversity(participants)
+ if (diversity.personas < participants.length) {
+ return {
+ ok: false,
+ reason: 'The same persona is on this roster twice — that is one map counted twice.',
+ }
+ }
+ if (participants.some((participant) => participant.mapId === null)) {
+ return {
+ ok: false,
+ reason:
+ 'A crunch reconciles maps that have drifted apart, so every participant has to ' +
+ 'bring one. A participant with no map of the subject is an audience.',
+ }
+ }
+ if (new Set(participants.map((participant) => participant.mapId)).size < participants.length) {
+ return {
+ ok: false,
+ reason:
+ 'Two participants brought the same map. There is nothing to reconcile between a ' +
+ 'map and itself, and agreement with itself is what every other rule here refuses.',
+ }
+ }
+ return { ok: true, diversity }
+ }
+
  const diversity = rosterDiversity(participants)
  if (diversity.personas < participants.length) {
  return {

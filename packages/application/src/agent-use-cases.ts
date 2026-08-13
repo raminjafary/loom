@@ -116,6 +116,7 @@ import type {
 } from './agent-ports.js'
 import type { BlobStoragePort } from './ports.js'
 import type { NotificationDeps } from './notification-use-cases.js'
+import { conveneCrunchForDrift } from './colosseum-use-cases.js'
 import {
  buildMapContext,
  closeMap,
@@ -4339,12 +4340,39 @@ const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<v
  * bookkeeping about someone's memory did not.
  */
  try {
- await invalidateMapsForMerge(deps, {
+ const { drifted } = await invalidateMapsForMerge(deps, {
  workspaceId: entry.workspaceId,
  repositoryId: repository.id,
  changedPaths: result.changedPaths,
  revision: result.commitSha,
  })
+
+ /**
+ * And when more than one persona's map went wrong at once, a place to reconcile them
+ *.
+ *
+ * Mastery calls a crunch "scheduled" and this is the schedule: a timer would convene
+ * sessions about subsystems nobody touched, while the condition that matters is
+ * exactly knowable here. Convening costs nothing — a session is a row and a roster,
+ * and its turns are ordinary runs somebody has to ask for — so the platform makes the
+ * place and never the spend.
+ */
+ const crunch = await conveneCrunchForDrift(deps, {
+ workspaceId: entry.workspaceId,
+ threadId: run.threadId,
+ repositoryId: repository.id,
+ subject: repository.displayName,
+ revision: result.commitSha,
+ drifted,
+ })
+ if (crunch) {
+ await postRunSystemMessage(
+ deps,
+ run,
+ `${drifted.length} maps of ${repository.displayName} lost nodes to this merge. ` +
+ 'A crunch is convened over them — nothing has been said in it yet.',
+)
+ }
  } catch {
  // Deliberately swallowed — see above.
  }

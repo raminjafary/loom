@@ -524,11 +524,21 @@ export const invalidateMapsForMerge = async (
  changedPaths: readonly string[]
  revision: string
  },
-): Promise<{ invalidated: number }> => {
- if (input.changedPaths.length === 0) return { invalidated: 0 }
+): Promise<{ invalidated: number; drifted: SubjectMap[] }> => {
+ if (input.changedPaths.length === 0) return { invalidated: 0, drifted: [] }
 
  const maps = await deps.subjectMaps.listMapsForRepository(input.workspaceId, input.repositoryId)
  let invalidated = 0
+ /**
+ * Which maps this merge actually made wrong, not which ones point at the repository.
+ *
+ * Returned because it is the platform's own signal that several agents' private
+ * knowledge of one subsystem just went stale together — which is exactly the condition
+ * Mastery convenes a **crunch** for. Computed here rather than re-derived by the caller:
+ * `selectStaleNodeIds` is the thing that knows, and asking a second time would be a
+ * second answer that could disagree with the invalidation actually performed.
+ */
+ const drifted: SubjectMap[] = []
  for (const map of maps) {
  const nodes = await deps.subjectMaps.listNodes(input.workspaceId, map.id)
  const stale = selectStaleNodeIds(nodes, input.changedPaths)
@@ -538,8 +548,9 @@ export const invalidateMapsForMerge = async (
  stale,
  `changed at ${input.revision}`,
 )
+ drifted.push(map)
  }
- return { invalidated }
+ return { invalidated, drifted }
 }
 
 export interface SubjectMapListing {

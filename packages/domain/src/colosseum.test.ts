@@ -352,3 +352,53 @@ describe('conveneRoster — a warm-up is not a debate', => {
  expect(conveneRoster([participant]).ok).toBe(false)
  })
 })
+
+/**
+ * The crunch — N drifting maps of one subsystem, put in front of each other. Its
+ * vantage points are the *maps*, because its participants are by definition experts in
+ * the same subject and the disagreement it looks for is already a fact about the
+ * artifacts before anybody speaks.
+ */
+describe('conveneRoster for a crunch', => {
+ const sameSubject = [
+ participant,
+ participant({
+ personaId: asAgentPersonaId('p2'),
+ personaName: 'second-expert',
+ mapId: asSubjectMapId('m2'),
+ }),
+ ]
+
+ /**
+ * The refusal that would have made this purpose unbuildable: identical subjects on one
+ * configured model is one `voice`, which every other purpose is right to refuse.
+ */
+ it('accepts two maps of one subject on one model, which a contention refuses', => {
+ expect(conveneRoster(sameSubject, 'crunching').ok).toBe(true)
+ expect(conveneRoster(sameSubject, 'contention').ok).toBe(false)
+ })
+
+ it('refuses a participant with nothing to reconcile', => {
+ const audience = [sameSubject[0]!, participant({ personaId: asAgentPersonaId('p3'), mapId: null })]
+ const verdict = conveneRoster(audience, 'crunching')
+ expect(verdict.ok).toBe(false)
+ if (!verdict.ok) expect(verdict.reason).toContain('audience')
+ })
+
+ it('refuses the same map twice, which is agreement with itself', => {
+ const doubled = [
+ sameSubject[0]!,
+ participant({ personaId: asAgentPersonaId('p3'), mapId: asSubjectMapId('m1') }),
+ ]
+ const verdict = conveneRoster(doubled, 'crunching')
+ expect(verdict.ok).toBe(false)
+ if (!verdict.ok) expect(verdict.reason).toContain('same map')
+ })
+
+ it('still refuses one expert alone, and a persona listed twice', => {
+ expect(conveneRoster([participant], 'crunching').ok).toBe(false)
+ expect(
+ conveneRoster([participant, participant({ mapId: asSubjectMapId('m2') })], 'crunching').ok,
+).toBe(false)
+ })
+})

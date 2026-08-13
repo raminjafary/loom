@@ -1,4 +1,6 @@
 import {
+ MAX_COLOSSEUM_ROSTER,
+ MIN_COLOSSEUM_ROSTER,
  MAX_COLOSSEUM_TURNS,
  MAX_TURN_TEXT_CHARS,
  NotFoundError,
@@ -17,6 +19,7 @@ import {
  type ColosseumPurpose,
  type ColosseumSession,
  type RepositoryId,
+ type SubjectMapId,
  type ThreadId,
  type WorkspaceId,
 } from '@loom/domain'
@@ -549,6 +552,116 @@ export const takeSessionTurn = async (
  * produced is the second half of the same story.
  */
 export const WARM_UP_TURN_CAP = 2
+
+/**
+ * How many turns a crunch holds — one round of the room, and no more.
+ *
+ * A crunch exists to put N drifting maps of one subsystem in front of each other, and
+ * The evidence is that further rounds are where factual attrition happens: correct
+ * claims present at the start are progressively dropped as the conversation continues.
+ * One pass each is the most a session can take and still be reporting what its
+ * participants knew rather than what the conversation produced.
+ */
+export const CRUNCH_TURN_CAP = MAX_COLOSSEUM_ROSTER
+
+/**
+ * The merge that made several agents' maps wrong at once, convened as a crunch
+ *.
+ *
+ * **The schedule is the merge queue.** mastery calls a crunch "scheduled" and nothing here
+ * runs on a clock, which is not a shortcut — it is the better trigger. A timer would
+ * convene sessions about subsystems nothing had touched, and the condition that actually
+ * matters is knowable exactly: a merge landed, and it invalidated nodes in *more than one
+ * persona's* map of that repository. That is the moment N private maps started drifting,
+ * and the own argument for this purpose is the merge queue's argument applied to
+ * knowledge.
+ *
+ * **Convening spends nothing.** A session is a row, a roster and a question; turns are
+ * ordinary runs and are taken deliberately, by a human or by an agent asking for the
+ * floor. So the platform creates the *place* and never the spend — the same division
+ * The handoff rule draws when it says the threshold nudges and the agent asks. A
+ * platform that convened and then argued with itself on a merge would be a budget with
+ * no bottom attached to the most frequent event in the system.
+ *
+ * Returns null whenever there is nothing to convene, which is the common case and not a
+ * failure: one map is not a drift, and a repository already holding an open crunch does
+ * not need a second one saying the same thing.
+ */
+export const conveneCrunchForDrift = async (
+ deps: ColosseumDeps,
+ input: {
+ workspaceId: WorkspaceId
+ threadId: ThreadId
+ repositoryId: RepositoryId
+ /** What to call the subsystem in the room — the repository, as a human names it. */
+ subject: string
+ /** The commit that made them wrong, so the question can point at something checkable. */
+ revision: string
+ /** The maps this merge actually invalidated, from the invalidation itself. */
+ drifted: readonly { readonly id: SubjectMapId; readonly personaId: AgentPersonaId }[],
+ },
+): Promise<ColosseumSession | null> => {
+ /**
+ * One map per persona, and at least two personas. A persona holding two maps of one
+ * repository is still one voice in this room, and picking either of them would be the
+ * roster asserting something about which is authoritative.
+ */
+ const byPersona = new Map<string, SubjectMapId>
+ for (const map of input.drifted) {
+ if (!byPersona.has(map.personaId as string)) byPersona.set(map.personaId as string, map.id)
+ }
+ if (byPersona.size < MIN_COLOSSEUM_ROSTER) return null
+
+ /**
+ * Never a second open crunch for the same repository. Merges land in bursts — a queue
+ * drains several branches in a row — and one session per merge would bury the one a
+ * human might actually take turns in under a stack of identical rooms.
+ */
+ const sessions = await deps.colosseum.listSessions(input.workspaceId)
+ const alreadyOpen = sessions.some(
+ (session) =>
+ session.purpose === 'crunching' &&
+ session.repositoryId === input.repositoryId &&
+ (session.status === 'convened' || session.status === 'running'),
+)
+ if (alreadyOpen) return null
+
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const participants: ColosseumParticipant[] = []
+ for (const [personaId, mapId] of byPersona) {
+ const persona = personas.find((entry) => (entry.id as string) === personaId)
+ // A map whose persona is gone is not a participant. Skipped rather than refused: the
+ // remaining experts still have something to reconcile.
+ if (!persona) continue
+ participants.push({
+ personaId: persona.id,
+ personaName: persona.name,
+ mapId,
+ model: persona.model,
+ subjectRef: input.subject,
+ })
+ if (participants.length === MAX_COLOSSEUM_ROSTER) break
+ }
+
+ const verdict = conveneRoster(participants, 'crunching')
+ if (!verdict.ok) return null
+
+ return deps.colosseum.convene({
+ workspaceId: input.workspaceId,
+ threadId: input.threadId,
+ repositoryId: input.repositoryId,
+ purpose: 'crunching',
+ subject: input.subject,
+ question:
+ `${input.revision.slice(0, 8)} landed and made part of every map here wrong. ` +
+ 'What does each of you now believe about the changed area, and what in the ' +
+ 'repository settles it?',
+ turnCap: CRUNCH_TURN_CAP,
+ spendCapUsd: null,
+ diversity: verdict.diversity,
+ participants,
+ })
+}
 
 /**
  * A handover, held in the venue.

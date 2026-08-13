@@ -13,6 +13,7 @@ import {
 } from '@loom/domain'
 import type { ColosseumRepositoryPort } from './agent-ports.js'
 import {
+ conveneCrunchForDrift,
  recordSpokenTurn,
  takeSessionTurn,
  type ColosseumTurnDeps,
@@ -348,5 +349,123 @@ describe('recordSpokenTurn', => {
 
  expect(h.turns).toHaveLength(0)
  expect(h.session.speakingRunId).toBeNull
+ })
+})
+
+/**
+ * The crunch, convened by the merge queue.
+ *
+ * The condition is the whole design: a merge landed, and it made more than one persona's
+ * map of that repository wrong. What is asserted here is that the platform makes a
+ * *place* and never a spend — a session with a roster and a question, and no runs.
+ */
+describe('conveneCrunchForDrift', => {
+ const repositoryId = asRepositoryId('r1')
+ const threadId = asThreadId('t1')
+
+ const crunchHarness = (options: { sessions?: ColosseumSession[]; personaIds?: string[] } = {}) => {
+ const convened: {
+ purpose: string
+ participants: readonly ColosseumParticipant[]
+ turnCap: number
+ question: string
+ }[] = []
+
+ const deps = {
+ colosseum: {
+ convene: async (input: {
+ purpose: string
+ participants: readonly ColosseumParticipant[]
+ turnCap: number
+ question: string
+ }) => {
+ convened.push(input)
+ return { id: `s${convened.length}` } as ColosseumSession
+ },
+ listSessions: async => options.sessions ?? [],
+ },
+ personas: {
+ listByWorkspace: async =>
+ (options.personaIds ?? ['p-flight', 'p-hotel']).map((id) => ({
+ id: asAgentPersonaId(id),
+ name: id,
+ model: 'claude-sonnet-5',
+ })),
+ },
+ subjectMaps: {},
+ } as unknown as ColosseumTurnDeps
+
+ return { deps, convened: => convened }
+ }
+
+ const drifted = (entries: [string, string][]) =>
+ entries.map(([id, personaId]) => ({
+ id: id as never,
+ personaId: asAgentPersonaId(personaId),
+ }))
+
+ const call = async (
+ h: ReturnType<typeof crunchHarness>,
+ maps: ReturnType<typeof drifted>,
+): Promise<ColosseumSession | null> =>
+ conveneCrunchForDrift(h.deps, {
+ workspaceId,
+ threadId,
+ repositoryId,
+ subject: 'loom',
+ revision: 'abc1234567',
+ drifted: maps,
+ })
+
+ it('convenes over the personas whose maps this merge made wrong', async => {
+ const h = crunchHarness
+ const session = await call(h, drifted([['m1', 'p-flight'], ['m2', 'p-hotel']]))
+
+ expect(session).not.toBeNull
+ const room = h.convened[0]
+ expect(room?.purpose).toBe('crunching')
+ expect(room?.participants.map((p) => p.personaName).sort).toEqual(['p-flight', 'p-hotel'])
+ // The question points at something checkable, because the arbiter is the repository.
+ expect(room?.question).toContain('abc12345')
+ })
+
+ /** One expert's map going stale is not a drift — it is a map to re-master. */
+ it('convenes nothing when only one persona was affected', async => {
+ const h = crunchHarness
+ expect(await call(h, drifted([['m1', 'p-flight']]))).toBeNull
+ expect(h.convened).toHaveLength(0)
+ })
+
+ /** A persona holding two maps of one repository is still one voice in the room. */
+ it('counts a persona once however many of its maps drifted', async => {
+ const h = crunchHarness
+ expect(
+ await call(h, drifted([['m1', 'p-flight'], ['m2', 'p-flight']])),
+).toBeNull
+ })
+
+ /**
+ * Merges land in bursts, and one room per merge would bury the one somebody might
+ * actually speak in under a stack of identical ones.
+ */
+ it('does not open a second room while one is still open for this repository', async => {
+ const open = {
+ id: 's-open',
+ purpose: 'crunching',
+ repositoryId,
+ status: 'convened',
+ } as ColosseumSession
+ const h = crunchHarness({ sessions: [open] })
+ expect(await call(h, drifted([['m1', 'p-flight'], ['m2', 'p-hotel']]))).toBeNull
+
+ // A concluded one is not in the way — the next merge is a new disagreement.
+ const done = crunchHarness({ sessions: [{...open, status: 'concluded' } as ColosseumSession] })
+ expect(await call(done, drifted([['m1', 'p-flight'], ['m2', 'p-hotel']]))).not.toBeNull
+ })
+
+ /** A map whose persona has been deleted leaves the rest with nothing to reconcile. */
+ it('convenes nothing when the drifted maps outlive their personas', async => {
+ const h = crunchHarness({ personaIds: ['p-flight'] })
+ expect(await call(h, drifted([['m1', 'p-flight'], ['m2', 'p-gone']]))).toBeNull
  })
 })
