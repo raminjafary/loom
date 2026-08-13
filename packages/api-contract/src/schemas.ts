@@ -888,6 +888,41 @@ export const PersonaDraftSchema = z.object({
 })
 
 /** The persona model — organizational grouping of personas, not a Team/roster. */
+/**
+ * A plan a human is being asked to approve.
+ *
+ * The stored decomposition, field for field — what is reviewed has to be exactly what would
+ * run, and a second projection of "the plan" is a second thing that can be wrong.
+ */
+export const PlanReviewSubtaskSchema = z.object({
+ id: z.string,
+ position: z.number.int,
+ title: z.string,
+ /** The whole instruction the worker will get. Model-authored — untrusted text. */
+ task: z.string,
+ personaName: z.string,
+ paths: z.array(z.string),
+ /** Which sibling positions must finish first — the DAG a reviewer reads as the shape. */
+ dependsOn: z.array(z.number.int),
+ /** Which sibling `position` this one reviews, or null. */
+ reviews: z.number.int.nullable,
+ status: z.enum(['waiting', 'started', 'skipped', 'refused']),
+ agentRunId: z.string.nullable,
+ detail: z.string.nullable,
+})
+
+export const PlanReviewSchema = z.object({
+ plannerRunId: z.string,
+ plannerName: z.string,
+ /**
+ * True exactly when nothing has started and something is waiting. Derived rather than
+ * stored: a plan mid-flight also has waiting rows, so a stored flag would need clearing at
+ * a moment nobody owns.
+ */
+ awaitingReview: z.boolean,
+ subtasks: z.array(PlanReviewSubtaskSchema),
+})
+
 export const PersonaGroupSchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -1047,6 +1082,15 @@ export const RunControlSchema = z.object({
  threshold: z.number.nullable,
  capPerTree: z.number.int.nullable,
  }),
+ /**
+ * Whether a Planner's decomposition waits for a human before anything starts
+ *.
+ *
+ * The pair to autonomous teams: with the tool gates off, the human's job is to review the
+ * plan and to merge, and a plan was the one expensive decision with no gate at all — N
+ * runs spawn the moment a model submits, and the steering only reaches them afterwards.
+ */
+ planReviewRequired: z.boolean,
 })
 
 /**
@@ -1115,6 +1159,7 @@ export type WorkerNote = z.infer<typeof WorkerNoteSchema>
 export type SubjectMap = z.infer<typeof SubjectMapSchema>
 export type Envelope = z.infer<typeof EnvelopeSchema>
 export type AtlasEdge = z.infer<typeof AtlasEdgeSchema>
+export type PlanReview = z.infer<typeof PlanReviewSchema>
 export type AtlasEdgeEnd = z.infer<typeof AtlasEdgeEndSchema>
 export type ColosseumSession = z.infer<typeof ColosseumSessionSchema>
 export type ColosseumView = z.infer<typeof ColosseumViewSchema>

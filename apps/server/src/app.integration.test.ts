@@ -815,6 +815,7 @@ describe('contract completeness', => {
  'workerNote',
  'mastery',
  'colosseum',
+ 'plan',
  'atlas',
  'cost',
  'persona',
@@ -830,6 +831,7 @@ describe('contract completeness', => {
  expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken', 'remove'])
  expect(Object.keys(contract.cost)).toEqual(['summary'])
  expect(Object.keys(contract.atlas)).toEqual(['listProposals', 'contend', 'decide'])
+ expect(Object.keys(contract.plan)).toEqual(['get', 'accept', 'requestChanges', 'reject'])
  expect(Object.keys(contract.repository)).toEqual([
  'list',
  'bindExisting',
@@ -883,6 +885,7 @@ describe('contract completeness', => {
  'pauseAll',
  'resume',
  'setHandoffPolicy',
+ 'setPlanReviewRequired',
  ])
  expect(Object.keys(contract.notification)).toEqual(['config', 'subscribe', 'unsubscribe'])
  expect(Object.keys(contract.approval)).toEqual(['listPending', 'decide'])

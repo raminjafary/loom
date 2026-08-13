@@ -1,0 +1,1 @@
+ALTER TABLE "workspace" ADD COLUMN "plan_review_required" boolean DEFAULT true NOT NULL;

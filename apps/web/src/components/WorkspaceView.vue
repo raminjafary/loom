@@ -2,6 +2,7 @@
 import type {
  AtlasEdge,
  ColosseumSession,
+ PlanReview,
  ColosseumView,
  MasteryView,
  ResponseStyle,
@@ -34,6 +35,7 @@ import SidebarSection from './SidebarSection.vue'
 import CostDashboardPanel from './CostDashboardPanel.vue'
 import RunTreePanel from './RunTreePanel.vue'
 import SwarmBoardPanel from './SwarmBoardPanel.vue'
+import PlanReviewPanel from './PlanReviewPanel.vue'
 import SteerPanel from './SteerPanel.vue'
 import SwarmGraphPanel from './SwarmGraphPanel.vue'
 import WorkerNotesPanel from './WorkerNotesPanel.vue'
@@ -403,6 +405,37 @@ const decideAtlasProposal = async (input: {
 }) => {
  await agent.decideAtlasProposal(input)
  await refreshAtlas
+}
+
+/**
+ * The plan awaiting review, for the run being watched.
+ *
+ * Fetched when the watched run changes rather than carried on the snapshot: a plan is decided
+ * once, and folding it into every poll would add a query per tick to a surface that is empty
+ * most of the time. Refreshed after each act, because all three change what the panel says.
+ */
+const planReview = ref<PlanReview | null>(null)
+
+const refreshPlanReview = async => {
+ const runId = agentSnapshot.value.activeRun?.id
+ planReview.value = runId === undefined ? null: await agent.getPlanForReview(runId)
+}
+
+watch( => agentSnapshot.value.activeRun?.id, => void refreshPlanReview, { immediate: true })
+
+const acceptPlan = async (agentRunId: string) => {
+ await agent.acceptPlan(agentRunId)
+ await refreshPlanReview
+}
+
+const requestPlanChanges = async (input: { agentRunId: string; note: string }) => {
+ await agent.requestPlanChanges(input)
+ await refreshPlanReview
+}
+
+const rejectPlan = async (input: { agentRunId: string; reason?: string }) => {
+ await agent.rejectPlan(input)
+ await refreshPlanReview
 }
 
 const composerOpen = ref(false)
@@ -1107,6 +1140,21 @@ onBeforeUnmount( => {
  reads the board: the run ids and statuses a re-plan acts on are the ones
  drawn directly above it.
  -->
+ <!--
+ The plan gate, above steering. Above, because they are
+ the same human at two different moments and only one of them is available: a plan
+ waiting for review has nothing running to steer, and a plan that started cannot be
+ re-decided. Putting the decision second would bury the one that is actionable under
+ the one that is not.
+ -->
+ <PlanReviewPanel
+:review="planReview"
+:busy="steering"
+ @accept="(agentRunId) => void acceptPlan(agentRunId)"
+ @request-changes="(input) => void requestPlanChanges(input)"
+ @reject="(input) => void rejectPlan(input)"
+ @refresh=" => void refreshPlanReview"
+ />
  <SteerPanel
 :board="agentSnapshot.swarmBoard"
 :busy="steering"
@@ -1192,6 +1240,7 @@ onBeforeUnmount( => {
 :colosseum-sessions="colosseumSessions"
 :colosseum-view="colosseumView"
 :atlas-proposals="atlasProposals"
+ @set-plan-review="(required) => void agent.setPlanReviewRequired(required)"
  @atlas-refresh=" => void refreshAtlas"
  @atlas-contend="(edgeId) => void contendAtlasProposal(edgeId)"
  @atlas-decide="(input) => void decideAtlasProposal(input)"

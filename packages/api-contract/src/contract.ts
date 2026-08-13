@@ -30,6 +30,7 @@ import {
  ColosseumSessionSchema,
  AtlasEdgeSchema,
  ColosseumViewSchema,
+ PlanReviewSchema,
  MasteryViewSchema,
  SubjectMapListingSchema,
  SubjectMapSchema,
@@ -544,6 +545,37 @@ export const contract = {
  },
 
  /**
+ * Reviewing a plan before it builds.
+ *
+ * There is no `submit` here, deliberately: a decomposition arrives from a Planner over the
+ * Runner channel, and a human authoring one in a form would be a plan with no planner
+ * behind it. What a human does here is decide — and the three acts are distinct rather
+ * than one with a flag, because they cost different things. Accepting spends the plan,
+ * asking for changes spends another planning turn, and rejecting spends nothing.
+ */
+ plan: {
+ /** The stored decomposition, exactly as it would run. Never a re-derivation. */
+ get: oc.input(z.object({ agentRunId: z.string })).output(PlanReviewSchema),
+
+ accept: oc
+.input(z.object({ agentRunId: z.string }))
+.output(z.object({ started: z.number.int })),
+
+ /**
+ * Sends it back with an instruction, which becomes a mid-flight steering re-planning turn — the
+ * mechanism already exists and already refuses to let a re-plan submit a whole second
+ * plan beside running work.
+ */
+ requestChanges: oc
+.input(z.object({ agentRunId: z.string, note: z.string.min(1).max(4_000) }))
+.output(AgentRunSchema),
+
+ reject: oc
+.input(z.object({ agentRunId: z.string, reason: z.string.max(1_000).optional }))
+.output(z.object({ skipped: z.number.int })),
+ },
+
+ /**
  * The atlas's write side — the queue a human works through.
  *
  * There is deliberately **no `propose` procedure here**. A proposal comes from an agent
@@ -960,6 +992,19 @@ export const contract = {
  capPerTree: z.number.int.nullable,
  }),
 )
+.output(RunControlSchema),
+
+ /**
+ * Whether a Planner's decomposition waits for a human before anything starts
+ *.
+ *
+ * Its own procedure rather than a field on `pauseAll`, for the reason
+ * `setHandoffPolicy` has one: the kill switch is what an operator hits in an emergency
+ * and this is policy they edit deliberately, and a call that could do both would let a
+ * pause quietly turn a review gate off.
+ */
+ setPlanReviewRequired: oc
+.input(z.object({ required: z.boolean }))
 .output(RunControlSchema),
  },
 

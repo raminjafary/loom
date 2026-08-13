@@ -107,6 +107,7 @@ const emit = defineEmits<{
  'colosseum-take-turn': [input: { sessionId: string; personaId?: string }]
  'set-handoff-policy': [input: { threshold: number | null; capPerTree: number | null }]
  'colosseum-conclude': [sessionId: string]
+ 'set-plan-review': [required: boolean]
  'atlas-refresh': []
  'atlas-contend': [edgeId: string]
  'atlas-decide': [input: { edgeId: string; decision: 'promoted' | 'rejected'; note?: string }]
@@ -253,6 +254,34 @@ onMounted( => scrim.value?.focus)
 :default-cap-per-tree="DEFAULT_HANDOFF_CAP_PER_TREE"
  @save="(input) => emit('set-handoff-policy', input)"
  />
+ <!--
+ The plan gate, beside the handoff policy because both
+ are workspace policy an operator sets deliberately — and deliberately *not* beside
+ the kill switch, which is what somebody hits in an emergency. A pause must never
+ be able to turn a review gate off as a side effect.
+ -->
+ <section class="policy">
+ <h4>Plans</h4>
+ <label class="check">
+ <input
+ type="checkbox"
+:checked="runControl?.planReviewRequired !== false"
+ @change="
+ emit(
+ 'set-plan-review',
+ ($event.target as HTMLInputElement).checked,
+)
+ "
+ />
+ <span>A plan waits for me before anything starts</span>
+ </label>
+ <p class="hint">
+ On, a planner's decomposition is recorded and nothing runs until you accept it —
+ which is the gate that replaced the per-tool approvals when the teams became
+ autonomous. Off, workers start the moment a plan is submitted, and steering is
+ the only way to change it afterwards.
+ </p>
+ </section>
  </template>
 
  <template v-else-if="tab === 'personas'">
@@ -345,6 +374,32 @@ onMounted( => scrim.value?.focus)
 </template>
 
 <style scoped>
+/* Workspace policy an operator sets deliberately — see the section's own comment. */
+.policy {
+ padding: 0.6rem 0.7rem;
+ border: 1px solid var(--border);
+ border-radius: 0.5rem;
+}
+
+.policy h4 {
+ margin: 0 0 0.4rem;
+ font-size: 0.8rem;
+}
+
+.policy.check {
+ display: flex;
+ align-items: center;
+ gap: 0.4rem;
+ font-size: 0.78rem;
+}
+
+.policy.hint {
+ margin: 0.3rem 0 0;
+ font-size: 0.72rem;
+ line-height: 1.5;
+ color: var(--text-faint);
+}
+
 .scrim {
  position: fixed;
  inset: 0;

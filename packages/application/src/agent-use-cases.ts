@@ -116,6 +116,7 @@ import type {
  PersonaGroupRepositoryPort,
  AtlasRepositoryPort,
  PersonaRepositoryPort,
+ PlanSubtaskRecord,
  PlanSubtaskRepositoryPort,
  RepositoryRepositoryPort,
  ListDirectoryResult,
@@ -2450,14 +2451,14 @@ export const applySubmittedPlan = async (
  reviews?: number | null | undefined
  }[]
  },
-): Promise<{ started: AgentRunId[]; refused: string[] }> => {
+): Promise<{ started: AgentRunId[]; refused: string[]; heldForReview: boolean }> => {
  const planner = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
  if (!planner) throw new NotFoundError('AgentRun')
 
  const verdict = parseDecomposition({ subtasks: [...input.subtasks] })
  if (!verdict.ok) {
  await postRunSystemMessage(deps, planner, `Plan refused: ${verdict.reason}`)
- return { started: [], refused: [verdict.reason] }
+ return { started: [], refused: [verdict.reason], heldForReview: false }
  }
 
  const personas = await deps.personas.listByWorkspace(input.workspaceId)
@@ -2610,6 +2611,22 @@ export const applySubmittedPlan = async (
 )
  if (reviewWarning) await postRunSystemMessage(deps, planner, reviewWarning)
 
+ /**
+ * Whether this plan waits for a human before anything starts.
+ *
+ * Read here rather than at the frame, because this is the one place that knows the plan
+ * parsed: a decomposition the domain refuses should be refused, not held for review.
+ *
+ * **Every warning above is still posted first**, and that ordering is the point. The
+ * overlaps, the stage accounting, the fleet overruns and the missing reviews are what a
+ * human reviews *with* — a gate that held the plan and said nothing about it would ask
+ * somebody to approve a list of titles. The own words for the stage accounting are
+ * "visible before the plan is approved"; until now there was no approval for it to be
+ * before.
+ */
+ const control = await deps.runControl.get(input.workspaceId)
+ const heldForReview = control.planReviewRequired
+
  const records: {
  position: number
  title: string
@@ -2633,6 +2650,21 @@ export const applySubmittedPlan = async (
  paths: [...subtask.paths],
  dependsOn: [...subtask.dependsOn],
  reviews: subtask.reviews,
+ }
+
+ /**
+ * Held: recorded, described, and started by nobody.
+ *
+ * `waiting` rather than a fifth status, because that is exactly what these rows are —
+ * not started, and startable when something says so. The DAG's own scheduler already
+ * releases `waiting` rows whose dependencies are satisfied, so accepting a plan is one
+ * call into a loop that already exists rather than a second start path.
+ */
+ if (heldForReview) {
+ deferred += 1
+ records.push({...base, status: 'waiting', agentRunId: null, detail: null })
+ startedLines.push(`⏸ ${subtask.title} → ${subtask.personaName}`)
+ continue
  }
 
  if (subtask.dependsOn.length > 0) {
@@ -2691,7 +2723,7 @@ export const applySubmittedPlan = async (
  * was refused, so nothing will ever reach a terminal state to release the waiting
  * ones. They would sit in `waiting` forever with no error anywhere.
  */
- if (deferred > 0 && started.length === 0) {
+ if (!heldForReview && deferred > 0 && started.length === 0) {
  await skipAllWaiting(
  deps,
  planner,
@@ -2707,14 +2739,217 @@ export const applySubmittedPlan = async (
  * the refusals. Refusals are per-subtask by design, so a hole in the middle is the
  * ordinary case rather than the edge one.
  */
- const summary = [
+ const summary = heldForReview
+ ? [
+ /**
+ * "Waiting for you" rather than "accepted", because the word is what a human acts
+ * on. A gate that reported the plan as accepted and then started nothing is the
+ * worst of both: the operator believes the work is running, and it never was.
+ */
+ `Plan ready for review: ${records.length} subtask(s), none started yet.`,
+...startedLines,
+...refused.map((reason) => `✗ ${reason}`),
+ '',
+ 'Nothing runs until you accept it. Read the warnings above — they are what this ' +
+ 'plan is worth reviewing for — then accept it, ask the planner to change it, or ' +
+ 'reject it.',
+ ].join('\n')
+: [
  `Plan accepted: ${started.length} subtask(s) started.`,
 ...startedLines,
 ...refused.map((reason) => `✗ ${reason}`),
  ].join('\n')
  await postRunSystemMessage(deps, planner, summary)
 
- return { started, refused }
+ return { started, refused, heldForReview }
+}
+
+/**
+ * The plan a human is being asked to approve.
+ *
+ * The stored decomposition, not a re-derivation: what is reviewed has to be exactly what
+ * would run, and a second projection of "the plan" is a second thing that can be wrong.
+ * `plan_subtask` already holds every field — the persona, the paths, the dependencies and
+ * the review edges — so this is one read plus the stage accounting the plan was described
+ * with.
+ */
+export const getPlanForReview = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; agentRunId: AgentRunId },
+): Promise<{
+ plannerRunId: AgentRunId
+ plannerName: string
+ awaitingReview: boolean
+ subtasks: PlanSubtaskRecord[]
+}> => {
+ const planner = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!planner) throw new NotFoundError('AgentRun')
+ const subtasks = await deps.planSubtasks.listByPlanner(input.workspaceId, planner.id)
+ return {
+ plannerRunId: planner.id,
+ plannerName: planner.persona.name,
+ /**
+ * Awaiting a human exactly when *nothing* has started and something is waiting.
+ *
+ * Derived rather than stored, and that is deliberate: a plan mid-flight also has
+ * `waiting` rows, so a stored flag would need clearing at a moment nobody owns. "Has
+ * anything begun" is the question, and the rows answer it.
+ */
+ awaitingReview:
+ subtasks.length > 0 && subtasks.every((subtask) => subtask.status === 'waiting'),
+ subtasks,
+ }
+}
+
+/**
+ * A human accepting a plan — the gate the operator asks asks for.
+ *
+ * Drives the DAG's own scheduler rather than a second start path: the plan is already
+ * recorded as `waiting`, and "start what is ready" is precisely `releasePlanSubtasks`. So
+ * accepting a five-stage plan starts stage one and leaves the rest exactly as a plan that
+ * was never gated would — the review changes *when* work starts and nothing about how.
+ */
+export const acceptPlan = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; agentRunId: AgentRunId },
+): Promise<{ started: number }> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError(
+ 'Only a human accepts a plan. An agent approving its own decomposition is the gate ' +
+ 'removed rather than moved.',
+)
+ }
+ const planner = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!planner) throw new NotFoundError('AgentRun')
+
+ const before = await deps.planSubtasks.listByPlanner(input.workspaceId, planner.id)
+ if (before.length === 0) throw new ValidationError('That run has no plan to accept')
+ if (before.some((subtask) => subtask.status !== 'waiting')) {
+ throw new ValidationError(
+ 'This plan has already started. Steer it instead — mid-flight steering is the way to change a plan ' +
+ 'that is running.',
+)
+ }
+
+ await postRunSystemMessage(deps, planner, 'Plan accepted by a human. Starting the first stage.')
+ await releasePlanSubtasks(deps, input.workspaceId, planner.id)
+
+ const after = await deps.planSubtasks.listByPlanner(input.workspaceId, planner.id)
+ const started = after.filter((subtask) => subtask.status === 'started').length
+
+ /**
+ * Every subtask still waiting with nothing started is the case `applySubmittedPlan`
+ * guards for an ungated plan: a first stage that started nothing leaves rows nothing
+ * will ever release. Deferred to here for a gated plan, because until a human accepted
+ * it there was no first stage to fail.
+ */
+ if (started === 0) {
+ await skipAllWaiting(
+ deps,
+ planner,
+ 'nothing in the first stage could start, so this could never be released',
+)
+ }
+ return { started }
+}
+
+/**
+ * A human sending a plan back.
+ *
+ * **Reuses the re-planning turn rather than inventing a revision loop**, and that is the
+ * whole reason this item was affordable: steering already re-enters a planner with a human's
+ * note and gives it the *delta* tool instead of the plan tool, precisely so a re-planning
+ * turn cannot answer by submitting a whole second plan beside work already running. Here
+ * nothing is running, which makes it the easy case of a mechanism built for the hard one.
+ *
+ * The waiting rows are skipped first. A plan sent back is not a plan half-kept: leaving
+ * them would mean the delta's additions land beside subtasks the human just rejected, and
+ * `releasePlanSubtasks` would then be free to start them.
+ */
+export const requestPlanChanges = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ agentRunId: AgentRunId
+ /** What to change, in the human's words. This is the whole instruction the planner gets. */
+ note: string
+ },
+): Promise<AgentRun> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human sends a plan back')
+ }
+ const note = input.note.trim
+ if (note.length === 0) {
+ throw new ValidationError(
+ 'Say what to change. A plan sent back with no reason is a planner asked to guess, ' +
+ 'and it will produce the same plan.',
+)
+ }
+ const planner = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!planner) throw new NotFoundError('AgentRun')
+
+ const subtasks = await deps.planSubtasks.listByPlanner(input.workspaceId, planner.id)
+ if (subtasks.length === 0) throw new ValidationError('That run has no plan to change')
+ if (subtasks.some((subtask) => subtask.status !== 'waiting')) {
+ throw new ValidationError('This plan has already started — steer it instead')
+ }
+
+ await skipAllWaiting(deps, planner, 'sent back for changes before it started')
+ await postRunSystemMessage(
+ deps,
+ planner,
+ ['Plan sent back for changes:', note].join('\n'),
+)
+ return steerSwarm(deps, {
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ agentRunId: planner.id,
+ message: note,
+ })
+}
+
+/**
+ * A human rejecting a plan outright.
+ *
+ * Distinct from asking for changes, and both are worth having: sending it back spends
+ * another planning turn, and rejecting it spends nothing. A goal that turned out to be
+ * wrong should cost one click, not one more model call.
+ *
+ * The reason is recorded on every skipped row rather than only posted, because
+ * `plan_subtask.detail` is what the board renders — a rejection whose reason lived only in
+ * a thread message would be invisible on the surface the plan is read from.
+ */
+export const rejectPlan = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; agentRunId: AgentRunId; reason?: string },
+): Promise<{ skipped: number }> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human rejects a plan')
+ }
+ const planner = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!planner) throw new NotFoundError('AgentRun')
+
+ const subtasks = await deps.planSubtasks.listByPlanner(input.workspaceId, planner.id)
+ if (subtasks.length === 0) throw new ValidationError('That run has no plan to reject')
+ if (subtasks.some((subtask) => subtask.status !== 'waiting')) {
+ throw new ValidationError('This plan has already started — stop the runs instead')
+ }
+
+ const reason = (input.reason ?? '').trim
+ await skipAllWaiting(
+ deps,
+ planner,
+ reason === '' ? 'rejected by a human before it started': `rejected: ${reason}`,
+)
+ await postRunSystemMessage(
+ deps,
+ planner,
+ reason === ''
+ ? 'Plan rejected by a human. Nothing was started.'
+: `Plan rejected by a human: ${reason}. Nothing was started.`,
+)
+ return { skipped: subtasks.length }
 }
 
 /**
@@ -2764,13 +2999,30 @@ const skipAllWaiting = async (
 const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void> => {
  const own = await deps.planSubtasks.findByAgentRun(child.workspaceId, child.id)
  if (!own) return
+ await releasePlanSubtasks(deps, child.workspaceId, own.plannerRunId)
+}
 
- const planner = await deps.agentRuns.findById(child.workspaceId, own.plannerRunId)
+/**
+ * Starts every subtask of one plan whose dependencies are satisfied.
+ *
+ * Extracted from `releaseDependents` so that **a human accepting a plan drives the same
+ * scheduler a finishing child does**. Two entry points into one loop
+ * rather than a second start path: the review gate holds a whole plan as `waiting`, and
+ * "release what is ready" is exactly what has to happen next — a separate implementation
+ * would be a second place for the DAG's rules to live, and this loop is the one that has
+ * been paid for in bugs.
+ */
+const releasePlanSubtasks = async (
+ deps: AgentDeps,
+ workspaceId: WorkspaceId,
+ plannerRunId: AgentRunId,
+): Promise<void> => {
+ const planner = await deps.agentRuns.findById(workspaceId, plannerRunId)
  if (!planner) return
- const thread = await deps.threads.findById(child.workspaceId, planner.threadId)
+ const thread = await deps.threads.findById(workspaceId, planner.threadId)
  if (!thread) return
 
- const rows = await deps.planSubtasks.listByPlanner(child.workspaceId, own.plannerRunId)
+ const rows = await deps.planSubtasks.listByPlanner(workspaceId, plannerRunId)
  const byPosition = new Map(rows.map((row) => [row.position, row]))
 
  /**
@@ -2784,7 +3036,7 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  if (row.status === 'waiting') return 'pending'
  if (row.status === 'skipped' || row.status === 'refused') return 'bad'
  if (!row.agentRunId) return 'bad'
- const run = await deps.agentRuns.findById(child.workspaceId, row.agentRunId)
+ const run = await deps.agentRuns.findById(workspaceId, row.agentRunId)
  if (!run) return 'bad'
  if (!isTerminalRunStatus(run.status)) return 'pending'
  return run.status === 'completed' ? 'ok': 'bad'
@@ -2824,7 +3076,7 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
 .filter((_, index) => outcomes[index] === 'bad')
 .map((position) => `"${byPosition.get(position)?.title ?? position}"`)
  const claimed = await deps.planSubtasks.claimWaiting({
- workspaceId: child.workspaceId,
+ workspaceId: workspaceId,
  id: row.id,
  status: 'skipped',
  agentRunId: null,
@@ -2848,7 +3100,7 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  * to serialize against itself.
  */
  const claimed = await deps.planSubtasks.claimWaiting({
- workspaceId: child.workspaceId,
+ workspaceId: workspaceId,
  id: row.id,
  status: 'started',
  agentRunId: null,
@@ -2872,7 +3124,7 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  if (row.reviews !== null) {
  const target = byPosition.get(row.reviews)
  const targetRun = target?.agentRunId
- ? await deps.agentRuns.findById(child.workspaceId, target.agentRunId)
+ ? await deps.agentRuns.findById(workspaceId, target.agentRunId)
 : null
  if (!target || !targetRun || !targetRun.branchName) {
  const why = `nothing to review: "${target?.title ?? row.reviews}" produced no branch`
@@ -2881,7 +3133,7 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  // `settleClaimed`, not `claimWaiting` — the claim above already took this row
  // out of `waiting`. See the write-back below.
  await deps.planSubtasks.settleClaimed({
- workspaceId: child.workspaceId,
+ workspaceId: workspaceId,
  id: row.id,
  status: 'refused',
  agentRunId: null,
@@ -2898,7 +3150,7 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  }
  }
 
- personas ??= await deps.personas.listByWorkspace(child.workspaceId)
+ personas ??= await deps.personas.listByWorkspace(workspaceId)
  const outcome = await startPlannedChild(deps, {
  planner,
  channelId: thread.channelId,
@@ -2937,7 +3189,7 @@ const releaseDependents = async (deps: AgentDeps, child: AgentRun): Promise<void
  detail: outcome.ok ? null: outcome.reason,
  })
  await deps.planSubtasks.settleClaimed({
- workspaceId: child.workspaceId,
+ workspaceId: workspaceId,
  id: row.id,
  status: outcome.ok ? 'started': 'refused',
  agentRunId: outcome.ok ? outcome.runId: null,
@@ -3848,6 +4100,32 @@ export const setHandoffPolicy = async (
  metadata: { threshold: verdict.threshold, capPerTree: verdict.capPerTree },
  })
 
+ return control
+}
+
+/**
+ * Whether a decomposition waits for a human.
+ *
+ * Human-only and audited, for the reason the kill switch is: this is the gate that replaced
+ * the tool gates when the teams went autonomous, and turning it off is the single edit that
+ * lets N runs start on a model's word. An operator should be able to find out later who did.
+ */
+export const setPlanReviewRequired = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; required: boolean },
+): Promise<WorkspaceRunControl> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human decides whether plans are reviewed')
+ }
+ const control = await deps.runControl.setPlanReviewRequired(input.workspaceId, input.required)
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'workspace.plan_review_set',
+ subjectType: 'workspace',
+ subjectId: input.workspaceId,
+ metadata: { required: input.required },
+ })
  return control
 }
 

@@ -91,6 +91,17 @@ beforeEach(async => {
  // the fake Runner is re-paired per test rather than reused.
  const persona = await client.persona.create({ markdownSource: TEST_PERSONA_MARKDOWN })
  testPersonaId = persona.id
+ /**
+ * Plan review off for the file's default.
+ *
+ * A workspace ships with it **on**, which is the right default and the wrong one for the
+ * thirty-odd tests here that assert what a decomposition *fans out into* — those are
+ * testing the DAG, the roster, the ledger and the board, and a gate in front of them would
+ * make every one of them assert the gate instead. The tests that are about the gate turn
+ * it back on for themselves, which keeps the default honest: nothing here silently proves
+ * that ungated is normal.
+ */
+ await client.runControl.setPlanReviewRequired({ required: false })
 })
 
 afterAll(async => {
@@ -3095,6 +3106,126 @@ Decompose and delegate.`
  expect((await client.persona.get({ personaId: planner.id })).markdownSource).not.toContain(
  'roster-inside',
 )
+
+ socket.close
+ })
+
+ /**
+ * The plan review gate, which every other test in this file
+ * turns off. Turned back on here, so the default is never silently proven to be the other
+ * one.
+ *
+ * Asserted end to end because the whole feature *is* the ordering: the frame arrives, the
+ * plan is recorded, the warnings are posted, and nothing starts. A unit test could assert
+ * a boolean; only this level can assert that no child run exists.
+ */
+ it('records a plan and starts nothing until a human accepts it', async => {
+ await client.runControl.setPlanReviewRequired({ required: true })
+ const { socket, runnerId } = await pairFakeRunner('plan-review')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'plan-review' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Docs', task: 'Write docs.', personaName: 'fake-worker' },
+ { title: 'Tests', task: 'Write tests.', personaName: 'fake-worker' },
+ ],
+ }),
+)
+
+ // The plan is recorded — that is what a human reviews.
+ let review = await client.plan.get({ agentRunId: run.id })
+ for (let i = 0; i < 40 && review.subtasks.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ review = await client.plan.get({ agentRunId: run.id })
+ }
+ expect(review.subtasks).toHaveLength(2)
+ expect(review.awaitingReview).toBe(true)
+ expect(review.subtasks.every((subtask) => subtask.status === 'waiting')).toBe(true)
+ // And nothing is running. This is the assertion the feature exists for.
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toHaveLength(0)
+
+ // Accepting drives the DAG's own scheduler, so the first stage starts and no more.
+ const accepted = await client.plan.accept({ agentRunId: run.id })
+ expect(accepted.started).toBe(2)
+ let children = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 40 && children.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+ expect(children).toHaveLength(2)
+ expect((await client.plan.get({ agentRunId: run.id })).awaitingReview).toBe(false)
+
+ socket.close
+ })
+
+ /** A plan already running is steered, not accepted — the first decision stands. */
+ it('refuses to accept a plan twice', async => {
+ await client.runControl.setPlanReviewRequired({ required: true })
+ const { socket, runnerId } = await pairFakeRunner('plan-review-twice')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'plan-review-twice' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [{ title: 'Docs', task: 'Write docs.', personaName: 'fake-worker' }],
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ if ((await client.plan.get({ agentRunId: run.id })).subtasks.length > 0) break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ await client.plan.accept({ agentRunId: run.id })
+ await expect(client.plan.accept({ agentRunId: run.id })).rejects.toThrow
+
+ socket.close
+ })
+
+ /**
+ * Rejecting spends nothing, which is the reason it is a separate act from asking for
+ * changes rather than the same one with a flag.
+ */
+ it('rejects a plan without spending another planning turn', async => {
+ await client.runControl.setPlanReviewRequired({ required: true })
+ const { socket, runnerId } = await pairFakeRunner('plan-reject')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'plan-reject' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ const { run } = await startPlanner(socket, created.rootThread.id, repo.id, planner.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [{ title: 'Docs', task: 'Write docs.', personaName: 'fake-worker' }],
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ if ((await client.plan.get({ agentRunId: run.id })).subtasks.length > 0) break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+
+ const rejected = await client.plan.reject({
+ agentRunId: run.id,
+ reason: 'The docs area is not the goal.',
+ })
+ expect(rejected.skipped).toBe(1)
+ expect(await client.agentRun.listChildren({ agentRunId: run.id })).toHaveLength(0)
+
+ const after = await client.plan.get({ agentRunId: run.id })
+ expect(after.awaitingReview).toBe(false)
+ // The reason is on the row, not only in a thread message — the board renders the row.
+ expect(after.subtasks[0]?.status).toBe('skipped')
+ expect(after.subtasks[0]?.detail).toContain('not the goal')
 
  socket.close
  })

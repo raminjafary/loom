@@ -46,6 +46,22 @@ export const workspace = pgTable(
  // second is the one bound the platform enforces on its own.
  handoffThreshold: doublePrecision('handoff_threshold'),
  handoffCapPerTree: integer('handoff_cap_per_tree'),
+ /**
+ * Whether a Planner's decomposition waits for a human before any worker starts
+ *.
+ *
+ * **Default on, and that is the pair to the operator asks.** Making the teams
+ * autonomous moved the human's job to two places — review the plan, merge the branch —
+ * and a plan was the one expensive decision in the system with no gate at all: N runs
+ * spawn the moment a model submits, and the steering only reaches them afterwards.
+ * Off is a real state and belongs to the operator: a workspace running a tight loop on
+ * a trusted repository does not want to arbitrate every decomposition.
+ *
+ * Travels with the kill switch and the handoff policy for the reason they do — the same
+ * kind of thing (workspace policy an operator sets, persisted so a redeploy cannot undo
+ * it), and read on a path that already reads this row.
+ */
+ planReviewRequired: boolean('plan_review_required').notNull.default(true),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  },
  (t) => [uniqueIndex('workspace_slug_idx').on(t.slug)],

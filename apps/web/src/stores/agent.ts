@@ -49,6 +49,13 @@ export const useAgentStore = defineStore('agent', => {
  listRepositoryMaps: (repositoryId: string) => session.listRepositoryMaps(repositoryId),
  /** Which maps one run read, and which it was deliberately denied. */
  listWorkspaceMaps: => session.listWorkspaceMaps,
+ /** The operator asks — the plan gate: read it, then accept, change or reject. */
+ getPlanForReview: (agentRunId: string) => session.getPlanForReview(agentRunId),
+ acceptPlan: (agentRunId: string) => session.acceptPlan(agentRunId),
+ requestPlanChanges: (input: Parameters<typeof session.requestPlanChanges>[0]) =>
+ session.requestPlanChanges(input),
+ rejectPlan: (input: Parameters<typeof session.rejectPlan>[0]) => session.rejectPlan(input),
+ setPlanReviewRequired: (required: boolean) => session.setPlanReviewRequired(required),
  /** The atlas — the queue a human decides, and the two acts on it. */
  listAtlasProposals: (input?: Parameters<typeof session.listAtlasProposals>[0]) =>
  session.listAtlasProposals(input),

@@ -299,6 +299,15 @@ export interface WorkspaceRunControl {
  * happens to equal it: an operator who has not chosen should inherit a better default
  * later, and one who chose 0.8 should keep 0.8.
  */
+ /**
+ * Whether a Planner's decomposition waits for a human before any worker starts
+ *.
+ *
+ * The pair to autonomous teams: with the tool gates off, the human's job is to review the
+ * plan and to merge, and a plan was the one expensive decision with no gate — N runs spawn
+ * the moment a model submits, and the steering only reaches them afterwards.
+ */
+ readonly planReviewRequired: boolean
  readonly handoff: {
  readonly threshold: number | null
  readonly capPerTree: number | null

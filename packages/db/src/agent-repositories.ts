@@ -1178,6 +1178,7 @@ const CONTROL_COLUMNS = {
  runsPausedByUserId: workspace.runsPausedByUserId,
  handoffThreshold: workspace.handoffThreshold,
  handoffCapPerTree: workspace.handoffCapPerTree,
+ planReviewRequired: workspace.planReviewRequired,
 }
 
 const toControl = (
@@ -1188,12 +1189,14 @@ const toControl = (
  runsPausedByUserId: string | null
  handoffThreshold: number | null
  handoffCapPerTree: number | null
+ planReviewRequired: boolean
  },
 ): WorkspaceRunControl => ({
  workspaceId,
  paused: row.runsPaused,
  pausedAt: row.runsPausedAt,
  pausedByUserId: row.runsPausedByUserId,
+ planReviewRequired: row.planReviewRequired,
  handoff: { threshold: row.handoffThreshold, capPerTree: row.handoffCapPerTree },
 })
 
@@ -1226,6 +1229,16 @@ export const workspaceRunControlRepository = (db: Database): WorkspaceRunControl
  const [row] = await db
 .update(workspace)
 .set({ handoffThreshold: patch.threshold, handoffCapPerTree: patch.capPerTree })
+.where(eq(workspace.id, workspaceId))
+.returning(CONTROL_COLUMNS)
+ if (!row) throw new NotFoundError('Workspace')
+ return toControl(workspaceId, row)
+ },
+
+ async setPlanReviewRequired(workspaceId, required) {
+ const [row] = await db
+.update(workspace)
+.set({ planReviewRequired: required })
 .where(eq(workspace.id, workspaceId))
 .returning(CONTROL_COLUMNS)
  if (!row) throw new NotFoundError('Workspace')

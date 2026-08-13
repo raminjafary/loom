@@ -49,7 +49,12 @@ import {
  listSettledRuns,
  getMastery,
  concludeSession,
+ acceptPlan,
  contendAtlasProposal,
+ getPlanForReview,
+ rejectPlan,
+ requestPlanChanges,
+ setPlanReviewRequired,
  conveneSession,
  decideAtlasProposal,
  listAtlasProposals,
@@ -1196,6 +1201,65 @@ export const router = os.router({
  actor: context.principal.actor,
  threshold: input.threshold,
  capPerTree: input.capPerTree,
+ }),
+),
+),
+
+ /** Whether a decomposition waits for a human before anything starts. */
+ setPlanReviewRequired: os.runControl.setPlanReviewRequired.handler(({ context, input }) =>
+ guard( =>
+ setPlanReviewRequired(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ required: input.required,
+ }),
+),
+),
+ },
+
+ /**
+ * Reviewing a plan before it builds. No `submit`: a decomposition
+ * arrives from a Planner over the Runner channel, and a human authoring one here would be
+ * a plan with no planner behind it.
+ */
+ plan: {
+ get: os.plan.get.handler(({ context, input }) =>
+ guard( =>
+ getPlanForReview(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ agentRunId: asAgentRunId(input.agentRunId),
+ }),
+),
+),
+
+ accept: os.plan.accept.handler(({ context, input }) =>
+ guard( =>
+ acceptPlan(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ agentRunId: asAgentRunId(input.agentRunId),
+ }),
+),
+),
+
+ requestChanges: os.plan.requestChanges.handler(({ context, input }) =>
+ guard( =>
+ requestPlanChanges(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ agentRunId: asAgentRunId(input.agentRunId),
+ note: input.note,
+ }),
+),
+),
+
+ reject: os.plan.reject.handler(({ context, input }) =>
+ guard( =>
+ rejectPlan(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ agentRunId: asAgentRunId(input.agentRunId),
+...(input.reason === undefined ? {}: { reason: input.reason }),
  }),
 ),
 ),

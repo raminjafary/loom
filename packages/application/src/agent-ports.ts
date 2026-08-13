@@ -761,6 +761,17 @@ export interface WorkspaceRunControlRepositoryPort {
  workspaceId: WorkspaceId,
  patch: { threshold: number | null; capPerTree: number | null },
 ): Promise<WorkspaceRunControl>
+ /**
+ * Whether a decomposition waits for a human.
+ *
+ * Its own method for the reason `setHandoffPolicy` is: this is policy an operator edits
+ * deliberately, and folding it into `set` would let hitting the kill switch quietly turn
+ * a review gate off.
+ */
+ setPlanReviewRequired(
+ workspaceId: WorkspaceId,
+ required: boolean,
+): Promise<WorkspaceRunControl>
 }
 
 export interface ApprovalRepositoryPort {

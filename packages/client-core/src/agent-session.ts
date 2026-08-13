@@ -4,6 +4,7 @@ import type {
  ApprovalRequest,
  AtlasEdge,
  Capability,
+ PlanReview,
  CostSummary,
  DirectoryListing,
  MasteryView,
@@ -312,6 +313,18 @@ export interface AgentSession {
  * lead and went and looked; a human drawing one here would record a relation nobody
  * checked with the same status as one that was.
  */
+ /**
+ * Reviewing a plan before it builds.
+ *
+ * No `submit`: a decomposition comes from a Planner over the Runner channel. What a human
+ * does is decide, and the three acts cost different things — accepting spends the plan,
+ * asking for changes spends another planning turn, rejecting spends nothing.
+ */
+ getPlanForReview(agentRunId: string): Promise<PlanReview | null>
+ acceptPlan(agentRunId: string): Promise<{ started: number } | null>
+ requestPlanChanges(input: { agentRunId: string; note: string }): Promise<boolean>
+ rejectPlan(input: { agentRunId: string; reason?: string }): Promise<boolean>
+ setPlanReviewRequired(required: boolean): Promise<void>
  listAtlasProposals(input?: {
  status?: ('proposed' | 'contended' | 'promoted' | 'rejected')[]
  }): Promise<AtlasEdge[]>
@@ -1167,6 +1180,60 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  } catch (error) {
  patch({ error: errorMessage(error) })
  return null
+ }
+ },
+
+ async getPlanForReview(agentRunId) {
+ try {
+ return await options.api.plan.get({ agentRunId })
+ } catch {
+ return null
+ }
+ },
+
+ async acceptPlan(agentRunId) {
+ patch({ error: null })
+ try {
+ return await options.api.plan.accept({ agentRunId })
+ } catch (error) {
+ // On the banner: "already started" and "no plan" are sentences a human has to read,
+ // not a button that appears to do nothing.
+ patch({ error: errorMessage(error) })
+ return null
+ }
+ },
+
+ async requestPlanChanges(input) {
+ patch({ error: null })
+ try {
+ await options.api.plan.requestChanges(input)
+ return true
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return false
+ }
+ },
+
+ async rejectPlan(input) {
+ patch({ error: null })
+ try {
+ await options.api.plan.reject({
+ agentRunId: input.agentRunId,
+...(input.reason === undefined ? {}: { reason: input.reason }),
+ })
+ return true
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return false
+ }
+ },
+
+ async setPlanReviewRequired(required) {
+ patch({ error: null })
+ try {
+ await options.api.runControl.setPlanReviewRequired({ required })
+ } catch (error) {
+ patch({ error: errorMessage(error) })
  }
  },
 
