@@ -1221,6 +1221,7 @@ onBeforeUnmount( => {
  (input) => void agent.createPersona(input.markdownSource).then(input.done)
  "
  @create-group="(input) => agent.createPersonaGroup(input)"
+ @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
  @save-group="(input) => agent.updatePersonaGroup(input)"
  @update-persona="(input) => agent.updatePersona(input)"
  />

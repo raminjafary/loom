@@ -113,6 +113,15 @@ const emit = defineEmits<{
  orchestratorId: string | null
  },
  ]
+ /**
+ * What the merge queue runs before it merges into this team's repository.
+ *
+ * The same procedure Settings uses, deliberately: the rule for this canvas is that it
+ * may only draw what the runtime executes, and `verifyCommand` is a field the merge
+ * queue already reads. A second store for the same policy would be a decoration that
+ * agreed with the real one until it did not.
+ */
+ 'set-verify-command': [repositoryId: string, verifyCommand: string | null]
  'update-persona': [input: { personaId: string; markdownSource: string }]
  /**
  * Author a new persona from the canvas.
@@ -507,6 +516,35 @@ const setRepository = (id: string) => {
  repositoryId.value = id
  saveGroup({ repositoryId: id === '' ? null: id })
 }
+
+/**
+ * The verify command, edited where the team's repository is chosen.
+ *
+ * Cost nothing to add, which is why the section orders it after the repository: it is a
+ * field the merge queue already reads, so this is a second surface onto one policy rather
+ * than a new one. Empty clears it, and a repository with no command merges **unverified**
+ * — which the queue's entries say outright rather than reporting as a pass.
+ */
+const editingVerify = ref(false)
+const verifyDraft = ref('')
+
+const startEditingVerify = => {
+ verifyDraft.value = chosenRepository.value?.verifyCommand ?? ''
+ editingVerify.value = true
+}
+
+const saveVerifyCommand = => {
+ const repo = chosenRepository.value
+ if (!repo) return
+ const value = verifyDraft.value.trim
+ emit('set-verify-command', repo.id, value.length > 0 ? value: null)
+ editingVerify.value = false
+}
+
+// A repository swap must not leave the previous one's command in an open editor.
+watch(repositoryId, => {
+ editingVerify.value = false
+})
 
 /**
  * Saved on drag *stop* rather than on every frame. A position is a fact worth
@@ -978,10 +1016,55 @@ const onKeydown = (event: KeyboardEvent) => {
  carries a persona, not a team, so the launcher can only default from a
  persona's teams — and teams that disagree default to nothing.
  -->
- <p v-if="sharedWithOtherTeams.length > 0" class="fine warn">
+ <p v-if="sharedWithOtherTeams.length > 0" class="fine warn shared">
  {{ sharedWithOtherTeams.join(', ') }} also sit(s) on a team that lands
  somewhere else, so the launcher fills in nothing for them.
  </p>
+
+ <!--
+ The second policy item, and the one that cost nothing once the first
+ existed: `verifyCommand` is a field the merge queue already reads. Leads with
+ what happens at a merge rather than with the control.
+ -->
+ <template v-if="chosenRepository">
+ <p v-if="chosenRepository.verifyCommand === null" class="fine warn">
+ Nothing is run before a merge, so branches land <strong>unverified</strong>.
+ </p>
+ <p v-else class="fine">
+ Before a branch merges, the queue runs
+ <code>{{ chosenRepository.verifyCommand }}</code> in the sandbox — and hands
+ the branch back to its run if it fails.
+ </p>
+ <form
+ v-if="editingVerify"
+ class="verify-form"
+ @submit.prevent="saveVerifyCommand"
+ >
+ <input
+ v-model="verifyDraft"
+ placeholder="pnpm -r test"
+ aria-label="Verification command"
+ />
+ <button type="submit">Save</button>
+ <button type="button" class="link" @click="editingVerify = false">Cancel</button>
+ </form>
+ <button v-else type="button" class="link" @click="startEditingVerify">
+ {{ chosenRepository.verifyCommand === null ? 'Set a verify command': 'Change it' }}
+ </button>
+ <!--
+ Verification runs with `--network none`, so on any repository whose tests
+ need an install step the command can only succeed against a warmed cache
+. Setting one without the other is the configuration that looks right
+ and merges unverified anyway.
+ -->
+ <p
+ v-if="chosenRepository.verifyCommand !== null && chosenRepository.installCommand === null"
+ class="fine warn"
+ >
+ No install command, and verification runs with the network closed — if
+ those tests need dependencies, warm the cache in Settings first.
+ </p>
+ </template>
  </section>
 
  <!--
@@ -1539,6 +1622,23 @@ header h2 {
 
 .canvas:deep(.delegates.out-of-depth.vue-flow__edge-text) {
  fill: var(--text-faint);
+}
+
+.verify-form {
+ display: flex;
+ gap: 0.25rem;
+}
+
+.verify-form input {
+ flex: 1;
+ min-width: 0;
+ padding: 0.2rem 0.3rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text);
+ font: inherit;
+ font-size: 0.75rem;
 }
 
 .root-picker,

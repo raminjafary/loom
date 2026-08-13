@@ -83,7 +83,11 @@ const VueFlowStub = {
  template: '<div class="flow-stub" />',
 }
 
-const repository = (id: string, displayName: string) =>
+const repository = (
+ id: string,
+ displayName: string,
+ overrides: { verifyCommand?: string | null; installCommand?: string | null } = {},
+) =>
  ({
  id,
  workspaceId: 'w1',
@@ -91,8 +95,8 @@ const repository = (id: string, displayName: string) =>
  displayName,
  absolutePath: `/src/${displayName}`,
  defaultBranch: 'main',
- verifyCommand: null,
- installCommand: null,
+ verifyCommand: overrides.verifyCommand ?? null,
+ installCommand: overrides.installCommand ?? null,
  createdAt: new Date(0),
  }) as unknown as Repository
 
@@ -542,7 +546,7 @@ describe('TeamComposer', => {
  group({ id: 'g2', name: 'Team B', personaIds: ['swe'], repositoryId: 'r2' }),
  ],
  })
- expect(wrapper.get('.lands.warn').text).toContain('swe')
+ expect(wrapper.get('.lands.shared').text).toContain('swe')
  })
 
  it('says nothing about members whose other team agrees', => {
@@ -552,7 +556,69 @@ describe('TeamComposer', => {
  group({ id: 'g2', name: 'Team B', personaIds: ['swe'], repositoryId: 'r1' }),
  ],
  })
- expect(wrapper.find('.lands.warn').exists).toBe(false)
+ expect(wrapper.find('.lands.shared').exists).toBe(false)
+ })
+ })
+
+ /**
+ * The second policy item, which cost nothing once the first existed: the merge
+ * queue already reads `verifyCommand`, so this is a second surface onto one field
+ * rather than a second store for it.
+ */
+ describe('the verify command as team policy', => {
+ it('says branches land unverified when no command is set', => {
+ const wrapper = composer({ groups: [group({ repositoryId: 'r1' })] })
+ expect(wrapper.get('.lands').text).toContain('unverified')
+ })
+
+ it('says what the queue runs before a merge, and what happens when it fails', => {
+ const wrapper = composer({
+ groups: [group({ repositoryId: 'r1' })],
+ repositories: [repository('r1', 'loom', { verifyCommand: 'pnpm -r test' })],
+ })
+ const text = wrapper.get('.lands').text
+ expect(text).toContain('pnpm -r test')
+ expect(text).toContain('hands the branch back')
+ })
+
+ it('sets it through the same procedure Settings uses', async => {
+ const wrapper = composer({ groups: [group({ repositoryId: 'r1' })] })
+ await wrapper.get('.lands button.link').trigger('click')
+ await wrapper.get('.verify-form input').setValue('pnpm -r test')
+ await wrapper.get('.verify-form').trigger('submit')
+ expect(wrapper.emitted('set-verify-command')?.[0]).toEqual(['r1', 'pnpm -r test'])
+ })
+
+ /** Empty clears it — a repository with no command merges unverified and says so. */
+ it('clears it with null rather than an empty command the queue would try to run', async => {
+ const wrapper = composer({
+ groups: [group({ repositoryId: 'r1' })],
+ repositories: [repository('r1', 'loom', { verifyCommand: 'pnpm -r test' })],
+ })
+ await wrapper.get('.lands button.link').trigger('click')
+ await wrapper.get('.verify-form input').setValue(' ')
+ await wrapper.get('.verify-form').trigger('submit')
+ expect(wrapper.emitted('set-verify-command')?.[0]).toEqual(['r1', null])
+ })
+
+ /**
+ * Verification runs with the network closed, so a verify command without an
+ * install command is the configuration that looks right and merges unverified anyway.
+ */
+ it('warns when there is a command to run and no warmed cache to run it against', => {
+ const withInstall = composer({
+ groups: [group({ repositoryId: 'r1' })],
+ repositories: [
+ repository('r1', 'loom', { verifyCommand: 'pnpm -r test', installCommand: 'pnpm i' }),
+ ],
+ })
+ expect(withInstall.get('.lands').text).not.toContain('network closed')
+
+ const without = composer({
+ groups: [group({ repositoryId: 'r1' })],
+ repositories: [repository('r1', 'loom', { verifyCommand: 'pnpm -r test' })],
+ })
+ expect(without.get('.lands').text).toContain('network closed')
  })
  })
 
