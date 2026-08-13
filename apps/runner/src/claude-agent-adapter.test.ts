@@ -294,6 +294,28 @@ describe('buildPrompt: a mastery run is told its deliverable is a map', => {
  expect(prompt).toContain('do not edit')
  })
 
+ /**
+ * The last leg of the directive. It is declared on the port, rendered at
+ * the gateway, carried on the frame and through the sandbox schema — and this is where
+ * it either reaches the model or is silently the fourth field this repository has
+ * dropped between two places with no type error at either.
+ */
+ it('puts what it was asked to look for into the opening', => {
+ const prompt = buildPrompt({
+ persona,
+ mastery: {
+ subjectKind: 'author',
+ subjectRef: 'ada@example.com',
+ revision: 'abc123',
+ directive: 'FOCUS-BLOCK',
+ },
+ })
+ expect(prompt).toContain('FOCUS-BLOCK')
+ // After the general instruction: it narrows what to spend the run on, and is not
+ // the whole of what the run is for.
+ expect(prompt.indexOf('FOCUS-BLOCK')).toBeGreaterThan(prompt.indexOf('record_map'))
+ })
+
  it('puts the map before the ledger, and both after the task', => {
  const prompt = buildPrompt({
  persona,

@@ -188,7 +188,19 @@ export interface RunAgentOptions {
  /**
  * Present when this run's deliverable is a map rather than a diff.
  */
- readonly mastery?: { subjectKind: string; subjectRef: string; revision: string }
+ readonly mastery?: {
+ subjectKind: string
+ subjectRef: string
+ revision: string
+ /**
+ * What this run was asked to look for, rendered server-side.
+ *
+ * A string rather than a structure, deliberately: the wording is what makes a focus
+ * produce a concept rather than a directory listing, and a second formatter here
+ * would be a second place for it to drift.
+ */
+ directive?: string | undefined
+ }
  /** The `record_map`, offered only on a mastery run. */
  readonly mapTool?: McpSdkServerConfigWithInstance
  /**
@@ -414,7 +426,12 @@ export const buildPrompt = (
  */
 const masteryOpening = (
  personaName: string,
- mastery: { subjectKind: string; subjectRef: string; revision: string },
+ mastery: {
+ subjectKind: string
+ subjectRef: string
+ revision: string
+ directive?: string | undefined
+ },
  task: string | undefined,
 ): string =>
  [
@@ -431,6 +448,11 @@ const masteryOpening = (
  'code follows that is written down nowhere, a place where past changes went wrong, ' +
  'something that must stay true. A node for every file and an edge for every import is ' +
  'worth nothing to the next reader.',
+ /**
+ * After the general instruction and before the task, which is where it belongs: it
+ * narrows what to spend the run on, and it is not the whole of what the run is for.
+ */
+ mastery.directive,
  task,
  ]
 .filter((part): part is string => typeof part === 'string' && part.length > 0)

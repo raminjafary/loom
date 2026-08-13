@@ -399,6 +399,30 @@ export const contract = {
  personaId: z.string,
  repositoryId: z.string,
  task: z.string.max(4_000).optional,
+ /**
+ * What is being mastered. `repository` is the tree; `author` is one
+ * person's record *within* that repository's history, which is why a repository
+ * is required either way — an author subject with no corpus to read is a map
+ * with nothing behind it.
+ *
+ * `corpus` is deliberately absent: the bar for a new subject kind is an
+ * extractor plus something checkable to serve as the revision, and prose has
+ * neither here yet. Offering it would be a control the runtime ignores.
+ */
+ subjectKind: z.enum(['repository', 'author']).optional,
+ /** Who, for an author subject — the name or email git history records. */
+ subjectRef: z.string.max(200).optional,
+ /**
+ * What kind of expertise to grasp.
+ *
+ * A closed vocabulary rather than free text alone, because free text does not
+ * fix the failure mastery names: a model told to "learn this repository" and then
+ * "focus on payments" produces the same directory listing about payments. Each
+ * focus carries what *earns a node* for the thing being asked.
+ */
+ focus: z.array(z.string).max(8).optional,
+ /** The human's own words, for what a closed vocabulary cannot express. */
+ guidance: z.string.max(2_000).optional,
  }),
 )
 .output(AgentRunSchema),

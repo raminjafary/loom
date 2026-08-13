@@ -456,7 +456,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  /** What the persona already knows about this subject, rendered server-side. */
  mapContext?: string
  /** Present when the deliverable is a map rather than a diff. */
- mastery?: { subjectKind: 'repository' | 'author' | 'corpus'; subjectRef: string; revision: string }
+ mastery?: {
+ subjectKind: 'repository' | 'author' | 'corpus'
+ subjectRef: string
+ revision: string
+ /** What it was asked to look for, rendered server-side. */
+ directive?: string | undefined
+ }
  }): Promise<void> => {
  // Async, and awaited by whoever produces events (the SDK loop in-process, the
  // container's stdout reader when sandboxed) — that await is the backpressure.

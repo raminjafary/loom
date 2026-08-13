@@ -40,6 +40,15 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  subjectKind: z.enum(['repository', 'author', 'corpus']),
  subjectRef: z.string,
  revision: z.string,
+ /**
+ * What this run was asked to look for, rendered server-side.
+ *
+ * Declared here as well as on the wire and the port because the sandbox boundary
+ * is the third place a field of this shape has been dropped: a schema that does
+ * not name it strips it, and the container runs a mastery run that was never told
+ * what it was for — with no error at either end.
+ */
+ directive: z.string.optional,
  })
 .optional,
  /** The tree's ledger, rendered and fenced server-side. */

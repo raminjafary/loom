@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
  buildMapGraph,
  coveragePercent,
@@ -7,6 +7,7 @@ import {
  undrawnNodeCount,
  type MapGraphNode,
 } from '@loom/client-core'
+import { FOCUS_BY_SUBJECT } from '@loom/domain'
 import type {
  AgentPersona,
  MasteryView,
@@ -47,7 +48,15 @@ const emit = defineEmits<{
  'select-persona': [personaId: string]
  select: [mapId: string]
  refresh: []
- master: [repositoryId: string]
+ master: [
+ input: {
+ repositoryId: string
+ subjectKind: 'repository' | 'author'
+ subjectRef: string
+ focus: string[]
+ guidance: string
+ },
+ ]
  /**
  * A human's standing answer about whether a map is used. `null`
  * hands the decision back to the measurement, which is a third act and a real state.
@@ -75,6 +84,66 @@ const RETRIEVAL_TITLE: Record<string, string> = {
 }
 
 const masterTarget = ref('')
+
+/**
+ * What to master, and what to look for.
+ *
+ * The focus list is a closed vocabulary because free text does not fix the failure mastery
+ * names — a model told to "learn this repository" and then "focus on payments" produces
+ * the same directory listing about payments. Each focus carries what *earns a node* for
+ * the thing being asked, which is a paragraph written once in the domain rather than one
+ * a human has to write correctly every time.
+ */
+const subjectKind = ref<'repository' | 'author'>('repository')
+const authorRef = ref('')
+const chosenFocus = ref<string[]>([])
+const guidance = ref('')
+
+const FOCUS_LABEL: Record<string, string> = {
+ architecture: 'architecture',
+ conventions: 'conventions',
+ hazards: 'hazards',
+ tests: 'tests & how to run them',
+ domain: 'domain concepts',
+ 'review-stance': 'what they insist on in review',
+ habits: 'habits in their own changes',
+}
+
+/**
+ * Offered per subject, because a focus a subject has no record to satisfy is refused by
+ * the server — and an option that reads as a promise and is then refused is the failure
+ * the delegation roster exists to prevent, one surface over.
+ */
+const focusOptions = computed( =>
+ subjectKind.value === 'author'
+ ? (FOCUS_BY_SUBJECT.author as readonly string[])
+: (FOCUS_BY_SUBJECT.repository as readonly string[]),
+)
+
+watch(subjectKind, => {
+ chosenFocus.value = chosenFocus.value.filter((focus) => focusOptions.value.includes(focus))
+})
+
+const toggleFocus = (focus: string) => {
+ chosenFocus.value = chosenFocus.value.includes(focus)
+ ? chosenFocus.value.filter((entry) => entry !== focus)
+: [...chosenFocus.value, focus]
+}
+
+const canStart = computed(
+ => masterTarget.value !== '' && (subjectKind.value !== 'author' || authorRef.value.trim !== ''),
+)
+
+const startMastery = => {
+ if (!canStart.value) return
+ emit('master', {
+ repositoryId: masterTarget.value,
+ subjectKind: subjectKind.value,
+ subjectRef: subjectKind.value === 'author' ? authorRef.value.trim: '',
+ focus: [...chosenFocus.value],
+ guidance: guidance.value.trim,
+ })
+}
 
 const selectedKey = ref<string | null>(null)
 
@@ -130,28 +199,80 @@ const dashFor = (provenance: string): string | undefined =>
  </header>
 
  <div v-if="personaId" class="start">
+ <div class="row">
  <select v-model="masterTarget" aria-label="Repository to master">
  <option value="" disabled>Repository to learn…</option>
  <option v-for="repository in repositories":key="repository.id":value="repository.id">
  {{ repository.displayName }}
  </option>
  </select>
+ <!--
+ The subjects. `corpus` is deliberately absent: the bar for a subject kind
+ is an extractor plus something checkable to serve as the revision, and prose has
+ neither yet — offering it would be a control the runtime ignores.
+ -->
+ <select v-model="subjectKind" aria-label="What to master">
+ <option value="repository">the codebase</option>
+ <option value="author">a person's practice in it</option>
+ </select>
+ <input
+ v-if="subjectKind === 'author'"
+ v-model="authorRef"
+ type="text"
+ class="author"
+ placeholder="name or email in git history"
+ aria-label="Whose practice to learn"
+ />
+ </div>
+
+ <!--
+ What kind of expertise to grasp. The operator's ask, and the reason it is a
+ vocabulary rather than a text box: each of these carries what *earns a node* for
+ the thing being asked, which is what stops a mastery run producing a directory
+ listing with a theme.
+ -->
+ <div class="focus" role="group" aria-label="What to concentrate on">
  <button
+ v-for="focus in focusOptions"
+:key="focus"
  type="button"
- class="primary"
-:disabled="masterTarget === ''"
- @click="emit('master', masterTarget)"
+:class="{ chosen: chosenFocus.includes(focus) }"
+ @click="toggleFocus(focus)"
  >
+ {{ FOCUS_LABEL[focus] ?? focus }}
+ </button>
+ </div>
+
+ <textarea
+ v-model="guidance"
+ class="guidance"
+ rows="2"
+ maxlength="2000"
+ placeholder="Anything the list above cannot say — e.g. “the parts that bill customers”"
+ aria-label="Extra guidance for the mastery run"
+ ></textarea>
+
+ <div class="row">
+ <button type="button" class="primary":disabled="!canStart" @click="startMastery">
  Start a mastery run
  </button>
+ </div>
  <!--
  Said before it is started, not after. Mastery: a mastery run is a normal run — same
  sandbox, same metering, same cap — and a human authorising one should know it
  costs money and produces no diff.
  -->
  <p class="sub">
- Reads the repository and records what it learns. It changes no code, and it spends
- against this agent's budget cap like any other run.
+ <template v-if="subjectKind === 'author'">
+ Reads this repository's history for that person and records the practices that
+ <em>recur</em> — a preference seen once is refused, because personalization built
+ from single observations measurably performs worse than none. What comes out is
+ informed by that person and is never presented as them.
+ </template>
+ <template v-else>
+ Reads the repository and records what it learns.
+ </template>
+ It changes no code, and it spends against this agent's budget cap like any other run.
  </p>
  </div>
 
@@ -702,5 +823,58 @@ svg {
 .overrides button.chosen {
  border-color: var(--accent);
  color: var(--accent);
+}
+
+.start.row {
+ display: flex;
+ flex-wrap: wrap;
+ align-items: center;
+ gap: 0.4rem;
+}
+
+.start.author {
+ flex: 1 1 12rem;
+ min-width: 0;
+ padding: 0.25rem 0.4rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text);
+ font: inherit;
+ font-size: 0.78rem;
+}
+
+.focus {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 0.3rem;
+}
+
+.focus button {
+ padding: 0.12rem 0.45rem;
+ border: 1px solid var(--border);
+ border-radius: 0.8rem;
+ background: var(--bg);
+ color: var(--text-muted);
+ font: inherit;
+ font-size: 0.7rem;
+ cursor: pointer;
+}
+
+.focus button.chosen {
+ border-color: var(--accent);
+ color: var(--accent);
+}
+
+.guidance {
+ width: 100%;
+ padding: 0.3rem 0.4rem;
+ border: 1px solid var(--border);
+ border-radius: 0.3rem;
+ background: var(--bg);
+ color: var(--text);
+ font: inherit;
+ font-size: 0.75rem;
+ resize: vertical;
 }
 </style>

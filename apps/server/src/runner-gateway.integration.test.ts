@@ -242,6 +242,102 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  socket.close
  })
 
+ /**
+ * The directive, at the frame.
+ *
+ * Guarded here for the reason the session before learned the hard way: a field can be
+ * declared on a port, spread on a frame and dropped by a schema in between with no type
+ * error at any of the three, and the result is a run that costs money and does nothing
+ * it was asked for. The frame is the one place both halves are visible at once.
+ */
+ it('carries what the run was asked to look for, rendered, on start_run', async => {
+ const { socket, runnerId } = await pairFakeRunner('mastery-directive')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'mastery-directive' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ focus: ['conventions', 'hazards'],
+ guidance: 'the parts that bill customers',
+ })
+ const frame = await startRun
+
+ const mastery = frame.mastery as { subjectKind: string; directive?: string }
+ expect(mastery.subjectKind).toBe('repository')
+ // Rendered server-side: what earns a node, not merely the word "conventions".
+ expect(mastery.directive).toContain('files that obey it')
+ expect(mastery.directive).toContain('more dangerous than it looks')
+ expect(mastery.directive).toContain('the parts that bill customers')
+ await runPromise
+ socket.close
+ })
+
+ it('masters an author, and tells the run where that record actually is', async => {
+ const { socket, runnerId } = await pairFakeRunner('mastery-author')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'mastery-author' })
+
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ subjectKind: 'author',
+ subjectRef: 'ada@example.com',
+ focus: ['habits'],
+ })
+ const frame = await startRun
+
+ const mastery = frame.mastery as { subjectKind: string; subjectRef: string; directive?: string }
+ expect(mastery.subjectKind).toBe('author')
+ expect(mastery.subjectRef).toBe('ada@example.com')
+ // Without this the run reads the working tree and produces a repository map with a
+ // person's name on it.
+ expect(mastery.directive).toContain('git log --author="ada@example.com"')
+ // The one non-technical constraint, stated at the earliest point it can be.
+ expect(mastery.directive).toContain('presented as this person')
+ await runPromise
+
+ const maps = await client.mastery.listForPersona({ personaId: testPersonaId })
+ expect(maps.some((entry) => entry.map.subjectKind === 'author')).toBe(true)
+ socket.close
+ })
+
+ it('refuses an author subject with nobody named, rather than mapping the tree again', async => {
+ const { socket, runnerId } = await pairFakeRunner('mastery-author-empty')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'mastery-author-empty' })
+
+ await expect(
+ client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ subjectKind: 'author',
+ }),
+).rejects.toThrow(/that is the corpus/)
+ socket.close
+ })
+
+ it('refuses a focus the subject has no record for, rather than dropping it', async => {
+ const { socket, runnerId } = await pairFakeRunner('mastery-focus-refused')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'mastery-focus-refused' })
+
+ await expect(
+ client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ focus: ['review-stance'],
+ }),
+).rejects.toThrow(/no record to derive it from/)
+ socket.close
+ })
+
  it('opens the map before dispatch, so a run that produced nothing still recorded that it tried', async => {
  const { socket, runnerId } = await pairFakeRunner('mastery-open')
  const repo = await bindViaFakeRunner(socket, runnerId)

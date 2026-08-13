@@ -58,6 +58,7 @@ import {
  type AgentPersonaId,
  type AgentRun,
  type MapSubjectKind,
+ type MasteryDirective,
  type Message,
  type AgentRunId,
  type AgentRunRelation,
@@ -1343,7 +1344,16 @@ export const startAgentRun = async (
  * named subject, not a diff. Opens (or re-opens) the persona's map for that subject
  * before dispatch, and is what gives the run `record_map` at all.
  */
- mastery?: { subjectKind: MapSubjectKind; subjectRef: string }
+ /**
+ * What this run is mastering, and what it has been asked to look for. `directive` is validated by the domain against the subject kind before it
+ * gets here — a focus a subject has no record to satisfy is refused rather than
+ * quietly dropped, since the human read the option as a promise.
+ */
+ mastery?: {
+ subjectKind: MapSubjectKind
+ subjectRef: string
+ directive?: MasteryDirective
+ }
  },
 ): Promise<AgentRun> => {
  const parent = input.parentRunId
@@ -1680,7 +1690,11 @@ export const startAgentRun = async (
  * leave a row saying it tried, against which subject, at what revision. A map that
  * comes into existence only once a model has succeeded cannot record a failure.
  */
- let mastery: { subjectKind: MapSubjectKind; subjectRef: string } | null = null
+ let mastery: {
+ subjectKind: MapSubjectKind
+ subjectRef: string
+ directive?: MasteryDirective
+ } | null = null
  if (input.mastery) {
  const map = await openMap(deps, {
  workspaceId: input.workspaceId,
@@ -1694,7 +1708,11 @@ export const startAgentRun = async (
  revision: PENDING_REVISION,
  masteryRunId: run.id,
  })
- mastery = { subjectKind: map.subjectKind, subjectRef: map.subjectRef }
+ mastery = {
+ subjectKind: map.subjectKind,
+ subjectRef: map.subjectRef,
+...(input.mastery.directive ? { directive: input.mastery.directive }: {}),
+ }
  }
 
  /**

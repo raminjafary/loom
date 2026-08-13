@@ -251,7 +251,13 @@ const loadGraphExpertise = async => {
 }
 
 
-const startMastery = async (repositoryId: string) => {
+const startMastery = async (input: {
+ repositoryId: string
+ subjectKind: 'repository' | 'author'
+ subjectRef: string
+ focus: string[]
+ guidance: string
+}) => {
  const personaId = masteryPersonaId.value
  const threadId = snapshot.value.activeThread?.id
  if (!personaId) return
@@ -262,7 +268,15 @@ const startMastery = async (repositoryId: string) => {
  return
  }
  masteryError.value = null
- const runId = await agent.startMastery({ threadId, personaId, repositoryId })
+ const runId = await agent.startMastery({
+ threadId,
+ personaId,
+ repositoryId: input.repositoryId,
+ subjectKind: input.subjectKind,
+...(input.subjectRef === '' ? {}: { subjectRef: input.subjectRef }),
+...(input.focus.length === 0 ? {}: { focus: input.focus }),
+...(input.guidance === '' ? {}: { guidance: input.guidance }),
+ })
  if (runId) {
  settingsOpen.value = false
  await selectExpertisePersona(personaId)

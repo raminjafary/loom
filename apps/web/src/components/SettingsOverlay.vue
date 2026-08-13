@@ -54,7 +54,15 @@ const emit = defineEmits<{
  'select-expertise': [personaId: string]
  'select-map': [mapId: string]
  'refresh-maps': []
- master: [repositoryId: string]
+ master: [
+ input: {
+ repositoryId: string
+ subjectKind: 'repository' | 'author'
+ subjectRef: string
+ focus: string[]
+ guidance: string
+ },
+ ]
  /** Portable expertise: a human's standing answer about whether a map is used. */
  'set-retrieval': [input: { mapId: string; override: 'on' | 'off' | null }]
  'create-pairing-token': [name: string]
@@ -217,7 +225,7 @@ onMounted( => scrim.value?.focus)
  @select-persona="(personaId) => emit('select-expertise', personaId)"
  @select="(mapId) => emit('select-map', mapId)"
  @refresh="emit('refresh-maps')"
- @master="(repositoryId) => emit('master', repositoryId)"
+ @master="(input) => emit('master', input)"
  @set-retrieval="(input) => emit('set-retrieval', input)"
  />
  </template>

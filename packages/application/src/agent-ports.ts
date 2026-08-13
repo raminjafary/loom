@@ -1,5 +1,6 @@
 import type {
  ExpertiseArm,
+ MasteryDirective,
  ExpertiseArmTally,
  RetrievalOverride,
  ApprovalMode,
@@ -814,7 +815,17 @@ export interface RunDispatchPort {
  * revision resolved, and the model was simply never offered the tool. A live run
  * scored 0 nodes; nothing else noticed.
  */
- mastery?: { subjectKind: MapSubjectKind; subjectRef: string }
+ mastery?: {
+ subjectKind: MapSubjectKind
+ subjectRef: string
+ /**
+ * What this run was asked to look for. Declared here as well as on
+ * the frame, because this port is exactly where the last such field was dropped
+ * without a type error: a spread against a port that never declared it compiles,
+ * and the tool the model never got cost a run and produced nothing.
+ */
+ directive?: MasteryDirective
+ }
  /**
  * Start this run as a reconciler over another run's conflicted branch
  *. Changes how the Runner prepares the workspace — a

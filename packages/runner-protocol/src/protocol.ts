@@ -510,6 +510,15 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
 .object({
  subjectKind: z.enum(['repository', 'author', 'corpus']),
  subjectRef: z.string,
+ /**
+ * What the run was asked to look for, already rendered by the server.
+ *
+ * Pre-rendered for the same reason `mapContext` is: the wording is what makes a
+ * focus produce a concept instead of a directory listing, and a second formatter
+ * on the Runner would be a second place for it to drift. The Runner's job is to
+ * put it in the opening, not to decide what it says.
+ */
+ directive: z.string.optional,
  })
 .optional,
  /**

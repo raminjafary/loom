@@ -53,12 +53,8 @@ export const useAgentStore = defineStore('agent', => {
  session.listExpertiseUsedByRuns(agentRunIds),
  setMapRetrieval: (mapId: string, override: 'on' | 'off' | null) =>
  session.setMapRetrieval(mapId, override),
- startMastery: (input: {
- threadId: string
- personaId: string
- repositoryId: string
- task?: string
- }) => session.startMastery(input),
+ startMastery: (input: Parameters<typeof session.startMastery>[0]) =>
+ session.startMastery(input),
 
  parsePersona: (markdownSource: string) => session.parsePersona(markdownSource),
  previewDelegation: (input: Parameters<typeof session.previewDelegation>[0]) =>

@@ -1,5 +1,30 @@
 import type { AgentDeps, RunDispatchPort } from '@loom/application'
 import {
+ authorCorpusInstruction,
+ renderMasteryDirective,
+ type MapSubjectKind,
+ type MasteryDirective,
+} from '@loom/domain'
+
+/**
+ * Everything a mastery run is told beyond "learn this subject": what it was asked to
+ * look for, and — for an author — where the record it is learning from actually is.
+ *
+ * One function so the two cannot be added independently and one of them forgotten, which
+ * is the shape of every field this gateway has previously dropped.
+ */
+const renderMasteryFraming = (mastery: {
+ subjectKind: MapSubjectKind
+ subjectRef: string
+ directive?: MasteryDirective
+}): string =>
+ [
+ mastery.subjectKind === 'author' ? authorCorpusInstruction(mastery.subjectRef): '',
+ mastery.directive ? renderMasteryDirective(mastery.directive): '',
+ ]
+.filter((part) => part !== '')
+.join('\n\n')
+import {
  applyPlanDelta,
  applySubmittedPlan,
  readContextLedger,
@@ -247,7 +272,26 @@ export const createRunnerGateway = (
  // how `mastery` was lost on its first live run: the map row was created, the
  // revision resolved, and the model was never offered `record_map`.
 ...(mapContext === undefined ? {}: { mapContext }),
-...(mastery === undefined ? {}: { mastery }),
+ /**
+ * The directive is **rendered here**, not on the Runner.
+ *
+ * Same reason `mapContext` is pre-rendered: the wording is what makes a focus
+ * produce a concept rather than a directory listing, and a second formatter on
+ * the Runner would be a second place for it to drift. An author subject also
+ * carries where its corpus *is* — a run that does not know to read `git log`
+ * reads the working tree and produces a repository map with a person's name on it.
+ */
+...(mastery === undefined
+ ? {}
+: {
+ mastery: {
+ subjectKind: mastery.subjectKind,
+ subjectRef: mastery.subjectRef,
+...(renderMasteryFraming(mastery) === ''
+ ? {}
+: { directive: renderMasteryFraming(mastery) }),
+ },
+ }),
 ...(reconcile === undefined ? {}: { reconcile }),
 ...(review === undefined ? {}: { review }),
 ...(steering ? { steering: true }: {}),

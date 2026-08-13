@@ -300,6 +300,17 @@ export interface AgentSession {
  personaId: string
  repositoryId: string
  task?: string
+ /**
+ * What is being mastered. An `author` subject's corpus is the
+ * repository's history for that person, which is why the repository is required
+ * either way.
+ */
+ subjectKind?: 'repository' | 'author'
+ subjectRef?: string
+ /** What kind of expertise to grasp — a closed vocabulary. */
+ focus?: string[]
+ /** The human's own words, for what the vocabulary cannot express. */
+ guidance?: string
  }): Promise<string | null>
  /**
  * Who this planner could delegate to under a launcher's overrides.

@@ -85,6 +85,8 @@ import {
  asAgentRunId,
  asSubjectMapId,
  NotFoundError,
+ ValidationError,
+ parseMasteryDirective,
  asApprovalRequestId,
  asCapabilityId,
  asChannelId,
@@ -507,6 +509,37 @@ export const router = os.router({
 )
  if (!repository) throw new NotFoundError('Repository')
 
+ /**
+ * Which subject, and who. A repository subject's ref is the
+ * repository's display name rather than its id — it is what a human reads on the
+ * map, and an id would make every map's title a uuid. An author subject's ref is
+ * the person, and the repository stays required because their record *is* that
+ * repository's history: an author subject with no corpus is a map with nothing
+ * behind it.
+ */
+ const subjectKind = input.subjectKind ?? 'repository'
+ const subjectRef =
+ subjectKind === 'author' ? (input.subjectRef ?? '').trim: repository.displayName
+ if (subjectKind === 'author' && subjectRef === '') {
+ throw new ValidationError(
+ 'An author subject needs the name or email that this repository\'s history records for them — that is the corpus.',
+)
+ }
+
+ /**
+ * Refused rather than dropped. A focus a subject has no record to satisfy would
+ * produce either an invention or nothing, and the human read the option as a
+ * promise when they picked it.
+ */
+ const verdict = parseMasteryDirective(
+ {
+...(input.focus === undefined ? {}: { focus: input.focus }),
+...(input.guidance === undefined ? {}: { guidance: input.guidance }),
+ },
+ subjectKind,
+)
+ if (!verdict.ok) throw new ValidationError(verdict.reason)
+
  return startAgentRun(context.deps, {
  workspaceId: context.principal.workspaceId,
  actor: context.principal.actor,
@@ -514,9 +547,11 @@ export const router = os.router({
  repositoryId: repository.id,
  personaId: asAgentPersonaId(input.personaId),
 ...(input.task === undefined ? {}: { task: input.task }),
- // The subject is the repository's display name rather than its id: it is what a
- // human reads on the map, and an id would make every map's title a uuid.
- mastery: { subjectKind: 'repository', subjectRef: repository.displayName },
+ mastery: {
+ subjectKind,
+ subjectRef,
+ directive: verdict.directive,
+ },
  })
  }),
 ),
