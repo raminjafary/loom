@@ -614,7 +614,44 @@ export interface SwarmBoard {
  readonly authorRunId: AgentRunId
  readonly readCount: number
  }[]
+ /**
+ * Notes as objects rather than as a count on a card.
+ *
+ * **Bounded to decisions and blockers, and the bound is the design.** the worker-notes design makes
+ * a `decision` the only authored kind that governs everyone after it, and a `blocker`
+ * the one that is asking for help — both are things a human watching a swarm should see
+ * without opening a panel. A `finding` is one run's experience of its own work: a busy
+ * swarm writes dozens, they are what the ledger is *for*, and drawing them would bury
+ * the tree they hang off. The own phrasing is that the canvas must stay readable
+ * while a swarm is moving, which is precisely when it is being watched.
+ *
+ * Every title here is model-authored in the general case, so it is untrusted text and
+ * must be rendered as such.
+ */
+ readonly notes: {
+ readonly noteId: string
+ readonly agentRunId: AgentRunId
+ readonly kind: 'decision' | 'blocker'
+ readonly title: string
+ /** Human-authored notes exist and are not the same claim as an agent's. */
+ readonly authorKind: string
+ readonly createdAt: Date
+ }[]
+ /** How many decisions and blockers exist beyond the ones drawn — never silently dropped. */
+ readonly elidedNotes: number
 }
+
+/**
+ * How many note nodes one canvas draws.
+ *
+ * The same argument as `MAX_NODES_IN_CONTEXT` with a different reader: a graph that draws
+ * every decision a long swarm made stops being a picture of the swarm. Newest first,
+ * because a decision of record is most useful while it is still governing work in flight
+ * — and the count dropped is reported rather than swallowed, for the reason
+ * `selectNotesForContext` reports its own: a viewer shown a silently truncated set
+ * believes it has the whole picture.
+ */
+export const MAX_NOTE_NODES = 24
 
 export const getSwarmBoard = async (
  deps: NoteDeps,
@@ -714,7 +751,30 @@ export const getSwarmBoard = async (
  // Deliberately swallowed — see above.
  }
 
- return { treeRunId, cards, pathCollisions: collidingCards(cards), noteReads }
+ /**
+ * Live swarm observability gap 3. Read from the notes already fetched for the cards, so this costs no query.
+ */
+ const governing = notes.filter(
+ (note): note is typeof note & { kind: 'decision' | 'blocker'; agentRunId: AgentRunId } =>
+ (note.kind === 'decision' || note.kind === 'blocker') && note.agentRunId !== null,
+)
+ const drawnNotes = governing.slice(-MAX_NOTE_NODES).map((note) => ({
+ noteId: note.id as string,
+ agentRunId: note.agentRunId,
+ kind: note.kind,
+ title: note.title,
+ authorKind: note.authorKind,
+ createdAt: note.createdAt,
+ }))
+
+ return {
+ treeRunId,
+ cards,
+ pathCollisions: collidingCards(cards),
+ noteReads,
+ notes: drawnNotes,
+ elidedNotes: governing.length - drawnNotes.length,
+ }
 }
 
 /**

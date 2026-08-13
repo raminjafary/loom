@@ -492,6 +492,24 @@ export const SwarmBoardSchema = z.object({
  z.object({ titles: z.tuple([z.string, z.string]), paths: z.array(z.string) }),
 ),
  noteReads: z.array(NoteReadEdgeSchema),
+ /**
+ * Notes as objects on the canvas, bounded to decisions and
+ * blockers: a decision governs everyone after it and a blocker is asking for help,
+ * while a finding is one run's experience of its own work and a busy swarm writes
+ * dozens. Titles are model-authored in the general case — untrusted text.
+ */
+ notes: z.array(
+ z.object({
+ noteId: z.string,
+ agentRunId: z.string,
+ kind: z.enum(['decision', 'blocker']),
+ title: z.string,
+ authorKind: z.string,
+ createdAt: z.date,
+ }),
+),
+ /** Decisions and blockers beyond the ones drawn — reported, never silently dropped. */
+ elidedNotes: z.number.int,
 })
 
 /**

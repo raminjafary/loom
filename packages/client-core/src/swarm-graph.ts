@@ -53,6 +53,14 @@ export type SwarmEdgeKind =
  * forgets to fire — which is exactly how "unmeasured" reads to someone watching.
  */
  | 'withheld'
+ /**
+ * A run authored a decision or a blocker.
+ *
+ * Points run→note, which is the direction it was written in. A decision *governs* runs
+ * that come after it and drawing that would be a second, guessed edge — scope is
+ * The and it is not a property of the note.
+ */
+ | 'wrote'
  /** A run's branch to the merge-queue entry holding it. */
  | 'queue'
  /** That entry to its verification. */
@@ -188,6 +196,24 @@ export interface SwarmKnowledgeNode {
  readonly order: number
 }
 
+/**
+ * A decision or a blocker, as a node.
+ *
+ * Live swarm observability names this gap outright, and the reason it is worth closing is the * split-brain: "decisions are a standing record, not a note among notes". A count on a
+ * card says a swarm has been writing; a node says *what was decided*, beside the run that
+ * decided it, at a glance.
+ *
+ * `title` is model-authored in the general case. It is text and must be rendered as text.
+ */
+export interface SwarmNoteNode {
+ readonly noteId: string
+ readonly agentRunId: string
+ readonly kind: 'decision' | 'blocker'
+ readonly title: string
+ readonly authorKind: string
+ readonly order: number
+}
+
 export interface SwarmGraph {
  readonly nodes: SwarmGraphNode[]
  /**
@@ -202,6 +228,10 @@ export interface SwarmGraph {
  readonly queue: SwarmQueueNode[]
  /** Expertise in play on this tree — empty when nothing has been mastered. */
  readonly knowledge: SwarmKnowledgeNode[]
+ /** Decisions and blockers, in their own band like the queue's. */
+ readonly notes: SwarmNoteNode[]
+ /** How many exist beyond the ones drawn, so a truncated set never reads as the whole. */
+ readonly elidedNotes: number
  readonly edges: SwarmGraphEdge[]
  /** Widest layer, so a renderer can size the canvas without measuring. */
  readonly width: number
@@ -307,6 +337,7 @@ export const buildSwarmGraph = (
 ): SwarmGraph => {
  const cards = board?.cards ?? []
  const byId = new Map(cards.map((card) => [card.runId, card]))
+ const boardNotes = board?.notes ?? []
 
  const withDepth = cards.map((card) => ({ card, depth: depthOf(card, byId) }))
 
@@ -551,6 +582,32 @@ export const buildSwarmGraph = (
  }
  }
 
+ /**
+ * Decisions and blockers.
+ *
+ * A note whose run is not on this board is dropped rather than drawn floating, for the
+ * same reason a map with nobody holding it is: this band answers "what has this swarm
+ * decided", and a note nobody here wrote is not an answer to it.
+ */
+ const noteNodes: SwarmNoteNode[] = []
+ for (const note of boardNotes) {
+ if (!byId.has(note.agentRunId)) continue
+ noteNodes.push({
+ noteId: note.noteId,
+ agentRunId: note.agentRunId,
+ kind: note.kind,
+ title: note.title,
+ authorKind: note.authorKind,
+ order: noteNodes.length,
+ })
+ edges.push({
+ from: note.agentRunId,
+ to: `note:${note.noteId}`,
+ kind: 'wrote',
+ detail: `${note.kind}: ${note.title}`,
+ })
+ }
+
  const queueWidth = new Set(queue.map((node) => node.order)).size
  const queueLayers = new Set(queue.map((node) => node.depth)).size
 
@@ -558,8 +615,10 @@ export const buildSwarmGraph = (
  nodes,
  queue,
  knowledge,
+ notes: noteNodes,
+ elidedNotes: board?.elidedNotes ?? 0,
  edges,
- width: Math.max(...[...perLayer.values], queueWidth, 0),
+ width: Math.max(...[...perLayer.values], queueWidth, noteNodes.length, 0),
  depth: perLayer.size + queueLayers,
  }
 }

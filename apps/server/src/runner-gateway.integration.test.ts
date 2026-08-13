@@ -2485,6 +2485,47 @@ Decompose and delegate.`
  })
 
  /**
+ * Notes as objects on the board.
+ *
+ * The bound is what is being asserted, not merely the projection: a finding is one
+ * run's experience of its own work and a busy swarm writes dozens, so drawing them
+ * would bury the tree they hang off. A decision governs everyone after it and a
+ * blocker is asking for help.
+ */
+ it('puts decisions and blockers on the board as objects, and leaves findings off it', async => {
+ const { socket, runnerId } = await pairFakeRunner('notes-as-objects')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'notes-as-objects' })
+ const { run } = await startRunVia(socket, created.rootThread.id, repo.id, testPersonaId)
+
+ await writeNoteAsAgent(socket, run.id, {
+ kind: 'decision',
+ title: 'One retry, then fail',
+ body: 'Anything more hides a real outage behind a spinner.',
+ })
+ await writeNoteAsAgent(socket, run.id, {
+ kind: 'blocker',
+ title: 'The seed data has no refunds',
+ body: 'Cannot exercise the path without one.',
+ })
+ await writeNoteAsAgent(socket, run.id, {
+ kind: 'finding',
+ title: 'Migrations are generated',
+ body: 'drizzle-kit generate, never hand-written SQL.',
+ })
+
+ const board = await client.workerNote.board({ agentRunId: run.id })
+ expect(board.notes.map((note) => note.title).sort).toEqual([
+ 'One retry, then fail',
+ 'The seed data has no refunds',
+ ])
+ expect(board.notes.every((note) => note.agentRunId === run.id)).toBe(true)
+ expect(board.elidedNotes).toBe(0)
+
+ socket.close
+ })
+
+ /**
  * A refusal has to reach the model, because the Runner is holding its tool call
  * open on this reply — a silent drop would stall the run that wrote the note, and
  * the model would never learn what was wrong with it.

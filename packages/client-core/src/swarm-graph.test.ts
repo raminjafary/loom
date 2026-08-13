@@ -49,6 +49,8 @@ describe('buildSwarmGraph roles', => {
  ],
  pathCollisions: [],
  noteReads: [],
+ notes: [],
+ elidedNotes: 0,
  }, [])
  const roleOf = (id: string) => graph.nodes.find((node) => node.card.runId === id)?.role
  expect(roleOf('root')).toBe('planner')
@@ -66,6 +68,8 @@ describe('buildSwarmGraph roles', => {
  cards: [card({ runId: 'root' })],
  pathCollisions: [],
  noteReads: [],
+ notes: [],
+ elidedNotes: 0,
  }, [])
  expect(graph.nodes[0]?.role).toBe('worker')
  })
@@ -384,6 +388,8 @@ describe('buildSwarmGraph: note-read edges', => {
  cards: [card({ runId: 'root', parentRunId: null }), card({ runId: 'child', parentRunId: 'root' })],
  pathCollisions: [],
  noteReads,
+ notes: [],
+ elidedNotes: 0,
  },
  [],
 )
@@ -416,6 +422,8 @@ describe('buildSwarmGraph: expertise on the tree', => {
  ],
  pathCollisions: [],
  noteReads: [],
+ notes: [],
+ elidedNotes: 0,
  }
  const map = {
  mapId: 'm1',
@@ -488,5 +496,85 @@ describe('buildSwarmGraph: expertise on the tree', => {
  const graph = buildSwarmGraph(board, [], [map], new Date, [])
  expect(graph.edges.find((e) => e.to === 'map:m1')?.detail).toBe('knows booking')
  expect(graph.knowledge[0]?.readByRunIds).toEqual([])
+ })
+})
+
+/**
+ * Notes as objects.
+ *
+ * Live swarm observability names the gap outright, and the corporation says why it is worth closing: "decisions are a
+ * standing record, not a note among notes". A count on a card says a swarm has been
+ * writing; a node says what was decided, beside the run that decided it.
+ */
+describe('buildSwarmGraph: notes as nodes', => {
+ const board = (
+ notes: {
+ noteId: string
+ agentRunId: string
+ kind: 'decision' | 'blocker'
+ title: string
+ authorKind: string
+ createdAt: Date
+ }[],
+ elidedNotes = 0,
+) => ({
+ treeRunId: 'root',
+ cards: [
+ card({ runId: 'root', parentRunId: null }),
+ card({ runId: 'child', parentRunId: 'root' }),
+ ],
+ pathCollisions: [],
+ noteReads: [],
+ notes,
+ elidedNotes,
+ })
+
+ const note = (over: Partial<Parameters<typeof board>[0][number]> = {}) => ({
+ noteId: 'n1',
+ agentRunId: 'child',
+ kind: 'decision' as const,
+ title: 'One retry, then fail',
+ authorKind: 'agent_run',
+ createdAt: new Date('2026-08-01T00:00:00Z'),
+...over,
+ })
+
+ it('draws the note and an edge from the run that wrote it', => {
+ const graph = buildSwarmGraph(board([note]), [])
+
+ expect(graph.notes).toHaveLength(1)
+ expect(graph.notes[0]?.title).toBe('One retry, then fail')
+ const edge = graph.edges.find((e) => e.kind === 'wrote')
+ expect(edge?.from).toBe('child')
+ expect(edge?.to).toBe('note:n1')
+ })
+
+ /**
+ * The direction matters. A decision *governs* runs that come after it, and drawing that
+ * would be a second, guessed edge — scope is the and is not a property of a note.
+ */
+ it('points run → note, the direction it was written in', => {
+ const graph = buildSwarmGraph(board([note]), [])
+ expect(graph.edges.find((e) => e.kind === 'wrote')?.from).toBe('child')
+ })
+
+ it('drops a note whose run is not on this board rather than drawing it floating', => {
+ const graph = buildSwarmGraph(board([note({ agentRunId: 'elsewhere' })]), [])
+ expect(graph.notes).toEqual([])
+ expect(graph.edges.some((e) => e.kind === 'wrote')).toBe(false)
+ })
+
+ it('carries how many were left undrawn, so a truncated set never reads as the whole', => {
+ const graph = buildSwarmGraph(board([note], 12), [])
+ expect(graph.elidedNotes).toBe(12)
+ })
+
+ it('keeps a human-authored note distinguishable from an agent\'s', => {
+ const graph = buildSwarmGraph(board([note({ authorKind: 'user' })]), [])
+ expect(graph.notes[0]?.authorKind).toBe('user')
+ })
+
+ it('adds nothing when a swarm has decided nothing', => {
+ expect(buildSwarmGraph(board([]), []).notes).toEqual([])
  })
 })

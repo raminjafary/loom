@@ -270,6 +270,32 @@ const knowledgeY = => KNOWLEDGE_H / 2
 const knowledgeLeft = (node: { order: number }) => node.order * (NODE_W + GAP_X)
 
 /**
+ * The note band sits **below** everything, under the queue.
+ *
+ * Below because a decision or a blocker is what the work *produced*, and reading down the
+ * canvas then goes knowledge → runs → branches → merges → what was decided along the way.
+ * Above the runs it would compete with the expertise band for the same claim on a
+ * reader's attention, and only one of the two is context a run arrived with.
+ */
+const NOTE_H = 34
+const NOTE_GAP_Y = 26
+const NOTE_PER_ROW = 4
+const noteTop = computed( => {
+ const queueLayers = new Set(graph.value.queue.map((node) => node.depth)).size
+ return (
+ knowledgeBandH.value +
+ runLayers.value * (NODE_H + GAP_Y) +
+ queueLayers * (QUEUE_H + QUEUE_GAP_Y) +
+ (graph.value.notes.length === 0 ? 0: NOTE_GAP_Y)
+)
+})
+// Wrapped rather than one long row: a swarm's decisions are a set, not a sequence, and a
+// row of twenty would make the canvas wider than the tree it is about.
+const noteY = (node: { order: number }) =>
+ noteTop.value + Math.floor(node.order / NOTE_PER_ROW) * (NOTE_H + NOTE_GAP_Y) + NOTE_H / 2
+const noteLeft = (node: { order: number }) => (node.order % NOTE_PER_ROW) * (NODE_W + GAP_X)
+
+/**
  * Resolved geometry per drawable endpoint — runs by `runId`, queue nodes by their
  * namespaced `id`.
  *
@@ -292,6 +318,13 @@ const positions = computed(
  [
  `map:${node.mapId}`,
  { cx: knowledgeLeft(node) + NODE_W / 2, cy: knowledgeY, h: KNOWLEDGE_H },
+ ] as const,
+),
+...graph.value.notes.map(
+ (node) =>
+ [
+ `note:${node.noteId}`,
+ { cx: noteLeft(node) + NODE_W / 2, cy: noteY(node), h: NOTE_H },
  ] as const,
 ),
  ]),
@@ -434,8 +467,21 @@ const fit = => {
  zoom.value = 1
  return
  }
- const maxX = Math.max(...nodes.map((node) => left(node) + NODE_W))
- const maxY = Math.max(...nodes.map((node) => top(node) + NODE_H))
+ /**
+ * Every band, not only the runs. Fitting to the tree alone left the queue below the
+ * fold and, once notes became nodes, the decisions with them — a "Fit" that hides part
+ * of the canvas is worse than none, because it looks like there is nothing there.
+ */
+ const maxX = Math.max(
+...nodes.map((node) => left(node) + NODE_W),
+...graph.value.notes.map((node) => noteLeft(node) + NODE_W),
+...graph.value.knowledge.map((node) => knowledgeLeft(node) + NODE_W),
+)
+ const maxY = Math.max(
+...nodes.map((node) => top(node) + NODE_H),
+...graph.value.queue.map((node) => queueY(node) + QUEUE_H / 2),
+...graph.value.notes.map((node) => noteY(node) + NOTE_H / 2),
+)
  const { width, height } = stage.getBoundingClientRect
  const margin = 32
  const next = Math.min(
@@ -614,6 +660,9 @@ const collisionCount = computed(
  </li>
  <li v-if="graph.edges.some((e) => e.kind === 'withheld')">
  <span class="swatch withheld"></span>denied it — the baseline
+ </li>
+ <li v-if="graph.notes.length > 0">
+ <span class="swatch wrote"></span>decisions &amp; blockers
  </li>
  </ul>
  <button type="button" @click="emit('refresh')">Refresh</button>
@@ -835,6 +884,31 @@ const collisionCount = computed(
  edge was deliberately denied it — that run is the baseline this map is
  measured against.
  </title>
+ </g>
+
+ <!--
+ Notes as objects. Bounded to decisions and blockers:
+ a decision governs everyone after it and a blocker is asking for help,
+ while a finding is one run's experience of its own work — a busy swarm
+ writes dozens, and drawing them would bury the tree they hang off.
+
+ Every title is interpolated, never `v-html`: it is model-authored in the
+ general case.
+ -->
+ <g
+ v-for="nnode in graph.notes"
+:key="nnode.noteId"
+:class="['nnode', nnode.kind, nnode.authorKind === 'user' ? 'human': 'agent']"
+:transform="`translate(${noteLeft(nnode)} ${noteY(nnode) - NOTE_H / 2})`"
+ >
+ <rect:width="NODE_W":height="NOTE_H" rx="6" class="box" />
+ <text class="nkind" x="9" y="14">
+ {{ nnode.kind }}<tspan v-if="nnode.authorKind === 'user'"> · human</tspan>
+ </text>
+ <text class="ntitle" x="9" y="27">
+ {{ nnode.title.length > 30 ? `${nnode.title.slice(0, 29)}…`: nnode.title }}
+ </text>
+ <title>{{ nnode.kind }}: {{ nnode.title }}</title>
  </g>
 
  <g
@@ -1558,5 +1632,45 @@ text {
 
 .ctx-fill.warn {
  fill: var(--warn);
+}
+
+/* The note band (live swarm observability gap 3). Solid, unlike the expertise band's dashes: a decision is
+ something that happened, not context a run arrived carrying. */
+.edge.wrote {
+ stroke: var(--text-faint);
+ stroke-dasharray: 2 3;
+ stroke-width: 1.25;
+ opacity: 0.55;
+}
+
+.swatch.wrote {
+ border-top-style: dashed;
+ border-color: var(--text-faint);
+}
+
+.nnode.box {
+ fill: var(--surface-2, transparent);
+ stroke: var(--border);
+}
+
+/* A blocker is a run asking for help — the one note kind that is a call to action. */
+.nnode.blocker.box {
+ stroke: var(--danger, #b42318);
+}
+
+.nnode.decision.box {
+ stroke: var(--text-muted);
+}
+
+.nnode.nkind {
+ font-size: 9px;
+ fill: var(--text-faint);
+ text-transform: uppercase;
+ letter-spacing: 0.04em;
+}
+
+.nnode.ntitle {
+ font-size: 11px;
+ fill: var(--text);
 }
 </style>
