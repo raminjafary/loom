@@ -1,11 +1,27 @@
 <script setup lang="ts">
-import type { AgentRun, ApprovalRequest } from '@loom/api-contract'
-import { attentionReason, describeAge, shortBranchName } from '@loom/client-core'
+import type { AgentRun, ApprovalRequest, MergeQueueEntry } from '@loom/api-contract'
+import {
+ attentionReason,
+ buildInboxBoard,
+ describeAge,
+ shortBranchName,
+ type InboxLaneId,
+} from '@loom/client-core'
+import { computed, ref } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import DiffView from './DiffView.vue'
 
 const props = defineProps<{
  runs: AgentRun[]
+ /**
+ * What the swarm produced and a human already decided about.
+ *
+ * The half the Inbox never had. "What is waiting on me" gets someone through a day;
+ * "what came out" is the question anyone supervising a swarm actually has, and it was
+ * answerable only by opening runs one at a time.
+ */
+ settled: AgentRun[]
+ mergeQueue: MergeQueueEntry[]
  selectedRun: AgentRun | null
  approvals: ApprovalRequest[]
  diff: string | null
@@ -62,42 +78,98 @@ const emit = defineEmits<{
 const money = (usd: number | null) => (usd === null ? null: `$${usd.toFixed(4)}`)
 
 const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
+
+/**
+ * The board. Lanes are *what a human does next*, not what status a row is
+ * in — see `buildInboxBoard`, where the derivation lives so a TUI reaches the same board.
+ */
+const lanes = computed( =>
+ buildInboxBoard({
+ needsAttention: props.runs,
+ settled: props.settled,
+ mergeQueue: props.mergeQueue,
+ }),
+)
+
+/**
+ * Which lanes are open, and why the last three start shut.
+ *
+ * The first three are work; the last three are a record. A board that opened everything
+ * would put fifty landed branches above the one thing blocking an agent, which is the
+ * flat list's failure with columns drawn on it.
+ */
+const collapsed = ref<Set<InboxLaneId>>(new Set(['queued', 'landed', 'dropped']))
+
+const toggle = (id: InboxLaneId) => {
+ const next = new Set(collapsed.value)
+ if (next.has(id)) next.delete(id)
+ else next.add(id)
+ collapsed.value = next
+}
+
+const total = computed( => lanes.value.reduce((sum, lane) => sum + lane.cards.length, 0))
 </script>
 
 <template>
  <div class="inbox">
- <ul class="list">
- <li v-if="props.fetchError" class="failed">
+ <div class="board">
+ <p v-if="props.fetchError" class="failed">
  Could not load the inbox — <strong>{{ props.fetchError }}</strong>
  <button type="button" class="retry" @click="emit('refresh')">Try again</button>
- </li>
- <li v-else-if="props.loading && props.runs.length === 0" class="empty">Loading…</li>
- <li v-else-if="props.runs.length === 0" class="empty">Nothing needs you right now.</li>
+ </p>
+ <p v-else-if="props.loading && total === 0" class="empty">Loading…</p>
+ <p v-else-if="total === 0" class="empty">
+ Nothing has come out of this workspace yet. Start a run and its branch will land
+ here.
+ </p>
+
+ <!--
+ Lanes are what a human does next, not what status a row is in. A failed run with a
+ branch and a completed run with a branch have different statuses and the same next
+ action; a merged run and a discarded run share a status and have nothing left to do.
+ -->
+ <section
+ v-for="lane in lanes"
+:key="lane.id"
+ class="lane"
+:class="[lane.id, { shut: collapsed.has(lane.id) }]"
+ >
+ <button type="button" class="lane-head" @click="toggle(lane.id)">
+ <span class="lane-title">{{ lane.title }}</span>
+ <span class="count">{{ lane.cards.length }}</span>
+ </button>
+
+ <ul v-if="!collapsed.has(lane.id)" class="cards">
  <li
- v-for="run in props.runs"
-:key="run.id"
+ v-for="card in lane.cards"
+:key="card.run.id"
  class="row"
-:class="[attentionReason(run).kind, { selected: run.id === props.selectedRun?.id }]"
+:class="{ selected: card.run.id === props.selectedRun?.id }"
  role="button"
  tabindex="0"
-:aria-current="run.id === props.selectedRun?.id ? 'true': undefined"
- @click="emit('select', run.id)"
- @keydown.enter.prevent="emit('select', run.id)"
- @keydown.space.prevent="emit('select', run.id)"
+:aria-current="card.run.id === props.selectedRun?.id ? 'true': undefined"
+ @click="emit('select', card.run.id)"
+ @keydown.enter.prevent="emit('select', card.run.id)"
+ @keydown.space.prevent="emit('select', card.run.id)"
  >
  <div class="line">
- <strong>{{ run.persona.name }}</strong>
- <span class="age">{{ describeAge(finishedAt(run)) }}</span>
+ <strong>{{ card.run.persona.name }}</strong>
+ <span class="age">{{ describeAge(finishedAt(card.run)) }}</span>
  </div>
- <span class="reason">{{ attentionReason(run).summary }}</span>
+ <span class="reason">{{ card.summary }}</span>
  <div class="line meta">
- <span v-if="run.branchName" class="branch":title="run.branchName">{{
- shortBranchName(run.branchName)
+ <span v-if="card.run.branchName" class="branch":title="card.run.branchName">{{
+ shortBranchName(card.run.branchName)
  }}</span>
- <span v-if="money(run.totalCostUsd)" class="cost">{{ money(run.totalCostUsd) }}</span>
+ <span v-if="money(card.run.totalCostUsd)" class="cost">{{
+ money(card.run.totalCostUsd)
+ }}</span>
  </div>
  </li>
+ <li v-if="lane.cards.length === 0" class="lane-empty">{{ lane.empty }}</li>
  </ul>
+ </section>
+ </div>
 
  <div class="detail">
  <p v-if="!props.selectedRun" class="hint">Select a run to review it.</p>
@@ -166,14 +238,82 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
  min-height: 0;
 }
 
-.list {
- width: 20rem;
+.board {
+ width: 21rem;
  flex-shrink: 0;
- margin: 0;
- padding: 0;
- list-style: none;
+ display: flex;
+ flex-direction: column;
+ gap: 0.15rem;
+ padding: 0.4rem 0.35rem;
  overflow-y: auto;
  border-right: 1px solid var(--border);
+}
+
+.lane-head {
+ width: 100%;
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 0.4rem;
+ padding: 0.3rem 0.4rem;
+ border: 0;
+ border-radius: 0.3rem;
+ background: none;
+ color: var(--text-faint);
+ font: inherit;
+ font-size: 0.66rem;
+ font-weight: 600;
+ text-transform: uppercase;
+ letter-spacing: 0.06em;
+ cursor: pointer;
+}
+
+.lane-head::before {
+ content: '▾';
+ margin-right: 0.3rem;
+ font-size: 0.6rem;
+}
+
+.lane.shut.lane-head::before {
+ content: '▸';
+}
+
+.lane-title {
+ flex: 1;
+ text-align: left;
+}
+
+/* The two lanes that are actually asking for something read louder than the record. */
+.lane.needs-you.lane-head,
+.lane.review.lane-head {
+ color: var(--text);
+}
+
+.lane.needs-you.count {
+ color: var(--warn, var(--accent));
+}
+
+.count {
+ font-variant-numeric: tabular-nums;
+}
+
+.cards {
+ margin: 0 0 0.3rem;
+ padding: 0;
+ list-style: none;
+ display: flex;
+ flex-direction: column;
+ gap: 0.2rem;
+}
+
+.lane-empty {
+ padding: 0.15rem 0.55rem 0.35rem;
+ font-size: 0.68rem;
+ color: var(--text-faint);
+}
+
+.failed.retry {
+ margin-left: 0.4rem;
 }
 
 .empty,
@@ -209,19 +349,32 @@ const finishedAt = (run: AgentRun): Date => run.completedAt ?? run.createdAt
  display: flex;
  flex-direction: column;
  gap: 0.2rem;
- padding: 0.6rem 1rem;
- border-bottom: 1px solid var(--border);
- /* The reason a row is here, as a colour, so the list is scannable before it is read. */
- border-left: 3px solid transparent;
+ padding: 0.45rem 0.55rem;
+ border: 1px solid var(--border);
+ border-radius: 0.35rem;
+ /*
+ * A card, and the lane it sits in carries the meaning — the flat list had to encode
+ * "why is this here" as a stripe per row because there was nothing else to say it.
+ */
+ border-left-width: 3px;
+ border-left-color: transparent;
  cursor: pointer;
 }
 
-.row.approval {
- border-left-color: var(--warn);
+.lane.needs-you.row {
+ border-left-color: var(--warn, var(--accent));
 }
 
-.row.failed-branch {
- border-left-color: var(--danger);
+.lane.stopped.row {
+ border-left-color: var(--danger, #b42318);
+}
+
+.lane.review.row {
+ border-left-color: var(--accent);
+}
+
+.lane.landed.row {
+ border-left-color: var(--ok);
 }
 
 .row:hover {

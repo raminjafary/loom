@@ -46,6 +46,7 @@ import {
  listRepositories,
  listRunners,
  listRunsNeedingAttention,
+ listSettledRuns,
  getMastery,
  concludeSession,
  conveneSession,
@@ -1046,6 +1047,15 @@ export const router = os.router({
  actor: context.principal.actor,
  agentRunId: asAgentRunId(input.agentRunId),
  message: input.message,
+ }),
+),
+),
+
+ listSettled: os.agentRun.listSettled.handler(({ context, input }) =>
+ guard( =>
+ listSettledRuns(context.deps, {
+ workspaceId: context.principal.workspaceId,
+...(input.limit === undefined ? {}: { limit: input.limit }),
  }),
 ),
 ),

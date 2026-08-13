@@ -944,6 +944,8 @@ onBeforeUnmount( => {
  v-else
  class="inbox-region"
 :runs="agentSnapshot.needsAttention"
+:settled="agentSnapshot.settledRuns"
+:merge-queue="agentSnapshot.mergeQueue"
 :selected-run="agentSnapshot.inspectedRun"
 :approvals="agentSnapshot.inspectedApprovals"
 :diff="agentSnapshot.diff"

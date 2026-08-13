@@ -484,6 +484,18 @@ export interface AgentRunRepositoryPort {
  * falls into the latter — it already got a chat message explaining why.
  */
  listNeedsAttention(workspaceId: WorkspaceId): Promise<AgentRun[]>
+ /**
+ * Runs a human has already decided about, newest first.
+ *
+ * The other half of the Inbox. `listNeedsAttention` answers "what is waiting on me",
+ * which is the question that gets you through a day; this answers "what came out",
+ * which is the one you cannot answer at all today without opening runs one at a time.
+ *
+ * Windowed by count rather than by age, because a workspace that has been quiet for a
+ * week should still show its last outcomes rather than an empty board — "nothing
+ * happened recently" and "nothing has ever happened" send a reader to different places.
+ */
+ listSettled(workspaceId: WorkspaceId, limit: number): Promise<AgentRun[]>
 }
 
 /**

@@ -270,7 +270,7 @@ describe('resolvePersonaNames', => {
 describe('fetchErrors', => {
  const inboxApi = (listNeedsAttention: => Promise<unknown>) =>
  ({
- agentRun: { listNeedsAttention },
+ agentRun: { listNeedsAttention, listSettled: async => [] },
  mergeQueue: { list: async => [] },
  }) as unknown as LoomApi
 
@@ -325,6 +325,7 @@ describe('fetchErrors', => {
  if (fail) throw new Error('inbox down')
  return []
  },
+ listSettled: async => [],
  getDiff: async => {
  throw new Error('diff down')
  },
@@ -367,7 +368,7 @@ describe('lastPauseCancelledCount', => {
  pausedByUserId: null,
  }),
  },
- agentRun: { listNeedsAttention: async => [] },
+ agentRun: { listNeedsAttention: async => [], listSettled: async => [] },
  mergeQueue: { list: async => [] },
  }) as unknown as LoomApi
 

@@ -844,6 +844,17 @@ export const contract = {
 .output(AgentRunSchema),
 
  /** Runs needing a human decision — the inbox's data source. */
+ /**
+ * What came out — runs whose branch has been decided, newest first.
+ *
+ * Separate from `listNeedsAttention` because they answer different questions and are
+ * ordered by different things: that one is oldest-first, since the longest wait is
+ * closest to the approval SLA, and this one is newest-first because it is a record.
+ */
+ listSettled: oc
+.input(z.object({ limit: z.number.int.min(1).max(200).optional }))
+.output(z.array(AgentRunSchema)),
+
  listNeedsAttention: oc.output(z.array(AgentRunSchema)),
  },
 

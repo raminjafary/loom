@@ -936,6 +936,19 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
 .orderBy(agentRun.createdAt, agentRun.id)
  return rows.map((row) => toAgentRun(row as AgentRunRow))
  },
+
+ async listSettled(workspaceId, limit) {
+ const rows = await db
+.select
+.from(agentRun)
+.where(and(eq(agentRun.workspaceId, workspaceId), isNotNull(agentRun.branchDisposition)))
+ // Newest first, unlike the attention list: that one is ordered by who has waited
+ // longest because the longest wait is closest to timing out, and this one is a
+ // record of what happened — where the most recent thing is the interesting one.
+.orderBy(desc(agentRun.completedAt), desc(agentRun.createdAt))
+.limit(limit)
+ return rows.map((row) => toAgentRun(row as AgentRunRow))
+ },
 })
 
 export const agentRunEventRepository = (db: Database): AgentRunEventRepositoryPort => ({

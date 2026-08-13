@@ -140,6 +140,15 @@ export interface AgentSnapshot {
  readonly diff: string | null
  // Inbox — runs needing a human decision, workspace-wide.
  readonly needsAttention: AgentRun[]
+ /**
+ * What the swarm produced and a human already decided about.
+ *
+ * The other half of the Inbox board. Kept separate from `needsAttention` rather than
+ * merged into one list, because the two are ordered by different things and for
+ * different reasons — oldest-first there, since the longest wait is closest to the
+ * approval SLA, and newest-first here, because it is a record.
+ */
+ readonly settledRuns: AgentRun[]
  // The run being reviewed from the Inbox — independent of `activeRun`,
  // since a human can review a past run's approval/diff without it being
  // the one currently executing.
@@ -597,6 +606,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  lastPairing: null,
  diff: null,
  needsAttention: [],
+ settledRuns: [],
  inspectedRun: null,
  inspectedApprovals: [],
  runControl: null,
@@ -664,13 +674,17 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  */
  const fetchInbox = async : Promise<void> => {
  try {
- const [needsAttention, mergeQueue] = await Promise.all([
+ // Three reads in one round trip, and in one patch. The board is built from all
+ // three, and refreshing them separately is how a column ends up describing a run
+ // the column beside it also claims.
+ const [needsAttention, settledRuns, mergeQueue] = await Promise.all([
  options.api.agentRun.listNeedsAttention,
+ options.api.agentRun.listSettled({}),
  options.api.mergeQueue.list,
  ])
- patch({ needsAttention, mergeQueue })
+ patch({ needsAttention, settledRuns, mergeQueue })
  patchFetchError('inbox', null)
- rememberPersonaNames(fromRuns(needsAttention))
+ rememberPersonaNames(fromRuns([...needsAttention,...settledRuns]))
  } catch (error) {
  // Both the banner and the surface: the banner is what a human scanning the page
  // sees, and the surface is what stops the empty list reading as "all clear".

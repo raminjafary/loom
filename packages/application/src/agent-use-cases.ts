@@ -3245,6 +3245,19 @@ export const listRunsNeedingAttention = (
  input: { workspaceId: WorkspaceId },
 ): Promise<AgentRun[]> => deps.agentRuns.listNeedsAttention(input.workspaceId)
 
+/**
+ * What the swarm actually produced, most recent first.
+ *
+ * The other half of the Inbox. "What is waiting on me" is the question that gets a human
+ * through a day; "what came out" is the one they cannot answer today without opening runs
+ * one at a time — and it is the question anyone supervising a swarm actually has.
+ */
+export const listSettledRuns = (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; limit?: number },
+): Promise<AgentRun[]> =>
+ deps.agentRuns.listSettled(input.workspaceId, Math.min(Math.max(input.limit ?? 50, 1), 200))
+
 /** Asks the Runner for the run's branch diff on demand, for end-of-run review. */
 export const getAgentRunDiff = async (
  deps: AgentDeps,
