@@ -87,6 +87,7 @@ describe('BUILTIN_PERSONAS', => {
  harnessPlanner: persona.harnessPlanner,
  harnessDelegates: persona.harnessDelegates,
  harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
+ envelope: persona.envelope,
  systemPrompt: persona.systemPrompt,
  })
  },

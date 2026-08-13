@@ -31,6 +31,32 @@ export interface PersonaFormState {
  readonly effort: string | null
  readonly maxTurns: number | null
  readonly budgetCapUsd: number | null
+ /**
+ * The self-modification envelope, or null for a persona that may not
+ * rewrite itself — which is every persona until somebody says otherwise.
+ *
+ * In the form rather than only in the raw markdown tab, and that is a decision worth
+ * stating: the whole safety property is that widening a ceiling is a *deliberate human
+ * act*. A ceiling only reachable by hand-editing frontmatter is one most operators will
+ * never set, and an unset envelope is a persona that cannot self-modify at all — so
+ * hiding the field would not be safe-by-default, it would be feature-off-by-obscurity.
+ */
+ readonly envelope: PersonaFormEnvelope | null
+}
+
+/**
+ * The envelope as the form holds it.
+ *
+ * Numbers are `number | null` and not strings, matching the rest of this state — the
+ * editor converts at its inputs, as it already does for `budgetCapUsd`.
+ */
+export interface PersonaFormEnvelope {
+ readonly tools: readonly string[]
+ readonly model: string | null
+ readonly budgetCapUsd: number | null
+ readonly capabilities: readonly string[]
+ readonly subagentDepth: number | null
+ readonly approvalMode: ApprovalMode | null
 }
 
 /**
@@ -84,6 +110,7 @@ export const EMPTY_PERSONA_FORM: PersonaFormState = {
  effort: null,
  maxTurns: null,
  budgetCapUsd: null,
+ envelope: null,
 }
 
 const DELIM = '---'
@@ -122,6 +149,7 @@ export const personaFormFromPersona = (persona: AgentPersona): PersonaFormState 
  effort: persona.harnessEffort,
  maxTurns: persona.harnessMaxTurns,
  budgetCapUsd: persona.harnessBudgetCapUsd,
+ envelope: persona.envelope,
 })
 
 /** A `persona.parse` result as form state — used when a human returns from the raw tab. */
@@ -140,6 +168,7 @@ export const personaFormFromDraft = (draft: PersonaDraft): PersonaFormState | nu
  effort: parsed.harnessEffort,
  maxTurns: parsed.harnessMaxTurns,
  budgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
  }
 }
 
@@ -171,6 +200,28 @@ export const personaFormToMarkdown = (form: PersonaFormState): string => {
  if (form.planner) lines.push(' planner: true')
  if (form.delegates.length > 0) lines.push(` delegates: [${form.delegates.join(', ')}]`)
  if (form.budgetCapUsd !== null) lines.push(` budgetCapUsd: ${form.budgetCapUsd}`)
+ }
+ /**
+ * Written whenever it exists, including empty — see the domain serializer's own note:
+ * `envelope:` with nothing under it is a real state, and dropping the empty block would
+ * silently withdraw permission on every save.
+ */
+ if (form.envelope !== null) {
+ lines.push('envelope:')
+ lines.push(` tools: [${form.envelope.tools.join(', ')}]`)
+ if (form.envelope.model !== null) lines.push(` model: ${form.envelope.model}`)
+ if (form.envelope.budgetCapUsd !== null) {
+ lines.push(` budgetCapUsd: ${form.envelope.budgetCapUsd}`)
+ }
+ if (form.envelope.capabilities.length > 0) {
+ lines.push(` capabilities: [${form.envelope.capabilities.join(', ')}]`)
+ }
+ if (form.envelope.subagentDepth !== null) {
+ lines.push(` subagentDepth: ${form.envelope.subagentDepth}`)
+ }
+ if (form.envelope.approvalMode !== null) {
+ lines.push(` approvalMode: ${form.envelope.approvalMode}`)
+ }
  }
  lines.push(DELIM, '', form.systemPrompt)
  return lines.join('\n')
@@ -212,6 +263,42 @@ export const personaFormProblems = (
  problems.push(
  'Only a planner may declare a delegation envelope — it is what its children are attenuated against.',
 )
+ }
+
+ /**
+ * The envelope's own rules, mirrored.
+ *
+ * A *mirror* like everything else here: `assertFitsItsEnvelope` on the server is the
+ * authority and still runs. What this buys is that a human writing a ceiling narrower
+ * than the persona they are writing finds out while they are still typing, rather than
+ * from a rejected save that names one of the three fields that are wrong.
+ */
+ if (form.envelope !== null) {
+ const outside = form.tools.filter((tool) => !form.envelope!.tools.includes(tool))
+ if (outside.length > 0) {
+ problems.push(
+ `This persona holds tools its own envelope does not allow: ${outside.join(', ')}. ` +
+ 'A ceiling below what the persona already is refuses every change it could make.',
+)
+ }
+ const handedOutside = form.planner
+ ? form.delegates.filter((tool) => !form.envelope!.tools.includes(tool))
+: []
+ if (handedOutside.length > 0) {
+ problems.push(
+ `This planner delegates tools its envelope does not allow: ${handedOutside.join(', ')}. ` +
+ 'What a persona may become bounds what it may hand down.',
+)
+ }
+ if (
+ form.envelope.budgetCapUsd !== null &&
+ (form.budgetCapUsd === null || form.budgetCapUsd > form.envelope.budgetCapUsd)
+) {
+ problems.push(
+ `The envelope caps spend at $${form.envelope.budgetCapUsd}, so this persona needs a cap ` +
+ 'at or below it.',
+)
+ }
  }
  if (form.budgetCapUsd !== null && !(form.budgetCapUsd > 0)) {
  problems.push('A budget cap must be greater than zero, or absent for uncapped.')

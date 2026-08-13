@@ -116,6 +116,14 @@ describe('the persona form writes what the server reads', => {
  harnessPlanner: form.planner,
  harnessDelegates: [...form.delegates],
  harnessBudgetCapUsd: form.budgetCapUsd,
+ envelope:
+ form.envelope === null
+ ? null
+: {
+...form.envelope,
+ tools: [...form.envelope.tools],
+ capabilities: [...form.envelope.capabilities],
+ },
  }),
 )
  })

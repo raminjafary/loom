@@ -60,6 +60,27 @@ export const PersonaSpecSchema = z.object({
  planner: z.boolean.optional,
  /** A planner's delegation envelope; empty for every other persona. */
  delegates: z.array(z.string).optional,
+ /**
+ * The self-modification ceiling, carried so the Runner's own copy of the
+ * snapshot is the same snapshot the server holds.
+ *
+ * Declared here for the reason this file's `egressHosts` comment gives, which has now
+ * cost this repository four fields: **a Zod schema strips what it does not name.** A
+ * field that exists on the domain type and not on the frame is one that crosses the wire
+ * as `undefined`, and nothing anywhere fails. The Runner does not enforce the envelope —
+ * nothing self-modifies yet — but a resumed run rebuilds its persona from a state file
+ * validated by this schema, so an unnamed field would be dropped on every restart.
+ */
+ envelope: z
+.object({
+ tools: z.array(z.string),
+ model: z.string.nullable,
+ budgetCapUsd: z.number.nullable,
+ capabilities: z.array(z.string),
+ subagentDepth: z.number.int.nullable,
+ approvalMode: z.enum(['ask', 'accept-edits', 'auto']).nullable,
+ })
+.nullish,
 })
 
 /**

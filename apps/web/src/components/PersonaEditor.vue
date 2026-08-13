@@ -248,6 +248,57 @@ const toggleDelegate = (tool: string) => {
  }
 }
 
+/**
+ * The self-modification envelope.
+ *
+ * **Off is the state with no envelope, and the copy has to say what that means.** An
+ * operator reading an empty ceiling naturally reads "unrestricted"; it means the opposite —
+ * a persona with no envelope may not rewrite itself at all. Every other off-by-default
+ * control in this app is a restriction being lifted; this one is a permission being
+ * granted, and a checkbox that did not say so would teach exactly the wrong model.
+ *
+ * Turning it on seeds the ceiling from what the persona already is, rather than from
+ * nothing. An envelope narrower than its own persona is refused on save, so seeding empty
+ * would hand the operator a form that cannot be saved and no clue why — and seeding from
+ * the persona is also the honest default: "may become what it already is" is a real,
+ * useful envelope (the tier 1, prompt edits only).
+ */
+const toggleEnvelope = => {
+ form.value =
+ form.value.envelope === null
+ ? {
+...form.value,
+ envelope: {
+ tools: [...form.value.tools,...(form.value.planner ? form.value.delegates: [])],
+ model: form.value.model,
+ budgetCapUsd: form.value.budgetCapUsd,
+ capabilities: [],
+ subagentDepth: null,
+ approvalMode: form.value.approvalMode,
+ },
+ }
+: {...form.value, envelope: null }
+}
+
+const toggleEnvelopeTool = (tool: string) => {
+ const current = form.value.envelope
+ if (!current) return
+ const has = current.tools.includes(tool)
+ form.value = {
+...form.value,
+ envelope: {
+...current,
+ tools: has ? current.tools.filter((entry) => entry !== tool): [...current.tools, tool],
+ },
+ }
+}
+
+const patchEnvelope = (patch: Partial<NonNullable<PersonaFormState['envelope']>>) => {
+ const current = form.value.envelope
+ if (!current) return
+ form.value = {...form.value, envelope: {...current,...patch } }
+}
+
 const numberOrNull = (value: string): number | null => {
  const trimmed = value.trim
  if (!trimmed) return null
@@ -530,6 +581,120 @@ const harnessSummary = (persona: AgentPersona): string => {
  <span>{{ entry.name }}</span>
  </label>
  </div>
+ </fieldset>
+
+ <fieldset>
+ <legend>Self-modification envelope</legend>
+ <label class="check">
+ <input
+ type="checkbox"
+:checked="form.envelope !== null"
+ @change="toggleEnvelope"
+ />
+ <span>This persona may change itself, within a ceiling</span>
+ </label>
+ <!--
+ The copy carries the whole of the default. An operator who reads "no
+ envelope" as "unrestricted" has it backwards, and nothing else in this app
+ works that way — so it is said rather than implied.
+ -->
+ <p v-if="form.envelope === null" class="hint">
+ Off. With no envelope this persona cannot rewrite its own prompt, tools or
+ settings at all — an absent ceiling is no permission, not an unlimited one.
+ </p>
+ <template v-else>
+ <p class="hint">
+ The most this persona may ever become. It may change itself freely inside this
+ and can never widen it — only you can, here. Separate from what it holds
+ today: this is the ceiling, not the current setting.
+ </p>
+ <div class="chips">
+ <label
+ v-for="entry in SELECTABLE_TOOLS"
+:key="`env-${entry.name}`"
+ class="chip"
+:class="{ acting: entry.acting }"
+ >
+ <input
+ type="checkbox"
+:checked="form.envelope.tools.includes(entry.name)"
+ @change="toggleEnvelopeTool(entry.name)"
+ />
+ <span>{{ entry.name }}</span>
+ </label>
+ </div>
+ <div class="grid">
+ <label>
+ <span>Model ceiling</span>
+ <select
+:value="form.envelope.model ?? ''"
+ @change="
+ patchEnvelope({
+ model: ($event.target as HTMLSelectElement).value || null,
+ })
+ "
+ >
+ <option value="">no ceiling</option>
+ <option v-for="option in SELECTABLE_MODELS":key="option.id":value="option.id">
+ {{ option.label }}
+ </option>
+ </select>
+ </label>
+ <label>
+ <span>Spend ceiling (USD)</span>
+ <input
+:value="form.envelope.budgetCapUsd ?? ''"
+ type="number"
+ min="0"
+ step="0.5"
+ placeholder="uncapped"
+ @input="
+ patchEnvelope({
+ budgetCapUsd: Number(($event.target as HTMLInputElement).value) || null,
+ })
+ "
+ />
+ </label>
+ <label>
+ <span>Widest approvals</span>
+ <select
+:value="form.envelope.approvalMode ?? ''"
+ @change="
+ patchEnvelope({
+ approvalMode:
+ (($event.target as HTMLSelectElement).value as
+ | 'ask'
+ | 'accept-edits'
+ | 'auto') || null,
+ })
+ "
+ >
+ <option value="">no ceiling</option>
+ <option value="ask">asks before risky calls</option>
+ <option value="accept-edits">accepts edits</option>
+ <option value="auto">runs unattended</option>
+ </select>
+ </label>
+ <label>
+ <span>Subagent depth</span>
+ <input
+:value="form.envelope.subagentDepth ?? ''"
+ type="number"
+ min="0"
+ step="1"
+ placeholder="no ceiling"
+ @input="
+ patchEnvelope({
+ subagentDepth:
+ ($event.target as HTMLInputElement).value === ''
+ ? null
+: Number(($event.target as HTMLInputElement).value),
+ })
+ "
+ />
+ </label>
+ </div>
+ </template>
  </fieldset>
 
  <fieldset v-if="mode === 'edit'">

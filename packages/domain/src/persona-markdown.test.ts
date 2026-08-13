@@ -27,6 +27,7 @@ describe('parsePersonaMarkdown', => {
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: null,
+ envelope: null,
  systemPrompt: 'You are backend-worker. Implement exactly what the spec says, nothing more.',
  })
  })
@@ -88,6 +89,7 @@ describe('parsePersonaMarkdown', => {
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: null,
+ envelope: null,
  systemPrompt: 'Go.',
  })
  expect(source).toContain(' approvalMode: auto')
@@ -141,6 +143,7 @@ describe('serializePersonaMarkdown', => {
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: null,
+ envelope: null,
  systemPrompt: 'body',
  })
  expect(serialized).not.toMatch(/harness:/)
@@ -158,6 +161,7 @@ describe('serializePersonaMarkdown', => {
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: null,
+ envelope: null,
  systemPrompt: 'body',
  })
  expect(serialized).toMatch(/harness:\n approvalMode: auto/)
@@ -175,6 +179,7 @@ describe('serializePersonaMarkdown', => {
  harnessPlanner: false,
  harnessDelegates: [],
  harnessBudgetCapUsd: 2.5,
+ envelope: null,
  systemPrompt: 'body',
  })
  expect(serialized).toMatch(/harness:\n budgetCapUsd: 2\.5/)

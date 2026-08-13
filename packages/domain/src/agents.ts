@@ -1,5 +1,6 @@
 import type { ApprovalMode } from './approval-modes.js'
 import type { CapabilitySpec } from './capabilities.js'
+import type { Envelope } from './envelope.js'
 import type { ResponseStyle } from './response-styles.js'
 import type {
  AgentPersonaId,
@@ -134,6 +135,20 @@ export interface PersonaSpec {
  */
  readonly delegates?: string[]
  /**
+ * The **self-modification envelope** this run's persona carries.
+ *
+ * On the snapshot rather than read live from the persona row, for the reason every other
+ * field here is: a run is what it was launched as, and an envelope widened mid-run must
+ * not change what a child started five minutes ago may hold. It is also what makes
+ * `attenuateEnvelope` checkable at a child start — the parent's ceiling has to be a fact
+ * about the parent *run*, not about the row its persona has since become.
+ *
+ * Optional for the reason `capabilities` is: runs that predate it have stored persona
+ * JSON without it, and null there means the same thing it means everywhere — no
+ * permission to rewrite anything.
+ */
+ readonly envelope?: Envelope | null
+ /**
  * The response style this run was launched with.
  *
  * Recorded on the snapshot rather than only folded into `systemPrompt` for two
@@ -165,6 +180,12 @@ export interface AgentPersona {
  readonly harnessPlanner: boolean
  readonly harnessDelegates: string[]
  readonly harnessBudgetCapUsd: number | null
+ /**
+ * The self-modification ceiling. Null means this persona may not rewrite
+ * itself — `maySelfModify` is the one place that reads absence, so nothing else has to
+ * remember which way it falls.
+ */
+ readonly envelope: Envelope | null
  /**
  * The markdown the platform seeded, for a built-in, or null for a
  * hand-authored persona and for a built-in seeded before this was recorded.

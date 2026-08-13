@@ -1,6 +1,7 @@
 import { DEFAULT_APPROVAL_MODE, type ApprovalMode } from './approval-modes.js'
 import { serializePersonaMarkdown } from './persona-markdown.js'
 import { PLANNER_READABLE_TOOLS } from './planner-tools.js'
+import type { Envelope } from './envelope.js'
 
 /**
  * Seeded once per workspace, on the request that actually creates it
@@ -18,6 +19,15 @@ export interface BuiltinPersona {
  readonly harnessPlanner: boolean
  readonly harnessDelegates: string[]
  readonly harnessBudgetCapUsd: number | null
+ /**
+ * The self-modification envelope — null on every shipped built-in.
+ *
+ * Declared on the interface rather than left to ride the spread in `withMarkdown`,
+ * because a field that exists at runtime and not on the type is how this repository has
+ * lost one before: a spread skips the excess-property check, so the value arrives and
+ * nothing that reads the type knows to look for it.
+ */
+ readonly envelope: Envelope | null
  readonly systemPrompt: string
  readonly markdownSource: string
 }
@@ -60,6 +70,14 @@ const define = (spec: {
  harnessPlanner: spec.planner ?? false,
  harnessDelegates: spec.delegates ?? [],
  harnessBudgetCapUsd: spec.budgetCapUsd ?? DEFAULT_BUDGET_CAP_USD,
+ /**
+ * No shipped built-in carries a self-modification envelope, and that
+ * is the same call the web reach makes: a capability an operator did not grant is
+ * one nothing has. A seeded persona is the one most likely to be `@mention`ed before
+ * anybody has thought about self-modification, so shipping one that may rewrite
+ * itself would make the ceiling something an operator has to remember to *remove*.
+ */
+ envelope: null,
  systemPrompt: spec.systemPrompt,
  }
  return {...persona, markdownSource: serializePersonaMarkdown(persona) }

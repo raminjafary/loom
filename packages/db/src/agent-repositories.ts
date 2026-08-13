@@ -1305,6 +1305,7 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  harnessPlanner: input.harnessPlanner,
  harnessDelegates: input.harnessDelegates,
  harnessBudgetCapUsd: input.harnessBudgetCapUsd,
+ envelope: input.envelope,
 ...(input.builtinSource === undefined ? {}: { builtinSource: input.builtinSource }),
  })
 .returning
@@ -1343,6 +1344,10 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  harnessPlanner: patch.harnessPlanner,
  harnessDelegates: patch.harnessDelegates,
  harnessBudgetCapUsd: patch.harnessBudgetCapUsd,
+ // Written on every save, including to null: a removed `envelope:` block is a
+ // human withdrawing permission, and a patch that skipped null would make that
+ // the one edit the platform ignores.
+ envelope: patch.envelope,
  // Absent leaves the recorded seed alone: it is what makes "untouched"
  // answerable, and rewriting it on a human's save would make every persona
  // look untouched forever.

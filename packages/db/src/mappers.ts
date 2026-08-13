@@ -27,6 +27,7 @@ import {
  PLATFORM_NOTE_KINDS,
  type Actor,
  type AgentPersona,
+ type Envelope,
  type AgentRun,
  type AgentRunBranchDisposition,
  type AgentRunRelation,
@@ -549,6 +550,7 @@ export interface AgentPersonaRow {
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
+ envelope?: Envelope | null
  builtinSource?: string | null
  createdAt: Date
  updatedAt: Date
@@ -568,6 +570,10 @@ export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
  harnessPlanner: row.harnessPlanner,
  harnessDelegates: row.harnessDelegates,
  harnessBudgetCapUsd: row.harnessBudgetCapUsd,
+ // `?? null` rather than a default object: a row written before this column existed has
+ // no envelope, which is exactly the same statement as a persona whose operator chose
+ // not to give it one — it may not rewrite itself.
+ envelope: row.envelope ?? null,
  builtinSource: row.builtinSource ?? null,
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,

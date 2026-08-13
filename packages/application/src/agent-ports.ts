@@ -3,6 +3,7 @@ import type {
  AtlasRelation,
  ColosseumClaim,
  ColosseumSession,
+ Envelope,
  ColosseumParticipant,
  ColosseumPurpose,
  ColosseumStatus,
@@ -581,6 +582,12 @@ export interface PersonaRepositoryPort {
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
+ /**
+ * The self-modification ceiling. Null means this persona may not
+ * rewrite itself — see `maySelfModify` for why absence is a refusal rather than a
+ * blank cheque.
+ */
+ envelope: Envelope | null
  /** The markdown the platform seeded, for a built-in — see `seedBuiltinPersonas`. */
  builtinSource?: string
  }): Promise<AgentPersona>
@@ -605,6 +612,8 @@ export interface PersonaRepositoryPort {
  harnessPlanner: boolean
  harnessDelegates: string[]
  harnessBudgetCapUsd: number | null
+ /** The ceiling. Sent on every save, because a removed `envelope:` block is a change. */
+ envelope: Envelope | null
  /**
  * Only `seedBuiltinPersonas` sends this, when it brings an untouched built-in
  * forward. A human's edit deliberately leaves it alone: the recorded seed is

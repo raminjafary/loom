@@ -14,6 +14,7 @@ import {
  type AnyPgColumn,
 } from 'drizzle-orm/pg-core'
 import { user } from './auth-schema.js'
+import type { Envelope } from '@loom/domain'
 
 /**
  * Better Auth owns `user`, `session`, `account`, `verification`
@@ -375,6 +376,23 @@ export const agentPersona = pgTable(
  harnessDelegates: jsonb('harness_delegates').$type<string[]>.notNull.default([]),
  // Enforced at the egress proxy, not advisory. Null = uncapped.
  harnessBudgetCapUsd: doublePrecision('harness_budget_cap_usd'),
+ /**
+ * The **self-modification envelope** — a human-set ceiling on what this
+ * persona may become, distinct from `harness_delegates`, which is the ceiling on what
+ * it may hand *down*.
+ *
+ * **Null is a refusal, not an absence of one.** A persona with no envelope may not
+ * rewrite itself at all; to let it, a human first says how far. Read the other way —
+ * null as "no ceiling" — every persona that predates this column becomes a
+ * self-rewriting agent with no bound, which is the one thing continuity mode says must not exist.
+ * `maySelfModify` is the single place that decides this, so no reader has to remember.
+ *
+ * Jsonb rather than six columns: the envelope is written and read as a whole, it is
+ * checked by one function, and its shape follows the list rather than this schema's
+ * conventions. Splitting it would put six nullable columns on a table where five of
+ * them are meaningless whenever the sixth is.
+ */
+ envelope: jsonb('envelope').$type<Envelope>,
  /**
  * The markdown **the platform seeded**, verbatim, for a built-in.
  * Null on a hand-authored persona, and on a built-in seeded before this column

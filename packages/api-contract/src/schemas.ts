@@ -742,6 +742,29 @@ export const MergeQueueEntrySchema = z.object({
  finishedAt: z.date.nullable,
 })
 
+/**
+ * A self-modification envelope — a human-set ceiling on what a persona may
+ * become, distinct from `harnessDelegates`, which bounds what it may hand *down*.
+ *
+ * Nullable wherever it appears, and null means **no permission** rather than no ceiling:
+ * a persona with no envelope may not rewrite itself at all. Every reader goes through the
+ * domain's `maySelfModify`, so this schema deliberately does not encode a default.
+ *
+ * No `pathScope`, though continuity mode lists one. Every run writes only inside its own clone,
+ * enforced in the container, and a narrower scope needs an enforcer that does not
+ * exist — putting the field on the wire would be a control the runtime ignores.
+ */
+export const EnvelopeSchema = z.object({
+ tools: z.array(z.string),
+ /** A model *id* whose tier is the ceiling — never a tier name, which would be a second vocabulary. */
+ model: z.string.nullable,
+ budgetCapUsd: z.number.nullable,
+ /** Capability names, because an envelope is written by a human and a uuid is unreviewable. */
+ capabilities: z.array(z.string),
+ subagentDepth: z.number.int.nullable,
+ approvalMode: ApprovalModeSchema.nullable,
+})
+
 /** Inline for Phase 1 — no markdown/git-backed persona storage yet. */
 export const PersonaSpecSchema = z.object({
  name: z.string.min(1).max(100),
@@ -755,6 +778,19 @@ export const PersonaSpecSchema = z.object({
  */
  approvalMode: ApprovalModeSchema,
  budgetCapUsd: z.number.nullable,
+ /**
+ * The self-modification ceiling this run was launched with.
+ *
+ * On the wire because a Zod schema **strips what it does not name**, and this
+ * repository has already lost a field to exactly that: a value present on the domain
+ * type and absent from the frame arrives nowhere and nothing fails. The snapshot is
+ * what `attenuateEnvelope` reads at a child start, so a stripped envelope is a ceiling
+ * that silently stops applying one delegation hop down.
+ *
+ * Optional and nullable for the same reason `planner` is optional: a run that predates
+ * the field has stored persona JSON without it, and absence means no permission.
+ */
+ envelope: EnvelopeSchema.nullish,
  /**
  * Whether this run decomposes rather than acts.
  *
@@ -786,6 +822,8 @@ export const AgentPersonaSchema = z.object({
  harnessPlanner: z.boolean,
  harnessDelegates: z.array(z.string),
  harnessBudgetCapUsd: z.number.nullable,
+ /** The ceiling. Null means this persona may not rewrite itself — not that it may do anything. */
+ envelope: EnvelopeSchema.nullable,
  /**
  * Where this persona stands relative to the version this build ships,
  * or null when it is not a built-in.
@@ -833,6 +871,7 @@ export const PersonaDraftSchema = z.object({
  harnessPlanner: z.boolean,
  harnessDelegates: z.array(z.string),
  harnessBudgetCapUsd: z.number.nullable,
+ envelope: EnvelopeSchema.nullable,
  })
 .nullable,
 })
@@ -1051,6 +1090,7 @@ export type Repository = z.infer<typeof RepositorySchema>
 export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
 export type WorkerNote = z.infer<typeof WorkerNoteSchema>
 export type SubjectMap = z.infer<typeof SubjectMapSchema>
+export type Envelope = z.infer<typeof EnvelopeSchema>
 export type AtlasEdge = z.infer<typeof AtlasEdgeSchema>
 export type AtlasEdgeEnd = z.infer<typeof AtlasEdgeEndSchema>
 export type ColosseumSession = z.infer<typeof ColosseumSessionSchema>

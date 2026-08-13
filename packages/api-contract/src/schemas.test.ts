@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ActorSchema, MessageSchema, ServerEventSchema } from './schemas.js'
+import { ActorSchema, MessageSchema, PersonaSpecSchema, ServerEventSchema } from './schemas.js'
 
 describe('ActorSchema', => {
  it('accepts each actor kind', => {
@@ -153,5 +153,50 @@ describe('ServerEventSchema', => {
  false,
 )
  expect(ServerEventSchema.safeParse({ type: 'error', message: 'nope' }).success).toBe(false)
+ })
+})
+
+/**
+ * The frame carries the envelope.
+ *
+ * This test exists because of a failure this repository has now paid for four times: **a
+ * Zod schema strips what it does not name.** A field added to a domain type and forgotten
+ * on the frame crosses the wire as `undefined`, every typecheck passes, and the value
+ * simply is not there. An envelope lost that way is a ceiling that stops applying one
+ * delegation hop down, which is silent and is the whole thing continuity mode exists to prevent.
+ */
+describe('PersonaSpecSchema carries the self-modification envelope', => {
+ const spec = {
+ name: 'swe',
+ systemPrompt: 'body',
+ model: 'claude-sonnet-5',
+ tools: ['Read'],
+ approvalMode: 'ask' as const,
+ budgetCapUsd: 5,
+ envelope: {
+ tools: ['Read', 'Edit'],
+ model: 'claude-sonnet-5',
+ budgetCapUsd: 10,
+ capabilities: ['github'],
+ subagentDepth: 1,
+ approvalMode: 'accept-edits' as const,
+ },
+ }
+
+ it('round-trips every field of the envelope rather than stripping it', => {
+ const parsed = PersonaSpecSchema.parse(spec)
+ expect(parsed.envelope).toEqual(spec.envelope)
+ })
+
+ /** Absence has to survive too, and mean what it means: no permission, not no ceiling. */
+ it('accepts a spec with no envelope', => {
+ const { envelope: _dropped,...without } = spec
+ expect(PersonaSpecSchema.parse(without).envelope).toBeUndefined
+ expect(PersonaSpecSchema.parse({...without, envelope: null }).envelope).toBeNull
+ })
+
+ it('refuses an envelope missing a field, rather than defaulting it', => {
+ const { tools: _dropped,...partial } = spec.envelope
+ expect(PersonaSpecSchema.safeParse({...spec, envelope: partial }).success).toBe(false)
  })
 })

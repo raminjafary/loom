@@ -1,5 +1,6 @@
 import { isWiderApprovalMode } from './approval-modes.js'
 import { attenuateChildCapabilities } from './capabilities.js'
+import { attenuateEnvelope, envelopeRefusalSummary } from './envelope.js'
 import { modelTierRank } from './model-pricing.js'
 import type { PersonaSpec } from './agents.js'
 
@@ -99,6 +100,21 @@ export const attenuateChildPersona = (
  // shell of its own, but an MCP server is a route to one.
  const capabilities = attenuateChildCapabilities(parent.capabilities ?? [], child.capabilities ?? [])
  if (!capabilities.ok) return capabilities
+
+ /**
+ * The **envelope** attenuates too.
+ *
+ * This is `delegates`' own amendment arriving one level up, and the escalation is the
+ * same shape: checking a child's *current* configuration reads a modest worker as
+ * harmless, while the thing actually being handed down is what that worker may later
+ * become. A child whose envelope reaches past its parent's is a privilege escalation one
+ * delegation hop long and one self-edit deep — nothing is refused at either moment, and
+ * the ceiling has been raised by going through it.
+ */
+ const envelope = attenuateEnvelope(parent.envelope ?? null, child.envelope ?? null)
+ if (!envelope.ok) {
+ return { ok: false, reason: `Child run's envelope exceeds its parent's: ${envelopeRefusalSummary(envelope)}` }
+ }
 
  const parentRank = modelTierRank(parent.model)
  const childRank = modelTierRank(child.model)

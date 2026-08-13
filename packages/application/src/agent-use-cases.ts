@@ -11,6 +11,10 @@ import {
  applyResponseStyle,
  asRepositoryId,
  attenuateChildPersona,
+ attenuateEnvelope,
+ type ParsedPersonaMarkdown,
+ envelopeAllows,
+ envelopeRefusalSummary,
  canPlannerRead,
  buildNotification,
  describeMergeFailure,
@@ -406,6 +410,42 @@ const assertPlannerToolsAreReadOnly = (parsed: {
 }
 
 /**
+ * A persona must fit inside its own envelope.
+ *
+ * Checked at authoring, which is where the whole feature becomes real. An envelope on a
+ * persona that already exceeds it is a ceiling on a room taller than itself: every
+ * self-modification would be refused while the persona kept running with what the
+ * envelope forbids, and an operator reading the field would learn that it means something
+ * it does not.
+ *
+ * It also means the envelope is not a thing that only matters once tiers 1–4 exist. From
+ * this commit a human writing `envelope:` is stating a ceiling the platform enforces
+ * against every later edit — including their own, which is the point: the widening is a
+ * deliberate act through the contract, not a side effect of editing something else.
+ *
+ * Every refusal at once rather than the first, because an operator fixing a tool and
+ * discovering the budget cap and then the model tier is the failure the roadmap describes for the
+ * composition canvas, arriving in a form field instead.
+ */
+const assertFitsItsEnvelope = (parsed: ParsedPersonaMarkdown): void => {
+ if (parsed.envelope === null) return
+ const verdict = envelopeAllows(parsed.envelope, {
+ name: parsed.name,
+ tools: parsed.tools,
+ model: parsed.model,
+ budgetCapUsd: parsed.harnessBudgetCapUsd,
+ approvalMode: parsed.harnessApprovalMode,
+ planner: parsed.harnessPlanner,
+ delegates: parsed.harnessDelegates,
+ })
+ if (!verdict.ok) {
+ throw new ValidationError(
+ `${parsed.name} does not fit its own envelope. ${envelopeRefusalSummary(verdict)}`,
+)
+ }
+}
+
+/**
  * Replaces a built-in's markdown with the version this build ships.
  *
  * The resolution for a `'stale'` built-in — one whose markdown differs from the
@@ -445,6 +485,7 @@ export const resetPersonaToBuiltin = async (
  harnessPlanner: parsed.harnessPlanner,
  harnessDelegates: parsed.harnessDelegates,
  harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
  builtinSource: shipped.markdownSource,
  })
 
@@ -490,7 +531,28 @@ export const parsePersonaDraft = (input: {
  parsed: null,
  }
  }
- const problems = plannerToolProblems(parsed)
+ /**
+ * Both sets of authoring rules, not just the planner ones.
+ *
+ * The draft route exists so a human sees every refusal *while typing* rather than from a
+ * rejected save, and an envelope refusal is the kind most worth seeing early: a ceiling
+ * narrower than the persona under it is a mistake in whichever of the two the operator
+ * did not mean, and only they know which.
+ */
+ const problems = [
+...plannerToolProblems(parsed),
+...(parsed.envelope === null
+ ? []
+: envelopeAllows(parsed.envelope, {
+ name: parsed.name,
+ tools: parsed.tools,
+ model: parsed.model,
+ budgetCapUsd: parsed.harnessBudgetCapUsd,
+ approvalMode: parsed.harnessApprovalMode,
+ planner: parsed.harnessPlanner,
+ delegates: parsed.harnessDelegates,
+ }).refusals.map((refusal) => `${refusal.detail} ${refusal.request}`)),
+ ]
  return { ok: problems.length === 0, problems, parsed }
 }
 
@@ -504,6 +566,7 @@ export const createPersona = async (
  }
  const parsed = parsePersonaMarkdown(input.markdownSource)
  assertPlannerToolsAreReadOnly(parsed)
+ assertFitsItsEnvelope(parsed)
  const existing = await deps.personas.listByWorkspace(input.workspaceId)
  if (existing.some((p) => p.name === parsed.name)) {
  throw new ValidationError(`Persona "${parsed.name}" already exists`)
@@ -521,6 +584,7 @@ export const createPersona = async (
  harnessPlanner: parsed.harnessPlanner,
  harnessDelegates: parsed.harnessDelegates,
  harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
  })
 }
 
@@ -589,6 +653,7 @@ export const seedBuiltinPersonas = async (
  harnessPlanner: parsed.harnessPlanner,
  harnessDelegates: parsed.harnessDelegates,
  harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
  builtinSource: persona.markdownSource,
  })
  continue
@@ -606,6 +671,7 @@ export const seedBuiltinPersonas = async (
  harnessPlanner: persona.harnessPlanner,
  harnessDelegates: persona.harnessDelegates,
  harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
+ envelope: persona.envelope,
  builtinSource: persona.markdownSource,
  })
  }
@@ -753,6 +819,7 @@ export const updatePersona = async (
  }
  const parsed = parsePersonaMarkdown(input.markdownSource)
  assertPlannerToolsAreReadOnly(parsed)
+ assertFitsItsEnvelope(parsed)
  /**
  * A rename is refused rather than silently dropped. `personas.update` has never
  * carried `name`, so editing the `name:` line stored a markdown whose frontmatter
@@ -782,6 +849,7 @@ export const updatePersona = async (
  harnessPlanner: parsed.harnessPlanner,
  harnessDelegates: parsed.harnessDelegates,
  harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
  })
 }
 
@@ -1301,6 +1369,7 @@ export const delegationPreviewForPersona = async (
  input.budgetCapUsd === undefined ? persona.harnessBudgetCapUsd: input.budgetCapUsd,
  planner: true,
  delegates: persona.harnessDelegates,
+ envelope: persona.envelope,
  capabilities: await resolveCapabilities(deps, input.workspaceId, persona.id),
  }
 
@@ -1367,6 +1436,7 @@ export const delegationMatrixForWorkspace = async (
  budgetCapUsd: persona.harnessBudgetCapUsd,
  planner: persona.harnessPlanner,
  delegates: persona.harnessDelegates,
+ envelope: persona.envelope,
  capabilities: await resolveCapabilities(deps, input.workspaceId, persona.id),
  } satisfies PersonaSpec,
  })),
@@ -1691,6 +1761,7 @@ export const startAgentRun = async (
  approvalMode: persona.harnessApprovalMode,
  planner: persona.harnessPlanner,
  delegates: persona.harnessDelegates,
+ envelope: persona.envelope,
  capabilities: await resolveCapabilities(deps, input.workspaceId, input.personaId),
  }
 
