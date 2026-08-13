@@ -20,6 +20,7 @@ const subtask = (over: Partial<PlanReview['subtasks'][number]>): PlanReview['sub
  paths: [],
  dependsOn: [],
  reviews: null,
+ repository: null,
  status: 'waiting',
  agentRunId: null,
  detail: null,

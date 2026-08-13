@@ -393,6 +393,7 @@ export const planSubtaskRepository = (db: Database): PlanSubtaskRepositoryPort =
  paths: subtask.paths,
  dependsOn: subtask.dependsOn,
  reviews: subtask.reviews,
+ repository: subtask.repository ?? null,
  status: subtask.status,
  agentRunId: subtask.agentRunId,
  detail: subtask.detail,
@@ -1402,6 +1403,9 @@ export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort
 ...(patch.reviewers === undefined ? {}: { reviewers: patch.reviewers }),
 ...(patch.reportsTo === undefined ? {}: { reportsTo: patch.reportsTo }),
 ...(patch.description === undefined ? {}: { description: patch.description }),
+...(patch.extraRepositoryIds === undefined
+ ? {}
+: { extraRepositoryIds: patch.extraRepositoryIds }),
  // Null is a real value here — "nobody has chosen" — so absent and null differ:
  // absent leaves the stored root alone, null clears it back to picked-by-reach.
 ...(patch.orchestratorId === undefined ? {}: { orchestratorId: patch.orchestratorId }),

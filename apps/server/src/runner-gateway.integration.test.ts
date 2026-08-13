@@ -3119,6 +3119,87 @@ Decompose and delegate.`
  * plan is recorded, the warnings are posted, and nothing starts. A unit test could assert
  * a boolean; only this level can assert that no child run exists.
  */
+ /**
+ * The cross-repository fleet, end to end.
+ *
+ * Only this level can prove it: the name a model writes has to resolve against a *team*, the
+ * child has to start in the resolved repository rather than its planner's, and a name the
+ * team did not declare has to be refused. All three are facts about the real dispatch path.
+ */
+ it('lands a subtask in another of the team’s repositories, and refuses one it did not declare', async => {
+ const { socket, runnerId } = await pairFakeRunner('cross-repo')
+ const here = await bindViaFakeRunner(socket, runnerId, '/tmp/cross-here', 'here-api')
+ const there = await bindViaFakeRunner(socket, runnerId, '/tmp/cross-there', 'there-api')
+ const nowhere = await bindViaFakeRunner(socket, runnerId, '/tmp/cross-nowhere', 'nowhere-api')
+ const created = await client.channel.create({ name: 'cross-repo' })
+ const planner = await client.persona.create({ markdownSource: PLANNER_MARKDOWN })
+ const worker = (await client.persona.list).find((p) => p.name === 'fake-worker')
+ if (!worker) throw new Error('fake-worker persona missing')
+
+ const group = await client.personaGroup.create({
+ name: 'cross-repo-team',
+ personaIds: [planner.id, worker.id],
+ })
+ // `there-api` is declared; `nowhere-api` is bound but not this team's.
+ await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [planner.id, worker.id],
+ repositoryId: here.id,
+ extraRepositoryIds: [there.id],
+ })
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: here.id,
+ personaId: planner.id,
+ })
+ const frame = (await startFrame) as { persona: { systemPrompt: string } }
+ // The planner is told the set, because a planner that is not told cannot split by it.
+ expect(frame.persona.systemPrompt).toContain('here-api')
+ expect(frame.persona.systemPrompt).toContain('there-api')
+ expect(frame.persona.systemPrompt).toContain('Split by repository')
+
+ socket.send(
+ JSON.stringify({
+ type: 'plan_submitted',
+ runId: run.id,
+ subtasks: [
+ { title: 'Here', task: 'Work here.', personaName: 'fake-worker' },
+ { title: 'There', task: 'Work there.', personaName: 'fake-worker', repository: 'there-api' },
+ {
+ title: 'Nowhere',
+ task: 'Work somewhere else.',
+ personaName: 'fake-worker',
+ repository: 'nowhere-api',
+ },
+ ],
+ }),
+)
+
+ let children = await client.agentRun.listChildren({ agentRunId: run.id })
+ for (let i = 0; i < 40 && children.length < 2; i += 1) {
+ await new Promise((r) => setTimeout(r, 50))
+ children = await client.agentRun.listChildren({ agentRunId: run.id })
+ }
+ // Two started, in two different repositories — the whole point of the feature.
+ expect(children).toHaveLength(2)
+ expect(new Set(children.map((child) => child.repositoryId))).toEqual(
+ new Set([here.id, there.id]),
+)
+
+ // And the third is refused, with the fix rather than the rule.
+ const plan = await client.plan.get({ agentRunId: run.id })
+ const refused = plan.subtasks.find((subtask) => subtask.title === 'Nowhere')
+ expect(refused?.status).toBe('refused')
+ expect(refused?.detail).toContain("not one of this team's repositories")
+ expect(nowhere.id).toBeTruthy
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ socket.close
+ })
+
  it('records a plan and starts nothing until a human accepts it', async => {
  await client.runControl.setPlanReviewRequired({ required: true })
  const { socket, runnerId } = await pairFakeRunner('plan-review')

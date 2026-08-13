@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { describeTeamRepositories } from './delegation-roster.js'
 import {
  describeReportingLines,
  hasReportingLines,
@@ -171,5 +172,50 @@ describe('describeReportingLines', => {
  expect(text).toContain('qa')
  expect(text).toContain('report to another planner')
  expect(text).toContain('give that part to the planner they report to')
+ })
+})
+
+/**
+ * The cross-repository clause — what a planner is told when its
+ * team works in more than one repository.
+ *
+ * Here rather than in its own file because it is the same kind of thing as a reporting line:
+ * a fact about the team that only matters as a sentence in the roster, and one whose *silence*
+ * is as load-bearing as its content.
+ */
+describe('describeTeamRepositories', => {
+ /**
+ * The silence is the decision. A planner told "you may name a repository" when it has one
+ * would spend a field on a choice it does not have — and a model handed an option uses it.
+ */
+ it('says nothing when the team works in one repository', => {
+ expect(describeTeamRepositories({ own: 'flight-api', others: [] })).toBe('')
+ expect(describeTeamRepositories({ own: null, others: [] })).toBe('')
+ })
+
+ it('names the whole set, including the planner’s own', => {
+ const text = describeTeamRepositories({ own: 'flight-api', others: ['hotel-api', 'billing'] })
+ expect(text).toContain('flight-api')
+ expect(text).toContain('hotel-api')
+ expect(text).toContain('billing')
+ })
+
+ /**
+ * The rule that makes the field usable rather than decorative: a subtask in a different
+ * repository cannot conflict with one in another, which is a stronger split than any area
+ * boundary — and an unlisted name is refused rather than silently redirected.
+ */
+ it('tells the planner to split by repository first, and that a wrong name is refused', => {
+ const text = describeTeamRepositories({ own: 'flight-api', others: ['hotel-api'] })
+ expect(text).toContain('Split by repository before you split by anything else')
+ expect(text).toContain('refused')
+ expect(text).toContain('`repository` field')
+ })
+
+ /** A planner with no repository of its own still gets a usable sentence. */
+ it('handles a team whose planner has no repository', => {
+ const text = describeTeamRepositories({ own: null, others: ['hotel-api'] })
+ expect(text).toContain('hotel-api')
+ expect(text).not.toContain('null')
  })
 })

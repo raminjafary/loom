@@ -815,6 +815,11 @@ export const contract = {
  /** What this team is for. Absent leaves the stored line alone. */
  description: z.string.max(200).optional,
  /**
+ * The other repositories this team's subtasks may name. Absent
+ * leaves them alone; `[]` clears them.
+ */
+ extraRepositoryIds: z.array(z.string).max(16).optional,
+ /**
  * The root orchestrator — the member the work starts from, and the
  * vantage the canvas measures depth from.
  *

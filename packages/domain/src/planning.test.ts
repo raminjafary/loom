@@ -161,6 +161,7 @@ describe('detectPathOverlaps', => {
  paths,
  dependsOn: [],
  reviews: null,
+ repository: null,
  })
 
  it('finds the same path claimed twice', => {
@@ -239,6 +240,7 @@ describe('detectClaimsAgainstExisting', => {
  paths,
  dependsOn: [],
  reviews: null,
+ repository: null,
  })
 
  it('finds a new subtask colliding with a claim from another plan', => {

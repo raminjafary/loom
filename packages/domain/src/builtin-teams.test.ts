@@ -138,3 +138,37 @@ describe('BUILTIN_TEAMS descriptions and reporting lines', => {
  expect(Object.keys(twoAreas?.reportsTo ?? {})).not.toContain('qa')
  })
 })
+
+/**
+ * The cross-repository preset.
+ *
+ * Asserted as an *arrangement* rather than as a repository list, because that is the only
+ * honest shape for a preset: which repositories a workspace has bound is unknowable at build
+ * time, so the team ships the shape and the seeder fills in what is actually there.
+ */
+describe('BUILTIN_TEAMS across repositories', => {
+ const acrossRepositories = BUILTIN_TEAMS.find((team) => team.name === 'across-repositories')
+
+ it('ships one team that works across repositories', => {
+ expect(acrossRepositories?.crossRepository).toBe(true)
+ // Exactly one, so the seeder's "fill in whatever is bound" has one owner.
+ expect(BUILTIN_TEAMS.filter((team) => team.crossRepository === true)).toHaveLength(1)
+ })
+
+ /**
+ * It must not name repositories. A shipped name would name nothing in every workspace but
+ * one, and a team pointing at a repository that does not exist is worse than a team that
+ * points at none.
+ */
+ it('names no repository, because a preset cannot know one', => {
+ expect(JSON.stringify(acrossRepositories)).not.toContain('repositoryId')
+ expect(JSON.stringify(acrossRepositories)).not.toContain('extraRepositoryIds')
+ })
+
+ /** Every other preset stays single-repository, which is what every team did before. */
+ it('leaves every other preset working in one repository', => {
+ for (const team of BUILTIN_TEAMS.filter((entry) => entry.name !== 'across-repositories')) {
+ expect(team.crossRepository, team.name).toBeUndefined
+ }
+ })
+})

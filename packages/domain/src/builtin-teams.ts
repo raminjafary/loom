@@ -47,6 +47,17 @@ export interface BuiltinTeam {
  /** How many of each member this team is sized to run at once — the fleet. */
  readonly fleet?: Readonly<Record<string, number>>
  /**
+ * Whether this team is meant to work across repositories.
+ *
+ * **A flag rather than a list of names, and that is the only honest shape for a preset.**
+ * Which repositories a workspace has bound is unknowable at build time — a shipped team
+ * naming `payments-api` would name nothing in every workspace but one. So the preset ships
+ * the *arrangement*, and the seeder fills in whatever is actually bound; a workspace with
+ * one repository gets a team that is simply a normal team, which is the truthful outcome
+ * rather than a broken one.
+ */
+ readonly crossRepository?: boolean
+ /**
  * Who reports to whom, keyed by the **worker** — the opposite key from
  * `reviewers`, because a worker reports to at most one planner.
  *
@@ -129,5 +140,32 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  reviewers: { qa: ['swe'] },
  fleet: { swe: 2 },
  reportsTo: { swe: 'area-planner' },
+ },
+
+ /**
+ * **the cross-repository fleet, shipped as an arrangement.** One goal, more
+ * than one repository, split by repository before anything else.
+ *
+ * Why this is a different team rather than a flag on `two-areas`: the split is not a
+ * decomposition choice, it is a fact about the work. Two subtasks in different repositories
+ * *cannot* conflict and one subtask cannot span two, so a planner told it works across
+ * repositories has a stronger and simpler rule to plan by than any area boundary — which is
+ * The own argument for parallel agents, arriving from the cheapest possible direction.
+ *
+ * What makes it affordable rather than merely appealing: the merge queue is already
+ * serialized *per repository*, so N repositories is N queues and no new concurrency story.
+ * The human gate stays exactly where item 4 put it — one merge per repository.
+ *
+ * `crossRepository` rather than a list of names: see the field's own comment. A workspace
+ * with one repository bound gets an ordinary team, which is the truthful outcome.
+ */
+ {
+ name: 'across-repositories',
+ description: 'One goal spanning several repositories — split by repository first.',
+ members: ['planner', 'swe', 'qa'],
+ orchestrator: 'planner',
+ reviewers: { qa: ['swe'] },
+ fleet: { swe: 2 },
+ crossRepository: true,
  },
 ]

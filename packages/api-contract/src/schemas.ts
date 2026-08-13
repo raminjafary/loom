@@ -906,6 +906,12 @@ export const PlanReviewSubtaskSchema = z.object({
  dependsOn: z.array(z.number.int),
  /** Which sibling `position` this one reviews, or null. */
  reviews: z.number.int.nullable,
+ /**
+ * Which repository this subtask lands in, by name, or null for the planner's own
+ * — the field a cross-repository team's plan actually uses, and the
+ * one a reviewer most needs to see before accepting.
+ */
+ repository: z.string.nullable,
  status: z.enum(['waiting', 'started', 'skipped', 'refused']),
  agentRunId: z.string.nullable,
  detail: z.string.nullable,
@@ -960,6 +966,11 @@ export const PersonaGroupSchema = z.object({
  * child may hold. Empty means no narrowing, not nobody.
  */
  reportsTo: z.record(z.string, z.string),
+ /**
+ * The other repositories this team's subtasks may name. `repositoryId`
+ * is where a run defaults; this is which repositories a *subtask* may land in.
+ */
+ extraRepositoryIds: z.array(z.string),
  /**
  * Which member the work starts from — the root orchestrator, as the canvas's
  * vantage point (see `orchestrate` in client-core).

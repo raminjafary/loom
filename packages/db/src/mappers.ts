@@ -591,6 +591,7 @@ export interface PersonaGroupRow {
  reportsTo?: unknown
  orchestratorId?: string | null
  repositoryId?: string | null
+ extraRepositoryIds?: unknown
  createdAt: Date
  updatedAt: Date
 }
@@ -637,6 +638,11 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
  // deliberately the same state, because both mean the same thing to every reader: no
  // repository chosen, so nothing is defaulted from this team.
  repositoryId: row.repositoryId ?? null,
+ // Empty for a row that predates the column: the team works in one repository, which is
+ // what every team did before a cross-repository team was expressible.
+ extraRepositoryIds: Array.isArray(row.extraRepositoryIds)
+ ? (row.extraRepositoryIds as string[])
+: [],
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
 })
@@ -677,6 +683,7 @@ export interface PlanSubtaskRow {
  paths: unknown
  dependsOn: unknown
  reviews: number | null
+ repository?: string | null
  status: string
  agentRunId: string | null
  detail: string | null
@@ -705,6 +712,9 @@ export const toPlanSubtask = (row: PlanSubtaskRow): PlanSubtaskRecord => {
  paths: Array.isArray(row.paths) ? (row.paths as string[]): [],
  dependsOn: Array.isArray(row.dependsOn) ? (row.dependsOn as number[]): [],
  reviews: row.reviews,
+ // Null for every row that predates the column, which means the same thing it means for
+ // a subtask that named nothing: the planner's own repository.
+ repository: row.repository ?? null,
  status,
  agentRunId: row.agentRunId === null ? null: asAgentRunId(row.agentRunId),
  detail: row.detail,

@@ -486,6 +486,11 @@ export interface AgentSession {
  /** What this team is for. Omitted leaves the stored line alone. */
  description?: string
  /**
+ * The other repositories this team's subtasks may name. Omitted
+ * leaves them alone; `[]` clears them.
+ */
+ extraRepositoryIds?: string[]
+ /**
  * Which member the work starts from, as the canvas's vantage for
  * depth. Omitted leaves the stored root alone; `null` clears it back to
  * picked-by-reach, which is a different act.

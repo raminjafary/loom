@@ -34,6 +34,7 @@ import {
  delegationMatrix,
  describeDelegationRoster,
  describeReportingLines,
+ describeTeamRepositories,
  reportingLineProblems,
  scopeToReportingLines,
  describePathOverlaps,
@@ -779,6 +780,23 @@ export const seedBuiltinTeams = async (
  }),
 )
 
+ /**
+ * The repositories a cross-repository preset works across.
+ *
+ * Filled from what is actually bound, because a shipped team cannot know: a preset naming
+ * `payments-api` would name nothing in every workspace but one. The primary is the first
+ * bound repository and the rest are the extras — an arbitrary choice and an honest one,
+ * since an operator picking a different primary is one click on the canvas and the preset's
+ * value is the *arrangement*.
+ *
+ * A workspace with one repository gets an ordinary team, and one with none gets a team with
+ * no repository at all — which is what every other preset ships and is not a failure.
+ */
+ const crossRepository =
+ team.crossRepository === true
+ ? await deps.repositories.listByWorkspace(input.workspaceId)
+: []
+
  await deps.personaGroups.update(input.workspaceId, created.id, {
  name: created.name,
  description: team.description,
@@ -787,6 +805,12 @@ export const seedBuiltinTeams = async (
  reviewers,
  fleet,
  reportsTo,
+...(crossRepository.length > 1
+ ? {
+ repositoryId: crossRepository[0]?.id ?? null,
+ extraRepositoryIds: crossRepository.slice(1).map((repo) => repo.id as string),
+ }
+: {}),
  })
  }
 }
@@ -1174,9 +1198,17 @@ const resolveTeamPolicy = async (
  fleet: Record<string, number>
  reviewers: Record<string, string[]>
  reportsTo: Record<string, string>
+ /** The other repositories this team's subtasks may name. */
+ extraRepositoryIds: string[]
  ambiguous: boolean
 }> => {
- const none = { fleet: {}, reviewers: {}, reportsTo: {}, ambiguous: false }
+ const none = {
+ fleet: {},
+ reviewers: {},
+ reportsTo: {},
+ extraRepositoryIds: [] as string[],
+ ambiguous: false,
+ }
  if (personaId === null) return none
  const groups = await deps.personaGroups.listByWorkspace(workspaceId)
  const owning = groups.filter((group) => group.personaIds.includes(personaId))
@@ -1185,6 +1217,7 @@ const resolveTeamPolicy = async (
  fleet: owning[0]?.fleet ?? {},
  reviewers: owning[0]?.reviewers ?? {},
  reportsTo: owning[0]?.reportsTo ?? {},
+ extraRepositoryIds: owning[0]?.extraRepositoryIds ?? [],
  ambiguous: false,
  }
 }
@@ -1228,6 +1261,11 @@ export const updatePersonaGroup = async (
  name: string
  /** What this team is for. Omitted leaves the stored line alone. */
  description?: string
+ /**
+ * The other repositories this team's subtasks may name. Omitted
+ * leaves them alone; `[]` clears them.
+ */
+ extraRepositoryIds?: string[]
  personaIds: string[]
  /**
  * Where each member sits on the composition canvas. Omitted leaves the stored
@@ -1346,6 +1384,25 @@ export const updatePersonaGroup = async (
  }
 
  /**
+ * The team's *other* repositories, checked to exist.
+ *
+ * Checked for the reason the primary is: this list is what a plan's `repository` field is
+ * resolved against, so an id naming nothing would not be an inert field — it would refuse
+ * a subtask with a message about a repository the operator believes they added.
+ */
+ if (input.extraRepositoryIds !== undefined && input.extraRepositoryIds.length > 0) {
+ const bound = await deps.repositories.listByWorkspace(input.workspaceId)
+ const missing = input.extraRepositoryIds.filter(
+ (id) => !bound.some((entry) => (entry.id as string) === id),
+)
+ if (missing.length > 0) {
+ throw new ValidationError(
+ `${missing.length} of this team's repositories are not bound in this workspace`,
+)
+ }
+ }
+
+ /**
  * The team's repository, checked to exist in this workspace rather than stored as sent
  *.
  *
@@ -1365,6 +1422,9 @@ export const updatePersonaGroup = async (
  name: input.name,
  personaIds: input.personaIds,
 ...(input.description === undefined ? {}: { description: input.description }),
+...(input.extraRepositoryIds === undefined
+ ? {}
+: { extraRepositoryIds: input.extraRepositoryIds }),
 ...(input.orchestratorId === undefined ? {}: { orchestratorId: input.orchestratorId }),
 ...(input.repositoryId === undefined ? {}: { repositoryId: input.repositoryId }),
 ...(input.fleet === undefined ? {}: { fleet: fleetVerdict.fleet }),
@@ -1964,7 +2024,29 @@ export const startAgentRun = async (
  })
 : ''
 
- const promptSuffix = `${roster ?? ''}${reviewClause ?? ''}${reportingClause}`
+ /**
+ * Which repositories this team works in.
+ *
+ * Only when there is more than one — see `describeTeamRepositories`. A planner told it may
+ * name a repository when it has one choice would spend a field on a decision it does not
+ * have, and a model handed an option tends to use it.
+ */
+ const repositoryClause =
+ baseSpec.planner && roster && teamPolicy.extraRepositoryIds.length > 0
+ ? await (async => {
+ const bound = await deps.repositories.listByWorkspace(input.workspaceId)
+ const nameOf = (id: string) =>
+ bound.find((entry) => (entry.id as string) === id)?.displayName ?? null
+ return describeTeamRepositories({
+ own: nameOf(input.repositoryId as string),
+ others: teamPolicy.extraRepositoryIds
+.map(nameOf)
+.filter((name): name is string => name !== null),
+ })
+ })
+: ''
+
+ const promptSuffix = `${roster ?? ''}${reviewClause ?? ''}${reportingClause}${repositoryClause}`
  const personaSpec: PersonaSpec =
  promptSuffix === ''
  ? baseSpec
@@ -2300,6 +2382,66 @@ const reviewTaskText = (
  * that ties attenuation to the right parent. Every one of those is load-bearing and
  * none of them is obvious from the call site.
  */
+/**
+ * Which repository a subtask lands in, and whether it is allowed to.
+ *
+ * **The check is against the *team*, and that is the whole authority story.** A planner
+ * directing work at a repository is new reach: it was previously impossible, because a child
+ * inherited `planner.repositoryId` and nothing else was expressible. What bounds it is the
+ * same thing that bounds every other cross-cutting fact on that canvas — a human declared it
+ * on the team (`extraRepositoryIds`), so a plan can only reach where an operator already said
+ * this team works.
+ *
+ * Note what this does **not** widen. The worker's tools, model, cap and capabilities are still
+ * attenuated against the planner; it gets its own clone; and its branch still
+ * leaves through the merge queue for *that* repository, which is serialized per repository
+ * and gated by a human. A cross-repository plan is N branches in N queues, not one privileged
+ * run.
+ *
+ * Resolved by **name**, because a model is told which repositories its team works in and
+ * names one back — and re-resolved at every start rather than at submission, so a team edited
+ * between the two is re-checked instead of bypassed.
+ */
+const resolveSubtaskRepository = async (
+ deps: AgentDeps,
+ input: {
+ planner: AgentRun
+ /** The planner's team's declared extras, already read by the caller. */
+ extraRepositoryIds: readonly string[]
+ /** What the subtask named, or null for the planner's own. */
+ named: string | null
+ },
+): Promise<{ ok: true; repositoryId?: RepositoryId } | { ok: false; reason: string }> => {
+ if (input.named === null) return { ok: true }
+
+ const bound = await deps.repositories.listByWorkspace(input.planner.workspaceId)
+ const own = bound.find((entry) => entry.id === input.planner.repositoryId)
+ // Naming your own repository is not an error, and not a cross-repository subtask either.
+ if (own && own.displayName === input.named) return { ok: true }
+
+ const target = bound.find((entry) => entry.displayName === input.named)
+ if (!target) {
+ return {
+ ok: false,
+ reason: `no repository named "${input.named}" is bound in this workspace`,
+ }
+ }
+ if (!input.extraRepositoryIds.includes(target.id as string)) {
+ /**
+ * The refusal names the fix rather than the rule, because the person who reads it is an
+ * operator looking at a team: the plan is not wrong, the team has not said this is one of
+ * its repositories.
+ */
+ return {
+ ok: false,
+ reason:
+ `"${input.named}" is not one of this team's repositories — add it to the team on the ` +
+ 'design canvas before a plan can land work there',
+ }
+ }
+ return { ok: true, repositoryId: target.id }
+}
+
 const startPlannedChild = async (
  deps: AgentDeps,
  input: {
@@ -2318,6 +2460,17 @@ const startPlannedChild = async (
  * this absent, so the two cannot disagree.
  */
  reviewOf?: { runId: AgentRunId; branchName: string; title: string; paths: readonly string[] }
+ /**
+ * Which repository this subtask lands in, already resolved and already checked against
+ * the team. Absent means the planner's own, which is what
+ * every subtask did before the field existed.
+ *
+ * Resolved by the caller rather than here, and that is the boundary that matters: the
+ * check is "did *this planner's team* declare this repository", and a team is something
+ * only the caller has read. A resolver in here would have to re-read it per subtask and
+ * would be a second place the authority rule lives.
+ */
+ repositoryId?: RepositoryId
  },
 ): Promise<{ ok: true; runId: AgentRunId } | { ok: false; reason: string }> => {
  const { planner, subtask } = input
@@ -2372,7 +2525,7 @@ const startPlannedChild = async (
  // right parent.
  actor: agentRunActor(planner.id),
  threadId,
- repositoryId: planner.repositoryId,
+ repositoryId: input.repositoryId ?? planner.repositoryId,
  personaId: persona.id,
  /**
  * The paths this subtask owns are appended to the *task*, not left only in the
@@ -2449,6 +2602,8 @@ export const applySubmittedPlan = async (
  */
  dependsOn?: readonly number[] | undefined
  reviews?: number | null | undefined
+ /** The operator asks — the repository this subtask lands in, by name. */
+ repository?: string | null | undefined
  }[]
  },
 ): Promise<{ started: AgentRunId[]; refused: string[]; heldForReview: boolean }> => {
@@ -2635,6 +2790,7 @@ export const applySubmittedPlan = async (
  paths: string[]
  dependsOn: number[]
  reviews: number | null
+ repository: string | null
  status: 'waiting' | 'started' | 'skipped' | 'refused'
  agentRunId: AgentRunId | null
  detail: string | null
@@ -2650,6 +2806,7 @@ export const applySubmittedPlan = async (
  paths: [...subtask.paths],
  dependsOn: [...subtask.dependsOn],
  reviews: subtask.reviews,
+ repository: subtask.repository,
  }
 
  /**
@@ -2686,11 +2843,23 @@ export const applySubmittedPlan = async (
  continue
  }
 
+ const where = await resolveSubtaskRepository(deps, {
+ planner,
+ extraRepositoryIds: plannerTeam.extraRepositoryIds,
+ named: subtask.repository,
+ })
+ if (!where.ok) {
+ refused.push(`${subtask.title}: ${where.reason}`)
+ records.push({...base, status: 'refused', agentRunId: null, detail: where.reason })
+ continue
+ }
+
  const outcome = await startPlannedChild(deps, {
  planner,
  channelId: thread.channelId,
  personas,
  subtask,
+...(where.repositoryId === undefined ? {}: { repositoryId: where.repositoryId }),
  })
  if (outcome.ok) {
  started.push(outcome.runId)
@@ -3045,6 +3214,8 @@ const releasePlanSubtasks = async (
  const startedTitles: string[] = []
  const skippedTitles: string[] = []
  let personas: AgentPersona[] | null = null
+ /** Read once per release pass, not per row: it is one query and the answer cannot change. */
+ let team: Awaited<ReturnType<typeof resolveTeamPolicy>> | null = null
 
  /**
  * A loop rather than one pass, because releasing a subtask can only ever *add*
@@ -3151,6 +3322,38 @@ const releasePlanSubtasks = async (
  }
 
  personas ??= await deps.personas.listByWorkspace(workspaceId)
+ /**
+ * Re-resolved here, at the moment the run actually starts, rather than carried from
+ * submission. The stored row holds the *name*, so a team
+ * that stopped working in a repository between submission and release refuses the
+ * subtask instead of honouring a permission it no longer grants — which is the whole
+ * reason the column is a name and not an id.
+ */
+ team ??= await resolveTeamPolicy(deps, workspaceId, plannerPersonaId(personas, planner))
+ const where = await resolveSubtaskRepository(deps, {
+ planner,
+ extraRepositoryIds: team.extraRepositoryIds,
+ named: row.repository,
+ })
+ if (!where.ok) {
+ byPosition.set(row.position, {
+...claimed,
+ status: 'refused',
+ agentRunId: null,
+ detail: where.reason,
+ })
+ await deps.planSubtasks.settleClaimed({
+ workspaceId,
+ id: row.id,
+ status: 'refused',
+ agentRunId: null,
+ detail: where.reason,
+ })
+ skippedTitles.push(row.title)
+ progressed = true
+ continue
+ }
+
  const outcome = await startPlannedChild(deps, {
  planner,
  channelId: thread.channelId,
@@ -3162,8 +3365,10 @@ const releasePlanSubtasks = async (
  paths: row.paths,
  dependsOn: row.dependsOn,
  reviews: row.reviews,
+ repository: row.repository,
  },
 ...(reviewOf ? { reviewOf }: {}),
+...(where.repositoryId === undefined ? {}: { repositoryId: where.repositoryId }),
  })
 
  /**

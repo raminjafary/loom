@@ -618,6 +618,24 @@ export const personaGroup = pgTable(
  * defaults to nothing.
  */
  repositoryId: uuid('repository_id').references( => repository.id, { onDelete: 'set null' }),
+ /**
+ * The **other** repositories this team's work may land in.
+ *
+ * `repositoryId` is where a run *defaults*, and it stays singular for that reason: the
+ * launcher fills one field, and a persona on two teams that disagree gets nothing
+ * (`teamRepositoryFor`). This is the different question a cross-repository team asks —
+ * which repositories a **subtask** may name — and it is a set because that is what the
+ * answer is.
+ *
+ * Ids in jsonb rather than a join table, matching `personaIds`: it is a short list read
+ * whole, and a join table would be a second place a team's shape lives. No foreign key
+ * for the same reason `personaIds` has none — a repository unbound must leave a team that
+ * still opens, and the resolver drops an id that names nothing.
+ *
+ * Empty is every team today, and empty means "this team works in one repository", which
+ * is what every team has always done.
+ */
+ extraRepositoryIds: jsonb('extra_repository_ids').$type<string[]>.notNull.default([]),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },
@@ -869,6 +887,17 @@ export const planSubtask = pgTable(
  * which is what decides the child's `relation`, its clone and its path ownership.
  */
  reviews: integer('reviews'),
+ /**
+ * Which repository this subtask lands in, by **name**, or null for the planner's own
+ *.
+ *
+ * The name as submitted rather than a resolved id, and that is deliberate: resolution
+ * checks the name against the *team's* declared repositories, and a plan held for review
+ * or waiting on a dependency may be released long after it was submitted. Storing the id
+ * would carry a permission granted at submission past a team edit that revoked it;
+ * storing the name means the check runs again at the moment the run actually starts.
+ */
+ repository: text('repository'),
  /** 'waiting' | 'started' | 'skipped' | 'refused'. */
  status: text('status').notNull.default('waiting'),
  /** Set when `status` becomes 'started'. */

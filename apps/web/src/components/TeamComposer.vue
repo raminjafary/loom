@@ -114,6 +114,8 @@ const emit = defineEmits<{
  * `reviewers`, because a worker reports to at most one planner. Always sent.
  */
  reportsTo: Record<string, string>
+ /** The operator asks — the other repositories a subtask may name. Always sent. */
+ extraRepositoryIds: string[]
  /** The root, as the canvas's vantage. Always sent, for the same reason. */
  orchestratorId: string | null
  },
@@ -215,6 +217,8 @@ const fleet = ref<Record<string, number>>({})
 const reviewers = ref<Record<string, string[]>>({})
 /** The chain of command, keyed by worker. */
 const reportsTo = ref<Record<string, string>>({})
+/** The other repositories this team's subtasks may name. */
+const extraRepositoryIds = ref<string[]>([])
 /** The root, mirrored likewise. Empty string is "nobody has chosen". */
 const orchestratorId = ref('')
 /** The team repository, mirrored likewise. Empty string is "nobody has chosen". */
@@ -259,6 +263,7 @@ watch(
  Object.entries(group.value?.reviewers ?? {}).map(([id, list]) => [id, [...list]]),
 )
  reportsTo.value = {...(group.value?.reportsTo ?? {}) }
+ extraRepositoryIds.value = [...(group.value?.extraRepositoryIds ?? [])]
  },
  { immediate: true },
 )
@@ -474,6 +479,7 @@ const saveGroup = (
  fleet: Record<string, number>
  reviewers: Record<string, string[]>
  reportsTo: Record<string, string>
+ extraRepositoryIds: string[]
  orchestratorId: string | null
  repositoryId: string | null
  }> = {},
@@ -488,6 +494,7 @@ const saveGroup = (
  fleet: fleet.value,
  reviewers: reviewers.value,
  reportsTo: reportsTo.value,
+ extraRepositoryIds: extraRepositoryIds.value,
  orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
  repositoryId: repositoryId.value === '' ? null: repositoryId.value,
 ...changed,
@@ -666,6 +673,33 @@ const setReportsTo = (workerId: string, plannerId: string) => {
 const reportingCandidates = computed( => plannerMembers.value)
 
 const reportsToOf = (workerId: string): string => reportsTo.value[workerId] ?? ''
+
+/**
+ * Adds or removes one of the team's other repositories.
+ *
+ * The primary is excluded from the list rather than merely ignored: a team's own repository
+ * is already where work lands by default, so offering it here would present the same fact
+ * twice and let an operator "add" something that was never absent.
+ */
+const toggleExtraRepository = (repositoryId_: string) => {
+ const has = extraRepositoryIds.value.includes(repositoryId_)
+ const next = has
+ ? extraRepositoryIds.value.filter((id) => id !== repositoryId_)
+: [...extraRepositoryIds.value, repositoryId_]
+ extraRepositoryIds.value = next
+ saveGroup({ extraRepositoryIds: next })
+}
+
+/** Everything bound except this team's own — see `toggleExtraRepository`. */
+const otherRepositories = computed( =>
+ repositories.value.filter((repo) => repo.id !== repositoryId.value),
+)
+
+const extraRepositoryNames = computed( =>
+ extraRepositoryIds.value
+.map((id) => repositories.value.find((repo) => repo.id === id)?.displayName)
+.filter((name): name is string => name !== undefined),
+)
 
 const repositories = computed( => props.repositories ?? [])
 
@@ -1286,6 +1320,39 @@ const onKeydown = (event: KeyboardEvent) => {
  </p>
 
  <!--
+ The operator asks — the cross-repository fleet, drawn where the single
+ repository already is, because it answers the same question one level up: not
+ "where does a run default" but "which repositories may a *subtask* land in".
+
+ Leads with the consequence rather than the control, like everything else in this
+ section: a planner is told this list and splits its plan by repository, and each
+ branch goes through that repository's own merge queue.
+ -->
+ <template v-if="otherRepositories.length > 0">
+ <h4 class="also">And across</h4>
+ <p v-if="extraRepositoryNames.length === 0" class="fine">
+ One repository. A plan's subtasks all land where this team lands.
+ </p>
+ <p v-else class="fine">
+ A planner here is told it works across
+ <strong>{{ extraRepositoryNames.join(', ') }}</strong> as well, and may put any
+ subtask in one of them. Each lands on its own branch, through that
+ repository's own merge queue.
+ </p>
+ <div class="chips">
+ <label v-for="repo in otherRepositories":key="`extra-${repo.id}`" class="chip">
+ <input
+ type="checkbox"
+:checked="extraRepositoryIds.includes(repo.id)"
+:aria-label="`Also land work in ${repo.displayName}`"
+ @change="toggleExtraRepository(repo.id)"
+ />
+ <span>{{ repo.displayName }}</span>
+ </label>
+ </div>
+ </template>
+
+ <!--
  The second policy item, and the one that cost nothing once the first
  existed: `verifyCommand` is a field the merge queue already reads. Leads with
  what happens at a merge rather than with the control.
@@ -1881,6 +1948,15 @@ header h2 {
  display: flex;
  flex-direction: column;
  gap: 0.9rem;
+}
+
+/* A sibling heading inside "Where the work lands" — see the section's own comment. */
+.also {
+ margin: 0.6rem 0 0.2rem;
+ font-size: 0.68rem;
+ text-transform: uppercase;
+ letter-spacing: 0.05em;
+ color: var(--text-faint);
 }
 
 .chips {

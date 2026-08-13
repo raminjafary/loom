@@ -48,6 +48,20 @@ export interface PlanSubtask {
  */
  readonly paths: readonly string[]
  /**
+ * Which repository this subtask lands in, by **display name**.
+ *
+ * Null means the planner's own repository, which is what every subtask did before this
+ * field and is still the overwhelming case. A name here is only honoured when the
+ * planner's team declared that repository (`extraRepositoryIds`), and anything else is
+ * refused where the child starts — the *validator* cannot know the team, so this parse
+ * only establishes the shape.
+ *
+ * **By name, not id**, for the reason `personaName` is a name: a model is told which
+ * repositories its team works in and names one of them back. A uuid is a thing it would
+ * have to be handed and could invent.
+ */
+ readonly repository: string | null
+ /**
  * Which other subtasks in this same plan must finish first, by index
  *.
  *
@@ -567,6 +581,28 @@ export const parsePlanSubtask = (
  const pathsVerdict = parseSubtaskPaths(value.paths, index, value.title)
  if (!pathsVerdict.ok) return pathsVerdict
 
+ /**
+ * The repository, as a name and nothing more.
+ *
+ * Absent, null and empty all mean "the planner's own", which is the pre-field behaviour
+ * and the case that must stay free. A non-string is refused rather than coerced: a
+ * subtask whose repository silently became `"undefined"` would be refused at child start
+ * with a message about a repository nobody named.
+ */
+ const rawRepository = value.repository
+ if (
+ rawRepository !== undefined &&
+ rawRepository !== null &&
+ (typeof rawRepository !== 'string' || rawRepository.length > 200)
+) {
+ return {
+ ok: false,
+ reason: `Subtask ${index} ("${String(value.title)}") has a repository that is not a name (1–200 characters)`,
+ }
+ }
+ const repository =
+ typeof rawRepository === 'string' && rawRepository.trim !== '' ? rawRepository.trim: null
+
  const dependsVerdict = parseSubtaskDependsOn(value.dependsOn, index, value.title, subtaskCount)
  if (!dependsVerdict.ok) return dependsVerdict
 
@@ -595,6 +631,7 @@ export const parsePlanSubtask = (
  task: value.task.trim,
  personaName: value.personaName.trim,
  paths: pathsVerdict.paths,
+ repository,
  /**
  * The derived edge (see `PlanSubtask.reviews`). Unioned rather than replaced: a
  * planner may legitimately want its reviewer to wait for a second subtask too —

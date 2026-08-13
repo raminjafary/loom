@@ -127,6 +127,37 @@ export const selectDelegatablePersonas = (
  * Appended to a Planner's system prompt at run start. Null when the persona is not
  * a Planner, so the caller has one condition rather than a rule to remember.
  */
+/**
+ * What a planner is told about the repositories its team works in.
+ *
+ * Empty when the team declared none, which is every team by default — and that silence is
+ * correct rather than lazy: a planner told "you may name a repository" when there is only one
+ * would spend a field on a choice it does not have, and a model handed an option tends to use
+ * it.
+ *
+ * The planner's own repository is named too, because the useful sentence is the *set*: a
+ * planner that knows it has two and only hears about one will put everything in the one it
+ * was told about.
+ */
+export const describeTeamRepositories = (input: {
+ readonly own: string | null
+ readonly others: readonly string[]
+}): string => {
+ if (input.others.length === 0) return ''
+ const all = [...(input.own === null ? []: [input.own]),...input.others]
+ return [
+ '',
+ '',
+ `This team works across more than one repository: ${all.join(', ')}. Each subtask lands ` +
+ 'in one of them, on its own branch. Put a subtask in a repository by naming it in the ' +
+ '`repository` field, exactly as written above; leave the field out and it lands in ' +
+ `${input.own ?? 'this run’s own repository'}.`,
+ 'Split by repository before you split by anything else — two subtasks in different ' +
+ 'repositories never conflict, and one subtask cannot span two. A name that is not on ' +
+ 'that list is refused and its work is simply not done.',
+ ].join('\n')
+}
+
 export const describeDelegationRoster = (
  planner: PersonaSpec,
  candidates: readonly DelegationCandidate[],

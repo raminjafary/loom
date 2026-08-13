@@ -112,6 +112,17 @@ export const PlanSubtaskSchema = z.object({
  * is a dropped plan frame with no reason the model could act on.
  */
  reviews: z.number.nullish,
+ /**
+ * Which repository this subtask lands in, by **name**. Absent or null means the planner's own, which is every subtask
+ * a single-repository team writes.
+ *
+ * Declared here rather than left to ride the payload, for the reason this file's
+ * `egressHosts` comment gives and this repository has now paid for five times: a Zod schema
+ * **strips what it does not name**. A subtask's repository dropped at the frame is a plan
+ * that silently lands every branch in the planner's own repository, with nothing anywhere
+ * saying so.
+ */
+ repository: z.string.max(200).nullish,
 })
 
 /**

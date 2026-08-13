@@ -1,0 +1,1 @@
+ALTER TABLE "persona_group" ADD COLUMN "extra_repository_ids" jsonb DEFAULT '[]'::jsonb NOT NULL;

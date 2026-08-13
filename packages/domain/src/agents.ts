@@ -269,6 +269,15 @@ export interface PersonaGroup {
  * Null means nobody has chosen, which is what every team had before this existed.
  */
  readonly repositoryId: string | null
+ /**
+ * The other repositories this team's subtasks may name.
+ *
+ * `repositoryId` is where a run *defaults*, and stays singular for that reason. This is the
+ * different question a cross-repository team asks — which repositories a **subtask** may
+ * name — and it is a set because that is what the answer is. Empty means the team works in
+ * one repository, which is what every team has always done.
+ */
+ readonly extraRepositoryIds: string[]
  readonly createdAt: Date
  readonly updatedAt: Date
 }

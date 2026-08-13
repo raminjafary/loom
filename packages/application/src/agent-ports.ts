@@ -231,6 +231,12 @@ export interface PlanSubtaskRecord {
  readonly dependsOn: number[]
  /** Which sibling `position` this subtask reviews, or null. */
  readonly reviews: number | null
+ /**
+ * Which repository this subtask lands in, by name, or null for the planner's own
+ *. A name, not an id — see the column's own comment: the
+ * check against the team runs when the run starts, not when the plan was submitted.
+ */
+ readonly repository: string | null
  readonly status: 'waiting' | 'started' | 'skipped' | 'refused'
  readonly agentRunId: AgentRunId | null
  readonly detail: string | null
@@ -249,6 +255,7 @@ export interface PlanSubtaskRepositoryPort {
  position: number
  title: string
  task: string
+ repository?: string | null
  personaName: string
  paths: string[]
  dependsOn: number[]
@@ -656,6 +663,11 @@ export interface PersonaGroupRepositoryPort {
  orchestratorId?: string | null
  /** The team repository. Null clears it; absent leaves it, likewise. */
  repositoryId?: string | null
+ /**
+ * The other repositories this team's subtasks may name. Absent
+ * leaves them alone; `[]` clears them, which is a team saying it works in one place.
+ */
+ extraRepositoryIds?: string[]
  },
 ): Promise<PersonaGroup>
  delete(workspaceId: WorkspaceId, id: PersonaGroupId): Promise<void>
