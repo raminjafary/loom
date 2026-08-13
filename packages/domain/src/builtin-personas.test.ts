@@ -19,9 +19,28 @@ const asSpec = (persona: BuiltinPersona): PersonaSpec => ({
 })
 
 describe('BUILTIN_PERSONAS', => {
- it('has exactly nine roles with unique names', => {
- expect(BUILTIN_PERSONAS).toHaveLength(9)
- expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(9)
+ it('has exactly ten roles with unique names', => {
+ expect(BUILTIN_PERSONAS).toHaveLength(10)
+ expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(10)
+ })
+
+ /**
+ * The answer to "several planners" is several planner *personas*, so a workspace
+ * that ships one planner ships no depth at all — an operator had to author the second
+ * before the corporation was visible anywhere.
+ */
+ it('ships a sub-planner whose envelope reaches the workers its parent could', => {
+ const root = BUILTIN_PERSONAS.find((p) => p.name === 'planner')
+ const area = BUILTIN_PERSONAS.find((p) => p.name === 'area-planner')
+ expect(area?.harnessPlanner).toBe(true)
+ // Narrower than its parent's and every refusal lands two hops from the mistake;
+ // attenuation intersects the two, so equal is the only workable default.
+ expect([...(area?.harnessDelegates ?? [])].sort).toEqual(
+ [...(root?.harnessDelegates ?? [])].sort,
+)
+ // And it cannot act, for the same reason the root cannot.
+ expect(area?.tools).not.toContain('Bash')
+ expect(area?.tools).not.toContain('Write')
  })
 
  /**

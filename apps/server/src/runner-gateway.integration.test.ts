@@ -846,7 +846,17 @@ describe('runner-gateway: warm handoff', => {
  }),
 )
 
- const delivered = nextFrame(socket, (v) => v.type === 'deliver_context')
+ /**
+ * A longer wait than the 5s default, and a longer poll below it.
+ *
+ * This test failed twice under a full parallel suite while a live driver was running
+ * beside it, and never once on its own or on six clean runs after — so the cause was
+ * never reproduced and is recorded as unproven. What is certain is that it is the only
+ * test here racing a heartbeat against two fixed budgets, and that lengthening them
+ * cannot weaken what it asserts: the claim is that the nudge is delivered **once**, and
+ * waiting longer for a second one makes that stronger rather than weaker.
+ */
+ const delivered = nextFrame(socket, (v) => v.type === 'deliver_context', 20_000)
  socket.send(
  JSON.stringify({
  type: 'heartbeat',
@@ -864,7 +874,7 @@ describe('runner-gateway: warm handoff', => {
  expect(frame.text).toContain('nobody is stopping you')
 
  // And where a human reads, because a threshold nobody can see acting is a setting.
- for (let i = 0; i < 40; i += 1) {
+ for (let i = 0; i < 200; i += 1) {
  const page = await client.message.list({ threadId: created.rootThread.id })
  if (page.messages.some((m) => m.body.text?.includes('91% full'))) break
  await new Promise((r) => setTimeout(r, 50))

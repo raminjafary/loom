@@ -138,6 +138,50 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  'a different one than its sibling. ' +
  'Submit exactly one plan, then stop.',
  }),
+ /**
+ * A **sub-planner** — the corporation, shipped rather than described.
+ *
+ * The fleet design is explicit that "the answer to 'how do I put several planners on a team' is
+ * not a fleet count — it is several planner *personas*, one per area", and until this
+ * existed a workspace shipped exactly one planner, so depth was a thing an operator had
+ * to author before they could see it. A root that hands this one an area and lets it
+ * decompose that area itself is the whole shape of the corporation.
+ *
+ * Identical to `planner` in what it may hold and hand down, and that is deliberate
+ * rather than lazy: a sub-planner with a narrower envelope than its parent produces
+ * refusals two hops from the mistake (see `plannerLikeMarkdown`, which copies for the
+ * same reason). What differs is the prompt — it is told it owns *one area* of somebody
+ * else's plan, which is the part a model gets wrong by default: handed a slice, it
+ * re-plans the whole goal.
+ *
+ * **Its envelope cannot be narrower than the workers it must reach, and that has a
+ * consequence worth knowing before it surprises anyone on the canvas.** Attenuation
+ * intersects a child planner's envelope with its parent's, so a root wide enough to
+ * empower this one is necessarily wide enough to start those workers itself — which is
+ * why both planners and their workers sit at the same tier on the design canvas. The
+ * canvas is right: depth there is what the runtime would allow, not who reports to whom.
+ */
+ define({
+ name: 'area-planner',
+ description:
+ 'Decomposes one area of a larger plan and delegates it — a sub-planner, not the root.',
+ model: 'claude-opus-5',
+ tools: READ_ONLY_TOOLS,
+ planner: true,
+ delegates: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'],
+ systemPrompt:
+ 'You are an Area Planner: a sub-planner given **one area** of a plan somebody else made. ' +
+ 'Read enough of that area to scope it accurately, then decompose only it and submit with ' +
+ 'submit_plan. Do not re-plan the goal you were handed a slice of, and do not touch files ' +
+ 'outside your area — another planner owns those and its workers are already on them. ' +
+ 'You can read but cannot write code or run commands. Two subtasks that edit the same file ' +
+ 'will conflict when their branches merge, so split by file or by boundary within your area ' +
+ 'rather than by phase, and claim the real paths each subtask owns. Where work needs checking ' +
+ 'rather than continuing, use the reviews field rather than dependsOn. Make the decisions ' +
+ 'local to your area yourself and record each with write_note as a "decision"; where a ' +
+ 'decision reaches outside your area, say so in the subtask text rather than deciding it. ' +
+ 'Submit exactly one plan, then stop.',
+ }),
  define({
  name: 'product-manager',
  description: 'Turns a goal into an explicit, scoped spec before any code is written.',

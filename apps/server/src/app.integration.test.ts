@@ -1,6 +1,7 @@
 import { ApprovalModeSchema, contract, type Contract } from '@loom/api-contract'
+import { seedBuiltinPersonas, seedBuiltinTeams } from '@loom/application'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
-import { APPROVAL_MODES } from '@loom/domain'
+import { APPROVAL_MODES, BUILTIN_TEAMS, asWorkspaceId } from '@loom/domain'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
 import type { ContractRouterClient } from '@orpc/contract'
@@ -615,6 +616,78 @@ describe('removal over HTTP', => {
  await client.personaGroup.delete({ personaGroupId: group.id })
  await client.persona.delete({ personaId: planner.id })
  await client.persona.delete({ personaId: worker.id })
+ })
+
+ /**
+ * The shipped teams, over the contract.
+ *
+ * What is worth asserting here rather than in the domain is the *seeding*: that a team
+ * arrives with its root, its review policy and its widths resolved to real persona ids,
+ * and that running it again does not touch a team an operator has since edited.
+ */
+ it('seeds teams whose policy is resolved to the personas in this workspace', async => {
+ await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+ await seedBuiltinTeams(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+
+ const groups = await client.personaGroup.list
+ const personas = await client.persona.list
+ const nameById = new Map(personas.map((p: any) => [p.id, p.name]))
+
+ for (const team of BUILTIN_TEAMS) {
+ const seeded = groups.find((group) => group.name === team.name)
+ expect(seeded, team.name).toBeDefined
+ if (!seeded) continue
+
+ expect(seeded.personaIds.map((id) => nameById.get(id))).toEqual([...team.members])
+ // The root, as an id — the vantage, without which the canvas picks by reach.
+ expect(nameById.get(seeded.orchestratorId ?? '')).toBe(team.orchestrator)
+ // And no repository, which is the operator's choice to make.
+ expect(seeded.repositoryId).toBeNull
+
+ const reviewersByName = Object.fromEntries(
+ Object.entries(seeded.reviewers).map(([reviewer, reviewed]) => [
+ nameById.get(reviewer),
+ reviewed.map((id) => nameById.get(id)),
+ ]),
+)
+ for (const [reviewer, reviewed] of Object.entries(team.reviewers ?? {})) {
+ expect(reviewersByName[reviewer]).toEqual([...reviewed])
+ }
+ for (const [member, size] of Object.entries(team.fleet ?? {})) {
+ const id = personas.find((p: any) => p.name === member)?.id
+ expect(seeded.fleet[id ?? '']).toBe(size)
+ }
+ }
+ })
+
+ /**
+ * Create-if-absent, never update. A team has no `builtinSource` to compare against, so
+ * "the operator has not edited this" is not a checkable fact — and re-seeding would
+ * silently undo a roster, a width or a repository somebody chose.
+ */
+ it('leaves a team an operator has edited entirely alone', async => {
+ await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+ await seedBuiltinTeams(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+
+ const first = (await client.personaGroup.list).find(
+ (group) => group.name === BUILTIN_TEAMS[0]?.name,
+)
+ expect(first).toBeDefined
+
+ const emptied = await client.personaGroup.update({
+ personaGroupId: first!.id,
+ name: first!.name,
+ personaIds: [],
+ })
+ expect(emptied.personaIds).toEqual([])
+
+ await seedBuiltinTeams(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+ const after = (await client.personaGroup.list).find((group) => group.id === first!.id)
+ expect(after?.personaIds).toEqual([])
+ // And no second copy under the same name, which the unique index would refuse anyway.
+ expect(
+ (await client.personaGroup.list).filter((group) => group.name === first!.name),
+).toHaveLength(1)
  })
 
  /**

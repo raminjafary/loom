@@ -4,6 +4,7 @@ import {
  expireStaleApprovals,
  reapStuckRuns,
  seedBuiltinPersonas,
+ seedBuiltinTeams,
  type AgentDeps,
  type NotificationPort,
 } from '@loom/application'
@@ -142,6 +143,9 @@ export const buildApp = async (
  // built-in added after it was made — silently, since the reconciler is looked
  // up by name and simply does nothing when absent.
  await seedBuiltinPersonas(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
+ // After the personas, necessarily: a team is a roster of them, and a member
+ // whose persona has not been seeded yet would simply be dropped.
+ await seedBuiltinTeams(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
  return result
  },
  })

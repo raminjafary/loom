@@ -7,6 +7,7 @@ import {
  ValidationError,
  actingTools,
  agentRunActor,
+ BUILTIN_TEAMS,
  applyResponseStyle,
  asRepositoryId,
  attenuateChildPersona,
@@ -602,6 +603,96 @@ export const seedBuiltinPersonas = async (
  harnessDelegates: persona.harnessDelegates,
  harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
  builtinSource: persona.markdownSource,
+ })
+ }
+}
+
+/**
+ * The teams a workspace ships with.
+ *
+ * **Create-if-absent, and never update** — which is where this deliberately differs from
+ * `seedBuiltinPersonas`. That one can re-seed an untouched built-in because a persona has a
+ * `builtinSource` to compare against, so "the operator has not edited this" is a
+ * checkable fact. A team has no such record and its edits are not text: a repository
+ * chosen, a member added, a width tuned, a layout dragged. There is no diff that
+ * distinguishes an operator's team from a stale copy of ours, so a team that exists by
+ * name is left entirely alone.
+ *
+ * Runs on every membership check like the persona seeding, for the same reason: a
+ * workspace made before a team existed would otherwise never receive it, silently.
+ *
+ * A member naming a persona this workspace does not have is dropped rather than failing
+ * the team — an operator who deleted `qa` should still get the rest of the roster — and a
+ * team whose *root* is gone is skipped entirely, because the depth is only
+ * answerable from somewhere and a rootless team is the state this seeding exists to avoid.
+ */
+export const seedBuiltinTeams = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<void> => {
+ const [personas, groups] = await Promise.all([
+ deps.personas.listByWorkspace(input.workspaceId),
+ deps.personaGroups.listByWorkspace(input.workspaceId),
+ ])
+ const idByName = new Map(personas.map((persona) => [persona.name, persona.id as string]))
+ const taken = new Set(groups.map((group) => group.name))
+
+ for (const team of BUILTIN_TEAMS) {
+ if (taken.has(team.name)) continue
+ const orchestratorId = idByName.get(team.orchestrator)
+ if (orchestratorId === undefined) continue
+
+ const personaIds = team.members.flatMap((name) => {
+ const id = idByName.get(name)
+ return id === undefined ? []: [id]
+ })
+ if (personaIds.length < 2) continue
+
+ const created = await deps.personaGroups.create({
+ workspaceId: input.workspaceId,
+ name: team.name,
+ personaIds,
+ })
+
+ /**
+ * The policy in a second call, because `create` takes a roster and nothing else. Worth
+ * not widening it for this: everything below is a *design-canvas* fact, and
+ * a create that accepted them would let any caller assert a review policy the same
+ * call cannot validate.
+ *
+ * Written through the **port**, not through `updatePersonaGroup`, and for the reason
+ * `seedBuiltinPersonas` writes through `deps.personas` rather than `createPersona`:
+ * that use case is human-only on purpose, and
+ * seeding is the platform rather than an actor. What is given up is validation of
+ * *human* input; the data here is ours, and `builtin-teams.test.ts` refuses a shipped
+ * team whose policy those same rules would reject — which fails a build rather than a
+ * workspace's first login.
+ */
+ const onTeam = new Set(personaIds)
+ const reviewers = Object.fromEntries(
+ Object.entries(team.reviewers ?? {}).flatMap(([reviewer, reviewed]) => {
+ const reviewerId = idByName.get(reviewer)
+ if (reviewerId === undefined) return []
+ const reviewedIds = reviewed.flatMap((name) => {
+ const id = idByName.get(name)
+ return id !== undefined && onTeam.has(id) ? [id]: []
+ })
+ return reviewedIds.length === 0 ? []: [[reviewerId, reviewedIds]]
+ }),
+)
+ const fleet = Object.fromEntries(
+ Object.entries(team.fleet ?? {}).flatMap(([name, size]) => {
+ const id = idByName.get(name)
+ return id !== undefined && onTeam.has(id) ? [[id, size]]: []
+ }),
+)
+
+ await deps.personaGroups.update(input.workspaceId, created.id, {
+ name: created.name,
+ personaIds,
+ orchestratorId,
+ reviewers,
+ fleet,
  })
  }
 }
