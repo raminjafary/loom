@@ -123,8 +123,9 @@ export const arrangeByTier = (
  tiers: Readonly<Record<string, number>>,
 ): Record<string, { x: number; y: number }> => {
  const rows = new Map<number, AgentPersona[]>
+ const deepest = Math.max(0,...personas.map((persona) => tiers[persona.id] ?? 0))
  for (const persona of personas) {
- const tier = tiers[persona.id] ?? UNREACHABLE_TIER
+ const tier = tiers[persona.id] ?? deepest + UNREACHABLE_GAP
  rows.set(tier, [...(rows.get(tier) ?? []), persona])
  }
 
@@ -166,8 +167,15 @@ export const arrangeByTier = (
  */
 export type OrchestrationRole = 'orchestrator' | 'sub-planner' | 'worker' | 'unreachable'
 
-/** The row a member with no depth is drawn on — below everything that has one. */
-export const UNREACHABLE_TIER = 9
+/**
+ * How far below the deepest reachable tier an unreachable member is drawn.
+ *
+ * Two rows, not a fixed faraway one. A constant row put them 1,350px down on a canvas
+ * whose whole tree fit in 300, so "Arrange" then fitted to the gap and shrank every node
+ * to unreadability — found by clicking the button. A gap of two rows still reads as "these
+ * are not part of the chain" without making the chain illegible to say it.
+ */
+export const UNREACHABLE_GAP = 2
 
 export interface OrchestrationSeat {
  /** How deep this member's runs would sit under the orchestrator; null when unreachable. */
@@ -296,7 +304,6 @@ export const orchestrate = (
  const depth = depths[node.personaId]
  if (depth === undefined) {
  seats[node.personaId] = { depth: null, role: 'unreachable', canRecurse: false }
- tiers[node.personaId] = UNREACHABLE_TIER
  unreachable.push(node.personaId)
  continue
  }
@@ -310,6 +317,15 @@ export const orchestrate = (
  }
  tiers[node.personaId] = depth
  }
+
+ /**
+ * Unreachable members are placed *after* everything else, two rows below the deepest
+ * tier anything reached. Placed here rather than in `arrangeByTier` because the tiers
+ * map is what `layoutForGroup` reads too, and the two have to agree about where a
+ * stranded member goes.
+ */
+ const deepest = Math.max(0,...Object.values(tiers))
+ for (const personaId of unreachable) tiers[personaId] = deepest + UNREACHABLE_GAP
 
  return { orchestratorId, seats, tiers, outOfDepth, unreachable }
 }
