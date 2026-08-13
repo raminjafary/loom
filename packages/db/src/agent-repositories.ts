@@ -1369,6 +1369,9 @@ export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort
  // Null is a real value here — "nobody has chosen" — so absent and null differ:
  // absent leaves the stored root alone, null clears it back to picked-by-reach.
 ...(patch.orchestratorId === undefined ? {}: { orchestratorId: patch.orchestratorId }),
+ // Absent and null differ here too — absent leaves the team's repository alone,
+ // null is an operator un-choosing it.
+...(patch.repositoryId === undefined ? {}: { repositoryId: patch.repositoryId }),
  updatedAt: new Date,
  })
 .where(and(eq(personaGroup.workspaceId, workspaceId), eq(personaGroup.id, id)))

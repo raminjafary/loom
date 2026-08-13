@@ -618,6 +618,54 @@ describe('removal over HTTP', => {
  })
 
  /**
+ * The team repository, over the contract. The `set null` behaviour is asserted in
+ * `packages/db` where it happens; what belongs here is the refusal, because the run
+ * launcher *defaults* from this field — an id naming nothing would not sit inert, it
+ * would start a run against a repository no Runner can clone.
+ */
+ it('refuses a team repository that is not bound in this workspace', async => {
+ const stamp = Date.now
+ const member = await client.persona.create({
+ markdownSource: [
+ '---',
+ `name: lands-member-${stamp}`,
+ 'description: On a team',
+ 'model: claude-haiku-4-5-20251001',
+ 'tools: [Read]',
+ '---',
+ 'Do nothing.',
+ ].join('\n'),
+ })
+ const group = await client.personaGroup.create({
+ name: `lands-${stamp}`,
+ personaIds: [member.id],
+ })
+ // Nobody has chosen out of the box — the state every team starts in.
+ expect(group.repositoryId).toBeNull
+
+ await expect(
+ client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [member.id],
+ repositoryId: '00000000-0000-4000-8000-000000000000',
+ }),
+).rejects.toThrow(/Repository/)
+
+ // Null is not a lookup: un-choosing must not have to name something that exists.
+ const cleared = await client.personaGroup.update({
+ personaGroupId: group.id,
+ name: group.name,
+ personaIds: [member.id],
+ repositoryId: null,
+ })
+ expect(cleared.repositoryId).toBeNull
+
+ await client.personaGroup.delete({ personaGroupId: group.id })
+ await client.persona.delete({ personaId: member.id })
+ })
+
+ /**
  * The depth limit reaches the client through the session, because the composition
  * canvas cannot say which of the edges it draws a plan could use without it — and a
  * client that assumed a value would be hard-coding server configuration.

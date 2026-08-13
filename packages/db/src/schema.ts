@@ -531,6 +531,20 @@ export const personaGroup = pgTable(
  * roster. A constraint here would turn a stale pointer into a failed load.
  */
  orchestratorId: uuid('orchestrator_id'),
+ /**
+ * Which repository this team's work lands in — the design canvas, and the fact
+ * the other two policy items on it were blocked on.
+ *
+ * A real foreign key, unlike `personaIds` and `orchestratorId`, because the two cases
+ * are not the same. Those hold ids the platform cannot constrain without turning a
+ * stale pointer into a failed load; this one can say `set null`, which is the same
+ * property — a team whose repository was removed still opens — while keeping the
+ * database from holding a repository id that names nothing.
+ *
+ * Null is the state every team has today: no repository chosen, and the run launcher
+ * defaults to nothing.
+ */
+ repositoryId: uuid('repository_id').references( => repository.id, { onDelete: 'set null' }),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },

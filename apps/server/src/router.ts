@@ -924,6 +924,8 @@ export const router = os.router({
  // Null is forwarded, not dropped: it is how a human un-chooses a root, which
  // absent deliberately does not mean.
 ...(input.orchestratorId === undefined ? {}: { orchestratorId: input.orchestratorId }),
+ // Forwarded on the same terms — null un-chooses the team's repository.
+...(input.repositoryId === undefined ? {}: { repositoryId: input.repositoryId }),
  }),
 ),
 ),

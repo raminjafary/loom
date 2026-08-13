@@ -209,6 +209,17 @@ export interface PersonaGroup {
  * can have. This says where to stand.
  */
  readonly orchestratorId: string | null
+ /**
+ * Which repository this team's work lands in.
+ *
+ * The fact the rest of that canvas was blocked on: `verifyCommand` and reconciliation
+ * are fields on a *repository*, so a team's canvas could not say whose policy it was
+ * showing. Read by the run launcher, which defaults to it — a repository a human chose
+ * for a team and every start then ignored would be the decoration the roadmap forbids here.
+ *
+ * Null means nobody has chosen, which is what every team had before this existed.
+ */
+ readonly repositoryId: string | null
  readonly createdAt: Date
  readonly updatedAt: Date
 }

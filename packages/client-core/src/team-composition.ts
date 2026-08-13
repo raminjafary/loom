@@ -685,3 +685,34 @@ export const derivedPersonaMarkdown = (
 ...(input.planner === undefined ? {}: { planner: input.planner }),
  })
 }
+
+/**
+ * Which repository a run of this persona should start against, according to the teams it
+ * is on.
+ *
+ * This is the reader that keeps the team's repository from being a decoration. The rule
+ * for the design canvas is that it may only draw what the runtime executes, and a
+ * repository nothing defaults from would be a field a human sets and every start ignores.
+ *
+ * **Resolved from membership, with the same limitation the widths have.** A run
+ * carries a persona, not a team, so the only honest question available is "which teams is
+ * this persona on". One team with a repository answers it. Several teams naming the *same*
+ * repository also answer it — every candidate is identical, so there is nothing to guess
+ * — which is why this is not simply the fleet rule copied. Teams that disagree are a
+ * genuine ambiguity and the answer is null: a pre-filled field the human did not choose
+ * and cannot see the reasoning for is worse than an empty one they must fill.
+ *
+ * Null is also what a persona on no team, or on teams with no repository, gets.
+ */
+export const teamRepositoryFor = (
+ personaId: string,
+ groups: readonly { readonly personaIds: readonly string[]; readonly repositoryId: string | null }[],
+): string | null => {
+ const claimed = new Set(
+ groups
+.filter((group) => group.personaIds.includes(personaId))
+.map((group) => group.repositoryId)
+.filter((repositoryId): repositoryId is string => repositoryId !== null),
+)
+ return claimed.size === 1 ? [...claimed][0]!: null
+}

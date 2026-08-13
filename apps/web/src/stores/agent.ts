@@ -87,15 +87,11 @@ export const useAgentStore = defineStore('agent', => {
  session.detachCapability(input),
  createPersonaGroup: (input: { name: string; personaIds: string[] }) =>
  session.createPersonaGroup(input),
- updatePersonaGroup: (input: {
- personaGroupId: string
- name: string
- personaIds: string[]
- layout?: Record<string, { x: number; y: number }>
- fleet?: Record<string, number>
- reviewers?: Record<string, string[]>
- orchestratorId?: string | null
- }) => session.updatePersonaGroup(input),
+ // Typed from the session for the reason the local copy of `startRun`'s input was:
+ // this restatement had already had to grow a field three times, and the fourth
+ // is the one that would have been dropped silently.
+ updatePersonaGroup: (input: Parameters<typeof session.updatePersonaGroup>[0]) =>
+ session.updatePersonaGroup(input),
  deletePersonaGroup: (personaGroupId: string) => session.deletePersonaGroup(personaGroupId),
  // Typed from the session rather than restated: the local copy had already fallen
  // behind `responseStyle`, `model` and `budgetCapUsd`, and a store that silently

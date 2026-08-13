@@ -995,6 +995,7 @@ onBeforeUnmount( => {
  <RunLauncher
 :repositories="agentSnapshot.repositories"
 :personas="agentSnapshot.personas"
+:groups="agentSnapshot.personaGroups"
 :disabled="!snapshot.activeThread"
  @start="startRun"
  @open-settings="settingsOpen = true"
@@ -1211,6 +1212,7 @@ onBeforeUnmount( => {
  v-if="composerOpen"
 :personas="agentSnapshot.personas"
 :groups="agentSnapshot.personaGroups"
+:repositories="agentSnapshot.repositories"
 :matrix="agentSnapshot.delegationMatrix"
 :max-delegation-depth="snapshot.limits?.maxDelegationDepth"
 :expertise="composerExpertise"

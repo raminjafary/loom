@@ -1,4 +1,9 @@
-import type { AgentPersona, DelegationEdge, PersonaGroup } from '@loom/api-contract'
+import type {
+ AgentPersona,
+ DelegationEdge,
+ PersonaGroup,
+ Repository,
+} from '@loom/api-contract'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import TeamComposer from './TeamComposer.vue'
@@ -64,6 +69,7 @@ const group = (overrides: Partial<PersonaGroup> = {}): PersonaGroup => ({
  reviewers: {},
  layout: {},
  orchestratorId: null,
+ repositoryId: null,
  createdAt: new Date(0),
  updatedAt: new Date(0),
 ...overrides,
@@ -77,9 +83,23 @@ const VueFlowStub = {
  template: '<div class="flow-stub" />',
 }
 
+const repository = (id: string, displayName: string) =>
+ ({
+ id,
+ workspaceId: 'w1',
+ runnerId: 'runner-1',
+ displayName,
+ absolutePath: `/src/${displayName}`,
+ defaultBranch: 'main',
+ verifyCommand: null,
+ installCommand: null,
+ createdAt: new Date(0),
+ }) as unknown as Repository
+
 const composer = (options: {
  personas?: AgentPersona[]
  groups?: PersonaGroup[]
+ repositories?: Repository[]
  matrix?: DelegationEdge[]
  maxDelegationDepth?: number
  expertise?: {
@@ -93,6 +113,7 @@ const composer = (options: {
  props: {
  personas: options.personas ?? [lead, persona],
  groups: options.groups ?? [group],
+ repositories: options.repositories ?? [repository('r1', 'loom'), repository('r2', 'atlas')],
  matrix: options.matrix ?? [],
  maxDelegationDepth: options.maxDelegationDepth ?? 2,
  expertise: options.expertise ?? [],
@@ -471,6 +492,70 @@ describe('TeamComposer', => {
  * identity, never to a slot on a team — and the canvas has to make that visible and
  * cheap, or the two are indistinguishable names.
  */
+ /**
+ * The design-canvas policy: which repository this team's work lands in. The item
+ * the other two on that canvas were blocked on, because verification and reconciliation
+ * are fields on a repository.
+ */
+ describe('where the work lands', => {
+ it('says nothing is chosen rather than showing an empty picker', => {
+ const wrapper = composer
+ expect(wrapper.get('.lands').text).toContain('No repository chosen')
+ })
+
+ it('names the repository and the branch a run would start on', => {
+ const wrapper = composer({ groups: [group({ repositoryId: 'r1' })] })
+ const text = wrapper.get('.lands').text
+ expect(text).toContain('loom')
+ expect(text).toContain('main')
+ })
+
+ it('saves the choice along with everything else the team holds', async => {
+ const wrapper = composer({ groups: [group({ orchestratorId: 'lead' })] })
+ await wrapper.get('.repo-picker').setValue('r2')
+ const saved = wrapper.emitted('save-group')?.[0]?.[0] as {
+ repositoryId: string | null
+ orchestratorId: string | null
+ personaIds: string[]
+ }
+ expect(saved.repositoryId).toBe('r2')
+ // The single save path is what makes this hold: one control must not clear another.
+ expect(saved.orchestratorId).toBe('lead')
+ expect(saved.personaIds).toEqual(['lead', 'swe'])
+ })
+
+ it('un-chooses with null rather than with an empty string the server would look up', async => {
+ const wrapper = composer({ groups: [group({ repositoryId: 'r1' })] })
+ await wrapper.get('.repo-picker').setValue('')
+ const saved = wrapper.emitted('save-group')?.[0]?.[0] as { repositoryId: string | null }
+ expect(saved.repositoryId).toBeNull
+ })
+
+ /**
+ * The launcher defaults from a *persona's* teams, so a member on two teams that land
+ * in different places gets no default at all. Correct, and invisible unless said.
+ */
+ it('names members whose other team lands somewhere else', => {
+ const wrapper = composer({
+ groups: [
+ group({ repositoryId: 'r1' }),
+ group({ id: 'g2', name: 'Team B', personaIds: ['swe'], repositoryId: 'r2' }),
+ ],
+ })
+ expect(wrapper.get('.lands.warn').text).toContain('swe')
+ })
+
+ it('says nothing about members whose other team agrees', => {
+ const wrapper = composer({
+ groups: [
+ group({ repositoryId: 'r1' }),
+ group({ id: 'g2', name: 'Team B', personaIds: ['swe'], repositoryId: 'r1' }),
+ ],
+ })
+ expect(wrapper.find('.lands.warn').exists).toBe(false)
+ })
+ })
+
  describe('expertise on the roster', => {
  const expertise = [
  {

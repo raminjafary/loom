@@ -578,6 +578,7 @@ export interface PersonaGroupRow {
  fleet?: unknown
  reviewers?: unknown
  orchestratorId?: string | null
+ repositoryId?: string | null
  createdAt: Date
  updatedAt: Date
 }
@@ -610,6 +611,10 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
  // Null for every team that predates the column, which is the same state as "nobody has
  // chosen" — the canvas picks by reach and says so, rather than rendering an empty tier.
  orchestratorId: row.orchestratorId ?? null,
+ // Null for a team that predates the column and for one whose repository was deleted —
+ // deliberately the same state, because both mean the same thing to every reader: no
+ // repository chosen, so nothing is defaulted from this team.
+ repositoryId: row.repositoryId ?? null,
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
 })

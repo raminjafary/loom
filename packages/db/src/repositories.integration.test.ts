@@ -467,6 +467,46 @@ describe('persona group pruning', => {
  expect(after?.updatedAt).toEqual(before?.updatedAt)
  })
 
+ /**
+ * The team repository, asserted where the claim actually lives: `set null` on
+ * delete is a Postgres behaviour, and it is the whole reason this is a foreign key at
+ * all rather than a bare id like `orchestratorId`. A team whose repository was unbound
+ * has to still open.
+ */
+ it('keeps a team whose repository was deleted, with nothing chosen', async => {
+ const [rn] = await db
+.insert(runner)
+.values({ workspaceId: WS, name: 'runner-lands', pairingTokenHash: 'hash-lands' })
+.returning({ id: runner.id })
+ const [repo] = await db
+.insert(repository)
+.values({
+ workspaceId: WS,
+ runnerId: rn!.id,
+ displayName: 'lands',
+ absolutePath: '/tmp/lands',
+ defaultBranch: 'main',
+ })
+.returning({ id: repository.id })
+
+ const team = await group(WS, 'lands', ['p_1'])
+ const bound = await groups.update(WS, team.id, {
+ name: 'lands',
+ personaIds: ['p_1'],
+ repositoryId: repo!.id,
+ })
+ expect(bound.repositoryId).toBe(repo!.id)
+
+ // Absent leaves it alone; null un-chooses it. Two different acts, as with the root.
+ const renamed = await groups.update(WS, team.id, { name: 'lands-2', personaIds: ['p_1'] })
+ expect(renamed.repositoryId).toBe(repo!.id)
+
+ await db.delete(repository).where(sql`${repository.id} = ${repo!.id}`)
+ const after = (await groups.listByWorkspace(WS)).find((g) => g.id === team.id)
+ expect(after).toBeDefined
+ expect(after?.repositoryId).toBeNull
+ })
+
  it('never reaches into another workspace\'s groups', async => {
  const mine = await group(WS, 'backend', ['p_1'])
  const theirs = await group(OTHER_WS, 'backend', ['p_1'])

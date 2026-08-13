@@ -1,0 +1,2 @@
+ALTER TABLE "persona_group" ADD COLUMN "repository_id" uuid;--> statement-breakpoint
+ALTER TABLE "persona_group" ADD CONSTRAINT "persona_group_repository_id_repository_id_fk" FOREIGN KEY ("repository_id") REFERENCES "public"."repository"("id") ON DELETE set null ON UPDATE no action;

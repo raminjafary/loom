@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AgentPersona, DelegationEdge, PersonaGroup } from '@loom/api-contract'
+import type { AgentPersona, DelegationEdge, PersonaGroup, Repository } from '@loom/api-contract'
 import { MAX_FLEET_SIZE } from '@loom/domain'
 import {
  arrangeByTier,
@@ -46,14 +46,25 @@ const props = defineProps<{
  groups: PersonaGroup[]
  matrix: DelegationEdge[]
  /**
+ * The workspace's bound repositories, so a team can say which one its work lands in
+ *.
+ *
+ * The fact the rest of this canvas's policy half was blocked on: verification and
+ * reconciliation are fields on a *repository*, so without this the canvas had no way to
+ * say whose policy it was drawing. Defaulted empty so a caller that has not read them
+ * yet draws a canvas rather than nothing.
+ */
+ repositories?: Repository[]
+ /**
  * What each member is expert in, and what the platform is doing with each map
  *. Keyed by persona id.
  *
  * Portable expertise asks this canvas to show, per member, what it knows — because a roster of
  * names with no expertise on it is what made "two security reviewers, one of which
- * learned this subsystem" impossible to see. Not filtered to a repository, because a
- * team has no repository, and inventing one would be the canvas claiming a
- * fact the platform does not hold.
+ * learned this subsystem" impossible to see. Still not filtered to the team's
+ * repository, now that a team has one: an expert is a `(persona, subject)` pair and a
+ * subject is a repository, an author or a corpus, so filtering to where the work lands
+ * would hide most of what portable expertise wants visible.
  */
  expertise?: readonly {
  personaId: string
@@ -181,6 +192,8 @@ const fleet = ref<Record<string, number>>({})
 const reviewers = ref<Record<string, string[]>>({})
 /** The root, mirrored likewise. Empty string is "nobody has chosen". */
 const orchestratorId = ref('')
+/** The team repository, mirrored likewise. Empty string is "nobody has chosen". */
+const repositoryId = ref('')
 
 /**
  * The chain of command, computed from the matrix alone.
@@ -207,6 +220,7 @@ watch(
  [group, members],
  => {
  orchestratorId.value = group.value?.orchestratorId ?? ''
+ repositoryId.value = group.value?.repositoryId ?? ''
  // Recomputed only for members with no stored position, so opening a group never
  // rearranges what someone put where they wanted it. The tiers are what an unplaced
  // member falls into — its depth under the orchestrator, rather than a grid slot.
@@ -417,7 +431,25 @@ watch(
 
 const personaById = (id: string) => props.personas.find((persona) => persona.id === id) ?? null
 
-const saveLayout = => {
+/**
+ * One save path for the whole team, with only what this gesture changed passed in.
+ *
+ * It was five copies of the same payload, one per control, and every field added to a
+ * team had to be remembered in all five — a save that forgot one would send the *stored*
+ * value for it and read as a no-op rather than as a bug. The server treats an absent
+ * field as "leave it alone", so the payload here is always complete: what the canvas
+ * holds, overridden by what the caller just changed.
+ */
+const saveGroup = (
+ changed: Partial<{
+ personaIds: string[]
+ layout: Record<string, { x: number; y: number }>
+ fleet: Record<string, number>
+ reviewers: Record<string, string[]>
+ orchestratorId: string | null
+ repositoryId: string | null
+ }> = {},
+) => {
  const current = group.value
  if (!current) return
  emit('save-group', {
@@ -428,8 +460,12 @@ const saveLayout = => {
  fleet: fleet.value,
  reviewers: reviewers.value,
  orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
+ repositoryId: repositoryId.value === '' ? null: repositoryId.value,
+...changed,
  })
 }
+
+const saveLayout = => saveGroup
 
 /**
  * Puts every member back on the row its depth gives it.
@@ -458,6 +494,21 @@ const setOrchestrator = (personaId: string) => {
 }
 
 /**
+ * Which repository this team's work lands in.
+ *
+ * A team fact rather than a member fact, which is why it sits beside the chain of command
+ * and not on a node — and the reason the rest of this canvas's policy half was waiting on
+ * it: verification and reconciliation belong to a repository, so until a team named one
+ * there was no way to say whose policy was being shown.
+ *
+ * Empty un-chooses, which is a real state and the one every team starts in.
+ */
+const setRepository = (id: string) => {
+ repositoryId.value = id
+ saveGroup({ repositoryId: id === '' ? null: id })
+}
+
+/**
  * Saved on drag *stop* rather than on every frame. A position is a fact worth
  * persisting; sixty of them per second on the way to that position are not.
  */
@@ -466,19 +517,7 @@ const onNodeDragStop = (event: NodeDragEvent) => {
  saveLayout
 }
 
-const setMembers = (personaIds: string[]) => {
- const current = group.value
- if (!current) return
- emit('save-group', {
- personaGroupId: current.id,
- name: current.name,
- personaIds,
- layout: layout.value,
- fleet: fleet.value,
- reviewers: reviewers.value,
- orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
- })
-}
+const setMembers = (personaIds: string[]) => saveGroup({ personaIds })
 
 /**
  * The fleet — how many of each member this team runs at once.
@@ -496,15 +535,7 @@ const setFleet = (personaId: string, size: number | null) => {
  if (size === null) delete next[personaId]
  else next[personaId] = size
  fleet.value = next
- emit('save-group', {
- personaGroupId: current.id,
- name: current.name,
- personaIds: current.personaIds,
- layout: layout.value,
- fleet: next,
- reviewers: reviewers.value,
- orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
- })
+ saveGroup({ fleet: next })
 }
 
 /**
@@ -525,15 +556,7 @@ const setReviewer = (reviewedId: string, reviewerId: string) => {
  }
  if (reviewerId !== '') next[reviewerId] = [...(next[reviewerId] ?? []), reviewedId]
  reviewers.value = next
- emit('save-group', {
- personaGroupId: current.id,
- name: current.name,
- personaIds: current.personaIds,
- layout: layout.value,
- fleet: fleet.value,
- reviewers: next,
- orchestratorId: orchestratorId.value === '' ? null: orchestratorId.value,
- })
+ saveGroup({ reviewers: next })
 }
 
 /**
@@ -543,6 +566,35 @@ const setReviewer = (reviewedId: string, reviewerId: string) => {
  * the runtime does not have.
  */
 const reviewCandidates = computed( => members.value)
+
+const repositories = computed( => props.repositories ?? [])
+
+const chosenRepository = computed(
+ => repositories.value.find((repo) => repo.id === repositoryId.value) ?? null,
+)
+
+/**
+ * Members whose other teams land somewhere else, named rather than left to be discovered.
+ *
+ * The launcher defaults from a *persona's* teams (`teamRepositoryFor`), because a run
+ * carries a persona and not a team — so a persona on two teams that named different
+ * repositories gets no default at all. That is the right refusal and an invisible one:
+ * the operator sets a repository here and sees the launcher ignore it for some members.
+ */
+const sharedWithOtherTeams = computed( => {
+ if (repositoryId.value === '') return []
+ return members.value
+.filter((persona) =>
+ props.groups.some(
+ (other) =>
+ other.id !== group.value?.id &&
+ other.personaIds.includes(persona.id) &&
+ other.repositoryId !== null &&
+ other.repositoryId !== repositoryId.value,
+),
+)
+.map((persona) => persona.name)
+})
 
 /** Who may be the root: a planner on this team, because the chain starts with a plan. */
 const plannerMembers = computed( => members.value.filter((persona) => persona.harnessPlanner))
@@ -892,6 +944,46 @@ const onKeydown = (event: KeyboardEvent) => {
  </div>
 
  <aside class="side">
+ <!--
+ The design-canvas policy, and the item the other two were blocked on.
+ Leads with the answer — where this team's work lands — because the sentence is
+ what an operator came to read, and the picker is only how they change it.
+ -->
+ <section class="lands">
+ <h3>Where the work lands</h3>
+ <p v-if="repositoryId === ''" class="fine">
+ <strong>No repository chosen.</strong> Every start from the launcher picks one
+ by hand.
+ </p>
+ <p v-else class="fine">
+ Runs of these personas start against
+ <strong>{{ chosenRepository?.displayName ?? 'a repository that is gone' }}</strong
+ >, on
+ <code>{{ chosenRepository?.defaultBranch ?? '—' }}</code
+ >. The launcher fills it in; a human can still start one somewhere else.
+ </p>
+ <select
+ class="repo-picker"
+:value="repositoryId"
+ aria-label="Which repository this team's work lands in"
+ @change="setRepository(($event.target as HTMLSelectElement).value)"
+ >
+ <option value="">no repository</option>
+ <option v-for="repo in repositories":key="repo.id":value="repo.id">
+ {{ repo.displayName }}
+ </option>
+ </select>
+ <!--
+ The limitation stated where the choice is made, not discovered later: a run
+ carries a persona, not a team, so the launcher can only default from a
+ persona's teams — and teams that disagree default to nothing.
+ -->
+ <p v-if="sharedWithOtherTeams.length > 0" class="fine warn">
+ {{ sharedWithOtherTeams.join(', ') }} also sit(s) on a team that lands
+ somewhere else, so the launcher fills in nothing for them.
+ </p>
+ </section>
+
  <!--
  The chain of command. The picker is here rather than on a node because
  it is a fact about the *team* — which member the work starts from — and the
@@ -1449,7 +1541,8 @@ header h2 {
  fill: var(--text-faint);
 }
 
-.root-picker {
+.root-picker,
+.repo-picker {
  width: 100%;
  padding: 0.2rem 0.3rem;
  border: 1px solid var(--border);
@@ -1469,7 +1562,8 @@ header h2 {
  opacity: 0.85;
 }
 
-.chain {
+.chain,
+.lands {
  display: flex;
  flex-direction: column;
  gap: 0.3rem;

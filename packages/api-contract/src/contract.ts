@@ -728,6 +728,16 @@ export const contract = {
  * depth the canvas reports wrong.
  */
  orchestratorId: z.string.nullable.optional,
+ /**
+ * The team repository — which repository this team's work lands in, and
+ * therefore whose verification and reconciliation policy its canvas shows.
+ *
+ * Nullable *and* optional on the same terms as `orchestratorId`: omitted leaves
+ * the stored choice alone, `null` un-chooses it. Validated server-side, because
+ * the run launcher defaults from it — a repository id naming nothing in this
+ * workspace would default a start to a repository that cannot be cloned.
+ */
+ repositoryId: z.string.nullable.optional,
  }),
 )
 .output(PersonaGroupSchema),

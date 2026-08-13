@@ -3,10 +3,11 @@ import type {
  AgentPersona,
  ApprovalMode,
  DelegationPreview,
+ PersonaGroup,
  Repository,
  ResponseStyle,
 } from '@loom/api-contract'
-import { findSelectableModel, SELECTABLE_MODELS } from '@loom/client-core'
+import { findSelectableModel, SELECTABLE_MODELS, teamRepositoryFor } from '@loom/client-core'
 import { computed, ref, watch } from 'vue'
 
 /**
@@ -21,6 +22,15 @@ import { computed, ref, watch } from 'vue'
 const props = defineProps<{
  repositories: Repository[]
  personas: AgentPersona[]
+ /**
+ * The workspace's teams, read for one thing: which repository the chosen persona's team
+ * says its work lands in.
+ *
+ * This is what keeps that setting from being a decoration — the rule for the design
+ * canvas is that it may only draw what the runtime executes, and a repository a human
+ * chose for a team that every start then ignored would fail it.
+ */
+ groups?: PersonaGroup[]
  disabled: boolean
 }>
 
@@ -106,6 +116,29 @@ watch(
  }
  },
  { immediate: true },
+)
+
+/**
+ * The team's repository, filled in when a persona is chosen.
+ *
+ * A default, not a constraint: it overwrites the field because choosing a persona is
+ * choosing whose work this is, and leaving the previous persona's repository selected
+ * under a new name is the quieter wrong answer. A human can still pick anything.
+ *
+ * Silent when the persona's teams disagree or none has chosen — `teamRepositoryFor` has
+ * the rule, in client-core, so a TUI defaults the same way.
+ */
+const teamRepository = computed( =>
+ personaId.value === '' ? null: teamRepositoryFor(personaId.value, props.groups ?? []),
+)
+
+watch(teamRepository, (repositoryOfTeam) => {
+ if (repositoryOfTeam !== null) repositoryId.value = repositoryOfTeam
+})
+
+const teamRepositoryName = computed(
+ =>
+ props.repositories.find((repo) => repo.id === teamRepository.value)?.displayName ?? null,
 )
 
 const selected = computed(
@@ -327,6 +360,15 @@ const harnessSummary = (persona: AgentPersona): string => {
  </option>
  </select>
  </label>
+
+ <!--
+ Said, not silently done. A field that fills itself in when a
+ persona is chosen is a field a human stops reading, and this one decides where the
+ work lands. Outside the label, because `.field > span` is the field's *name*.
+ -->
+ <p v-if="teamRepositoryName && repositoryId === teamRepository" class="hint">
+ {{ teamRepositoryName }} is where {{ selected?.name }}’s team lands its work.
+ </p>
 
  <!-- the cost model: model choice is the cost swing factor, so it is on screen, not in config. -->
  <label class="field">

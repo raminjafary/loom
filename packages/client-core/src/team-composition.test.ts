@@ -14,6 +14,7 @@ import {
  arrangeByTier,
  chooseOrchestrator,
  orchestrate,
+ teamRepositoryFor,
 } from './team-composition.js'
 
 const persona = (overrides: Partial<AgentPersona> = {}): AgentPersona => ({
@@ -721,5 +722,38 @@ describe('derivedPersonaMarkdown — a second expert from one role', => {
  expect(plannerLikeMarkdown(reviewer, { name: 'a', description: 'd' })).toContain(
  'planner: true',
 )
+ })
+})
+
+/**
+ * The reader that keeps the team repository from being a decoration.
+ */
+describe('teamRepositoryFor', => {
+ const team = (personaIds: string[], repositoryId: string | null) => ({ personaIds, repositoryId })
+
+ it('answers with the repository of the one team that has one', => {
+ expect(teamRepositoryFor('swe', [team(['swe', 'qa'], 'repo-a')])).toBe('repo-a')
+ })
+
+ it('has no answer for a persona on no team, or on a team that chose none', => {
+ expect(teamRepositoryFor('swe', [])).toBeNull
+ expect(teamRepositoryFor('swe', [team(['qa'], 'repo-a')])).toBeNull
+ expect(teamRepositoryFor('swe', [team(['swe'], null)])).toBeNull
+ })
+
+ /**
+ * Two teams naming the same repository is not the ambiguity the widths have —
+ * every candidate answer is identical, so there is nothing to guess between.
+ */
+ it('answers when several teams agree, and refuses when they disagree', => {
+ expect(
+ teamRepositoryFor('swe', [team(['swe'], 'repo-a'), team(['swe', 'qa'], 'repo-a')]),
+).toBe('repo-a')
+ expect(teamRepositoryFor('swe', [team(['swe'], 'repo-a'), team(['swe'], 'repo-b')])).toBeNull
+ })
+
+ /** A team with no repository does not veto one that has chosen. */
+ it('ignores teams that have chosen nothing', => {
+ expect(teamRepositoryFor('swe', [team(['swe'], null), team(['swe'], 'repo-a')])).toBe('repo-a')
  })
 })

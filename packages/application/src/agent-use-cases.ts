@@ -8,6 +8,7 @@ import {
  actingTools,
  agentRunActor,
  applyResponseStyle,
+ asRepositoryId,
  attenuateChildPersona,
  canPlannerRead,
  buildNotification,
@@ -1034,6 +1035,12 @@ export const updatePersonaGroup = async (
  * back to picked-by-reach, which is a different act and a real state.
  */
  orchestratorId?: string | null
+ /**
+ * Which repository this team's work lands in. Omitted leaves the
+ * stored choice alone; `null` un-chooses it, which is a real state and the one every
+ * team starts in.
+ */
+ repositoryId?: string | null
  },
 ): Promise<PersonaGroup> => {
  if (!isHuman(input.actor)) {
@@ -1096,10 +1103,27 @@ export const updatePersonaGroup = async (
  }
  }
 
+ /**
+ * The team's repository, checked to exist in this workspace rather than stored as sent
+ *.
+ *
+ * The run launcher defaults from it, so an id naming nothing here would not be an
+ * inert field — it would default a start to a repository no Runner can clone, and the
+ * human would meet that as a failed run rather than as a refused save.
+ */
+ if (input.repositoryId !== undefined && input.repositoryId !== null) {
+ const repository = await deps.repositories.findById(
+ input.workspaceId,
+ asRepositoryId(input.repositoryId),
+)
+ if (!repository) throw new NotFoundError('Repository')
+ }
+
  return deps.personaGroups.update(input.workspaceId, input.personaGroupId, {
  name: input.name,
  personaIds: input.personaIds,
 ...(input.orchestratorId === undefined ? {}: { orchestratorId: input.orchestratorId }),
+...(input.repositoryId === undefined ? {}: { repositoryId: input.repositoryId }),
 ...(input.fleet === undefined ? {}: { fleet: fleetVerdict.fleet }),
 ...(input.reviewers === undefined ? {}: { reviewers: reviewersVerdict.reviewers }),
 ...(input.layout === undefined

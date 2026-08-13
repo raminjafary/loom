@@ -450,6 +450,11 @@ export interface AgentSession {
  * picked-by-reach, which is a different act.
  */
  orchestratorId?: string | null
+ /**
+ * Which repository this team's work lands in. Omitted leaves the
+ * stored choice alone; `null` un-chooses it, on the same terms as `orchestratorId`.
+ */
+ repositoryId?: string | null
  }): Promise<void>
  deletePersonaGroup(personaGroupId: string): Promise<void>
  startRun(input: {

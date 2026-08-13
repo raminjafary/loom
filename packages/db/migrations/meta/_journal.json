@@ -316,6 +316,13 @@
       "when": 1786601422759,
       "tag": "0044_next_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1786605036851,
+      "tag": "0045_gigantic_vance_astro",
+      "breakpoints": true
     }
   ]
 }

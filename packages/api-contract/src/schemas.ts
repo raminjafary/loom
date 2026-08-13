@@ -829,6 +829,18 @@ export const PersonaGroupSchema = z.object({
  * the drawing describes, which is the opposite of a control the runtime ignores.
  */
  orchestratorId: z.string.nullable,
+ /**
+ * Which repository this team's work lands in.
+ *
+ * The fact the other two policy items on that canvas were blocked on: verification and
+ * reconciliation are fields on a *repository*, so without this a team's canvas had no
+ * way to say whose policy it was drawing. Read by the run launcher, which defaults to
+ * it — the rule for this canvas is that it may only draw what the runtime executes.
+ *
+ * Null means nobody has chosen, and a repository that is deleted leaves the teams that
+ * named it in exactly that state.
+ */
+ repositoryId: z.string.nullable,
  createdAt: z.date,
  updatedAt: z.date,
 })
