@@ -18,6 +18,30 @@ import type { PersonaSpec } from './agents.js'
  * and still authoritative — this only moves the answer to where it is still useful.
  */
 
+/**
+ * Personas the **platform** starts, which no planner may be offered.
+ *
+ * **[NEW — and it existed by accident until the operator asks removed the accident.]** The
+ * reconciler never appeared on a roster, and not because anything said so: it was the only
+ * built-in at `auto`, every planner was at `ask`, and the attenuation refused it. Making
+ * the roster autonomous removed that side effect and revealed there was no rule underneath.
+ *
+ * There has to be one. A reconciler is started by the merge queue with a working tree that
+ * is mid-rebase, and its own prompt says to stop if it was invoked any other way — so a
+ * subtask assigned to it is a subtask that does nothing, reported after the plan is paid
+ * for. That is exactly the "a listed name reads as permission" failure this module exists to
+ * prevent, and it would have arrived as an accidental regression rather than as a decision.
+ *
+ * A name list rather than a column, for the reason `PLANNER_READABLE_TOOLS` is one: this is
+ * a fact about personas the platform itself ships and starts, not a property an operator
+ * sets. A hand-authored persona named `reconciler` is caught by the same list, which is the
+ * conservative direction.
+ */
+export const PLATFORM_STARTED_PERSONAS: readonly string[] = ['reconciler']
+
+export const isPlatformStartedPersona = (name: string): boolean =>
+ PLATFORM_STARTED_PERSONAS.includes(name)
+
 export interface DelegationCandidate {
  readonly name: string
  readonly description: string
@@ -93,6 +117,9 @@ export const selectDelegatablePersonas = (
  * why it was written — the limit is the better answer and it now exists.
  */
  if (candidate.planner && remainingDepth < 1) return false
+ // See `PLATFORM_STARTED_PERSONAS`: the merge queue starts these, and one on a roster is
+ // a subtask that stops on its first turn.
+ if (isPlatformStartedPersona(candidate.name)) return false
  return attenuateChildPersona(planner, asChildSpec(candidate)).ok
  })
 

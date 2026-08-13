@@ -155,12 +155,25 @@ describe('BUILTIN_PERSONAS', => {
  expect(reconciler?.tools).not.toContain('Bash')
  })
 
- it('auto-approves only the reconciler, which nobody is watching', => {
+ it('runs what acts unattended, and leaves a read-only persona asking', => {
  // Started by the merge queue rather than a human, so an approval gate leaves it in
  // `awaiting_approval` until the SLA auto-denies — found by a live run stalling
  // there. Every other built-in is @mentioned by someone who is present.
  for (const persona of BUILTIN_PERSONAS) {
- expect(persona.harnessApprovalMode).toBe(persona.name === 'reconciler' ? 'auto': 'ask')
+ /**
+ * **[AMENDED — the operator asks moved the gate to the merge.]** The reconciler was
+ * the only autonomous built-in because it is the only one nobody watches; now every
+ * persona that *acts* is autonomous, and every planner is too — not for its own sake
+ * but because the data model refuses a child wider than its parent, so an `ask` planner cannot
+ * start an `auto` worker at all. A read-only persona stays at `ask`, where the mode
+ * gates nothing.
+ */
+ const acts = persona.tools.some((tool) =>
+ ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool),
+)
+ expect(persona.harnessApprovalMode, persona.name).toBe(
+ acts || persona.harnessPlanner ? 'auto': 'ask',
+)
  }
  })
 
@@ -189,5 +202,76 @@ describe('BUILTIN_PERSONAS', => {
  // one side's intent on exactly those.
  const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
  expect(reconciler?.systemPrompt).toMatch(/refus/i)
+ })
+})
+
+/**
+ * Autonomy, and what still bounds it.
+ *
+ * The operator moved the gate to the merge, so these tests assert the *bound* rather than
+ * the setting: a mode is one line and easy to change, and what makes it acceptable is that
+ * nothing on this roster can reach the default branch by itself.
+ */
+describe('BUILTIN_PERSONAS autonomy', => {
+ const acting = BUILTIN_PERSONAS.filter((persona) =>
+ persona.tools.some((tool) => ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool)),
+)
+
+ /**
+ * `accept-edits` would not have delivered autonomy: it covers Edit/Write/NotebookEdit and
+ * deliberately not Bash, so every test run would still wait for a human — the reconciler's
+ * documented stall, applied to the whole roster.
+ */
+ it('runs every acting persona unattended, because a half-gate is a stall', => {
+ expect(acting.length).toBeGreaterThan(0)
+ for (const persona of acting) {
+ expect(persona.harnessApprovalMode, persona.name).toBe('auto')
+ }
+ })
+
+ /**
+ * The bound that makes it acceptable. A persona holding a way to reach a remote itself
+ * would put the human gate somewhere an agent can walk past — the push policy keeps credentials out
+ * of the sandbox, and this asserts nothing on the roster is written as though they were.
+ */
+ it('gives no persona a path to a remote — the merge queue is the only way out', => {
+ for (const persona of BUILTIN_PERSONAS) {
+ expect(persona.tools, persona.name).not.toContain('WebSearch')
+ // No shipped persona names a capability, so no MCP server is a route out either.
+ expect(persona.markdownSource, persona.name).not.toContain('capabilities:')
+ }
+ })
+
+ /**
+ * A read-only persona's mode gates nothing — it holds no tool that asks — so leaving it
+ * at `ask` is not an inconsistency, and changing it would be noise that reads as a
+ * decision. Asserted so nobody "fixes" it later.
+ */
+ it('leaves a read-only persona at ask, because its mode gates nothing', => {
+ /**
+ * Planners excluded, and not as a carve-out: a planner's mode is a ceiling on its
+ * children rather than a gate on itself, so it is the one read-only persona whose
+ * mode has to be wide. See `builtin-personas.ts` on the `planner` define.
+ */
+ const readOnly = BUILTIN_PERSONAS.filter(
+ (persona) =>
+ persona.tools.length > 0 &&
+ !persona.harnessPlanner &&
+ !persona.tools.some((tool) => ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool)),
+)
+ expect(readOnly.length).toBeGreaterThan(0)
+ for (const persona of readOnly) {
+ expect(persona.harnessApprovalMode, persona.name).toBe('ask')
+ }
+ })
+
+ /**
+ * Autonomy pairs with the envelope rather than replacing it, and no shipped persona
+ * carries one — an operator grants self-modification deliberately or not at all.
+ */
+ it('ships no persona that may rewrite itself', => {
+ for (const persona of BUILTIN_PERSONAS) {
+ expect(persona.envelope, persona.name).toBeNull
+ }
  })
 })

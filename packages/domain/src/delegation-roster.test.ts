@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { BUILTIN_PERSONAS } from './builtin-personas.js'
-import { describeDelegationRoster, selectDelegatablePersonas } from './delegation-roster.js'
+import {
+ describeDelegationRoster,
+ isPlatformStartedPersona,
+ selectDelegatablePersonas,
+} from './delegation-roster.js'
 import type { DelegationCandidate } from './delegation-roster.js'
 import type { PersonaSpec } from './agents.js'
 
@@ -219,6 +223,12 @@ describe('describeDelegationRoster', => {
  delegates: builtinPlanner.harnessDelegates,
  budgetCapUsd: builtinPlanner.harnessBudgetCapUsd,
  model: builtinPlanner.model,
+ /**
+ * Carried from the shipped persona, which this test's own comment claims it is doing
+ * and was not: the spec defaulted to `ask` while the seed says `auto`. The * autonomy exposed it — with the workers at `auto` and the spec at `ask`, the data model refuses
+ * every one of them, which is the shipped-roster failure this test exists to catch.
+ */
+ approvalMode: builtinPlanner.harnessApprovalMode,
  })
  const candidates: DelegationCandidate[] = BUILTIN_PERSONAS.map((p) => ({
  name: p.name,
@@ -239,5 +249,39 @@ describe('describeDelegationRoster', => {
  'solution-architect',
  'swe',
  ])
+ })
+})
+
+/**
+ * The rule that existed by accident.
+ *
+ * Worth its own block because of how it was found: the reconciler fell off every roster only
+ * because it was the one built-in at `auto` under planners at `ask`, so the attenuation
+ * refused it. Making the roster autonomous removed the side effect and revealed there was no
+ * rule underneath — an accidental regression, caught by a test that was checking something
+ * else.
+ */
+describe('PLATFORM_STARTED_PERSONAS', => {
+ it('never offers a persona the platform starts itself', => {
+ const wide = planner({ approvalMode: 'auto', delegates: ['Read', 'Edit', 'Grep', 'Glob'] })
+ const reconciler = candidate({
+ name: 'reconciler',
+ tools: ['Read', 'Edit', 'Grep', 'Glob'],
+ approvalMode: 'auto',
+ })
+ // Attenuation would now admit it — which is exactly why the rule has to be explicit.
+ expect(selectDelegatablePersonas(wide, [reconciler])).toEqual([])
+ expect(isPlatformStartedPersona('reconciler')).toBe(true)
+ expect(isPlatformStartedPersona('swe')).toBe(false)
+ })
+
+ /**
+ * A roster of nothing but platform-started personas says so, rather than offering an empty
+ * list — the same reasoning the no-candidates message already has.
+ */
+ it('tells a planner it has nobody when only platform personas remain', => {
+ const wide = planner({ approvalMode: 'auto' })
+ const text = describeDelegationRoster(wide, [candidate({ name: 'reconciler' })])
+ expect(text).toContain('no personas in this workspace you are allowed to delegate to')
  })
 })

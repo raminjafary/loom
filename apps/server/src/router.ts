@@ -1018,6 +1018,7 @@ export const router = os.router({
 ...(input.fleet === undefined ? {}: { fleet: input.fleet }),
 ...(input.reviewers === undefined ? {}: { reviewers: input.reviewers }),
 ...(input.reportsTo === undefined ? {}: { reportsTo: input.reportsTo }),
+...(input.description === undefined ? {}: { description: input.description }),
  // Null is forwarded, not dropped: it is how a human un-chooses a root, which
  // absent deliberately does not mean.
 ...(input.orchestratorId === undefined ? {}: { orchestratorId: input.orchestratorId }),

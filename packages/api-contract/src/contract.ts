@@ -780,6 +780,8 @@ export const contract = {
  * which is what every team has today.
  */
  reportsTo: z.record(z.string, z.string).optional,
+ /** What this team is for. Absent leaves the stored line alone. */
+ description: z.string.max(200).optional,
  /**
  * The root orchestrator — the member the work starts from, and the
  * vantage the canvas measures depth from.

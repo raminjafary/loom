@@ -637,6 +637,11 @@ export interface PersonaGroupRepositoryPort {
  */
  patch: {
  name: string
+ /**
+ * What this team is for. Absent leaves the stored line alone, like
+ * `layout` — a client that does not offer the field is not saying to clear it.
+ */
+ description?: string
  personaIds: string[]
  layout?: Record<string, { x: number; y: number }>
  fleet?: Record<string, number>

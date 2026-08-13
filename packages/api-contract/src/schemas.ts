@@ -881,6 +881,8 @@ export const PersonaGroupSchema = z.object({
  id: z.string,
  workspaceId: z.string,
  name: z.string,
+ /** What this team is for, in one line. Empty means undescribed. */
+ description: z.string,
  personaIds: z.array(z.string),
  /**
  * Where each member sits on the composition canvas. Persisted because on an

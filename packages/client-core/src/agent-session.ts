@@ -470,6 +470,8 @@ export interface AgentSession {
  * planner's roster, which is what every team does today.
  */
  reportsTo?: Record<string, string>
+ /** What this team is for. Omitted leaves the stored line alone. */
+ description?: string
  /**
  * Which member the work starts from, as the canvas's vantage for
  * depth. Omitted leaves the stored root alone; `null` clears it back to

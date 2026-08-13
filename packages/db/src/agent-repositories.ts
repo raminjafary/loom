@@ -1388,6 +1388,7 @@ export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort
 ...(patch.fleet === undefined ? {}: { fleet: patch.fleet }),
 ...(patch.reviewers === undefined ? {}: { reviewers: patch.reviewers }),
 ...(patch.reportsTo === undefined ? {}: { reportsTo: patch.reportsTo }),
+...(patch.description === undefined ? {}: { description: patch.description }),
  // Null is a real value here — "nobody has chosen" — so absent and null differ:
  // absent leaves the stored root alone, null clears it back to picked-by-reach.
 ...(patch.orchestratorId === undefined ? {}: { orchestratorId: patch.orchestratorId }),

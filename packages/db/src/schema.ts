@@ -511,6 +511,15 @@ export const personaGroup = pgTable(
 .notNull
 .references( => workspace.id, { onDelete: 'cascade' }),
  name: text('name').notNull,
+ /**
+ * What this team is *for*, in one line.
+ *
+ * A team's name says what it does and a description says when to reach for it, which is
+ * the question an operator actually has when the composer lists six of them. Empty for
+ * every team authored before this column and for one a human never described — the same
+ * state, and both read as "no description" rather than as a missing value.
+ */
+ description: text('description').notNull.default(''),
  personaIds: jsonb('persona_ids').$type<string[]>.notNull.default([]),
  /**
  * Where each member sits on the composition canvas, keyed by persona id.

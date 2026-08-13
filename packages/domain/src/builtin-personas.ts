@@ -95,8 +95,27 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  * area of a repository and a planner that cannot open a file in that area has
  * nothing to decompose from — see `planner-tools.ts` for what that cost live.
  */
+ /**
+ * **`auto` on a planner is a ceiling, not a setting about the planner**.
+ *
+ * Caught by `builtin-personas.test.ts` the moment the workers went autonomous, and it is
+ * the half that would have shipped a roster where nothing could start: the attenuation
+ * refuses a child whose approval mode is wider than its parent's, so an `auto` worker
+ * under an `ask` planner is refused at every child start. Every shipped team would have
+ * been a team that cannot run.
+ *
+ * A planner's own mode gates almost nothing — it holds no tool that asks, only reads —
+ * so what this field actually does on a planner is bound what it may hand *down*. That is
+ * exactly what `delegates` does for tools, arriving on a second axis: a planner that must
+ * ask cannot hand down the right not to ask, and a planner authored `ask` is therefore a
+ * planner whose autonomous workers are unreachable.
+ *
+ * Kept narrow where it is free to be: a read-only built-in stays at `ask`, because its
+ * mode gates nothing and changing it would read as a decision rather than as noise.
+ */
  define({
  name: 'planner',
+ approvalMode: 'auto',
  description: 'Decomposes a goal into subtasks and delegates them to workers. Reads to scope; runs nothing.',
  model: 'claude-opus-5',
  tools: READ_ONLY_TOOLS,
@@ -181,6 +200,7 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  */
  define({
  name: 'area-planner',
+ approvalMode: 'auto',
  description:
  'Decomposes one area of a larger plan and delegates it — a sub-planner, not the root.',
  model: 'claude-opus-5',
@@ -208,8 +228,33 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  systemPrompt:
  'You are a Product Manager. Read the relevant code and any linked context, then produce an explicit spec: objective, output format, constraints, and boundaries. You do not write or edit code — your job is to remove ambiguity for whoever implements next.',
  }),
+ /**
+ * **Autonomous, with the human gate at the merge**.
+ *
+ * The operator's position, stated as they did: *all teams should be fully autonomous and
+ * only a human would do merge for them.* This is a deliberate move of the gate rather
+ * than its removal, and `auto` rather than `accept-edits` because `accept-edits` would
+ * not have delivered it: that mode covers `Edit`/`Write`/`NotebookEdit` and deliberately
+ * not `Bash`, so every test run and every build would still wait for a human — which is
+ * the reconciler's documented stall, applied to the whole roster.
+ *
+ * **What still bounds a run**, and it is the reconciler's own justification generalized
+ * rather than a new argument: the sandbox, writes path-scoped to the run's own
+ * clone, the egress allowlist, no git credentials anywhere in the
+ * sandbox, and the budget cap the proxy meters. A merge is therefore *already*
+ * the one thing no agent can do for itself, and nothing here changes that.
+ *
+ * **The cost, stated rather than buried:** this widens what a poisoned input can reach
+ * *within* a run, and the planner/worker trust boundary already classes untrusted-data framing as a mitigation and
+ * not a boundary. The merge gate bounds the blast radius to a branch nobody merged, which
+ * is the strongest bound available and not a complete one — a run may still spend budget,
+ * write notes its siblings read, and reach whatever the envelope allows. So this pairs
+ * with the envelope: autonomy inside a ceiling a human set is the shape, and autonomy
+ * with no ceiling is what continuity mode exists to prevent.
+ */
  define({
  name: 'swe',
+ approvalMode: 'auto',
  description: 'General-purpose software engineer — implements a scoped change end to end.',
  model: 'claude-sonnet-5',
  tools: ENGINEERING_TOOLS,
@@ -218,6 +263,7 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  }),
  define({
  name: 'frontend-engineer',
+ approvalMode: 'auto',
  description: 'Implements UI and client-side changes.',
  model: 'claude-sonnet-5',
  tools: ENGINEERING_TOOLS,
@@ -226,6 +272,7 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  }),
  define({
  name: 'backend-engineer',
+ approvalMode: 'auto',
  description: 'Implements server, API, and data-layer changes.',
  model: 'claude-sonnet-5',
  tools: ENGINEERING_TOOLS,
@@ -234,6 +281,7 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
  }),
  define({
  name: 'qa',
+ approvalMode: 'auto',
  description: 'Writes and runs tests against a change; does not edit application source.',
  model: 'claude-sonnet-5',
  tools: QA_TOOLS,

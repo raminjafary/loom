@@ -91,3 +91,50 @@ describe('BUILTIN_TEAMS', => {
  expect(withTwoPlanners.length).toBeGreaterThanOrEqual(1)
  })
 })
+
+/**
+ * The two fields the operator asks added, asserted here for the reason every other rule in this
+ * file is: seeding writes through the port, so a shipped team never meets the validation a
+ * human's edit does. A bad one has to fail a build.
+ */
+describe('BUILTIN_TEAMS descriptions and reporting lines', => {
+ it('describes every team, because a preset nobody can tell apart is one nobody picks', => {
+ for (const team of BUILTIN_TEAMS) {
+ expect(team.description.trim, team.name).not.toBe('')
+ // One line, not a paragraph — it sits beside a name in a list.
+ expect(team.description.length, team.name).toBeLessThanOrEqual(120)
+ expect(team.description, team.name).not.toContain('\n')
+ }
+ })
+
+ /**
+ * Every rule `reportingLineProblems` enforces, applied to what we ship: both ends on the
+ * team, the target a planner, nobody reporting to themselves.
+ */
+ it('draws every reporting line between members, into a planner', => {
+ for (const team of BUILTIN_TEAMS) {
+ for (const [worker, planner] of Object.entries(team.reportsTo ?? {})) {
+ expect(team.members, `${team.name} assigns ${worker}`).toContain(worker)
+ expect(team.members, `${team.name} reports into ${planner}`).toContain(planner)
+ expect(worker, `${team.name}: ${worker} reports to itself`).not.toBe(planner)
+ expect(
+ persona(planner)?.harnessPlanner,
+ `${team.name}: ${planner} is reported to but is not a planner`,
+).toBe(true)
+ }
+ }
+ })
+
+ /**
+ * The corporation is the one arrangement a chain of command is *for*, so the team
+ * that exists to demonstrate it has to actually demonstrate it — otherwise the feature is
+ * a mechanism with no shipped example, which is how it stays undiscovered.
+ */
+ it('ships a chain of command on the two-planner team', => {
+ const twoAreas = BUILTIN_TEAMS.find((team) => team.name === 'two-areas')
+ expect(twoAreas).toBeDefined
+ expect(twoAreas?.reportsTo).toEqual({ swe: 'area-planner' })
+ // And the reviewer stays unassigned: reviewing is team-wide, not one planner's staff.
+ expect(Object.keys(twoAreas?.reportsTo ?? {})).not.toContain('qa')
+ })
+})

@@ -1,0 +1,1 @@
+ALTER TABLE "persona_group" ADD COLUMN "description" text DEFAULT '' NOT NULL;

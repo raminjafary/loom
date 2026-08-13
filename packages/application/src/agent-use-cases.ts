@@ -759,13 +759,33 @@ export const seedBuiltinTeams = async (
  return id !== undefined && onTeam.has(id) ? [[id, size]]: []
  }),
 )
+ /**
+ * The chain of command. Both ends resolved and both required to be on the
+ * team, for the reason `reviewers` drops an unresolvable pair: a line naming a persona
+ * an operator deleted would narrow a roster against somebody who is not there, which
+ * reads as "this planner has no people" rather than as stale seed data.
+ */
+ const reportsTo = Object.fromEntries(
+ Object.entries(team.reportsTo ?? {}).flatMap(([worker, planner]) => {
+ const workerId = idByName.get(worker)
+ const plannerId = idByName.get(planner)
+ return workerId !== undefined &&
+ plannerId !== undefined &&
+ onTeam.has(workerId) &&
+ onTeam.has(plannerId)
+ ? [[workerId, plannerId]]
+: []
+ }),
+)
 
  await deps.personaGroups.update(input.workspaceId, created.id, {
  name: created.name,
+ description: team.description,
  personaIds,
  orchestratorId,
  reviewers,
  fleet,
+ reportsTo,
  })
  }
 }
@@ -1205,6 +1225,8 @@ export const updatePersonaGroup = async (
  actor: Actor
  personaGroupId: PersonaGroupId
  name: string
+ /** What this team is for. Omitted leaves the stored line alone. */
+ description?: string
  personaIds: string[]
  /**
  * Where each member sits on the composition canvas. Omitted leaves the stored
@@ -1341,6 +1363,7 @@ export const updatePersonaGroup = async (
  return deps.personaGroups.update(input.workspaceId, input.personaGroupId, {
  name: input.name,
  personaIds: input.personaIds,
+...(input.description === undefined ? {}: { description: input.description }),
 ...(input.orchestratorId === undefined ? {}: { orchestratorId: input.orchestratorId }),
 ...(input.repositoryId === undefined ? {}: { repositoryId: input.repositoryId }),
 ...(input.fleet === undefined ? {}: { fleet: fleetVerdict.fleet }),

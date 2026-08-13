@@ -583,6 +583,7 @@ export interface PersonaGroupRow {
  id: string
  workspaceId: string
  name: string
+ description?: string | null
  personaIds: unknown
  layout?: unknown
  fleet?: unknown
@@ -598,6 +599,9 @@ export const toPersonaGroup = (row: PersonaGroupRow): PersonaGroup => ({
  id: asPersonaGroupId(row.id),
  workspaceId: asWorkspaceId(row.workspaceId),
  name: row.name,
+ // Empty for a row that predates the column and for one nobody described — the same
+ // state, and both mean "undescribed" rather than "missing".
+ description: row.description ?? '',
  personaIds: Array.isArray(row.personaIds) ? (row.personaIds as string[]): [],
  // Defaulted rather than trusted: rows written before the column existed carry no
  // layout, and a group with no positions must open as an unarranged canvas rather

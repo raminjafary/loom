@@ -29,6 +29,15 @@
 
 export interface BuiltinTeam {
  readonly name: string
+ /**
+ * When to reach for this team, in one line.
+ *
+ * The name says what the team does; this says when it is the right one, which is the
+ * question an operator actually has when the composer lists six. Required rather than
+ * optional on a *shipped* team: a preset nobody can tell apart from the next one is a
+ * preset nobody picks, and that is the whole failure this field exists for.
+ */
+ readonly description: string
  /** Persona names, in the order they are worth reading. */
  readonly members: readonly string[]
  /** Which member the work starts from — the root orchestrator. */
@@ -37,6 +46,15 @@ export interface BuiltinTeam {
  readonly reviewers?: Readonly<Record<string, readonly string[]>>
  /** How many of each member this team is sized to run at once — the fleet. */
  readonly fleet?: Readonly<Record<string, number>>
+ /**
+ * Who reports to whom, keyed by the **worker** — the opposite key from
+ * `reviewers`, because a worker reports to at most one planner.
+ *
+ * Only `two-areas` ships one, and that is the point of it: a chain of command is the
+ * thing a two-planner team exists to demonstrate, and until the platform held the fact
+ * there was nothing to demonstrate it with.
+ */
+ readonly reportsTo?: Readonly<Record<string, string>>
 }
 
 export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
@@ -48,6 +66,7 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  */
  {
  name: 'ship-a-change',
+ description: 'One scoped change, fanned out and checked. Reach for this by default.',
  members: ['planner', 'swe', 'qa'],
  orchestrator: 'planner',
  reviewers: { qa: ['swe'] },
@@ -61,6 +80,7 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  */
  {
  name: 'front-and-back',
+ description: 'A change that spans UI and API, split by boundary so the branches merge.',
  members: ['planner', 'frontend-engineer', 'backend-engineer', 'qa'],
  orchestrator: 'planner',
  reviewers: { qa: ['frontend-engineer', 'backend-engineer'] },
@@ -73,6 +93,7 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  */
  {
  name: 'spec-then-build',
+ description: 'A goal too vague to hand out yet — scoped into a spec first, then built.',
  members: ['planner', 'product-manager', 'swe', 'qa'],
  orchestrator: 'planner',
  reviewers: { qa: ['swe'] },
@@ -86,14 +107,27 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
  * and so do the workers. That is not the canvas being wrong. Depth there is measured by
  * what the runtime would allow from the root, and attenuation intersects a child
  * planner's envelope with its parent's — so a root wide enough for `area-planner` to
- * reach `swe` is necessarily wide enough to start `swe` itself. Reporting-lines and
- * reachability are different questions, and this canvas answers the second one.
+ * reach `swe` is necessarily wide enough to start `swe` itself. Reporting lines and
+ * reachability are different questions, and the *tiers* answer the second one.
+ *
+ * **[AMENDED — the first question is now answerable, and this team answers it.]** The
+ * platform holds `reportsTo`, so this ships one: `swe` reports to `area-planner`. That
+ * makes the preset a real corporation rather than a flat team with an extra planner in
+ * it — the root's roster is `area-planner` and `qa`, and `swe` is the sub-planner's to
+ * assign. It is also the only place the feature is discoverable without an operator
+ * drawing it themselves, which is the difference between a mechanism and a demo.
+ *
+ * `qa` is deliberately left unassigned: reviewing is a team-wide expectation rather than
+ * one planner's staff, and an unassigned member stays on every planner's roster.
  */
  {
  name: 'two-areas',
+ description:
+ 'A goal with two areas — a root planner, a sub-planner owning one of them, and staff.',
  members: ['planner', 'area-planner', 'swe', 'qa'],
  orchestrator: 'planner',
  reviewers: { qa: ['swe'] },
  fleet: { swe: 2 },
+ reportsTo: { swe: 'area-planner' },
  },
 ]

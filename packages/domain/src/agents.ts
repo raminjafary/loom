@@ -206,6 +206,12 @@ export interface PersonaGroup {
  readonly id: PersonaGroupId
  readonly workspaceId: WorkspaceId
  readonly name: string
+ /**
+ * What this team is for, in one line. The name says what it does;
+ * this says when to reach for it, which is the question a human has when the composer
+ * lists six of them. Empty means undescribed, which is not a missing value.
+ */
+ readonly description: string
  readonly personaIds: string[]
  /**
  * Where each member sits on the composition canvas, keyed by persona id.
