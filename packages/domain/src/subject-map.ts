@@ -500,6 +500,18 @@ export interface MasteryCheckpoint {
 export interface MasteryProgress {
  /** 0–1, the only honest percentage in the set. */
  readonly coverage: number
+ /**
+ * The two numbers `coverage` is a ratio of, carried because the ratio alone cannot be
+ * read when it is zero.
+ *
+ * A live run mapped a repository entirely from `Grep` and `Glob` — which
+ * `fileReadByToolCall` deliberately does not count, since a glob matching four hundred
+ * files is not four hundred files read — and reported 0%. That is honest and it is
+ * indistinguishable, from the percentage alone, from a denominator the Runner failed to
+ * compute. "0 of 5 files opened" answers it; "0%" does not.
+ */
+ readonly filesRead: number
+ readonly filesInScope: number
  readonly nodeCount: number
  readonly edgeCount: number
  /** Nodes plus edges added since the previous checkpoint. */
@@ -554,6 +566,8 @@ export const computeMasteryProgress = (
 
  return {
  coverage,
+ filesRead: latest.filesRead,
+ filesInScope: latest.filesInScope,
  nodeCount: latest.nodeCount,
  edgeCount: latest.edgeCount,
  yield: yieldSincePrevious,

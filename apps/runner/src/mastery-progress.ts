@@ -134,3 +134,23 @@ export const createCoverageTracker = (clonePath: string): CoverageTracker => {
  * one interval still reports its coverage rather than none.
  */
 export const CHECKPOINT_INTERVAL_MS = 10_000
+
+/**
+ * Whether this tool call is the one that earns a checkpoint.
+ *
+ * A function rather than a condition inline in the run loop, because it is the whole
+ * rule and it had no test: the loop that holds it has none at all, and the server's
+ * integration test injects the frame the Runner would have produced — which proves the
+ * handler and says nothing about whether anything sends one. Three handoffs recorded this
+ * path as missing after it had shipped, for want of somewhere the claim could fail.
+ *
+ * Both halves matter. A call that opened nothing new is not progress, so a run re-reading
+ * one file would otherwise checkpoint on a timer while coverage stood still. And the
+ * interval is what keeps a curve readable on a run that opens four hundred files.
+ */
+export const shouldCheckpoint = (input: {
+ openedSomethingNew: boolean
+ now: number
+ lastCheckpointAt: number
+}): boolean =>
+ input.openedSomethingNew && input.now - input.lastCheckpointAt >= CHECKPOINT_INTERVAL_MS

@@ -303,7 +303,15 @@ let deps: MasteryDeps
 
 beforeEach( => {
  maps = new FakeMaps
- deps = { subjectMaps: maps, agentRuns: {} as MasteryDeps['agentRuns'] }
+ deps = {
+ subjectMaps: maps,
+ // A run row that costs nothing, which is what `getMastery` reads for the spend it
+ // reports: the checkpoint's copy is a sample taken mid-run, and on the unsandboxed
+ // path the whole cost arrives after the last one.
+ agentRuns: {
+ findById: async => ({ totalCostUsd: null }),
+ } as unknown as MasteryDeps['agentRuns'],
+ }
 })
 
 const open = (over: { revision?: string } = {}) =>

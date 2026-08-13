@@ -218,6 +218,8 @@ describe('coveragePercent — an unmeasured quantity is not a measured zero', =>
  view({
  progress: {
  coverage: 0.256,
+ filesRead: 64,
+ filesInScope: 250,
  nodeCount: 1,
  edgeCount: 0,
  yield: 1,
@@ -237,6 +239,8 @@ describe('describeMasteryState — what a human needs in one line', => {
  map: {...view.map, status: 'mastering' },
  progress: {
  coverage: 0.6,
+ filesRead: 6,
+ filesInScope: 10,
  nodeCount: 20,
  edgeCount: 5,
  yield: 0,

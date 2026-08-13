@@ -418,6 +418,9 @@ export const MapEdgeSchema = z.object({
  */
 export const MasteryProgressSchema = z.object({
  coverage: z.number,
+ /** The two numbers the ratio is of — a 0% that cannot be read is not an answer. */
+ filesRead: z.number.int,
+ filesInScope: z.number.int,
  nodeCount: z.number,
  edgeCount: z.number,
  yield: z.number,

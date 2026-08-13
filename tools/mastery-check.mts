@@ -183,9 +183,18 @@ const main = async => {
  })
  console.log('mastery run', run.id)
 
+ /**
+ * The map itself, unwrapped from its listing.
+ *
+ * `listForPersona` returns `{ map, retrievalState, decided }` — portable expertise made expertise
+ * legible before it is used, and this driver went on reading the row as though it were
+ * the map. Every `map.id` was then `undefined`, which the server rejected as a bad
+ * request: a live driver that is not run is a test that has stopped compiling in a
+ * language nobody typechecks.
+ */
  const mapOf = async : Promise<any> => {
- const maps = await client.mastery.listForPersona({ personaId: scholar.id })
- return maps[0] ?? null
+ const listings = await client.mastery.listForPersona({ personaId: scholar.id })
+ return listings[0]?.map ?? null
  }
 
  const opened = await mapOf
@@ -247,6 +256,36 @@ const main = async => {
 )
 
  /**
+ * **Coverage, which only a real Runner can produce.** The suite drives
+ * `mastery_progress` by injecting the frame, which proves the server's handler and says
+ * nothing about whether the Runner ever sends one — the exact shape the lesson names,
+ * and the reason three handoffs in a row recorded this path as missing after it had
+ * shipped. The numbers come from a `git ls-files` and a set of observed tool calls on
+ * the Runner's own machine, so this driver is the only place the claim can be checked.
+ */
+ check(
+ view.progress !== null,
+ 'the Runner sent measured progress, so coverage is a number rather than "not measured"',
+)
+ if (view.progress) {
+ /**
+ * The **denominator**, not the ratio. `git ls-files` on the Runner's own clone is
+ * what this driver can assert; the numerator is the agent's behaviour, and a run that
+ * mapped this repository entirely from `Grep` and `Glob` reported 0% — honestly, since
+ * a glob matching four hundred files is not four hundred files read. Asserting on
+ * coverage would fail on a legitimate run and say nothing about the measurement.
+ */
+ check(
+ view.progress.filesInScope > 0,
+ `the tree at the mastered revision was counted (${view.progress.filesRead} of ${view.progress.filesInScope} files opened)`,
+)
+ check(
+ view.progress.spendUsd > 0,
+ `the checkpoint carries what the proxy metered ($${view.progress.spendUsd.toFixed(4)})`,
+)
+ }
+
+ /**
  * The trust boundary, on the real path. `parseMapFragment` refuses a model's claim of
  * `extracted`, and every node here came from a model — so a single extracted node
  * would mean the refusal is not reached where it matters.
@@ -265,23 +304,58 @@ const main = async => {
 
  // ── Retrieval: the gate ───────────────────────────────────────────
  //
- // A second, ordinary run by the same persona against the same repository. It must be
- // handed the map — and the map must arrive fenced, since every claim in it is a
- // model's. Asserted by asking the agent to quote something only the map could have
- // told it, so a run that received nothing cannot pass by guessing.
+ // Two ordinary runs by the same persona against the same repository, and **the first
+ // one is supposed to be denied the map**. That is the trial: a brand-new
+ // expertise is off until it beats the unaided baseline, and `nextTrialArm` sends the
+ // very first run to `withheld` precisely so a pairing used once has measured the
+ // unaided case rather than having handed a run an untested map and learned nothing.
+ //
+ // This driver used to assert that the first ordinary run quoted the map, which was
+ // right when it was written and became a check against the platform's own design the
+ // day the trial shipped. It then reported a failure every time the measurement worked.
+ // Both arms are asserted here, from the platform's record rather than from prose.
  const marker = concepts[0]?.label ?? view.nodes[0]?.label ?? ''
- const second = await client.agentRun.start({
+
+ const ordinaryRun = async (label: string): Promise<any> => {
+ const started = await client.agentRun.start({
  threadId: channel.rootThread.id,
  repositoryId: repo.id,
  personaId: scholar.id,
  task:
  'Without reading any file, quote back the single most important thing you were ' +
- 'already told about this repository before you started, word for word.',
+ 'already told about this repository before you started, word for word. If you ' +
+ 'were told nothing, say exactly: I WAS TOLD NOTHING.',
  })
- console.log('retrieval run', second.id)
- const settledSecond = await awaitRun(second.id)
- console.log('retrieval run finished:', settledSecond.status, 'cost', settledSecond.totalCostUsd)
- if (settledSecond.errorMessage) console.log(' reason:', settledSecond.errorMessage)
+ console.log(`${label} run`, started.id)
+ const done = await awaitRun(started.id)
+ console.log(`${label} run finished:`, done.status, 'cost', done.totalCostUsd)
+ if (done.errorMessage) console.log(' reason:', done.errorMessage)
+ return started
+ }
+
+ const baseline = await ordinaryRun('baseline (expected withheld)')
+ const second = await ordinaryRun('retrieval (expected retrieved)')
+
+ /**
+ * The arms, as the platform recorded them. This is the half that cannot be flaky: a
+ * model may paraphrase or refuse to quote, but which arm a run went on is a row.
+ */
+ const uses = await client.mastery.usedByRuns({ agentRunIds: [baseline.id, second.id] })
+ const armOf = (runId: string) =>
+ uses.find((use: any) => use.agentRunId === runId)?.arm ?? 'none'
+ check(
+ armOf(baseline.id) === 'withheld',
+ `the first ordinary run is the unaided baseline (arm: ${armOf(baseline.id)})`,
+)
+ check(
+ armOf(second.id) === 'retrieved',
+ `the next one is handed the map (arm: ${armOf(second.id)})`,
+)
+ const shown = uses.find((use: any) => use.agentRunId === second.id)
+ check(
+ (shown?.nodesShown ?? 0) > 0,
+ `the retrieved run was shown map nodes (${shown?.nodesShown ?? 0})`,
+)
 
  /**
  * Asserted against what the **agent** said, not against the thread.
@@ -294,25 +368,67 @@ const main = async => {
  * The rule that comes out of it is to assert on the *author* as well as the text.
  */
  const page = await client.message.list({ threadId: channel.rootThread.id })
- const agentSaid = page.messages
-.filter((m: any) => m.author?.kind === 'agent_run' && m.author.agentRunId === second.id)
+ const saidBy = (runId: string): string =>
+ page.messages
+.filter((m: any) => m.author?.kind === 'agent_run' && m.author.agentRunId === runId)
 .map((m: any) => m.body.text ?? '')
 .join('\n')
- // A distinctive word from the map, not the whole label: a model quoting "word for
- // word" still paraphrases, and the check is about whether it *received* the map.
- const distinctive = marker.split(/\s+/).filter((w: string) => w.length > 4)
- const quoted = distinctive.some((word: string) =>
- agentSaid.toLowerCase.includes(word.toLowerCase),
-)
+.toLowerCase
+
+ /**
+ * Map vocabulary from **every** node it was shown, not from one node this driver
+ * picked.
+ *
+ * The earlier version asked the model to quote "the most important thing" and then
+ * looked for the label of `concepts[0]` — two independent choices of what matters, so
+ * a run that received the whole map and quoted a different node of it failed. What is
+ * being checked is whether the map *arrived*, and a run shown nothing cannot produce
+ * this vocabulary at all.
+ */
+ const mapWords = [
+...new Set(
+ view.nodes
+.flatMap((n: any) => String(n.label).split(/[^A-Za-z]+/))
+.filter((w: string) => w.length > 5)
+.map((w: string) => w.toLowerCase),
+),
+ ]
+ const usedMapWords = (runId: string) => mapWords.filter((w) => saidBy(runId).includes(w))
+
+ /**
+ * **Where the prompt is not.** Worth recording, because checking it here was the
+ * obvious idea and it is wrong.
+ *
+ * The raw tier stores the verbatim *provider stream* — what the model sent back,
+ * not what it was sent — so the fence `buildMapContext` wraps map claims in never
+ * appears there, and a check for it would fail on a run that had received the map and
+ * pass trivially on the baseline for the same reason. The platform's record of the arm
+ * and the node count above is the deterministic answer; this is the model's own.
+ */
+ const retrievedWords = usedMapWords(second.id)
  check(
- quoted,
- `the second run was handed the map and used it (looked for ${JSON.stringify(distinctive)})`,
+ retrievedWords.length > 0,
+ `the retrieved run answered in the map's own vocabulary (${retrievedWords.slice(0, 5).join(', ') || 'nothing matched'})`,
+)
+
+ /**
+ * The control, and the reason the pair is worth more than either half. The baseline was
+ * given the same task and denied the map, so it is the same model on the same
+ * repository with the same instruction — vocabulary the retrieved run has and this one
+ * does not is the map arriving, rather than a word both runs could have guessed.
+ */
+ const baselineWords = usedMapWords(baseline.id)
+ check(
+ retrievedWords.length > baselineWords.length,
+ `the withheld run could not answer in it (${baselineWords.length} shared word(s) against ${retrievedWords.length})`,
 )
 
  const failed = results.filter((r) => !r.ok)
  console.log(`\n${results.length - failed.length}/${results.length} checks passed`)
  if (failed.length > 0) console.log('failed:', failed.map((f) => f.what).join('; '))
  console.log(' first concept the retrieval run could have quoted:', JSON.stringify(marker))
+ console.log(' the withheld run said:', JSON.stringify(saidBy(baseline.id).slice(0, 200)))
+ console.log(' the retrieved run said:', JSON.stringify(saidBy(second.id).slice(0, 200)))
  console.log(' fence marker in use:', UNTRUSTED_MAP_OPEN)
 
  runner.kill('SIGKILL')

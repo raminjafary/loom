@@ -457,8 +457,18 @@ const dashFor = (provenance: string): string | undefined =>
  <dl>
  <div>
  <dt>Coverage</dt>
- <!-- Null is "not measured yet", never 0% — see coveragePercent. -->
- <dd>{{ coverage === null ? 'not measured': `${coverage}%` }}</dd>
+ <!--
+ Null is "not measured yet", never 0% — see coveragePercent. The counts sit
+ under the percentage because a 0% cannot be read on its own: a run that
+ mapped a repository entirely from search results really did open no files,
+ and that is a different fact from a denominator nobody could compute.
+ -->
+ <dd>
+ {{ coverage === null ? 'not measured': `${coverage}%` }}
+ <span v-if="view.progress" class="files">
+ {{ view.progress.filesRead }} of {{ view.progress.filesInScope }} files opened
+ </span>
+ </dd>
  </div>
  <div>
  <dt>Parsed</dt>
@@ -825,6 +835,12 @@ button.primary {
 .state {
  margin: 0;
  font-size: 0.8rem;
+}
+
+.files {
+ display: block;
+ font-size: 0.68rem;
+ color: var(--text-faint);
 }
 
 .flat {

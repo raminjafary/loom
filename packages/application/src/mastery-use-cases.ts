@@ -324,19 +324,40 @@ export const getMastery = async (
  const map = await deps.subjectMaps.getMap(input.workspaceId, input.mapId)
  if (!map) throw new NotFoundError('SubjectMap')
 
- const [nodes, edges, checkpoints, trial, claimOutcomes] = await Promise.all([
+ const [nodes, edges, checkpoints, trial, claimOutcomes, masteryRun] = await Promise.all([
  deps.subjectMaps.listNodes(input.workspaceId, map.id),
  deps.subjectMaps.listEdges(input.workspaceId, map.id),
  deps.subjectMaps.listCheckpoints(input.workspaceId, map.id),
  expertiseEffectFor(deps, { workspaceId: input.workspaceId, map }),
  deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, map.id),
+ map.masteryRunId === null
+ ? Promise.resolve(null)
+: deps.agentRuns.findById(input.workspaceId, map.masteryRunId),
  ])
+
+ const progress = computeMasteryProgress(checkpoints)
 
  return {
  map,
  nodes,
  edges,
- progress: computeMasteryProgress(checkpoints),
+ /**
+ * The curve comes from the checkpoints; **the spend comes from the run**.
+ *
+ * A checkpoint's spend is a sample taken while the run was still going, and on the
+ * unsandboxed path there is no egress proxy polling — the cost of the whole run
+ * arrives once, with the result, after the last checkpoint has been written. So the
+ * headline read $0.0000 on a run that had just cost real money, which a live driver
+ * found and no test could: every test that exercises this injects the frames in an
+ * order the runtime does not produce.
+ *
+ * The run row is the authority either way. Taking the figure from it here is not a second arithmetic; it is
+ * reading the same number later, once it exists.
+ */
+ progress:
+ progress === null
+ ? null
+: {...progress, spendUsd: masteryRun?.totalCostUsd ?? progress.spendUsd },
  hubs: findHubNodes(nodes, edges),
  effect: trial.effect,
  retrievalState: trial.state,

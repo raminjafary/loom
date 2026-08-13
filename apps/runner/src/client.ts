@@ -43,8 +43,8 @@ import { clearRunState, listRunStates, saveRunState, type RunState } from './run
 import { createHandoffTool } from './handoff-tool.js'
 import { createMapTool } from './map-tool.js'
 import {
- CHECKPOINT_INTERVAL_MS,
  countFilesInScope,
+ shouldCheckpoint,
  createCoverageTracker,
 } from './mastery-progress.js'
 import { createNotesTool } from './notes-tool.js'
@@ -505,7 +505,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  */
  if (coverage !== null && event.kind === 'tool_call') {
  const opened = coverage.observe(event.toolName, event.input)
- if (opened && Date.now - lastCheckpointAt >= CHECKPOINT_INTERVAL_MS) sendCheckpoint
+ if (
+ shouldCheckpoint({
+ openedSomethingNew: opened,
+ now: Date.now,
+ lastCheckpointAt,
+ })
+) {
+ sendCheckpoint
+ }
  }
  if (event.kind === 'run_completed' || event.kind === 'run_failed') {
  pendingTerminalEvents.set(input.runId, event)
@@ -764,6 +772,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onInputChannel: (channel) => registerDelivery(channel.deliver),
  })
  flushPlan
+ // Drained first, for the reason in the sandboxed path's `finally`: a checkpoint
+ // carries the spend the server has been told about, so sending one ahead of the
+ // last usage records a run as cheaper than it was.
+ await pumpUsage.catch( => {})
  // Unconditional, and that is the point: a run that finished inside one checkpoint
  // interval has sent nothing, and reporting no coverage for a run that read the
  // whole tree is the failure this whole path exists to fix.
@@ -871,15 +883,24 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // only the loop ending tells us which happened.
  flushPlan
  } finally {
- // In the `finally` rather than beside `flushPlan`, unlike the plan: a plan from a
- // run that died should not spawn children, and the coverage of a run that died is
- // exactly what a human wants to see — mastery writes the map incrementally for the same
- // reason, so that a killed run leaves what it had learned.
- sendCheckpoint
  // Drained before revoking: the final turn's spend is usually still queued
  // when the container exits, and revoking first would not lose it but
  // reporting late would let a run look cheaper than it was.
  await pumpUsage.catch( => {})
+ /**
+ * In the `finally` rather than beside `flushPlan`, unlike the plan: a plan from a
+ * run that died should not spawn children, and the coverage of a run that died is
+ * exactly what a human wants to see — mastery writes the map incrementally for the same
+ * reason, so that a killed run leaves what it had learned.
+ *
+ * **After the drain, not before**, and a live driver is what found that: the server
+ * stamps each checkpoint with what the proxy has metered *so far*, so a final
+ * checkpoint sent ahead of the last usage records the spend the run had before its
+ * last turn. On a run short enough to finish inside one poll that is every turn, and
+ * The "spend against cap, shown next to coverage" read $0.0000 on a run that had
+ * just cost real money.
+ */
+ sendCheckpoint
  await revokeEgressToken(egress, input.runId).catch((error) =>
  log(`failed to revoke lease for ${input.runId}: ${error instanceof Error ? error.message: String(error)}`),
 )
