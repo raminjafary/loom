@@ -815,6 +815,7 @@ describe('contract completeness', => {
  'workerNote',
  'mastery',
  'colosseum',
+ 'atlas',
  'cost',
  'persona',
  'capability',
@@ -828,6 +829,7 @@ describe('contract completeness', => {
  expect(Object.keys(contract.message)).toEqual(['list', 'post', 'backfill'])
  expect(Object.keys(contract.runner)).toEqual(['list', 'createPairingToken', 'remove'])
  expect(Object.keys(contract.cost)).toEqual(['summary'])
+ expect(Object.keys(contract.atlas)).toEqual(['listProposals', 'contend', 'decide'])
  expect(Object.keys(contract.repository)).toEqual([
  'list',
  'bindExisting',

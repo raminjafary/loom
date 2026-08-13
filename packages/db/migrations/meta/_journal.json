@@ -330,6 +330,13 @@
       "when": 1786606098454,
       "tag": "0046_thin_mephistopheles",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1786618919663,
+      "tag": "0047_heavy_timeslip",
+      "breakpoints": true
     }
   ]
 }

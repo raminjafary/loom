@@ -1291,3 +1291,76 @@ export const noteReadEdge = pgTable(
  index('note_read_edge_tree_idx').on(t.workspaceId, t.treeRunId),
  ],
 )
+
+/**
+ * A relation between two subjects' concepts.
+ *
+ * **Why a table exists here when the read side is a query.** The read side re-derives
+ * leads lexically from the `concept` nodes the maps already hold, which is why it needed
+ * no storage and could ship first. The one thing a query can never re-derive is that
+ * somebody went and looked and said yes — the bar for when an edge is worth storing is
+ * exactly "a relation somebody *confirmed*". So this is not a cache of the read side; it
+ * is the trail of one claim from an agent's proposal, through the venue that argued over
+ * it, to a human's name on it.
+ *
+ * Both endpoints cascade with their node. An invalidated node keeps its row — the
+ * bi-temporal model means a superseded claim is still a row — but a node deleted with its
+ * map takes the relation with it, because a relation with one end missing cannot be
+ * rendered and would only ever be filtered out at read time.
+ *
+ * The unique index is on the **ordered pair**, and the ordering is enforced in the domain
+ * (`proposeAtlasEdge` returns the lexically smaller node id first). Every atlas relation
+ * is symmetric, so `(A, B)` and `(B, A)` are one claim; without the normalization the
+ * second proposal would store as a discovery and the read side would show one relation
+ * twice, each with its own human decision.
+ */
+export const atlasEdge = pgTable(
+ 'atlas_edge',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ fromNodeId: uuid('from_node_id')
+.notNull
+.references( => subjectMapNode.id, { onDelete: 'cascade' }),
+ toNodeId: uuid('to_node_id')
+.notNull
+.references( => subjectMapNode.id, { onDelete: 'cascade' }),
+ // 'same_concept' | 'analogous_to' | 'contradicts' — a closed set, see AtlasRelation.
+ relation: text('relation').notNull,
+ rationale: text('rationale').notNull,
+ /** Who proposed it. Null once the persona is gone; the claim outlives its author. */
+ proposedByPersonaId: uuid('proposed_by_persona_id').references( => agentPersona.id, {
+ onDelete: 'set null',
+ }),
+ proposedByRunId: uuid('proposed_by_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ // 'proposed' | 'contended' | 'promoted' | 'rejected'.
+ status: text('status').notNull.default('proposed'),
+ /**
+ * The session that argued over it, when one has.
+ *
+ * `set null` rather than cascade: a deleted session must not delete the relation it
+ * discussed — losing the transcript is bad, losing the claim is worse.
+ */
+ sessionId: uuid('session_id').references( => colosseumSession.id, { onDelete: 'set null' }),
+ /**
+ * The human who decided, by name.
+ *
+ * `set null` on delete for the same reason the audit log keeps its rows: the decision
+ * happened, and a departed employee does not un-confirm what they confirmed. The read
+ * side then falls back to "a human" rather than dropping the relation.
+ */
+ decidedByUserId: text('decided_by_user_id').references( => user.id, { onDelete: 'set null' }),
+ decidedByName: text('decided_by_name').notNull.default(''),
+ decidedAt: timestamp('decided_at', { withTimezone: true }),
+ decisionNote: text('decision_note').notNull.default(''),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ uniqueIndex('atlas_edge_pair_idx').on(t.workspaceId, t.fromNodeId, t.toNodeId, t.relation),
+ index('atlas_edge_status_idx').on(t.workspaceId, t.status),
+ ],
+)

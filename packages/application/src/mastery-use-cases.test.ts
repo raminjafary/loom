@@ -19,7 +19,6 @@ import type { SubjectMapRepositoryPort } from './agent-ports.js'
 import {
  buildMapContext,
  closeMap,
- findAtlasLeads,
  invalidateMapsForMerge,
  openMap,
  PENDING_REVISION,
@@ -186,6 +185,36 @@ class FakeMaps implements SubjectMapRepositoryPort {
  ]
  })
 .slice(0, options.limit)
+ }
+
+ async findConceptsByLabel(
+ _w: typeof workspaceId,
+ input: { label: string; repositoryId?: SubjectMap['repositoryId']; subjectRef?: string },
+) {
+ const mapById = new Map(this.maps.map((map) => [map.id as string, map]))
+ return this.nodes
+.filter((node) => node.invalidatedAt === null)
+.filter((node) => CONCEPT_NODE_KINDS.includes(node.kind))
+.filter((node) => node.label.toLowerCase === input.label.toLowerCase)
+.flatMap((node) => {
+ const map = mapById.get(node.mapId as string)
+ if (!map || map.status !== 'ready') return []
+ if (input.repositoryId !== undefined && map.repositoryId !== input.repositoryId) return []
+ if (input.subjectRef !== undefined && map.subjectRef !== input.subjectRef) return []
+ return [
+ {
+ nodeId: node.id,
+ mapId: map.id,
+ kind: node.kind,
+ label: node.label,
+ summary: node.summary,
+ subjectRef: map.subjectRef,
+ repositoryId: map.repositoryId,
+ personaId: map.personaId,
+ personaName: `persona-${map.personaId}`,
+ },
+ ]
+ })
  }
 
  async countLive(_w: typeof workspaceId, mapId: SubjectMap['id']) {
@@ -933,103 +962,5 @@ describe('curateMap and the idle gate', => {
  { workspaceId, activeRuns: 0 },
 )
  expect(result.maps).toBe(1)
- })
-})
-
-/**
- * The atlas's read side — what the *other* subjects in this workspace know.
- *
- * The domain owns ranking and rendering; what is asserted here is the part only the
- * application can get wrong: which subjects are searched, and which one is deliberately
- * left out.
- */
-describe('findAtlasLeads', => {
- const otherRepo = asRepositoryId('r-hotel')
-
- const seedConcept = async (over: {
- mapId: string
- repositoryId: ReturnType<typeof asRepositoryId> | null
- subjectRef: string
- label: string
- status?: SubjectMap['status']
- }) => {
- maps.maps.push({
- id: asSubjectMapId(over.mapId),
- workspaceId,
- personaId,
- subjectKind: 'repository',
- repositoryId: over.repositoryId,
- subjectRef: over.subjectRef,
- revision: 'abc1234',
- status: over.status ?? 'ready',
- retrievalOverride: null,
- masteryRunId: null,
- createdAt: new Date('2026-08-01T00:00:00Z'),
- updatedAt: new Date('2026-08-01T00:00:00Z'),
- } as SubjectMap)
- maps.nodes.push({
- id: `node-${over.mapId}`,
- mapId: asSubjectMapId(over.mapId),
- workspaceId,
- key: over.label,
- kind: 'concept',
- label: over.label,
- summary: '',
- paths: [],
- observationCount: 1,
- provenance: 'inferred',
- derivedAtRevision: 'abc1234',
- createdAt: new Date('2026-08-01T00:00:00Z'),
- invalidatedAt: null,
- invalidatedReason: null,
- retirementProposedAt: null,
- retirementReason: null,
- } as MapNode)
- }
-
- it('answers from another subject, and never from the one this run already holds', async => {
- await seedConcept({
- mapId: 'm-hotel',
- repositoryId: otherRepo,
- subjectRef: 'hotel-api',
- label: 'Cancellation refund',
- })
- await seedConcept({
- mapId: 'm-mine',
- repositoryId: repositoryId,
- subjectRef: 'flight-api',
- label: 'Cancellation window',
- })
-
- const leads = await findAtlasLeads(deps, {
- workspaceId,
- repositoryId,
- topic: 'cancellation',
- })
- expect(leads).toContain('hotel-api')
- // The run has already been handed this map; repeating it here would spend the window
- // twice and make a duplicate look like a discovery.
- expect(leads).not.toContain('flight-api')
- })
-
- /** A map still being mastered is a partial reading, and a lead from one points at a
- * conclusion its own author had not finished. */
- it('ignores a subject still being mastered', async => {
- await seedConcept({
- mapId: 'm-open',
- repositoryId: otherRepo,
- subjectRef: 'hotel-api',
- label: 'Cancellation refund',
- status: 'mastering',
- })
- expect(await findAtlasLeads(deps, { workspaceId, repositoryId, topic: 'cancellation' })).toContain(
- 'That is an answer',
-)
- })
-
- it('asks for a topic rather than answering an empty one', async => {
- expect(await findAtlasLeads(deps, { workspaceId, repositoryId, topic: ' ' })).toContain(
- 'Ask about something',
-)
  })
 })

@@ -127,6 +127,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  string,
  (result: { ok: boolean; leads?: string | undefined; error?: string | undefined }) => void
  >
+ /** `propose_cross_project_link` round-trips. */
+ const pendingAtlasLinks = new Map<
+ string,
+ (result: { ok: boolean; outcome?: string | undefined; error?: string | undefined }) => void
+ >
  /** `ask_human` round-trips, keyed by the id the answer comes back on. */
  const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
  const NOTE_TIMEOUT_MS = Number(process.env.LOOM_NOTE_TIMEOUT_MS ?? 30_000)
@@ -636,6 +641,39 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  }
 
+ /**
+ * The atlas's write side — proposing a relation rather than reading one.
+ *
+ * Same channel and same bound as the read, because it is the same kind of round trip:
+ * the platform resolves both ends against what it actually holds and assembles the
+ * sentence the agent is shown, including every refusal. Nothing about the proposal is
+ * decided here.
+ */
+ const onAtlasLinkRequest = (proposal: {
+ mine: string
+ theirs: string
+ theirSubject?: string
+ relation: string
+ rationale: string
+ }): Promise<{ ok: true; outcome: string } | { ok: false; error: string }> => {
+ const requestId = nextNoteRequestId
+ send({ type: 'atlas_link_proposed', runId: input.runId, requestId,...proposal })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingAtlasLinks.delete(requestId)
+ resolve({ ok: false, error: 'the platform did not answer in time' })
+ }, NOTE_TIMEOUT_MS)
+ pendingAtlasLinks.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok
+ ? { ok: true, outcome: result.outcome ?? '' }
+: { ok: false, error: result.error ?? 'the platform could not record it' },
+)
+ })
+ })
+ }
+
  // Skills are written into the run's HOME before the SDK starts, so the
  // registry — not the clone — is where a run's skills come from. HOME is
  // run-scoped and destroyed with the run, so nothing outlives it.
@@ -649,7 +687,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  // The notes channel is given to every run, planner included: a note is not a
  // capability, so it does not weaken `tools: []` (see notes-tool.ts).
  const notesTool = createNotesTool({ writeNote: onNote, readNotes: onNotesRequest })
- const atlasTool = createAtlasTool({ lookAcross: onAtlasRequest })
+ const atlasTool = createAtlasTool({
+ lookAcross: onAtlasRequest,
+ proposeLink: onAtlasLinkRequest,
+ })
  /**
  * The mapping channel, present **only on a mastery run**.
  *
@@ -889,6 +930,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onNote,
  onNotesRequest,
  onAtlasRequest,
+ onAtlasLinkRequest,
 ...(mapTool
  ? {
  onMapWrite: (fragment: Record<string, unknown>) =>
@@ -1387,6 +1429,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const resolve = pendingAtlasReads.get(frame.requestId)
  if (resolve) {
  pendingAtlasReads.delete(frame.requestId)
+ resolve(frame)
+ }
+ return
+ }
+
+ case 'atlas_link_result': {
+ const resolve = pendingAtlasLinks.get(frame.requestId)
+ if (resolve) {
+ pendingAtlasLinks.delete(frame.requestId)
  resolve(frame)
  }
  return

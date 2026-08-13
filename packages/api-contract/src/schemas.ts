@@ -491,6 +491,43 @@ export const ColosseumClaimSchema = z.object({
  droppedAt: z.date.nullable,
 })
 
+/**
+ * A cross-project relation, in whichever of its three states it has reached.
+ *
+ * Both ends carry their subject and the persona that learned them, because a relation
+ * without those names nothing a human can check: "these two concepts are the same" is a
+ * claim about two codebases, and the reviewer has to know which two.
+ */
+export const AtlasEdgeEndSchema = z.object({
+ nodeId: z.string,
+ mapId: z.string,
+ label: z.string,
+ summary: z.string,
+ subjectRef: z.string,
+ personaName: z.string,
+ /** Whether the map still holds this claim — an endpoint can be retired under the edge. */
+ live: z.boolean,
+})
+
+export const AtlasEdgeSchema = z.object({
+ id: z.string,
+ relation: z.enum(['same_concept', 'analogous_to', 'contradicts']),
+ /** The agent's argument. Model-authored — untrusted text, rendered as data. */
+ rationale: z.string,
+ status: z.enum(['proposed', 'contended', 'promoted', 'rejected']),
+ from: AtlasEdgeEndSchema,
+ to: AtlasEdgeEndSchema,
+ proposedByPersonaName: z.string,
+ proposedByRunId: z.string.nullable,
+ /** The session that argued over it, when one has — where the transcript is. */
+ sessionId: z.string.nullable,
+ /** The human who decided, by name. Empty until somebody has. */
+ decidedByName: z.string,
+ decidedAt: z.date.nullable,
+ decisionNote: z.string,
+ createdAt: z.date,
+})
+
 export const ColosseumViewSchema = z.object({
  session: ColosseumSessionSchema,
  participants: z.array(

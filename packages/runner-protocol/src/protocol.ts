@@ -313,6 +313,25 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  topic: z.string.max(500),
  }),
  /**
+ * A run proposing a relation between its own subject and another's.
+ *
+ * Unvalidated beyond lengths on purpose, exactly as `map_written` is: the labels are
+ * resolved against what the platform actually holds and the pair is checked by the
+ * domain's `proposeAtlasEdge`, which is the one place that knows a concept may not be
+ * related to structure and that a relation must cross a subject boundary. A second
+ * validator here would be a second place for that rule to drift.
+ */
+ z.object({
+ type: z.literal('atlas_link_proposed'),
+ runId: z.string,
+ requestId: z.string,
+ mine: z.string.max(200),
+ theirs: z.string.max(200),
+ theirSubject: z.string.max(200).optional,
+ relation: z.string.max(40),
+ rationale: z.string.max(600),
+ }),
+ /**
  * One fragment of a map a mastery run wrote, sent **as it is written**.
  *
  * Same requirement and same reasoning as `note_written`, and it bites harder here: a
@@ -781,6 +800,20 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  requestId: z.string,
  ok: z.boolean,
  leads: z.string.optional,
+ error: z.string.optional,
+ }),
+ /**
+ * What became of a proposal — the sentence the agent is shown, assembled server-side.
+ *
+ * `outcome` carries a refusal as readily as an acceptance, because "that is not a
+ * concept" is an answer the model can act on rather than a fault in the channel. `error`
+ * is kept for the case where the platform could not decide at all.
+ */
+ z.object({
+ type: z.literal('atlas_link_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ outcome: z.string.optional,
  error: z.string.optional,
  }),
 ])

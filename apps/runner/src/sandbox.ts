@@ -101,6 +101,16 @@ export interface SandboxOptions {
  readonly onAtlasRequest?: (
  topic: string,
 ) => Promise<{ ok: true; leads: string } | { ok: false; error: string }>
+ /** The agent proposing a cross-project relation. */
+ readonly onAtlasLinkRequest?: (
+ proposal: {
+ mine: string
+ theirs: string
+ theirSubject?: string
+ relation: string
+ rationale: string
+ },
+) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
  /**
  * The agent asking a human a question and blocking on the answer.
  * Resolves with `answer: null` when nobody answered — the run must continue either
@@ -673,6 +683,23 @@ export const runAgentInSandbox = async (
  requestId: frame.requestId,
  ok: result.ok,
 ...(result.ok ? { leads: result.leads }: { error: result.error }),
+ })
+ })
+ return
+ case 'atlas_link_request':
+ void (async => {
+ const result = (await options.onAtlasLinkRequest?.({
+ mine: frame.mine,
+ theirs: frame.theirs,
+...(frame.theirSubject === undefined ? {}: { theirSubject: frame.theirSubject }),
+ relation: frame.relation,
+ rationale: frame.rationale,
+ })) ?? { ok: false, error: 'this run has no atlas channel' }
+ send({
+ t: 'atlas_link_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? { outcome: result.outcome }: { error: result.error }),
  })
  })
  return

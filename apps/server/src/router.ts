@@ -49,7 +49,11 @@ import {
  listSettledRuns,
  getMastery,
  concludeSession,
+ contendAtlasProposal,
  conveneSession,
+ decideAtlasProposal,
+ listAtlasProposals,
+ type AtlasEdge,
  curateMap,
  getSession as getColosseumSession,
  listSessions,
@@ -135,6 +139,29 @@ const toWirePersona = (persona: AgentPersona) => ({
 
 /** `paths` is readonly in the domain and mutable on the wire — same as `runner.allowedRoots`. */
 const toWireWorkerNote = (note: WorkerNote) => ({...note, paths: [...note.paths] })
+
+/**
+ * An atlas edge, field by field rather than spread.
+ *
+ * Named explicitly because a spread is how a field goes missing across a port in this
+ * codebase — an excess-property check does not fire on one, so an added field arrives on
+ * the type and never on the wire. Listing them makes a new field a compile error here.
+ */
+const toWireAtlasEdge = (edge: AtlasEdge) => ({
+ id: edge.id,
+ relation: edge.relation,
+ rationale: edge.rationale,
+ status: edge.status,
+ from: {...edge.from },
+ to: {...edge.to },
+ proposedByPersonaName: edge.proposedByPersonaName,
+ proposedByRunId: edge.proposedByRunId,
+ sessionId: edge.sessionId,
+ decidedByName: edge.decidedByName,
+ decidedAt: edge.decidedAt,
+ decisionNote: edge.decisionNote,
+ createdAt: edge.createdAt,
+})
 
 export interface RouterContext {
  readonly principal: Principal
@@ -589,6 +616,63 @@ export const router = os.router({
  },
 
  /** The venue. Nothing here writes a map — a session's output is claims with verdicts. */
+ /**
+ * The atlas's write side — the queue, the venue, and the decision.
+ *
+ * No `propose` handler, deliberately: a proposal reaches the platform over the Runner
+ * channel, from a run that followed a lead and went and looked. A form here would let a
+ * human record a relation nobody checked with the same status as one that was.
+ */
+ atlas: {
+ listProposals: os.atlas.listProposals.handler(({ context, input }) =>
+ guard(async =>
+ (
+ await listAtlasProposals(context.deps, {
+ workspaceId: context.principal.workspaceId,
+...(input.status === undefined ? {}: { statuses: input.status }),
+ })
+).map(toWireAtlasEdge),
+),
+),
+
+ contend: os.atlas.contend.handler(({ context, input }) =>
+ guard(async => {
+ const held = await contendAtlasProposal(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ threadId: asThreadId(input.threadId),
+ edgeId: input.edgeId,
+ })
+ if (held) return { edge: toWireAtlasEdge(held.edge), sessionId: held.session.id }
+ /**
+ * No room, and that is an answer rather than a failure: one persona holding both
+ * subjects cannot form a roster that can disagree. The proposal is unchanged and
+ * still perfectly decidable by a human, so the edge comes back as it was.
+ */
+ const edges = await listAtlasProposals(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ })
+ const edge = edges.find((entry) => entry.id === input.edgeId)
+ if (!edge) throw new NotFoundError('AtlasEdge')
+ return { edge: toWireAtlasEdge(edge), sessionId: null }
+ }),
+),
+
+ decide: os.atlas.decide.handler(({ context, input }) =>
+ guard(async =>
+ toWireAtlasEdge(
+ await decideAtlasProposal(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ edgeId: input.edgeId,
+ decision: input.decision,
+...(input.note === undefined ? {}: { note: input.note }),
+ decidedByName: context.principal.displayName,
+ }),
+),
+),
+),
+ },
+
  colosseum: {
  list: os.colosseum.list.handler(({ context }) =>
  guard( => listSessions(context.deps, { workspaceId: context.principal.workspaceId })),

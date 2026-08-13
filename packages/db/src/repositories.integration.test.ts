@@ -19,7 +19,12 @@ import {
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { createDatabase, type Database } from './client.js'
-import { agentRunRepository, personaGroupRepository } from './agent-repositories.js'
+import {
+ agentRunRepository,
+ atlasRepository,
+ personaGroupRepository,
+ subjectMapRepository,
+} from './agent-repositories.js'
 import {
  auditAdapter,
  channelRepository,
@@ -27,15 +32,18 @@ import {
  threadRepository,
 } from './repositories.js'
 import {
+ agentPersona,
  agentRun,
  auditEvent,
  channel,
  message,
  repository,
  runner,
+ subjectMapNode,
  thread,
  workspace,
 } from './schema.js'
+import { user } from './auth-schema.js'
 
 /**
  * The same use-case scenarios that `@loom/application` runs against in-memory
@@ -517,5 +525,271 @@ describe('persona group pruning', => {
  expect(
  (await groups.listByWorkspace(OTHER_WS)).find((g) => g.id === theirs.id)?.personaIds,
 ).toEqual(['p_1'])
+ })
+})
+
+/**
+ * The atlas's write side, asserted where its claims actually live.
+ *
+ * Three of the four things this repository promises are Postgres behaviours and cannot be
+ * demonstrated against a fake: the unique index that makes one relation one row, the
+ * `on conflict do nothing` that stops a second proposer overwriting the first's argument,
+ * and the joins that read both endpoints' current labels rather than a copy taken when
+ * the relation was proposed.
+ */
+describe('atlas repository', => {
+ const atlas = atlasRepository(db)
+ const maps = subjectMapRepository(db)
+
+ const seedConcept = async (input: {
+ workspaceId: WorkspaceId
+ personaName: string
+ subjectRef: string
+ label: string
+ }) => {
+ const [persona] = await db
+.insert(agentPersona)
+.values({
+ workspaceId: input.workspaceId,
+ name: input.personaName,
+ description: '',
+ markdownSource: '',
+ model: 'claude-opus-5',
+ tools: [],
+ })
+.returning({ id: agentPersona.id })
+ const map = await maps.upsertMap({
+ workspaceId: input.workspaceId,
+ personaId: persona!.id as never,
+ subjectKind: 'repository',
+ repositoryId: null,
+ subjectRef: input.subjectRef,
+ revision: 'abc1234',
+ status: 'ready',
+ masteryRunId: null,
+ })
+ await maps.writeFragment({
+ workspaceId: input.workspaceId,
+ mapId: map.id,
+ revision: 'abc1234',
+ nodes: [
+ {
+ key: input.label,
+ kind: 'concept',
+ label: input.label,
+ summary: `about ${input.label}`,
+ provenance: 'inferred',
+ paths: [],
+ observationCount: 1,
+ },
+ ],
+ edges: [],
+ })
+ const [node] = await maps.listNodes(input.workspaceId, map.id)
+ return { personaId: persona!.id, mapId: map.id, nodeId: node!.id }
+ }
+
+ it('stores one relation once, and keeps the first proposer’s argument', async => {
+ const flight = await seedConcept({
+ workspaceId: WS,
+ personaName: 'flight-expert',
+ subjectRef: 'flight-api',
+ label: 'Cancellation fee',
+ })
+ const hotel = await seedConcept({
+ workspaceId: WS,
+ personaName: 'hotel-expert',
+ subjectRef: 'hotel-api',
+ label: 'Refund policy',
+ })
+ const [first, second] = [flight.nodeId, hotel.nodeId].sort
+
+ const created = await atlas.propose({
+ workspaceId: WS,
+ fromNodeId: first!,
+ toNodeId: second!,
+ relation: 'same_concept',
+ rationale: 'Both compute a partial charge.',
+ proposedByPersonaId: flight.personaId as never,
+ proposedByRunId: null,
+ })
+ expect(created.created).toBe(true)
+
+ const again = await atlas.propose({
+ workspaceId: WS,
+ fromNodeId: first!,
+ toNodeId: second!,
+ relation: 'same_concept',
+ rationale: 'A different argument entirely.',
+ proposedByPersonaId: hotel.personaId as never,
+ proposedByRunId: null,
+ })
+ expect(again.created).toBe(false)
+ // A second proposer must not overwrite the argument a human is going to read.
+ expect(again.edge.rationale).toBe('Both compute a partial charge.')
+ expect(await atlas.list(WS)).toHaveLength(1)
+ })
+
+ /**
+ * Labels are joined, never copied. A curation pass that rewords a concept must not
+ * leave the atlas quoting a sentence its own map no longer contains.
+ */
+ it('reads the endpoint’s current label rather than the one it was proposed under', async => {
+ const flight = await seedConcept({
+ workspaceId: WS,
+ personaName: 'flight-expert',
+ subjectRef: 'flight-api',
+ label: 'Cancellation fee',
+ })
+ const hotel = await seedConcept({
+ workspaceId: WS,
+ personaName: 'hotel-expert',
+ subjectRef: 'hotel-api',
+ label: 'Refund policy',
+ })
+ const [first, second] = [flight.nodeId, hotel.nodeId].sort
+ const { edge } = await atlas.propose({
+ workspaceId: WS,
+ fromNodeId: first!,
+ toNodeId: second!,
+ relation: 'same_concept',
+ rationale: 'Same computation.',
+ proposedByPersonaId: null,
+ proposedByRunId: null,
+ })
+
+ await db
+.update(subjectMapNode)
+.set({ label: 'Cancellation charge' })
+.where(sql`${subjectMapNode.id} = ${flight.nodeId}`)
+
+ const reread = await atlas.get(WS, edge.id)
+ const labels = [reread?.from.label, reread?.to.label]
+ expect(labels).toContain('Cancellation charge')
+ expect(labels).not.toContain('Cancellation fee')
+ })
+
+ /**
+ * The bi-temporal model: the edge survives its endpoint being superseded, and the
+ * read reports that so the caller can decline to render it.
+ */
+ it('keeps a relation whose endpoint the map has retired, and says so', async => {
+ const flight = await seedConcept({
+ workspaceId: WS,
+ personaName: 'flight-expert',
+ subjectRef: 'flight-api',
+ label: 'Cancellation fee',
+ })
+ const hotel = await seedConcept({
+ workspaceId: WS,
+ personaName: 'hotel-expert',
+ subjectRef: 'hotel-api',
+ label: 'Refund policy',
+ })
+ const [first, second] = [flight.nodeId, hotel.nodeId].sort
+ const { edge } = await atlas.propose({
+ workspaceId: WS,
+ fromNodeId: first!,
+ toNodeId: second!,
+ relation: 'same_concept',
+ rationale: 'Same computation.',
+ proposedByPersonaId: null,
+ proposedByRunId: null,
+ })
+
+ await maps.invalidateNodes(WS, [flight.nodeId], 'the repository outgrew it')
+
+ const reread = await atlas.get(WS, edge.id)
+ expect(reread).not.toBeNull
+ expect([reread?.from.live, reread?.to.live]).toContain(false)
+ })
+
+ it('decides once, and refuses to be decided again', async => {
+ const flight = await seedConcept({
+ workspaceId: WS,
+ personaName: 'flight-expert',
+ subjectRef: 'flight-api',
+ label: 'Cancellation fee',
+ })
+ const hotel = await seedConcept({
+ workspaceId: WS,
+ personaName: 'hotel-expert',
+ subjectRef: 'hotel-api',
+ label: 'Refund policy',
+ })
+ const [first, second] = [flight.nodeId, hotel.nodeId].sort
+ const { edge } = await atlas.propose({
+ workspaceId: WS,
+ fromNodeId: first!,
+ toNodeId: second!,
+ relation: 'same_concept',
+ rationale: 'Same computation.',
+ proposedByPersonaId: null,
+ proposedByRunId: null,
+ })
+
+ // A fresh id per run: `user` is Better Auth's table and this suite's truncate does
+ // not reach it, so a fixed id survives into the next run and collides.
+ const userId = `u-atlas-${Date.now}`
+ const [row] = await db
+.insert(user)
+.values({
+ id: userId,
+ name: 'Ramin',
+ email: `${userId}@example.com`,
+ emailVerified: true,
+ })
+.returning({ id: user.id })
+
+ const promoted = await atlas.decide({
+ workspaceId: WS,
+ edgeId: edge.id,
+ status: 'promoted',
+ decidedByUserId: row!.id as never,
+ decidedByName: 'Ramin',
+ note: '',
+ })
+ expect(promoted?.status).toBe('promoted')
+ expect(promoted?.decidedByName).toBe('Ramin')
+
+ // First decision wins — a second would rewrite whose name is on it.
+ expect(
+ await atlas.decide({
+ workspaceId: WS,
+ edgeId: edge.id,
+ status: 'rejected',
+ decidedByUserId: row!.id as never,
+ decidedByName: 'Ramin',
+ note: 'changed my mind',
+ }),
+).toBeNull
+
+ expect(await atlas.listPromotedTouching(WS, [flight.nodeId])).toHaveLength(1)
+ })
+
+ it('never reaches into another workspace’s relations', async => {
+ const flight = await seedConcept({
+ workspaceId: WS,
+ personaName: 'flight-expert',
+ subjectRef: 'flight-api',
+ label: 'Cancellation fee',
+ })
+ const hotel = await seedConcept({
+ workspaceId: WS,
+ personaName: 'hotel-expert',
+ subjectRef: 'hotel-api',
+ label: 'Refund policy',
+ })
+ const [first, second] = [flight.nodeId, hotel.nodeId].sort
+ await atlas.propose({
+ workspaceId: WS,
+ fromNodeId: first!,
+ toNodeId: second!,
+ relation: 'same_concept',
+ rationale: 'Same computation.',
+ proposedByPersonaId: null,
+ proposedByRunId: null,
+ })
+ expect(await atlas.list(OTHER_WS)).toHaveLength(0)
  })
 })

@@ -71,6 +71,11 @@ const pendingAtlasReads = new Map<
  string,
  (result: { ok: boolean; leads?: string | undefined; error?: string | undefined }) => void
 >
+/** `propose_cross_project_link` round-trips. */
+const pendingAtlasLinks = new Map<
+ string,
+ (result: { ok: boolean; outcome?: string | undefined; error?: string | undefined }) => void
+>
 const pendingNoteReads = new Map<
  string,
  (result: { ok: boolean; ledger?: string | undefined; error?: string | undefined }) => void
@@ -183,6 +188,15 @@ const main = async : Promise<void> => {
  return
  }
 
+ if (parsed.data.t === 'atlas_link_result') {
+ const resolveLink = pendingAtlasLinks.get(parsed.data.requestId)
+ if (resolveLink) {
+ pendingAtlasLinks.delete(parsed.data.requestId)
+ resolveLink(parsed.data)
+ }
+ return
+ }
+
  if (parsed.data.t === 'question_result') {
  const resolveQuestion = pendingQuestions.get(parsed.data.requestId)
  if (resolveQuestion) {
@@ -237,6 +251,19 @@ const main = async : Promise<void> => {
  result.ok
  ? { ok: true, leads: result.leads ?? '' }
 : { ok: false, error: result.error ?? 'the platform could not read it' },
+),
+)
+ })
+ },
+ proposeLink: (proposal) => {
+ const requestId = nextRequestId
+ emit({ t: 'atlas_link_request', requestId,...proposal })
+ return new Promise((resolve) => {
+ pendingAtlasLinks.set(requestId, (result) =>
+ resolve(
+ result.ok
+ ? { ok: true, outcome: result.outcome ?? '' }
+: { ok: false, error: result.error ?? 'the platform could not record it' },
 ),
 )
  })

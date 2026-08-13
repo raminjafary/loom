@@ -1,4 +1,6 @@
 import type {
+ AtlasEdgeStatus,
+ AtlasRelation,
  ColosseumClaim,
  ColosseumSession,
  ColosseumParticipant,
@@ -46,6 +48,7 @@ import type {
  MapFragmentEdge,
  MapFragmentNode,
  MapNode,
+ MapNodeKind,
  MapSubjectKind,
  MasteryCheckpoint,
  SubjectMap,
@@ -1098,6 +1101,38 @@ export interface SubjectMapRepositoryPort {
  createdAt: Date
  }[]
  >
+ /**
+ * Live concepts in this workspace carrying a given label — how a proposal names its two
+ * ends.
+ *
+ * **By label, and that is forced rather than chosen.** Neither surface a model sees
+ * carries a node id: `renderMapForPrompt` renders a claim as a sentence, and an atlas
+ * lead is one line by design. Putting an identifier on either would spend context on
+ * plumbing in the one place this platform is most careful about it. So the model names
+ * the two concepts in the words it was shown, and the platform resolves — and a label
+ * that resolves to nothing is a real answer, because it means the model is relating
+ * something it was never told about.
+ *
+ * Case-insensitive, and every candidate is returned rather than one: two subjects
+ * holding the same label is exactly the interesting case, and picking one here would
+ * decide the proposal instead of resolving it.
+ */
+ findConceptsByLabel(
+ workspaceId: WorkspaceId,
+ input: { label: string; repositoryId?: RepositoryId; subjectRef?: string },
+): Promise<
+ {
+ nodeId: string
+ mapId: SubjectMapId
+ kind: MapNodeKind
+ label: string
+ summary: string
+ subjectRef: string
+ repositoryId: RepositoryId | null
+ personaId: AgentPersonaId
+ personaName: string
+ }[]
+ >
  listEdges(workspaceId: WorkspaceId, mapId: SubjectMapId): Promise<MapEdge[]>
  /** Live counts, which is what `MAX_NODES_PER_MAP` bounds. */
  countLive(
@@ -1349,4 +1384,101 @@ export interface NoteReadEdge {
  readonly authorRunId: AgentRunId
  readonly readCount: number
  readonly lastReadAt: Date
+}
+
+/**
+ * One end of a stored atlas relation, as read back with everything needed to render it.
+ *
+ * Denormalized on read rather than at write time, and that is the choice worth naming: a
+ * label copied into the edge row would be the label as it was when somebody proposed the
+ * relation, and a curation pass that rewords a concept would leave the atlas quoting a
+ * sentence its own map no longer contains. The join costs one statement and always tells
+ * the truth.
+ */
+export interface AtlasEdgeEnd {
+ readonly nodeId: string
+ readonly mapId: SubjectMapId
+ readonly label: string
+ readonly summary: string
+ readonly subjectRef: string
+ readonly personaName: string
+ /** Whether the map still holds this claim — an endpoint can be superseded under the edge. */
+ readonly live: boolean
+}
+
+export interface AtlasEdge {
+ readonly id: string
+ readonly relation: AtlasRelation
+ readonly rationale: string
+ readonly status: AtlasEdgeStatus
+ readonly from: AtlasEdgeEnd
+ readonly to: AtlasEdgeEnd
+ readonly proposedByPersonaName: string
+ readonly proposedByRunId: string | null
+ readonly sessionId: string | null
+ readonly decidedByName: string
+ readonly decidedAt: Date | null
+ readonly decisionNote: string
+ readonly createdAt: Date
+}
+
+/**
+ * The atlas's write side.
+ *
+ * Its own port rather than methods on `SubjectMapRepositoryPort`, for the reason
+ * `NoteReadRepositoryPort` is separate: nothing here reads or writes a *map*. An atlas
+ * edge is a relation between two maps that belongs to neither, and putting it on the map
+ * port would suggest a map owns its half of one — which is exactly the mistake that would
+ * make a re-mastering delete somebody's confirmed relation.
+ */
+export interface AtlasRepositoryPort {
+ /**
+ * Stores a proposal, or returns the existing row for that pair.
+ *
+ * Idempotent rather than erroring, because the caller is a model and a model that gets
+ * an error for "this already exists" will rephrase and try again. Returning the row it
+ * would have created lets the tool say *this was already proposed, here is where it
+ * got to*, which is the answer a run actually needs.
+ */
+ propose(input: {
+ workspaceId: WorkspaceId
+ fromNodeId: string
+ toNodeId: string
+ relation: AtlasRelation
+ rationale: string
+ proposedByPersonaId: AgentPersonaId | null
+ proposedByRunId: AgentRunId | null
+ }): Promise<{ edge: AtlasEdge; created: boolean }>
+ get(workspaceId: WorkspaceId, edgeId: string): Promise<AtlasEdge | null>
+ /** The queue a human works through, and the list the canvas draws. */
+ list(
+ workspaceId: WorkspaceId,
+ options?: { statuses?: readonly AtlasEdgeStatus[] },
+): Promise<AtlasEdge[]>
+ countByStatus(
+ workspaceId: WorkspaceId,
+ statuses: readonly AtlasEdgeStatus[],
+): Promise<number>
+ /**
+ * The confirmed relations touching a set of concepts — the read side's half of this
+ * table (mastery: "a confirmed edge stops being a lead and starts being ranked above
+ * leads").
+ *
+ * Keyed by node id rather than by topic because matching stays lexical and stays in the
+ * domain: this returns what is confirmed *about these concepts*, and the caller has
+ * already decided which concepts the topic matched.
+ */
+ listPromotedTouching(
+ workspaceId: WorkspaceId,
+ nodeIds: readonly string[],
+): Promise<AtlasEdge[]>
+ attachSession(workspaceId: WorkspaceId, edgeId: string, sessionId: string): Promise<AtlasEdge | null>
+ decide(input: {
+ workspaceId: WorkspaceId
+ edgeId: string
+ status: Extract<AtlasEdgeStatus, 'promoted' | 'rejected'>
+ decidedByUserId: UserId
+ decidedByName: string
+ note: string
+ }): Promise<AtlasEdge | null>
 }

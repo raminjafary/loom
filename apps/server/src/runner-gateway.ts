@@ -30,6 +30,8 @@ import {
  applyPlanDelta,
  applySubmittedPlan,
  readAtlasLeads,
+ proposeCrossSubjectRelation,
+ renderProposalOutcome,
  readContextLedger,
  reconcileRunnerRuns,
  recordAgentEvent,
@@ -941,6 +943,42 @@ export const createRunnerGateway = (
  } catch (error) {
  send(from, {
  type: 'atlas_result',
+ requestId: frame.requestId,
+ ok: false,
+ error: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
+ /**
+ * A run proposing a cross-project relation.
+ *
+ * The whole outcome is assembled here, refusals included, for the same reason the
+ * leads are: the sentence a model is shown after a refused proposal is what stops
+ * it rephrasing and trying again, and a Runner writing its own would be a second
+ * place for that wording — and for the rules behind it — to drift.
+ */
+ case 'atlas_link_proposed': {
+ try {
+ const result = await proposeCrossSubjectRelation(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ mine: frame.mine,
+ theirs: frame.theirs,
+...(frame.theirSubject === undefined ? {}: { theirSubject: frame.theirSubject }),
+ relation: frame.relation,
+ rationale: frame.rationale,
+ })
+ send(from, {
+ type: 'atlas_link_result',
+ requestId: frame.requestId,
+ ok: true,
+ outcome: renderProposalOutcome(result),
+ })
+ } catch (error) {
+ send(from, {
+ type: 'atlas_link_result',
  requestId: frame.requestId,
  ok: false,
  error: error instanceof Error ? error.message: String(error),

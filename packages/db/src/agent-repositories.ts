@@ -2,6 +2,8 @@ import type {
  AgentRunEventRepositoryPort,
  AgentRunRepositoryPort,
  ApprovalRepositoryPort,
+ AtlasEdge,
+ AtlasRepositoryPort,
  CapabilityRepositoryPort,
  ColosseumRepositoryPort,
  MergeQueueRepositoryPort,
@@ -31,11 +33,13 @@ import {
  type ColosseumClaim,
  type ColosseumSession,
  type ExpertiseArmTally,
+ type MapNodeKind,
  type WorkspaceId,
  type WorkspaceRunControl,
 } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import type { Database } from './client.js'
 import {
  toAgentPersona,
@@ -74,6 +78,7 @@ import {
  agentRun,
  agentRunEvent,
  approvalRequest,
+ atlasEdge,
  capability,
  channel,
  mergeQueueEntry,
@@ -1740,6 +1745,52 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  }))
  },
 
+ async findConceptsByLabel(workspaceId, input) {
+ const rows = await db
+.select({
+ nodeId: subjectMapNode.id,
+ mapId: subjectMapNode.mapId,
+ kind: subjectMapNode.kind,
+ label: subjectMapNode.label,
+ summary: subjectMapNode.summary,
+ subjectRef: subjectMap.subjectRef,
+ repositoryId: subjectMap.repositoryId,
+ personaId: subjectMap.personaId,
+ personaName: agentPersona.name,
+ updatedAt: subjectMap.updatedAt,
+ })
+.from(subjectMapNode)
+.innerJoin(subjectMap, eq(subjectMapNode.mapId, subjectMap.id))
+.innerJoin(agentPersona, eq(subjectMap.personaId, agentPersona.id))
+.where(
+ and(
+ eq(subjectMapNode.workspaceId, workspaceId),
+ isNull(subjectMapNode.invalidatedAt),
+ inArray(subjectMapNode.kind, [...CONCEPT_NODE_KINDS]),
+ eq(subjectMap.status, 'ready'),
+ sql`lower(${subjectMapNode.label}) = lower(${input.label})`,
+ input.repositoryId === undefined
+ ? sql`true`
+: eq(subjectMap.repositoryId, input.repositoryId),
+ input.subjectRef === undefined ? sql`true`: eq(subjectMap.subjectRef, input.subjectRef),
+),
+)
+ // Most recently mastered first: when one label appears in two maps of one subject,
+ // the newer reading is the one a proposal should be about.
+.orderBy(desc(subjectMap.updatedAt))
+ return rows.map((row) => ({
+ nodeId: row.nodeId,
+ mapId: asSubjectMapId(row.mapId),
+ kind: row.kind as MapNodeKind,
+ label: row.label,
+ summary: row.summary ?? '',
+ subjectRef: row.subjectRef,
+ repositoryId: row.repositoryId === null ? null: asRepositoryId(row.repositoryId),
+ personaId: asAgentPersonaId(row.personaId),
+ personaName: row.personaName,
+ }))
+ },
+
  async listEdges(workspaceId, mapId) {
  const rows = await db
 .select
@@ -2350,3 +2401,234 @@ export const noteReadRepository = (db: Database): NoteReadRepositoryPort => ({
  }))
  },
 })
+
+/**
+ * The atlas's write side.
+ *
+ * Every read joins both endpoints through to the persona that learned them, because an
+ * atlas edge is unreadable without them: "these two concepts are the same" names nothing
+ * a human can check unless it also says which subjects and whose expertise. Two aliased
+ * joins per end rather than labels copied onto the row — a copied label is the label as it
+ * was when the relation was proposed, and a curation pass that rewords a concept would
+ * leave the atlas quoting a sentence its own map no longer contains.
+ */
+export const atlasRepository = (db: Database): AtlasRepositoryPort => {
+ const fromNode = alias(subjectMapNode, 'from_node')
+ const toNode = alias(subjectMapNode, 'to_node')
+ const fromMap = alias(subjectMap, 'from_map')
+ const toMap = alias(subjectMap, 'to_map')
+ const fromPersona = alias(agentPersona, 'from_persona')
+ const toPersona = alias(agentPersona, 'to_persona')
+ const proposer = alias(agentPersona, 'proposer')
+
+ const selection = {
+ id: atlasEdge.id,
+ relation: atlasEdge.relation,
+ rationale: atlasEdge.rationale,
+ status: atlasEdge.status,
+ proposedByRunId: atlasEdge.proposedByRunId,
+ proposerName: proposer.name,
+ sessionId: atlasEdge.sessionId,
+ decidedByName: atlasEdge.decidedByName,
+ decidedAt: atlasEdge.decidedAt,
+ decisionNote: atlasEdge.decisionNote,
+ createdAt: atlasEdge.createdAt,
+ fromNodeId: fromNode.id,
+ fromMapId: fromNode.mapId,
+ fromLabel: fromNode.label,
+ fromSummary: fromNode.summary,
+ fromInvalidatedAt: fromNode.invalidatedAt,
+ fromSubjectRef: fromMap.subjectRef,
+ fromPersonaName: fromPersona.name,
+ toNodeId: toNode.id,
+ toMapId: toNode.mapId,
+ toLabel: toNode.label,
+ toSummary: toNode.summary,
+ toInvalidatedAt: toNode.invalidatedAt,
+ toSubjectRef: toMap.subjectRef,
+ toPersonaName: toPersona.name,
+ }
+
+ type Row = { [K in keyof typeof selection]: unknown }
+
+ const joined = =>
+ db
+.select(selection)
+.from(atlasEdge)
+.innerJoin(fromNode, eq(atlasEdge.fromNodeId, fromNode.id))
+.innerJoin(toNode, eq(atlasEdge.toNodeId, toNode.id))
+.innerJoin(fromMap, eq(fromNode.mapId, fromMap.id))
+.innerJoin(toMap, eq(toNode.mapId, toMap.id))
+.innerJoin(fromPersona, eq(fromMap.personaId, fromPersona.id))
+.innerJoin(toPersona, eq(toMap.personaId, toPersona.id))
+.leftJoin(proposer, eq(atlasEdge.proposedByPersonaId, proposer.id))
+
+ const toEdge = (row: Row): AtlasEdge => ({
+ id: row.id as string,
+ relation: row.relation as AtlasEdge['relation'],
+ rationale: row.rationale as string,
+ status: row.status as AtlasEdge['status'],
+ from: {
+ nodeId: row.fromNodeId as string,
+ mapId: asSubjectMapId(row.fromMapId as string),
+ label: row.fromLabel as string,
+ summary: (row.fromSummary as string | null) ?? '',
+ subjectRef: row.fromSubjectRef as string,
+ personaName: row.fromPersonaName as string,
+ live: row.fromInvalidatedAt === null,
+ },
+ to: {
+ nodeId: row.toNodeId as string,
+ mapId: asSubjectMapId(row.toMapId as string),
+ label: row.toLabel as string,
+ summary: (row.toSummary as string | null) ?? '',
+ subjectRef: row.toSubjectRef as string,
+ personaName: row.toPersonaName as string,
+ live: row.toInvalidatedAt === null,
+ },
+ // Empty rather than null when the persona is gone: the claim outlives its author, and
+ // every reader of this field is rendering a sentence.
+ proposedByPersonaName: (row.proposerName as string | null) ?? '',
+ proposedByRunId: (row.proposedByRunId as string | null) ?? null,
+ sessionId: (row.sessionId as string | null) ?? null,
+ decidedByName: row.decidedByName as string,
+ decidedAt: (row.decidedAt as Date | null) ?? null,
+ decisionNote: row.decisionNote as string,
+ createdAt: row.createdAt as Date,
+ })
+
+ const byId = async (workspaceId: WorkspaceId, edgeId: string): Promise<AtlasEdge | null> => {
+ const rows = await joined.where(
+ and(eq(atlasEdge.workspaceId, workspaceId), eq(atlasEdge.id, edgeId)),
+)
+ return rows[0] ? toEdge(rows[0]): null
+ }
+
+ return {
+ async propose(input) {
+ const [row] = await db
+.insert(atlasEdge)
+.values({
+ workspaceId: input.workspaceId,
+ fromNodeId: input.fromNodeId,
+ toNodeId: input.toNodeId,
+ relation: input.relation,
+ rationale: input.rationale,
+ proposedByPersonaId: input.proposedByPersonaId,
+ proposedByRunId: input.proposedByRunId,
+ })
+ /**
+ * Nothing is written on conflict, and that is the point rather than laziness: a
+ * second agent proposing the same relation must not overwrite the first one's
+ * rationale, and it certainly must not reset a decided row to `proposed`. The
+ * caller is told `created: false` and reports where the existing one got to.
+ */
+.onConflictDoNothing({
+ target: [
+ atlasEdge.workspaceId,
+ atlasEdge.fromNodeId,
+ atlasEdge.toNodeId,
+ atlasEdge.relation,
+ ],
+ })
+.returning({ id: atlasEdge.id })
+
+ if (row) {
+ const created = await byId(input.workspaceId, row.id)
+ if (!created) throw new Error('atlas_edge insert returned no readable row')
+ return { edge: created, created: true }
+ }
+
+ const rows = await joined.where(
+ and(
+ eq(atlasEdge.workspaceId, input.workspaceId),
+ eq(atlasEdge.fromNodeId, input.fromNodeId),
+ eq(atlasEdge.toNodeId, input.toNodeId),
+ eq(atlasEdge.relation, input.relation),
+),
+)
+ const existing = rows[0]
+ if (!existing) throw new Error('atlas_edge conflicted with a row that cannot be read')
+ return { edge: toEdge(existing), created: false }
+ },
+
+ get: byId,
+
+ async list(workspaceId, options) {
+ const statuses = options?.statuses
+ const rows = await joined
+.where(
+ and(
+ eq(atlasEdge.workspaceId, workspaceId),
+ statuses === undefined ? sql`true`: inArray(atlasEdge.status, [...statuses]),
+),
+)
+.orderBy(desc(atlasEdge.createdAt))
+ return rows.map(toEdge)
+ },
+
+ async countByStatus(workspaceId, statuses) {
+ if (statuses.length === 0) return 0
+ const [row] = await db
+.select({ total: count })
+.from(atlasEdge)
+.where(
+ and(eq(atlasEdge.workspaceId, workspaceId), inArray(atlasEdge.status, [...statuses])),
+)
+ return Number(row?.total ?? 0)
+ },
+
+ async listPromotedTouching(workspaceId, nodeIds) {
+ if (nodeIds.length === 0) return []
+ const ids = [...new Set(nodeIds)]
+ const rows = await joined
+.where(
+ and(
+ eq(atlasEdge.workspaceId, workspaceId),
+ eq(atlasEdge.status, 'promoted'),
+ or(inArray(atlasEdge.fromNodeId, ids), inArray(atlasEdge.toNodeId, ids)),
+),
+)
+.orderBy(desc(atlasEdge.decidedAt))
+ return rows.map(toEdge)
+ },
+
+ async attachSession(workspaceId, edgeId, sessionId) {
+ const [row] = await db
+.update(atlasEdge)
+.set({ sessionId, status: 'contended' })
+.where(
+ and(
+ eq(atlasEdge.workspaceId, workspaceId),
+ eq(atlasEdge.id, edgeId),
+ // Only an undecided proposal enters a venue. A promoted relation sent back to
+ // be argued over would silently un-confirm what a human confirmed.
+ eq(atlasEdge.status, 'proposed'),
+),
+)
+.returning({ id: atlasEdge.id })
+ return row ? byId(workspaceId, row.id): null
+ },
+
+ async decide(input) {
+ const [row] = await db
+.update(atlasEdge)
+.set({
+ status: input.status,
+ decidedByUserId: input.decidedByUserId,
+ decidedByName: input.decidedByName,
+ decidedAt: new Date,
+ decisionNote: input.note,
+ })
+.where(
+ and(
+ eq(atlasEdge.workspaceId, input.workspaceId),
+ eq(atlasEdge.id, input.edgeId),
+ inArray(atlasEdge.status, ['proposed', 'contended']),
+),
+)
+.returning({ id: atlasEdge.id })
+ return row ? byId(input.workspaceId, row.id): null
+ },
+ }
+}

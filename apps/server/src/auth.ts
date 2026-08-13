@@ -15,6 +15,16 @@ export interface AuthPort {
 export interface Principal {
  readonly actor: Actor
  readonly workspaceId: WorkspaceId
+ /**
+ * What to call this human where a record carries their name.
+ *
+ * Resolved from the authenticated session and **never** accepted from a client payload,
+ * for the reason: a name a caller supplies is a name a caller can forge, and the
+ * whole value of a promoted relation is whose judgement is behind it. Empty for a
+ * non-human principal, and for a session with no name set — readers fall back rather
+ * than dropping the record.
+ */
+ readonly displayName: string
 }
 
 export interface WorkspaceMembership {
@@ -36,6 +46,7 @@ export const betterAuthPort = (auth: LoomAuth, membership: WorkspaceMembership):
  return {
  actor: userActor(asUserId(session.user.id)),
  workspaceId: asWorkspaceId(workspaceId),
+ displayName: session.user.name ?? session.user.email ?? '',
  }
  },
 })
@@ -60,6 +71,7 @@ export const devAuth = (defaults: { userId: string; workspaceId: string }): Auth
  return {
  actor: userActor(asUserId(userId)),
  workspaceId: asWorkspaceId(workspaceId),
+ displayName: header(headers, 'x-loom-dev-name') ?? userId,
  }
  },
 })

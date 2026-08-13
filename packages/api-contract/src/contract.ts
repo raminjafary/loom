@@ -28,6 +28,7 @@ import {
  ThreadSchema,
  ColosseumClaimSchema,
  ColosseumSessionSchema,
+ AtlasEdgeSchema,
  ColosseumViewSchema,
  MasteryViewSchema,
  SubjectMapListingSchema,
@@ -540,6 +541,51 @@ export const contract = {
 ),
 
  conclude: oc.input(z.object({ sessionId: z.string })).output(ColosseumViewSchema),
+ },
+
+ /**
+ * The atlas's write side — the queue a human works through.
+ *
+ * There is deliberately **no `propose` procedure here**. A proposal comes from an agent
+ * that followed a lead and went and looked, over the Runner channel; a human drawing one
+ * in a form would be recording a relation nobody checked, wearing the same status as one
+ * that was. What a human does here is decide.
+ */
+ atlas: {
+ listProposals: oc
+.input(
+ z.object({
+ status: z
+.array(z.enum(['proposed', 'contended', 'promoted', 'rejected']))
+.optional,
+ }),
+)
+.output(z.array(AtlasEdgeSchema)),
+
+ /**
+ * Puts a proposal in front of the two experts who hold its ends, in the venue.
+ *
+ * Returns the edge either way: a workspace where one persona mastered both subjects
+ * cannot form a roster that can disagree, and that is a fact about the workspace
+ * rather than an error — the proposal is still perfectly decidable by a human.
+ */
+ contend: oc
+.input(z.object({ edgeId: z.string, threadId: z.string }))
+.output(z.object({ edge: AtlasEdgeSchema, sessionId: z.string.nullable })),
+
+ /**
+ * Promotes or rejects — the human act mastery insists on. Rejection carries a note,
+ * because the reason a plausible relation is wrong is written down nowhere else.
+ */
+ decide: oc
+.input(
+ z.object({
+ edgeId: z.string,
+ decision: z.enum(['promoted', 'rejected']),
+ note: z.string.max(1_000).optional,
+ }),
+)
+.output(AtlasEdgeSchema),
  },
 
  /**

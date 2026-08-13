@@ -107,6 +107,7 @@ import type {
  ColosseumRepositoryPort,
  MergeQueueRepositoryPort,
  PersonaGroupRepositoryPort,
+ AtlasRepositoryPort,
  PersonaRepositoryPort,
  PlanSubtaskRepositoryPort,
  RepositoryRepositoryPort,
@@ -118,10 +119,10 @@ import type {
 import type { BlobStoragePort } from './ports.js'
 import type { NotificationDeps } from './notification-use-cases.js'
 import { conveneCrunchForDrift } from './colosseum-use-cases.js'
+import { findAtlasLeads } from './atlas-use-cases.js'
 import {
  buildMapContext,
  closeMap,
- findAtlasLeads,
  invalidateMapsForMerge,
  openMap,
  PENDING_REVISION,
@@ -151,6 +152,8 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
  readonly runControl: WorkspaceRunControlRepositoryPort
  /** The venue — a session is not a run and not a map, so it has its own port. */
  readonly colosseum: ColosseumRepositoryPort
+ /** The atlas — a relation between two maps, belonging to neither. */
+ readonly atlas: AtlasRepositoryPort
  /** The DAG — the subtasks of a plan that have not started yet. */
  readonly planSubtasks: PlanSubtaskRepositoryPort
  /** The raw transcript tier's store. */

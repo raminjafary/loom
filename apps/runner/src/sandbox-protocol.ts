@@ -111,6 +111,14 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  leads: z.string.optional,
  error: z.string.optional,
  }),
+ /** What became of a proposed cross-project relation. */
+ z.object({
+ t: z.literal('atlas_link_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ outcome: z.string.optional,
+ error: z.string.optional,
+ }),
  /**
  * A human's reply to `ask_human`. `answer` absent means nobody
  * answered — denied, or the SLA expired — and the tool must still return, or the
@@ -198,6 +206,20 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  * by construction and a prompt is not — see `atlas-tool.ts`.
  */
  z.object({ t: z.literal('atlas_request'), requestId: z.string, topic: z.string.max(500) }),
+ /**
+ * A relation the agent wants to propose. Both
+ * ends are named in words rather than by id, because no surface a model sees carries
+ * one; the host resolves them against what the platform actually holds.
+ */
+ z.object({
+ t: z.literal('atlas_link_request'),
+ requestId: z.string,
+ mine: z.string.max(200),
+ theirs: z.string.max(200),
+ theirSubject: z.string.max(200).optional,
+ relation: z.string.max(40),
+ rationale: z.string.max(600),
+ }),
  /**
  * One map fragment the agent wrote, crossing out as it is
  * written for the same reason a note does — and more so, since a mastery run is the

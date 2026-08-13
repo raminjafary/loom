@@ -145,12 +145,15 @@ const bindViaFakeRunner = async (
  socket: WebSocket,
  runnerId: string,
  path = '/tmp/repo',
+ // The display name **is** the subject a map is keyed by, so two repositories sharing one
+ // are one subject as far as mastery is concerned. Distinguishable when a test needs two.
+ displayName = 'test repo',
 ): Promise<{ id: string; defaultBranch: string; reconcilerEnabled: boolean }> => {
  const checkPath = nextFrame(socket, (v) => v.type === 'check_path')
  const bindPromise = client.repository.bindExisting({
  runnerId,
  path,
- displayName: 'test repo',
+ displayName,
  })
  const frame = await checkPath
  socket.send(
@@ -469,6 +472,137 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  expect(leads.indexOf('leads, not facts')).toBeLessThan(leads.indexOf(ATLAS_OPEN))
  // And a lead cannot close the fence it arrived in.
  expect(leads.split(ATLAS_CLOSE)).toHaveLength(2)
+
+ socket.close
+ })
+
+ /**
+ * The atlas's **write side**, over the real frames.
+ *
+ * What only this level can prove: that a run naming two concepts *in the words it was
+ * shown* reaches a stored proposal, that the sentence it gets back does not read as a
+ * finding, and that a concept the model invented is refused rather than stored.
+ */
+ it('records a proposed cross-project relation, and refuses an invented one', async => {
+ const { socket, runnerId } = await pairFakeRunner('atlas-write')
+ const other = await bindViaFakeRunner(socket, runnerId, '/tmp/other-write', 'hotel-api')
+ const mine = await bindViaFakeRunner(socket, runnerId, '/tmp/my-write', 'flight-api')
+ const created = await client.channel.create({ name: 'atlas-write' })
+
+ const master = async (repositoryId: string, label: string, personaId: string) => {
+ const opened = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.mastery.start({
+ threadId: created.rootThread.id,
+ repositoryId,
+ personaId,
+ })
+ await opened
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: run.id,
+ clonePath: '/tmp/clone',
+ branchName: 'loom/mastery',
+ headSha: 'abc123def456',
+ }),
+)
+ const written = nextFrame(socket, (v) => v.type === 'map_result')
+ socket.send(
+ JSON.stringify({
+ type: 'map_written',
+ runId: run.id,
+ requestId: `frag-${label}`,
+ fragment: { nodes: [{ key: label, kind: 'concept', label, summary: `about ${label}` }] },
+ }),
+)
+ await written
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: run.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'mapped' },
+ }),
+)
+ return run
+ }
+
+ // Two experts, two subjects — the shape a relation is between.
+ const hotelPersona = await client.persona.create({
+ markdownSource: [
+ '---',
+ 'name: hotel-expert',
+ 'description: knows the hotel side',
+ 'model: claude-opus-5',
+ 'tools: []',
+ '---',
+ 'You know hotels.',
+ ].join('\n'),
+ })
+ await master(other.id, 'Refund policy', hotelPersona.id)
+ await master(mine.id, 'Cancellation fee', testPersonaId)
+
+ const bothReady = await waitForReady(async => {
+ const theirs = await client.mastery.listForPersona({ personaId: hotelPersona.id })
+ const ours = await client.mastery.listForPersona({ personaId: testPersonaId })
+ return (
+ theirs.some((entry) => entry.map.status === 'ready') &&
+ ours.some((entry) => entry.map.status === 'ready')
+)
+ })
+ expect(bothReady).toBe(true)
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: mine.id,
+ personaId: testPersonaId,
+ })
+ await startFrame
+
+ const answered = nextFrame(
+ socket,
+ (v) => v.type === 'atlas_link_result' && v.requestId === 'link-1',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'atlas_link_proposed',
+ runId: run.id,
+ requestId: 'link-1',
+ mine: 'Cancellation fee',
+ theirs: 'Refund policy',
+ theirSubject: 'hotel-api',
+ relation: 'same_concept',
+ rationale: 'Both compute a partial charge from time remaining.',
+ }),
+)
+ const frame = await answered
+ expect(frame.ok).toBe(true)
+ // A model told "noted" reasons from the relation for the rest of the run.
+ expect(String(frame.outcome)).toContain('proposal, not a finding')
+
+ const proposals = await client.atlas.listProposals({})
+ expect(proposals).toHaveLength(1)
+ expect(proposals[0]?.status).toBe('proposed')
+
+ // A concept nobody recorded is a relation to nothing, and is refused rather than stored.
+ const refused = nextFrame(
+ socket,
+ (v) => v.type === 'atlas_link_result' && v.requestId === 'link-2',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'atlas_link_proposed',
+ runId: run.id,
+ requestId: 'link-2',
+ mine: 'Cancellation fee',
+ theirs: 'Something I imagined',
+ relation: 'same_concept',
+ rationale: 'Feels related.',
+ }),
+)
+ expect(String((await refused).outcome)).toContain('No subject here has recorded')
+ expect(await client.atlas.listProposals({})).toHaveLength(1)
 
  socket.close
  })
