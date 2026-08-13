@@ -1008,6 +1008,53 @@ export const expertiseUse = pgTable(
 )
 
 /**
+ * Which claims a run was actually shown.
+ *
+ * Domain expertise wants a claim cited by runs that merged cleanly to outrank one from runs that were
+ * discarded, and until this table the platform recorded retrieval per *map*: scoring every
+ * claim in a map by the map's own record is not a ranking, and guessing which nodes a run
+ * acted on would have been worse than not ranking at all.
+ *
+ * This is not a guess. `selectMapForContext` decides exactly which nodes are rendered into
+ * a run's prompt and which are elided, so the rows here are the platform's own record of
+ * what it put in front of a model — the same standard the handoff brief's observed paths
+ * are held to.
+ *
+ * **A citation is "was shown", not "was used".** The distinction is deliberate and the
+ * weaker claim is the honest one: what a model did with a claim it read is not observable,
+ * and a table that pretended otherwise would rank memory by a fact nobody measured. What
+ * it supports is exactly what mastery permits scores to do — rank what to read first, never
+ * change what is believed without checking.
+ */
+export const expertiseUseNode = pgTable(
+ 'expertise_use_node',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ useId: uuid('use_id')
+.notNull
+.references( => expertiseUse.id, { onDelete: 'cascade' }),
+ nodeId: uuid('node_id')
+.notNull
+.references( => subjectMapNode.id, { onDelete: 'cascade' }),
+ /**
+ * Denormalized from the use row so the tally can group by node without a third join,
+ * and so an invalidated node's citations stay attributable to the map they were read
+ * from. Both parents cascade, so this cannot outlive either.
+ */
+ mapId: uuid('map_id')
+.notNull
+.references( => subjectMap.id, { onDelete: 'cascade' }),
+ },
+ (t) => [
+ uniqueIndex('expertise_use_node_unique_idx').on(t.useId, t.nodeId),
+ index('expertise_use_node_map_idx').on(t.workspaceId, t.mapId, t.nodeId),
+ ],
+)
+
+/**
  * A convened session.
  *
  * Mastery calls it "a venue rather than a feature because everything in it needs the same

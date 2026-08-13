@@ -418,6 +418,19 @@ export const MasteryViewSchema = z.object({
  /** Whether reading this map has been shown to help, and what is being done about it. */
  effect: ExpertiseEffectSchema,
  retrievalState: z.enum(['trial', 'on', 'off']),
+ /**
+ * What became of the runs each claim was shown to, keyed by node id. Counts rather than a score, because "outranked" is a
+ * conclusion and the human should be able to check it against the runs it came from.
+ */
+ claimOutcomes: z.record(
+ z.string,
+ z.object({
+ decided: z.number.int,
+ merged: z.number.int,
+ discarded: z.number.int,
+ failed: z.number.int,
+ }),
+),
 })
 
 /**

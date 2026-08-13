@@ -223,7 +223,10 @@ class FakeMaps implements SubjectMapRepositoryPort {
  arm: 'retrieved' | 'withheld'
  nodesShown: number
  edgesShown: number
+ nodeIds: readonly string[]
  }[] = []
+ /** What `tallyNodeOutcomes` would return; set by a test that wants claims ranked. */
+ nodeOutcomes: Record<string, { decided: number; merged: number; discarded: number; failed: number }> = {}
  /** What `tallyExpertiseOutcomes` would return; set by a test that wants a verdict. */
  tallies: Record<string, ExpertiseArmTally[]> = {}
 
@@ -245,6 +248,7 @@ class FakeMaps implements SubjectMapRepositoryPort {
  arm: 'retrieved' | 'withheld'
  nodesShown: number
  edgesShown: number
+ nodeIds: readonly string[]
  }) {
  // Idempotent per (run, map), like the real one: a run is on one arm.
  if (this.uses.some((use) => use.mapId === input.mapId && use.agentRunId === input.agentRunId)) {
@@ -258,8 +262,13 @@ class FakeMaps implements SubjectMapRepositoryPort {
  arm: input.arm,
  nodesShown: input.nodesShown,
  edgesShown: input.edgesShown,
+ nodeIds: input.nodeIds,
  },
  ]
+ }
+
+ async tallyNodeOutcomes {
+ return this.nodeOutcomes
  }
 
  async countExpertiseUses(_w: typeof workspaceId, mapId: SubjectMap['id']) {
@@ -644,6 +653,28 @@ describe('the expertise trial', => {
  // A withheld run's row is the baseline, and it saw nothing — recording a count here
  // would make the two arms indistinguishable in the one field that says what happened.
  expect(maps.uses.find((use) => use.arm === 'withheld')!.nodesShown).toBe(0)
+ })
+
+ /**
+ * The per-claim citation, and the reason it is not a guess: these are the exact nodes
+ * `selectMapForContext` rendered, not an inference about which ones a run acted on.
+ */
+ it('records which claims the run was shown, not just how many', async => {
+ await readyMap
+ await runContext('a')
+ await runContext('b')
+
+ const retrieved = maps.uses.find((use) => use.arm === 'retrieved')!
+ expect(retrieved.nodeIds).toHaveLength(retrieved.nodesShown)
+ expect(retrieved.nodeIds[0]).toBe(maps.nodes[0]?.id)
+ })
+
+ it('cites nothing for a run the trial deliberately denied the map', async => {
+ await readyMap
+ await runContext('a')
+ await runContext('b')
+
+ expect(maps.uses.find((use) => use.arm === 'withheld')!.nodeIds).toEqual([])
  })
 
  it('is idempotent per run, so one run cannot be counted twice in an arm', async => {

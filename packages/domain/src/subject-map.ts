@@ -707,11 +707,48 @@ export const MAX_EDGES_IN_CONTEXT = 120
  * it has the whole picture, which is precisely the belief that makes a partial map
  * more dangerous than none.
  */
+/**
+ * What became of the runs one claim was shown to.
+ */
+export interface ClaimOutcomes {
+ readonly decided: number
+ readonly merged: number
+ readonly discarded: number
+ readonly failed: number
+}
+
+/**
+ * A claim's standing, from the dispositions of the runs that were shown it.
+ *
+ * Domain expertise: "a claim cited by runs that merged cleanly outranks one from runs that were
+ * discarded." So merges count for it, discards count against it, and **failures count for
+ * nothing** — a run that fell over says nothing about a claim it happened to have read, and
+ * counting it would mark down every claim in a map that a flaky Runner touched.
+ *
+ * A claim nobody has been shown scores **zero**, which is the same as one whose merges and
+ * discards cancel. That is deliberate: no evidence is not bad evidence, and starting a new
+ * claim below a discarded one would bury it before anything could ever cite it — the
+ * feedback loop this ranking has to avoid, since a claim ranked down is a claim shown less
+ * and therefore cited less.
+ *
+ * **It ranks what to read first and nothing else.** mastery: "scores rank what to *read
+ * first*; they never change what is *believed without checking*." Nothing here retires a
+ * claim, and curation's retirement rules stay structural and model-free.
+ */
+export const claimScore = (outcomes: ClaimOutcomes | undefined): number =>
+ outcomes === undefined ? 0: outcomes.merged - outcomes.discarded
+
 export const selectMapForContext = (
  nodes: readonly MapNode[],
  edges: readonly MapEdge[],
  nodeLimit: number = MAX_NODES_IN_CONTEXT,
  edgeLimit: number = MAX_EDGES_IN_CONTEXT,
+ /**
+ * What each claim's citations came to, by node id. Absent for a map
+ * nothing has cited yet, which is every map until it has been read once — and then every
+ * score is zero and this orders by recency exactly as it did before.
+ */
+ outcomes: Readonly<Record<string, ClaimOutcomes>> = {},
 ): {
  readonly nodes: MapNode[]
  readonly edges: MapEdge[]
@@ -728,8 +765,24 @@ export const selectMapForContext = (
  return 2
  }
 
+ /**
+ * Kind, then **outcome**, then recency — and outcome above recency is the whole
+ * instruction: "scored by outcome, not recency". Recency stays as the last tiebreak
+ * rather than being dropped, because it is the only signal a map that nothing has cited
+ * yet has, and that is every map until it has been read once.
+ *
+ * Kind still outranks both. A concept node is the shape of the subsystem and a hub is
+ * where a change reaches furthest; those are facts about the graph, and letting a
+ * well-cited detail push the map's own structure out of the window would hand a run a
+ * list of findings with nothing to hang them on.
+ */
  const selectedNodes = [...liveNodes]
-.sort((a, b) => rank(a) - rank(b) || b.createdAt.getTime - a.createdAt.getTime)
+.sort(
+ (a, b) =>
+ rank(a) - rank(b) ||
+ claimScore(outcomes[b.id]) - claimScore(outcomes[a.id]) ||
+ b.createdAt.getTime - a.createdAt.getTime,
+)
 .slice(0, Math.max(0, nodeLimit))
 
  const visible = new Set(selectedNodes.map((node) => node.key))

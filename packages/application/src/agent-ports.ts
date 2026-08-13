@@ -1091,7 +1091,33 @@ export interface SubjectMapRepositoryPort {
  arm: ExpertiseArm
  nodesShown: number
  edgesShown: number
+ /**
+ * **Which** claims were put in front of this run.
+ *
+ * Written by the same call as the count rather than by a second one, because the two
+ * are one fact: a count that disagrees with the list is a measurement nobody can
+ * trust, and mastery has already paid twice for a field that had to be written in two
+ * places to arrive. Empty on the withheld arm — that run was shown nothing, which is
+ * the whole point of it.
+ */
+ nodeIds: readonly string[]
  }): Promise<void>
+
+ /**
+ * What became of the runs each claim was shown to.
+ *
+ * Domain expertise asks for claims "ranked by the dispositions of runs that cited them", and this is
+ * that join: per node, how many of the runs it was rendered into merged, were discarded,
+ * or failed. Undecided runs are excluded for the reason `tallyExpertiseOutcomes` gives —
+ * a run still in flight is not evidence either way.
+ *
+ * One query per map rather than per node: this is read on the dispatch path, where the
+ * selection has to be ordered before a run can start.
+ */
+ tallyNodeOutcomes(
+ workspaceId: WorkspaceId,
+ mapId: SubjectMapId,
+): Promise<Record<string, { decided: number; merged: number; discarded: number; failed: number }>>
 
  /**
  * How many runs are on each arm of a map's trial so far, including undecided ones.

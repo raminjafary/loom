@@ -80,6 +80,7 @@ const view = (over: Partial<MasteryView> = {}): MasteryView => ({
  detail: 'Still measuring.',
  },
  retrievalState: 'trial',
+ claimOutcomes: {},
 ...over,
 })
 

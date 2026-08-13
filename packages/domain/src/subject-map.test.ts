@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { asAgentPersonaId, asSubjectMapId, asWorkspaceId } from './ids.js'
 import {
+ claimScore,
  computeMasteryProgress,
  findHubNodes,
  MAX_NODES_PER_FRAGMENT,
@@ -9,6 +10,7 @@ import {
  neutralizeMapFence,
  parseMapFragment,
  renderMapForPrompt,
+ selectMapForContext,
  selectStaleNodeIds,
  UNTRUSTED_MAP_CLOSE,
  UNTRUSTED_MAP_OPEN,
@@ -439,5 +441,87 @@ describe('findHubNodes — computed, never asked of a model', => {
 )
 
  expect(findHubNodes(nodes, edges)).toEqual([])
+ })
+})
+
+describe('selectMapForContext — scored by outcome, not recency', => {
+ const old = new Date('2026-01-01T00:00:00Z')
+ const recent = new Date('2026-08-01T00:00:00Z')
+
+ it('puts a claim that merged ahead of a newer one that was discarded', => {
+ const selected = selectMapForContext(
+ [
+ node({ id: 'n-new', key: 'new', createdAt: recent }),
+ node({ id: 'n-earned', key: 'earned', createdAt: old }),
+ ],
+ [],
+ 1,
+ 10,
+ {
+ 'n-earned': { decided: 3, merged: 3, discarded: 0, failed: 0 },
+ 'n-new': { decided: 2, merged: 0, discarded: 2, failed: 0 },
+ },
+)
+ expect(selected.nodes.map((entry) => entry.key)).toEqual(['earned'])
+ expect(selected.elidedNodes).toBe(1)
+ })
+
+ /**
+ * A map nothing has cited yet is every map until it has been read once, and there the
+ * only signal is recency — so it has to keep working exactly as it did.
+ */
+ it('falls back to recency when nothing has been cited', => {
+ const selected = selectMapForContext(
+ [
+ node({ id: 'n-old', key: 'old', createdAt: old }),
+ node({ id: 'n-new', key: 'new', createdAt: recent }),
+ ],
+ [],
+ 1,
+)
+ expect(selected.nodes.map((entry) => entry.key)).toEqual(['new'])
+ })
+
+ /**
+ * No evidence is not bad evidence. Starting a fresh claim below a discarded one would
+ * bury it before anything could ever cite it — the feedback loop this ranking has to
+ * avoid, since a claim ranked down is shown less and therefore cited less.
+ */
+ it('does not rank an uncited claim below a discarded one', => {
+ const selected = selectMapForContext(
+ [
+ node({ id: 'n-fresh', key: 'fresh', createdAt: old }),
+ node({ id: 'n-bad', key: 'bad', createdAt: recent }),
+ ],
+ [],
+ 1,
+ 10,
+ { 'n-bad': { decided: 2, merged: 0, discarded: 2, failed: 0 } },
+)
+ expect(selected.nodes.map((entry) => entry.key)).toEqual(['fresh'])
+ })
+
+ /**
+ * Kind still outranks the score. Letting a well-cited detail push the map's own
+ * structure out of the window would hand a run findings with nothing to hang them on.
+ */
+ it('never lets a well-cited detail displace a concept', => {
+ const selected = selectMapForContext(
+ [
+ node({ id: 'n-detail', key: 'detail', kind: 'file' }),
+ node({ id: 'n-concept', key: 'concept', kind: 'concept' }),
+ ],
+ [],
+ 1,
+ 10,
+ { 'n-detail': { decided: 9, merged: 9, discarded: 0, failed: 0 } },
+)
+ expect(selected.nodes.map((entry) => entry.key)).toEqual(['concept'])
+ })
+
+ /** A failed run says nothing about a claim it happened to have read. */
+ it('counts a failure for nothing either way', => {
+ expect(claimScore({ decided: 4, merged: 1, discarded: 1, failed: 2 })).toBe(0)
+ expect(claimScore(undefined)).toBe(0)
  })
 })

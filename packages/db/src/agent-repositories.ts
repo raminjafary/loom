@@ -87,6 +87,7 @@ import {
  colosseumSession,
  colosseumTurn,
  expertiseUse,
+ expertiseUseNode,
  masteryCheckpoint,
  noteReadEdge,
  subjectMap,
@@ -1768,7 +1769,7 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  },
 
  async recordExpertiseUse(input) {
- await db
+ const rows = await db
 .insert(expertiseUse)
 .values({
  workspaceId: input.workspaceId,
@@ -1787,6 +1788,67 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
 .onConflictDoNothing({
  target: [expertiseUse.workspaceId, expertiseUse.agentRunId, expertiseUse.mapId],
  })
+.returning({ id: expertiseUse.id })
+
+ /**
+ * The citations, on the row that was just written.
+ *
+ * `returning` is empty exactly when `doNothing` fired — a retry of a run already
+ * assigned an arm — and then there is nothing to cite either: the first assignment is
+ * the real one, and its node list was written with it. Writing a second set here would
+ * attribute the same run's citations twice.
+ */
+ const useId = rows[0]?.id
+ if (useId === undefined || input.nodeIds.length === 0) return
+
+ await db
+.insert(expertiseUseNode)
+.values(
+ input.nodeIds.map((nodeId) => ({
+ workspaceId: input.workspaceId,
+ useId,
+ nodeId,
+ mapId: input.mapId,
+ })),
+)
+.onConflictDoNothing({ target: [expertiseUseNode.useId, expertiseUseNode.nodeId] })
+ },
+
+ async tallyNodeOutcomes(workspaceId, mapId) {
+ /**
+ * Joined against the run at read time, like `tallyExpertiseOutcomes` and for the same
+ * reason: a disposition is set long after the run started, and a copy onto the
+ * citation row would be a second write that can be missed.
+ */
+ const rows = await db
+.select({
+ nodeId: expertiseUseNode.nodeId,
+ decided: sql<number>`count(*) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed')::int`,
+ merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+ discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
+ failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
+ })
+.from(expertiseUseNode)
+.innerJoin(expertiseUse, eq(expertiseUse.id, expertiseUseNode.useId))
+.innerJoin(agentRun, eq(agentRun.id, expertiseUse.agentRunId))
+.where(
+ and(eq(expertiseUseNode.workspaceId, workspaceId), eq(expertiseUseNode.mapId, mapId)),
+)
+.groupBy(expertiseUseNode.nodeId)
+
+ const byNode: Record<
+ string,
+ { decided: number; merged: number; discarded: number; failed: number }
+ > = {}
+ for (const row of rows) {
+ byNode[row.nodeId] = {
+ decided: row.decided,
+ merged: row.merged,
+ discarded: row.discarded,
+ failed: row.failed,
+ }
+ }
+ return byNode
  },
 
  async countExpertiseUses(workspaceId, mapId) {

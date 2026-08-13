@@ -449,6 +449,56 @@ describe('runner-gateway: a mastery run reaches the Runner as one', => {
  expect(denied?.nodesShown).toBe(0)
  expect(read?.arm).toBe('retrieved')
  expect(read?.nodesShown).toBeGreaterThan(0)
+
+ /**
+ * The per-claim citation, joined against the disposition of the run that read it.
+ *
+ * Until this, retrieval was recorded per *map*: scoring every claim in a map by the
+ * map's own record is not a ranking. What makes this one honest is that the rows are
+ * the platform's record of what it rendered — the same standard the handoff brief's
+ * observed paths are held to — not a guess about what the model acted on.
+ */
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: readingRun.id,
+ clonePath: '/tmp/clone-reading',
+ branchName: 'loom/reading',
+ }),
+)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: readingRun.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.02, result: 'done' },
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ if ((await client.agentRun.get({ agentRunId: readingRun.id })).status === 'completed') break
+ await new Promise((r) => setTimeout(r, 50))
+ }
+ // Discard round-trips through the Runner, which deletes the clone; the fake has to
+ // answer or the request sits there.
+ const discardFrame = nextFrame(socket, (v) => v.type === 'discard_run')
+ const discarding = client.agentRun.discard({ agentRunId: readingRun.id })
+ socket.send(
+ JSON.stringify({ type: 'discard_result', requestId: (await discardFrame).requestId, ok: true }),
+)
+ await discarding
+
+ const listing = (await client.mastery.listForPersona({ personaId: testPersonaId })).find(
+ (entry) => entry.map.masteryRunId === masteryRun.id,
+)
+ const view = await client.mastery.get({ mapId: listing!.map.id })
+ const claimId = view.nodes.find((entry) => entry.key === 'checkout')!.id
+ // The claim was shown to one finished run, and that run's branch was thrown away —
+ // which is exactly the signal domain expertise says should rank it below one that merged.
+ expect(view.claimOutcomes[claimId]).toMatchObject({ decided: 1, merged: 0, discarded: 1 })
+ // The withheld run saw nothing, so it cites nothing: a baseline that appeared to have
+ // read the map would make the two arms indistinguishable at the claim level too.
+ expect(Object.values(view.claimOutcomes).reduce((sum, o) => sum + o.decided, 0)).toBe(1)
+
  socket.close
  })
 

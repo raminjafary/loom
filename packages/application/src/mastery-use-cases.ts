@@ -1,5 +1,7 @@
 import {
+ MAX_EDGES_IN_CONTEXT,
  MAX_EDGES_PER_MAP,
+ MAX_NODES_IN_CONTEXT,
  MAX_NODES_PER_MAP,
  NotFoundError,
  ValidationError,
@@ -17,6 +19,7 @@ import {
  selectStaleNodeIds,
  type AgentPersonaId,
  type AgentRunId,
+ type ClaimOutcomes,
  type MapEdge,
  type MapNode,
  type CurationReport,
@@ -303,6 +306,15 @@ export interface MasteryView {
  readonly retrievalState: RetrievalState
  /** The god nodes — computed from the graph, never asked of a model. */
  readonly hubs: { readonly key: string; readonly degree: number }[]
+ /**
+ * What became of the runs each claim was shown to, by node id.
+ *
+ * On the view because a ranking nobody can see is a ranking nobody can argue with, and
+ * this one decides which claims survive the context budget. The counts are here rather
+ * than the score alone for the same reason `effect` carries its arms: "outranked" is a
+ * conclusion, and the human should be able to check it against the runs it came from.
+ */
+ readonly claimOutcomes: Readonly<Record<string, ClaimOutcomes>>
 }
 
 export const getMastery = async (
@@ -312,11 +324,12 @@ export const getMastery = async (
  const map = await deps.subjectMaps.getMap(input.workspaceId, input.mapId)
  if (!map) throw new NotFoundError('SubjectMap')
 
- const [nodes, edges, checkpoints, trial] = await Promise.all([
+ const [nodes, edges, checkpoints, trial, claimOutcomes] = await Promise.all([
  deps.subjectMaps.listNodes(input.workspaceId, map.id),
  deps.subjectMaps.listEdges(input.workspaceId, map.id),
  deps.subjectMaps.listCheckpoints(input.workspaceId, map.id),
  expertiseEffectFor(deps, { workspaceId: input.workspaceId, map }),
+ deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, map.id),
  ])
 
  return {
@@ -327,6 +340,7 @@ export const getMastery = async (
  hubs: findHubNodes(nodes, edges),
  effect: trial.effect,
  retrievalState: trial.state,
+ claimOutcomes,
  }
 }
 
@@ -388,11 +402,24 @@ export const buildMapContext = async (
  // make the decision unreachable rather than reversible.
  if (arm === null) continue
 
- const [nodes, edges] = await Promise.all([
+ /**
+ * The claim scores come with the nodes. Fetched on the retrieved arm only: a withheld run is shown nothing, so
+ * ordering what it will not see would be a query spent on a decision nobody reads.
+ */
+ const [nodes, edges, outcomes] = await Promise.all([
  deps.subjectMaps.listNodes(input.workspaceId, map.id),
  deps.subjectMaps.listEdges(input.workspaceId, map.id),
+ arm === 'retrieved'
+ ? deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, map.id)
+: Promise.resolve({}),
  ])
- const selected = selectMapForContext(nodes, edges)
+ const selected = selectMapForContext(
+ nodes,
+ edges,
+ MAX_NODES_IN_CONTEXT,
+ MAX_EDGES_IN_CONTEXT,
+ outcomes,
+)
  const text =
  arm === 'withheld'
  ? ''
@@ -419,6 +446,12 @@ export const buildMapContext = async (
  arm,
  nodesShown: arm === 'retrieved' ? selected.nodes.length: 0,
  edgesShown: arm === 'retrieved' ? selected.edges.length: 0,
+ /**
+ * The per-claim citation domain expertise asks for, and the reason it is not a guess: these
+ * are the exact nodes rendered above, not an inference about which ones a run
+ * acted on. "Was shown" is the weaker claim and the honest one.
+ */
+ nodeIds: arm === 'retrieved' ? selected.nodes.map((node) => node.id): [],
  })
  } catch {
  // Deliberately swallowed — see above.

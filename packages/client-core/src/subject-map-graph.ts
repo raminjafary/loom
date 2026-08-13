@@ -16,6 +16,7 @@ import type { MapEdge, MapNode, MasteryView } from '@loom/api-contract'
  */
 
 export interface MapGraphNode {
+ readonly id: string
  readonly key: string
  readonly label: string
  readonly kind: MapNode['kind']
@@ -122,6 +123,7 @@ export const buildMapGraph = (view: MasteryView): MapGraph => {
  const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2 - Math.PI / 2
  const degree = degrees.get(node.key) ?? 0
  return {
+ id: node.id,
  key: node.key,
  label: node.label,
  kind: node.kind,

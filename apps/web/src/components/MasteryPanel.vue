@@ -187,6 +187,27 @@ const repositoryName = (map: SubjectMap): string =>
 const liveHere = (map: SubjectMap): boolean =>
  props.activeRepositoryId === null || map.repositoryId === props.activeRepositoryId
 
+/**
+ * What this claim has been cited into, and what became of those runs.
+ *
+ * "Not yet read by any run" rather than "0 merged", for the reason coverage renders null
+ * rather than zero: no evidence and bad evidence send a reader to different places, and a
+ * claim nobody has been shown has not failed at anything.
+ */
+const citationLine = (nodeId: string): string => {
+ const outcomes = props.view?.claimOutcomes[nodeId]
+ if (!outcomes || outcomes.decided === 0) {
+ return 'No finished run has been shown this claim yet, so nothing ranks it either way.'
+ }
+ const parts = [`${outcomes.merged} merged`, `${outcomes.discarded} discarded`]
+ if (outcomes.failed > 0) parts.push(`${outcomes.failed} failed`)
+ return (
+ `Shown to ${outcomes.decided} finished run(s): ${parts.join(', ')}. ` +
+ 'This decides what a worker reads first when the map does not fit — never what is ' +
+ 'believed without checking.'
+)
+}
+
 const strokeFor = (provenance: string): string =>
  provenance === 'extracted' ? 'var(--map-parsed)': 'var(--map-inferred)'
 
@@ -551,6 +572,13 @@ const dashFor = (provenance: string): string | undefined =>
  <p v-if="selected.paths.length > 0" class="paths">
  {{ selected.paths.join(', ') }}
  </p>
+ <!--
+ Domain expertise: "a claim cited by runs that merged cleanly outranks one from runs that were
+ discarded." The counts rather than the score, because "outranked" is a conclusion
+ and this is the evidence it was drawn from. It ranks what a worker reads first and
+ nothing else — it never retires a claim and never makes one believed unchecked.
+ -->
+ <p class="meta">{{ citationLine(selected.id) }}</p>
  </div>
  </template>
  </section>
