@@ -49,6 +49,13 @@ export const useAgentStore = defineStore('agent', => {
  listRepositoryMaps: (repositoryId: string) => session.listRepositoryMaps(repositoryId),
  /** Which maps one run read, and which it was deliberately denied. */
  listWorkspaceMaps: => session.listWorkspaceMaps,
+ /** The atlas — the queue a human decides, and the two acts on it. */
+ listAtlasProposals: (input?: Parameters<typeof session.listAtlasProposals>[0]) =>
+ session.listAtlasProposals(input),
+ contendAtlasProposal: (input: Parameters<typeof session.contendAtlasProposal>[0]) =>
+ session.contendAtlasProposal(input),
+ decideAtlasProposal: (input: Parameters<typeof session.decideAtlasProposal>[0]) =>
+ session.decideAtlasProposal(input),
  listColosseumSessions: => session.listColosseumSessions,
  getColosseumSession: (sessionId: string) => session.getColosseumSession(sessionId),
  conveneColosseum: (input: Parameters<typeof session.conveneColosseum>[0]) =>

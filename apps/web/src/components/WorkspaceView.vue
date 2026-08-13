@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type {
+ AtlasEdge,
  ColosseumSession,
  ColosseumView,
  MasteryView,
@@ -369,6 +370,39 @@ const conveneColosseum = async (input: {
 const takeColosseumTurn = async (input: { sessionId: string; personaId?: string }) => {
  await agent.takeColosseumTurn(input)
  await selectColosseumSession(input.sessionId)
+}
+
+/**
+ * The atlas's queue, fetched with the expertise tab for the same reason the
+ * venue is fetched with its own: a relation is proposed rarely and decided deliberately.
+ */
+const atlasProposals = ref<AtlasEdge[]>([])
+
+const refreshAtlas = async => {
+ atlasProposals.value = await agent.listAtlasProposals
+}
+
+/**
+ * Puts a proposal to the two experts who hold its ends.
+ *
+ * The thread is the active one, because a session is watched where the work is — the same
+ * rule convening a Colosseum session follows, and for the same reason: the "a session is
+ * a thing on the board, not a gap in the record".
+ */
+const contendAtlasProposal = async (edgeId: string) => {
+ const threadId = snapshot.value.activeThread?.id
+ if (!threadId) return
+ await agent.contendAtlasProposal({ edgeId, threadId })
+ await Promise.all([refreshAtlas, refreshColosseum])
+}
+
+const decideAtlasProposal = async (input: {
+ edgeId: string
+ decision: 'promoted' | 'rejected'
+ note?: string
+}) => {
+ await agent.decideAtlasProposal(input)
+ await refreshAtlas
 }
 
 const composerOpen = ref(false)
@@ -1155,6 +1189,10 @@ onBeforeUnmount( => {
 :mastery-curation="masteryCuration"
 :colosseum-sessions="colosseumSessions"
 :colosseum-view="colosseumView"
+:atlas-proposals="atlasProposals"
+ @atlas-refresh=" => void refreshAtlas"
+ @atlas-contend="(edgeId) => void contendAtlasProposal(edgeId)"
+ @atlas-decide="(input) => void decideAtlasProposal(input)"
 :run-control="agentSnapshot.runControl"
  @set-handoff-policy="(input) => void agent.setHandoffPolicy(input)"
  @colosseum-select="(sessionId) => void selectColosseumSession(sessionId)"

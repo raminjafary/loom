@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type {
  AgentPersona,
+ AtlasEdge,
  Capability,
  DirectoryListing,
  MasteryView,
@@ -18,6 +19,7 @@ import { DEFAULT_HANDOFF_CAP_PER_TREE, DEFAULT_HANDOFF_THRESHOLD } from '@loom/d
 import { computed, onMounted, ref, watch } from 'vue'
 import CapabilityPanel from './CapabilityPanel.vue'
 import HandoffPolicyPanel from './HandoffPolicyPanel.vue'
+import AtlasPanel from './AtlasPanel.vue'
 import ColosseumPanel from './ColosseumPanel.vue'
 import MasteryPanel from './MasteryPanel.vue'
 import PersonaEditor from './PersonaEditor.vue'
@@ -60,6 +62,8 @@ const props = defineProps<{
  /** The venue — sessions and the one being read, fetched when the tab opens. */
  colosseumSessions: ColosseumSession[]
  colosseumView: ColosseumView | null
+ /** The atlas — cross-project relations awaiting a human, fetched with the tab. */
+ atlasProposals: AtlasEdge[]
  /** The workspace's own policy row — where the handoff threshold and cap live. */
  runControl: RunControl | null
 }>
@@ -103,6 +107,9 @@ const emit = defineEmits<{
  'colosseum-take-turn': [input: { sessionId: string; personaId?: string }]
  'set-handoff-policy': [input: { threshold: number | null; capPerTree: number | null }]
  'colosseum-conclude': [sessionId: string]
+ 'atlas-refresh': []
+ 'atlas-contend': [edgeId: string]
+ 'atlas-decide': [input: { edgeId: string; decision: 'promoted' | 'rejected'; note?: string }]
  'create-pairing-token': [name: string]
  bind: [input: { runnerId: string; path: string; displayName: string }]
  'create-repository': [
@@ -167,6 +174,8 @@ const tab = ref<Tab>('infrastructure')
  */
 watch(tab, (next) => {
  if (next === 'colosseum') emit('colosseum-refresh')
+ // The atlas queue lives on the expertise tab because a relation is between two maps.
+ if (next === 'expertise') emit('atlas-refresh')
 })
 
 const onKeydown = (event: KeyboardEvent) => {
@@ -270,6 +279,21 @@ onMounted( => scrim.value?.focus)
  </template>
 
  <template v-else-if="tab === 'expertise'">
+ <!--
+ The queue first, and the mastery view under it.
+
+ Not a preference: a proposal is something *waiting on the reader* and a map is
+ something they went looking for, and with an agent chosen the mastery panel is
+ several screens tall. Putting the queue after it is how a feature that works
+ perfectly becomes one nobody knew existed — the same lesson the inbox lanes
+ and the canvas inspector each cost a session to learn.
+ -->
+ <AtlasPanel
+:proposals="atlasProposals"
+ @refresh="emit('atlas-refresh')"
+ @contend="(edgeId) => emit('atlas-contend', edgeId)"
+ @decide="(input) => emit('atlas-decide', input)"
+ />
  <MasteryPanel
 :personas="personas"
 :persona-id="masteryPersonaId"

@@ -2,6 +2,7 @@ import type {
  AgentPersona,
  AgentRun,
  ApprovalRequest,
+ AtlasEdge,
  Capability,
  CostSummary,
  DirectoryListing,
@@ -304,6 +305,25 @@ export interface AgentSession {
  * session, because a session's output is claims with verdicts and promotion is a
  * human act.
  */
+ /**
+ * The atlas's write side — the queue, and the two acts on it.
+ *
+ * There is deliberately no `propose`. A relation is proposed by a run that followed a
+ * lead and went and looked; a human drawing one here would record a relation nobody
+ * checked with the same status as one that was.
+ */
+ listAtlasProposals(input?: {
+ status?: ('proposed' | 'contended' | 'promoted' | 'rejected')[]
+ }): Promise<AtlasEdge[]>
+ contendAtlasProposal(input: {
+ edgeId: string
+ threadId: string
+ }): Promise<{ edge: AtlasEdge; sessionId: string | null } | null>
+ decideAtlasProposal(input: {
+ edgeId: string
+ decision: 'promoted' | 'rejected'
+ note?: string
+ }): Promise<AtlasEdge | null>
  listColosseumSessions: Promise<ColosseumSession[]>
  getColosseumSession(sessionId: string): Promise<ColosseumView | null>
  conveneColosseum(input: {
@@ -1137,6 +1157,42 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  try {
  return await options.api.mastery.curate({ mapId })
  } catch (error) {
+ patch({ error: errorMessage(error) })
+ return null
+ }
+ },
+
+ async listAtlasProposals(input) {
+ try {
+ return await options.api.atlas.listProposals({
+...(input?.status === undefined ? {}: { status: input.status }),
+ })
+ } catch {
+ return []
+ }
+ },
+
+ async contendAtlasProposal(input) {
+ patch({ error: null })
+ try {
+ return await options.api.atlas.contend(input)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ return null
+ }
+ },
+
+ async decideAtlasProposal(input) {
+ patch({ error: null })
+ try {
+ return await options.api.atlas.decide({
+ edgeId: input.edgeId,
+ decision: input.decision,
+...(input.note === undefined ? {}: { note: input.note }),
+ })
+ } catch (error) {
+ // Kept on the banner: a second decision is refused because the first stands, and
+ // that is a sentence a human has to read rather than a button doing nothing.
  patch({ error: errorMessage(error) })
  return null
  }
