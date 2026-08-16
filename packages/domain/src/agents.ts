@@ -7,9 +7,11 @@ import type {
  AgentRunId,
  ApprovalRequestId,
  PersonaGroupId,
+ PersonaRevisionId,
  RepositoryId,
  RunnerId,
  ThreadId,
+ UserId,
  WorkspaceId,
 } from './ids.js'
 
@@ -196,6 +198,31 @@ export interface AgentPersona {
  readonly builtinSource: string | null
  readonly createdAt: Date
  readonly updatedAt: Date
+}
+
+/** Who replaced a persona's markdown. Same vocabulary as a worker note's author. */
+export type PersonaRevisionAuthorKind = 'human' | 'agent_run' | 'platform'
+
+/**
+ * A prompt this persona used to have.
+ *
+ * `markdownSource` is the **superseded** document, not the one that replaced it — see the
+ * `persona_revision` table for why the history stores what was lost rather than what is
+ * already live. So the newest revision is the version immediately before the current one,
+ * and restoring one is a revert.
+ */
+export interface PersonaRevision {
+ readonly id: PersonaRevisionId
+ readonly workspaceId: WorkspaceId
+ readonly personaId: AgentPersonaId
+ readonly markdownSource: string
+ readonly replacedByKind: PersonaRevisionAuthorKind
+ /** The run that rewrote it, if an agent did. Null once that run is deleted. */
+ readonly replacedByRunId: AgentRunId | null
+ readonly replacedByUserId: UserId | null
+ /** What the author said they were doing. Empty for a human's edit, which has a diff. */
+ readonly rationale: string
+ readonly createdAt: Date
 }
 
 /**

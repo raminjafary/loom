@@ -6087,3 +6087,170 @@ Decompose and delegate.`
  await client.personaGroup.delete({ personaGroupId: group.id })
  })
 })
+
+/**
+ * Tier 1 of continuity mode — an agent rewriting its own prompt, over the
+ * real wire against the real database.
+ *
+ * The domain rule has its own tests; what only this level can show is the part that has
+ * bitten this repository repeatedly: that the frame reaches a use case, that the use case
+ * finds the *right* persona from the run alone, and that the row actually changed.
+ */
+describe('self-edit', => {
+ const SELF_EDITING_PERSONA = `---
+name: self-editor
+description: A persona a human has allowed to rewrite its own prompt.
+model: test-model
+tools: [Read]
+envelope:
+ tools: [Read]
+---
+
+The prompt it started with.`
+
+ it('rewrites its own prompt, records what it replaced, and leaves the frontmatter alone', async => {
+ const { socket, runnerId } = await pairFakeRunner('self-edit')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'self-edit' })
+ const persona = await client.persona.create({ markdownSource: SELF_EDITING_PERSONA })
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await startFrame
+
+ const answered = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'edit-1',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_prompt_revised',
+ runId: run.id,
+ requestId: 'edit-1',
+ body: 'Always run the repository verification command before committing.',
+ rationale: 'The tests are the definition of done here and nothing said so.',
+ }),
+)
+ const frame = await answered
+ expect(frame.ok).toBe(true)
+ // A model told its prompt changed will act as though its own instructions had.
+ expect(String(frame.outcome)).toContain('Your own instructions are unchanged')
+
+ const after = (await client.persona.list).find((p) => p.name === 'self-editor')!
+ expect(after.markdownSource).toContain('Always run the repository verification command')
+ // The whole of the guard, asserted where it can actually be wrong: the row's parsed
+ // configuration is what it was, not what a body claimed.
+ expect(after.tools).toEqual(['Read'])
+ expect(after.model).toBe('test-model')
+ expect(after.envelope).toEqual({
+ tools: ['Read'],
+ model: null,
+ budgetCapUsd: null,
+ capabilities: [],
+ subagentDepth: null,
+ approvalMode: null,
+ })
+
+ const revisions = await client.persona.revisions({ personaId: persona.id })
+ expect(revisions).toHaveLength(1)
+ expect(revisions[0]?.markdownSource).toContain('The prompt it started with')
+ expect(revisions[0]?.replacedByKind).toBe('agent_run')
+ expect(revisions[0]?.rationale).toContain('definition of done')
+
+ socket.close
+ })
+
+ it('refuses a persona with no envelope, and changes nothing', async => {
+ const { socket, runnerId } = await pairFakeRunner('self-edit-refused')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'self-edit-refused' })
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: testPersonaId,
+ })
+ await startFrame
+
+ const answered = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'edit-2',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_prompt_revised',
+ runId: run.id,
+ requestId: 'edit-2',
+ body: 'I would like different instructions.',
+ rationale: 'Because I would.',
+ }),
+)
+ const frame = await answered
+ // ok:true is the channel working; the refusal is the outcome, per the "surfaced as
+ // a request, not an error to retry against".
+ expect(frame.ok).toBe(true)
+ expect(String(frame.outcome)).toContain('no permission')
+
+ const after = (await client.persona.list).find((p) => p.name === 'fake-worker')!
+ expect(after.markdownSource).toContain('irrelevant for this test')
+ expect(await client.persona.revisions({ personaId: testPersonaId })).toHaveLength(0)
+
+ socket.close
+ })
+
+ it('lets a human put the old prompt back', async => {
+ const { socket, runnerId } = await pairFakeRunner('self-edit-revert')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'self-edit-revert' })
+ const persona = await client.persona.create({
+ markdownSource: SELF_EDITING_PERSONA.replace('self-editor', 'self-editor-revert'),
+ })
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await startFrame
+
+ const answered = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'edit-3',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_prompt_revised',
+ runId: run.id,
+ requestId: 'edit-3',
+ body: 'Something a human will disagree with.',
+ rationale: 'A lesson, allegedly.',
+ }),
+)
+ await answered
+
+ const [revision] = await client.persona.revisions({ personaId: persona.id })
+ const restored = await client.persona.revert({
+ personaId: persona.id,
+ revisionId: revision!.id,
+ })
+ expect(restored.markdownSource).toContain('The prompt it started with')
+
+ /**
+ * The revert is itself a revision, and the version being undone survives in the
+ * history — "an agent wrote this and a human took it out" is the most useful row this
+ * table holds, and deleting it would be the one edit with no record.
+ */
+ const history = await client.persona.revisions({ personaId: persona.id })
+ expect(history).toHaveLength(2)
+ expect(history[0]?.markdownSource).toContain('Something a human will disagree with')
+ expect(history[0]?.replacedByKind).toBe('human')
+
+ socket.close
+ })
+})

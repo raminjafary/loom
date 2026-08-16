@@ -36,6 +36,9 @@ import type {
  PersonaCapability,
  PersonaGroup,
  PersonaGroupId,
+ PersonaRevision,
+ PersonaRevisionAuthorKind,
+ PersonaRevisionId,
  PersonaSpec,
  Repository,
  RepositoryId,
@@ -629,7 +632,39 @@ export interface PersonaRepositoryPort {
  */
  builtinSource?: string
  },
+ /**
+ * What this save replaces, recorded in the same transaction.
+ *
+ * A third argument rather than a field on the patch, because it is not part of the
+ * new state: it is the old one. And in the same transaction rather than a second
+ * call, because the two orders fail differently and both failures are bad — record
+ * then update leaves a history entry for an edit that never happened, update then
+ * record loses the only copy of the superseded prompt.
+ *
+ * Optional so that a caller with no revision to record — seeding a built-in, say —
+ * is not made to invent one.
+ */
+ revision?: {
+ /** The markdown being replaced. The caller has it; the port does not re-read it. */
+ markdownSource: string
+ replacedByKind: PersonaRevisionAuthorKind
+ replacedByRunId?: AgentRunId | null
+ replacedByUserId?: UserId | null
+ rationale?: string
+ },
 ): Promise<AgentPersona>
+ /** Newest first — the top of the list is the version immediately before the live one. */
+ listRevisions(
+ workspaceId: WorkspaceId,
+ personaId: AgentPersonaId,
+ limit?: number,
+): Promise<PersonaRevision[]>
+ findRevision(
+ workspaceId: WorkspaceId,
+ revisionId: PersonaRevisionId,
+): Promise<PersonaRevision | null>
+ /** Backs the per-run self-edit cap — the same shape `worker_note` uses for its own. */
+ countRevisionsByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<number>
 }
 
 export interface PersonaGroupRepositoryPort {

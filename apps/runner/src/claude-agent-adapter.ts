@@ -13,6 +13,7 @@ import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
 import { MAP_SERVER_NAME, MAP_TOOL_NAMES } from './map-tool.js'
 import { HANDOFF_SERVER_NAME, HANDOFF_TOOL_NAMES } from './handoff-tool.js'
 import { ATLAS_SERVER_NAME, ATLAS_TOOL_NAMES } from './atlas-tool.js'
+import { SELF_SERVER_NAME, SELF_TOOL_NAMES } from './self-tool.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
 import { PLANNER_SERVER_NAME } from './planner-tool.js'
@@ -221,6 +222,17 @@ export interface RunAgentOptions {
  */
  readonly handoffTool?: McpSdkServerConfigWithInstance
  /**
+ * The `revise_own_prompt`, offered **only** to a persona that carries an
+ * envelope.
+ *
+ * The narrowest audience of any in-process tool here, and deliberately narrower than
+ * `mapTool`'s: a map is state a later run reads and can disbelieve, while this is the
+ * instruction text a later run is *given*. Absence of an envelope is a refusal, so
+ * for most personas this is simply not present — which is what "off by default" has to
+ * look like from where the model sits.
+ */
+ readonly selfTool?: McpSdkServerConfigWithInstance
+ /**
  * Hands the caller the run's delivery channel.
  *
  * Called once, synchronously, before the agent loop starts. What comes through it
@@ -312,6 +324,7 @@ export const buildQueryOptions = (
  | 'questionTool'
  | 'mapTool'
  | 'handoffTool'
+ | 'selfTool'
  >,
  settingSources: SettingSourceName[] = settingSourcesFromEnv,
 ) => {
@@ -326,6 +339,7 @@ export const buildQueryOptions = (
  if (options.atlasTool) mcpServers[ATLAS_SERVER_NAME] = options.atlasTool
  if (options.mapTool) mcpServers[MAP_SERVER_NAME] = options.mapTool
  if (options.handoffTool) mcpServers[HANDOFF_SERVER_NAME] = options.handoffTool
+ if (options.selfTool) mcpServers[SELF_SERVER_NAME] = options.selfTool
  if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
  const skills = capabilities
 .filter((capability) => capability.kind === 'skill')
@@ -360,6 +374,7 @@ export const buildQueryOptions = (
 ...(options.atlasTool ? ATLAS_TOOL_NAMES: []),
 ...(options.mapTool ? MAP_TOOL_NAMES: []),
 ...(options.handoffTool ? HANDOFF_TOOL_NAMES: []),
+...(options.selfTool ? SELF_TOOL_NAMES: []),
 ...(options.questionTool ? [ASK_HUMAN_TOOL_NAME]: []),
  ]
 

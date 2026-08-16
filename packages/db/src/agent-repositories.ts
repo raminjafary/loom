@@ -53,6 +53,7 @@ import {
  toPersonaCapability,
  toNotificationTarget,
  toPersonaGroup,
+ toPersonaRevision,
  toPlanSubtask,
  toRepository,
  toRunner,
@@ -65,6 +66,7 @@ import {
  type PersonaCapabilityRow,
  type NotificationTargetRow,
  type PersonaGroupRow,
+ type PersonaRevisionRow,
  type PlanSubtaskRow,
  type RepositoryRow,
  type RunnerRow,
@@ -85,6 +87,7 @@ import {
  personaCapability,
  notificationTarget,
  personaGroup,
+ personaRevision,
  planSubtask,
  repository,
  runner,
@@ -1344,7 +1347,86 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  return rows.map((row) => toAgentPersona(row as AgentPersonaRow))
  },
 
- async update(workspaceId, id, patch) {
+ async listRevisions(workspaceId, personaId, limit) {
+ const rows = await db
+.select
+.from(personaRevision)
+.where(
+ and(
+ eq(personaRevision.workspaceId, workspaceId),
+ eq(personaRevision.personaId, personaId),
+),
+)
+.orderBy(desc(personaRevision.createdAt))
+.limit(limit ?? 50)
+ return rows.map((row) => toPersonaRevision(row as PersonaRevisionRow))
+ },
+
+ async countRevisionsByRun(workspaceId, agentRunId) {
+ const [row] = await db
+.select({ value: count })
+.from(personaRevision)
+.where(
+ and(
+ eq(personaRevision.workspaceId, workspaceId),
+ eq(personaRevision.replacedByRunId, agentRunId),
+),
+)
+ return row?.value ?? 0
+ },
+
+ async findRevision(workspaceId, revisionId) {
+ const [row] = await db
+.select
+.from(personaRevision)
+.where(
+ and(eq(personaRevision.workspaceId, workspaceId), eq(personaRevision.id, revisionId)),
+)
+.limit(1)
+ return row ? toPersonaRevision(row as PersonaRevisionRow): null
+ },
+
+ async update(workspaceId, id, patch, revision) {
+ /**
+ * One transaction when a revision comes with the save. See
+ * `PersonaRepositoryPort.update` for why the two halves cannot be two calls: one
+ * order invents history, the other loses it.
+ */
+ if (revision) {
+ return db.transaction(async (tx) => {
+ await tx.insert(personaRevision).values({
+ workspaceId,
+ personaId: id,
+ markdownSource: revision.markdownSource,
+ replacedByKind: revision.replacedByKind,
+ replacedByRunId: revision.replacedByRunId ?? null,
+ replacedByUserId: revision.replacedByUserId ?? null,
+ rationale: revision.rationale ?? '',
+ })
+ const [updated] = await tx
+.update(agentPersona)
+.set({
+ description: patch.description,
+ markdownSource: patch.markdownSource,
+ model: patch.model,
+ tools: patch.tools,
+ harnessEffort: patch.harnessEffort,
+ harnessMaxTurns: patch.harnessMaxTurns,
+ harnessApprovalMode: patch.harnessApprovalMode,
+ harnessPlanner: patch.harnessPlanner,
+ harnessDelegates: patch.harnessDelegates,
+ harnessBudgetCapUsd: patch.harnessBudgetCapUsd,
+ envelope: patch.envelope,
+...(patch.builtinSource === undefined ? {}: { builtinSource: patch.builtinSource }),
+ updatedAt: new Date,
+ })
+.where(and(eq(agentPersona.workspaceId, workspaceId), eq(agentPersona.id, id)))
+.returning
+ if (!updated) throw new NotFoundError('AgentPersona')
+ return toAgentPersona(updated as AgentPersonaRow)
+ })
+ }
+
  const [row] = await db
 .update(agentPersona)
 .set({

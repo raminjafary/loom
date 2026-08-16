@@ -1,6 +1,7 @@
 import {
  classifyToolEffect,
  isRiskyTool,
+ maySelfModify,
  prepareTranscriptLine,
  TRANSCRIPT_CHUNK_LINES,
 } from '@loom/domain'
@@ -48,6 +49,7 @@ import {
  createCoverageTracker,
 } from './mastery-progress.js'
 import { createAtlasTool } from './atlas-tool.js'
+import { createSelfTool } from './self-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
@@ -129,6 +131,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  >
  /** `propose_cross_project_link` round-trips. */
  const pendingAtlasLinks = new Map<
+ string,
+ (result: { ok: boolean; outcome?: string | undefined; error?: string | undefined }) => void
+ >
+ /** `revise_own_prompt` round-trips. */
+ const pendingSelfEdits = new Map<
  string,
  (result: { ok: boolean; outcome?: string | undefined; error?: string | undefined }) => void
  >
@@ -757,6 +764,41 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  }
  const handoffTool = createHandoffTool({ handOver: onHandOver })
+
+ /**
+ * The channel, and the persona's envelope is what decides whether it exists.
+ *
+ * The Runner's copy of the check, against the snapshot it was dispatched with. The
+ * server checks again — `revisePromptBody` reads the *stored* persona, which is the
+ * only copy that can have been narrowed since this run started — so this is about what
+ * the model is offered rather than about what it is allowed. A persona whose envelope
+ * a human withdrew mid-run keeps the tool and gets a refusal, which is the right way
+ * round: the alternative is a tool list that changes under a running model.
+ */
+ const onSelfEdit = (edit: {
+ body: string
+ rationale: string
+ }): Promise<{ ok: true; outcome: string } | { ok: false; error: string }> => {
+ const requestId = nextNoteRequestId
+ send({ type: 'persona_prompt_revised', runId: input.runId, requestId,...edit })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingSelfEdits.delete(requestId)
+ resolve({ ok: false, error: 'the platform did not answer in time — nothing changed' })
+ }, NOTE_TIMEOUT_MS)
+ pendingSelfEdits.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok
+ ? { ok: true, outcome: result.outcome ?? '' }
+: { ok: false, error: result.error ?? 'the platform refused it' },
+)
+ })
+ })
+ }
+ const selfTool = maySelfModify(input.persona.envelope ?? null)
+ ? createSelfTool({ revisePrompt: onSelfEdit })
+: null
  // `ask_human`, on the same reasoning and the same round-trip. No
  // timeout here, unlike a notes read: this one is *meant* to block for as long as a
  // human takes, and the approval SLA is what bounds it — a second, shorter clock in
@@ -836,6 +878,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  atlasTool,
  handoffTool,
 ...(mapTool ? { mapTool }: {}),
+...(selfTool ? { selfTool }: {}),
  questionTool: questionTool.server,
 ...(input.task === undefined ? {}: { task: input.task }),
 ...(input.contextLedger === undefined ? {}: { contextLedger: input.contextLedger }),
@@ -931,6 +974,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onNotesRequest,
  onAtlasRequest,
  onAtlasLinkRequest,
+ onSelfEdit,
 ...(mapTool
  ? {
  onMapWrite: (fragment: Record<string, unknown>) =>
@@ -1438,6 +1482,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const resolve = pendingAtlasLinks.get(frame.requestId)
  if (resolve) {
  pendingAtlasLinks.delete(frame.requestId)
+ resolve(frame)
+ }
+ return
+ }
+
+ case 'persona_prompt_result': {
+ const resolve = pendingSelfEdits.get(frame.requestId)
+ if (resolve) {
+ pendingSelfEdits.delete(frame.requestId)
  resolve(frame)
  }
  return

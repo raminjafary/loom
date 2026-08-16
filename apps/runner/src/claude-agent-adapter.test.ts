@@ -142,6 +142,26 @@ describe('buildQueryOptions: the notes channel', => {
  'mcp__loom_atlas__look_across_projects',
 )
  })
+
+ /**
+ * Continuity mode tier 1, at the same place and for the same reason — and it matters more here
+ * than for the atlas: this is the one in-process tool whose *absence* is the security
+ * property. A persona with no envelope may not rewrite itself, so the name appearing in
+ * an exhaustive tool list it should not be in is the failure worth a test.
+ */
+ it('offers the self-edit tool only when the run has that channel', => {
+ const withSelf = buildQueryOptions({ persona, cwd: '/clone', selfTool: fakeServer })
+ expect(withSelf.agents?.[persona.name]?.tools).toContain(
+ 'mcp__loom_self__revise_own_prompt',
+)
+ expect(Object.keys(withSelf.mcpServers ?? {})).toContain('loom_self')
+
+ const without = buildQueryOptions({ persona, cwd: '/clone', notesTool: fakeServer })
+ expect(without.agents?.[persona.name]?.tools ?? []).not.toContain(
+ 'mcp__loom_self__revise_own_prompt',
+)
+ expect(Object.keys(without.mcpServers ?? {})).not.toContain('loom_self')
+ })
 })
 
 describe('buildPrompt', => {

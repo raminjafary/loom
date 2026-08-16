@@ -54,6 +54,7 @@ import {
  parseDecomposition,
  parsePlanDelta,
  parsePersonaMarkdown,
+ revisePromptBody,
  shippedBuiltin,
  planStages,
  primaryToolArgument,
@@ -91,6 +92,8 @@ import {
  type PersonaCapability,
  type PersonaGroup,
  type PersonaGroupId,
+ type PersonaRevision,
+ type PersonaRevisionId,
  type PersonaSpec,
  type AppliedDeltaOp,
  type PlanDeltaOp,
@@ -886,7 +889,10 @@ export const updatePersona = async (
  `A persona's name cannot be changed — "${existing.name}" is how @mention, the delegation roster and the merge queue address it. Create a new persona instead.`,
 )
  }
- return deps.personas.update(input.workspaceId, input.personaId, {
+ return deps.personas.update(
+ input.workspaceId,
+ input.personaId,
+ {
  description: parsed.description,
  markdownSource: input.markdownSource,
  model: parsed.model,
@@ -898,7 +904,240 @@ export const updatePersona = async (
  harnessDelegates: parsed.harnessDelegates,
  harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
  envelope: parsed.envelope,
+ },
+ /**
+ * A human's edit is recorded in the history too.
+ *
+ * Not only the agent's, and the reason is what the history is *for*: a log showing a
+ * prompt that changed between two recorded revisions with nothing explaining the gap
+ * is one nobody trusts, and the gap would be exactly the human edits. A save that
+ * changes nothing is skipped — clicking save twice is not a revision.
+ */
+...(existing.markdownSource === input.markdownSource
+ ? []
+: ([
+ {
+ markdownSource: existing.markdownSource,
+ replacedByKind: 'human' as const,
+ replacedByUserId: input.actor.kind === 'user' ? input.actor.userId: null,
+ },
+ ] as const)),
+)
+}
+
+/**
+ * The prompt versions this persona used to have, newest first.
+ *
+ * Read-only and not human-gated: a revision is the record of a change to a persona every
+ * member of the workspace can already read, so hiding the history would hide only the
+ * fact that an agent wrote it.
+ */
+export const listPersonaRevisions = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<PersonaRevision[]> => {
+ const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+ if (!persona) throw new NotFoundError('AgentPersona')
+ return deps.personas.listRevisions(input.workspaceId, input.personaId)
+}
+
+/**
+ * Puts a superseded prompt back.
+ *
+ * **Human-only, and it is the half of tier 1 that makes the other half safe.** An agent
+ * rewriting its own prompt without asking is only acceptable because undoing it is one
+ * click for a person who disagrees — the whole trade is that the ceiling is human-set,
+ * not that every step inside it is.
+ *
+ * A revert is stored as an ordinary revision rather than as a deletion: the version being
+ * undone stays in the history, because "an agent wrote this and a human took it out" is
+ * the single most useful row this table will ever hold.
+ */
+export const revertPersonaPrompt = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ personaId: AgentPersonaId
+ revisionId: PersonaRevisionId
+ },
+): Promise<AgentPersona> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError('Only a human may revert a persona')
+ }
+ const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+ if (!persona) throw new NotFoundError('AgentPersona')
+ const revision = await deps.personas.findRevision(input.workspaceId, input.revisionId)
+ if (!revision || revision.personaId !== input.personaId) {
+ throw new NotFoundError('PersonaRevision')
+ }
+
+ const parsed = parsePersonaMarkdown(revision.markdownSource)
+ assertPlannerToolsAreReadOnly(parsed)
+ assertFitsItsEnvelope(parsed)
+ /**
+ * The same refusal `updatePersona` makes, for the same reason and by a different road:
+ * a persona's name is its address, so restoring a revision written before a rename
+ * would silently re-point `@mention`, the delegation roster and the merge queue's
+ * lookup of the reconciler.
+ */
+ if (parsed.name !== persona.name) {
+ throw new ValidationError(
+ `That revision names the persona "${parsed.name}" and this one is "${persona.name}" — restoring it would change how it is addressed. Create a new persona instead.`,
+)
+ }
+
+ const restored = await deps.personas.update(
+ input.workspaceId,
+ input.personaId,
+ {
+ description: parsed.description,
+ markdownSource: revision.markdownSource,
+ model: parsed.model,
+ tools: parsed.tools,
+ harnessEffort: parsed.harnessEffort,
+ harnessMaxTurns: parsed.harnessMaxTurns,
+ harnessApprovalMode: parsed.harnessApprovalMode,
+ harnessPlanner: parsed.harnessPlanner,
+ harnessDelegates: parsed.harnessDelegates,
+ harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
+ },
+ {
+ markdownSource: persona.markdownSource,
+ replacedByKind: 'human',
+ replacedByUserId: input.actor.kind === 'user' ? input.actor.userId: null,
+ rationale: `Reverted to the version superseded on ${revision.createdAt.toISOString}.`,
+ },
+)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'persona.reverted',
+ subjectType: 'agent_persona',
+ subjectId: input.personaId,
+ metadata: { revisionId: input.revisionId, personaName: persona.name },
  })
+
+ return restored
+}
+
+/**
+ * Tier 1 of continuity mode: a run rewrites the prompt of the persona it is.
+ *
+ * **Three decisions live here rather than in the domain rule**, because they are about
+ * which persona and which run, not about which text:
+ *
+ * 1. **The target is the run's own persona, resolved from the run.** Never from the
+ * payload — the same rule the re-planning delta follows, and for the same reason: an
+ * id in a tool call is model output, so accepting one would let a run edit *another*
+ * persona's prompt and there is no such thing as attenuating that.
+ * 2. **The edit lands on the persona as it is now, and does not touch this run.** A run
+ * is what it was launched as, so the prompt being written is for whoever runs
+ * next. Telling the model that plainly is part of the outcome sentence: a model that
+ * believes its own instructions just changed will act as though they had.
+ * 3. **Refusals are answers, not errors.** Every one comes back as text the model reads,
+ * because continuity mode requires a refusal to arrive as a request a human could grant rather than
+ * as a failure to retry against.
+ *
+ * Note what is *not* re-derived here: the permission. `maySelfModify` inside
+ * `revisePromptBody` is the only place absence-of-envelope is interpreted, so this
+ * function cannot accidentally disagree with the authoring path about what null means.
+ */
+export const revisePersonaPrompt = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ body: string
+ rationale: string
+ },
+): Promise<{ ok: true; outcome: string } | { ok: false; reason: string }> => {
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!run) throw new NotFoundError('AgentRun')
+
+ /**
+ * By name, from the run's own snapshot — the same resolution the atlas's write side
+ * uses, and the same trade: a persona renamed or deleted since this run started
+ * resolves to nothing, and the edit is refused rather than landing somewhere else.
+ */
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const persona = personas.find((entry) => entry.name === run.persona.name)
+ if (!persona) {
+ return {
+ ok: false,
+ reason:
+ `There is no persona called "${run.persona.name}" in this workspace any more, so ` +
+ 'there is nothing to rewrite. Carry on with your task.',
+ }
+ }
+
+ const revisionsThisRun = await deps.personas.countRevisionsByRun(
+ input.workspaceId,
+ input.agentRunId,
+)
+ const verdict = revisePromptBody({
+ currentMarkdown: persona.markdownSource,
+ body: input.body,
+ revisionsThisRun,
+ })
+ if (!verdict.ok) return { ok: false, reason: verdict.reason }
+
+ const parsed = parsePersonaMarkdown(verdict.markdown)
+ await deps.personas.update(
+ input.workspaceId,
+ persona.id,
+ {
+ description: parsed.description,
+ markdownSource: verdict.markdown,
+ model: parsed.model,
+ tools: parsed.tools,
+ harnessEffort: parsed.harnessEffort,
+ harnessMaxTurns: parsed.harnessMaxTurns,
+ harnessApprovalMode: parsed.harnessApprovalMode,
+ harnessPlanner: parsed.harnessPlanner,
+ harnessDelegates: parsed.harnessDelegates,
+ harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
+ /**
+ * `builtinSource` deliberately not sent, which for a built-in persona means this
+ * edit makes it "touched" and `seedBuiltinPersonas` will stop bringing it forward.
+ * That is the correct outcome and the same one a human's edit produces: the
+ * recorded seed exists to tell "the platform shipped this" from "somebody changed
+ * it", and an agent is somebody.
+ */
+ },
+ {
+ markdownSource: persona.markdownSource,
+ replacedByKind: 'agent_run',
+ replacedByRunId: input.agentRunId,
+ rationale: input.rationale,
+ },
+)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: agentRunActor(input.agentRunId),
+ action: 'persona.self_revised',
+ subjectType: 'agent_persona',
+ subjectId: persona.id,
+ metadata: {
+ personaName: persona.name,
+ rationale: input.rationale,
+ bodyChars: verdict.body.length,
+ },
+ })
+
+ return {
+ ok: true,
+ outcome:
+ `Recorded. "${persona.name}" now has the prompt you wrote, and the next run of it ` +
+ 'will be told that instead. **Your own instructions are unchanged** — a run is what ' +
+ 'it was launched as, so nothing about what you are doing right now has moved. A ' +
+ 'human can read the change beside the version it replaced and put the old one back ' +
+ 'in one click, so write for that reader. Carry on with your task.',
+ }
 }
 
 /**

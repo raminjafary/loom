@@ -31,6 +31,7 @@ import {
  applySubmittedPlan,
  readAtlasLeads,
  proposeCrossSubjectRelation,
+ revisePersonaPrompt,
  renderProposalOutcome,
  readContextLedger,
  reconcileRunnerRuns,
@@ -979,6 +980,40 @@ export const createRunnerGateway = (
  } catch (error) {
  send(from, {
  type: 'atlas_link_result',
+ requestId: frame.requestId,
+ ok: false,
+ error: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
+ /**
+ * A run rewriting the prompt of the persona it is.
+ *
+ * The target is resolved from the run inside the use case, never from this frame —
+ * which is why the frame carries no persona id to ignore. Every refusal comes back
+ * as `outcome` rather than as an error, because continuity mode requires a refused
+ * self-modification to reach the agent as a request a human could grant; `error` is
+ * for the case where the platform could not decide at all.
+ */
+ case 'persona_prompt_revised': {
+ try {
+ const result = await revisePersonaPrompt(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ body: frame.body,
+ rationale: frame.rationale,
+ })
+ send(from, {
+ type: 'persona_prompt_result',
+ requestId: frame.requestId,
+ ok: true,
+ outcome: result.ok ? result.outcome: result.reason,
+ })
+ } catch (error) {
+ send(from, {
+ type: 'persona_prompt_result',
  requestId: frame.requestId,
  ok: false,
  error: error instanceof Error ? error.message: String(error),

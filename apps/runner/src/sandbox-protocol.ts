@@ -119,6 +119,14 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  outcome: z.string.optional,
  error: z.string.optional,
  }),
+ /** What became of a self-edit. */
+ z.object({
+ t: z.literal('self_edit_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ outcome: z.string.optional,
+ error: z.string.optional,
+ }),
  /**
  * A human's reply to `ask_human`. `answer` absent means nobody
  * answered — denied, or the SLA expired — and the tool must still return, or the
@@ -240,6 +248,18 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  t: z.literal('handoff'),
  requestId: z.string,
  brief: z.record(z.string, z.unknown),
+ }),
+ /**
+ * The agent rewriting its own persona prompt.
+ *
+ * Carries no persona id for the same reason the wire frame does not: the host resolves
+ * the target from the run, so this can only ever reach the persona the run *is*.
+ */
+ z.object({
+ t: z.literal('self_edit'),
+ requestId: z.string,
+ body: z.string.max(40_000),
+ rationale: z.string.max(600),
  }),
  /** The agent asking a human a question, answered by `question_result`. */
  z.object({ t: z.literal('question_request'), requestId: z.string, question: z.string }),

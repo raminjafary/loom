@@ -1,4 +1,4 @@
-import { classifyToolEffect, isRiskyTool } from '@loom/domain'
+import { classifyToolEffect, isRiskyTool, maySelfModify } from '@loom/domain'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
@@ -7,6 +7,7 @@ import { createMapTool } from './map-tool.js'
 import { createAtlasTool } from './atlas-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
+import { createSelfTool } from './self-tool.js'
 import {
  PLANNER_TOOL_NAME,
  PLAN_DELTA_TOOL_NAME,
@@ -94,6 +95,11 @@ const pendingMapWrites = new Map<
  edgesWritten?: number | undefined
  superseded?: number | undefined
  }) => void
+>
+/** `revise_own_prompt` round-trips. */
+const pendingSelfEdits = new Map<
+ string,
+ (result: { ok: boolean; outcome?: string | undefined; error?: string | undefined }) => void
 >
 /** `ask_human` round-trips, same shape as a notes read. */
 const pendingQuestions = new Map<string, (result: { answer: string | null }) => void>
@@ -193,6 +199,15 @@ const main = async : Promise<void> => {
  if (resolveLink) {
  pendingAtlasLinks.delete(parsed.data.requestId)
  resolveLink(parsed.data)
+ }
+ return
+ }
+
+ if (parsed.data.t === 'self_edit_result') {
+ const resolveSelfEdit = pendingSelfEdits.get(parsed.data.requestId)
+ if (resolveSelfEdit) {
+ pendingSelfEdits.delete(parsed.data.requestId)
+ resolveSelfEdit(parsed.data)
  }
  return
  }
@@ -346,6 +361,29 @@ const main = async : Promise<void> => {
  },
  })
 
+ /**
+ * The channel, present only when the persona carries an envelope — the same
+ * condition the unsandboxed path applies, and it has to be applied in both places
+ * because these are two different processes building two different tool lists.
+ */
+ const selfTool = maySelfModify(persona.envelope ?? null)
+ ? createSelfTool({
+ revisePrompt: (edit) => {
+ const requestId = nextRequestId
+ emit({ t: 'self_edit', requestId,...edit })
+ return new Promise((resolve) => {
+ pendingSelfEdits.set(requestId, (result) =>
+ resolve(
+ result.ok
+ ? { ok: true, outcome: result.outcome ?? '' }
+: { ok: false, error: result.error ?? 'the platform refused it' },
+),
+)
+ })
+ },
+ })
+: null
+
  const questionTool = createQuestionTool({
  askHuman: (question) => {
  const requestId = nextRequestId
@@ -365,6 +403,7 @@ const main = async : Promise<void> => {
  atlasTool,
 ...(mapTool ? { mapTool }: {}),
  handoffTool,
+...(selfTool ? { selfTool }: {}),
 ...(command.mapContext === undefined ? {}: { mapContext: command.mapContext }),
 ...(command.mastery === undefined ? {}: { mastery: command.mastery }),
  questionTool: questionTool.server,

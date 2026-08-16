@@ -364,6 +364,25 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  rationale: z.string.max(600),
  }),
  /**
+ * A run rewriting the prompt of the persona it is.
+ *
+ * **No persona id, and that absence is the security property.** The server resolves the
+ * target from the run's own snapshot, so a run can only ever edit the persona it *is* —
+ * The delta tool takes the same shape for the same reason, since an id in a tool call
+ * is model output and there is no meaningful way to attenuate "edit somebody else".
+ *
+ * The body is length-bounded here as a transport sanity check only; the rule that
+ * decides whether this edit may happen at all — the envelope, the round trip, the
+ * per-run cap — is `revisePromptBody`, server-side, where the stored markdown is.
+ */
+ z.object({
+ type: z.literal('persona_prompt_revised'),
+ runId: z.string,
+ requestId: z.string,
+ body: z.string.max(40_000),
+ rationale: z.string.max(600),
+ }),
+ /**
  * One fragment of a map a mastery run wrote, sent **as it is written**.
  *
  * Same requirement and same reasoning as `note_written`, and it bites harder here: a
@@ -843,6 +862,22 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  */
  z.object({
  type: z.literal('atlas_link_result'),
+ requestId: z.string,
+ ok: z.boolean,
+ outcome: z.string.optional,
+ error: z.string.optional,
+ }),
+ /**
+ * What became of a self-edit, assembled server-side.
+ *
+ * `outcome` carries the refusal as well as the acceptance, for the reason
+ * `atlas_link_result` does and one more that is specific to this tier: continuity mode requires a
+ * refused self-modification to reach the agent as a request a human could grant, so the
+ * wording *is* the feature and a Runner writing its own would be a second place for it
+ * to drift. `error` stays for the case where the platform could not decide at all.
+ */
+ z.object({
+ type: z.literal('persona_prompt_result'),
  requestId: z.string,
  ok: z.boolean,
  outcome: z.string.optional,

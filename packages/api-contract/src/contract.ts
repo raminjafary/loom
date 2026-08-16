@@ -6,6 +6,7 @@ import {
  DirectoryListingSchema,
  PersonaCapabilitySchema,
  AgentPersonaSchema,
+ PersonaRevisionSchema,
  AgentRunSchema,
  ApprovalRequestSchema,
  ChannelSchema,
@@ -705,6 +706,29 @@ export const contract = {
  */
  resetToBuiltin: oc
 .input(z.object({ personaId: z.string }))
+.output(AgentPersonaSchema),
+
+ /**
+ * What this persona's prompt used to say.
+ *
+ * Readable by anyone who can read the persona, deliberately: hiding the history would
+ * hide only the fact that an agent wrote one of these versions, which is the single
+ * thing a reader most needs to know.
+ */
+ revisions: oc
+.input(z.object({ personaId: z.string }))
+.output(z.array(PersonaRevisionSchema)),
+
+ /**
+ * Puts a superseded prompt back — the half of tier 1 that makes the other half safe.
+ *
+ * Continuity mode permits an agent to rewrite itself inside its envelope *without asking*, and
+ * that trade only holds while undoing it is one click for a human who disagrees. The
+ * revert is stored as an ordinary revision, so the version being undone stays in the
+ * history rather than disappearing with the decision.
+ */
+ revert: oc
+.input(z.object({ personaId: z.string, revisionId: z.string }))
 .output(AgentPersonaSchema),
  },
 

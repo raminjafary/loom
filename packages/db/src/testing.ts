@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
  agentPersona,
+ personaRevision,
  agentRun,
  agentRunEvent,
  approvalRequest,
@@ -74,14 +75,14 @@ const truncateWithRetry = async (db: Database, statement: SQL): Promise<void> =>
 export const truncateDomainTables = async (db: Database): Promise<void> => {
  await truncateWithRetry(
  db,
- sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${colosseumTurn}, ${colosseumClaim}, ${colosseumParticipant}, ${colosseumSession}, ${expertiseUse}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel} restart identity cascade`,
+ sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${colosseumTurn}, ${colosseumClaim}, ${colosseumParticipant}, ${colosseumSession}, ${expertiseUse}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${personaRevision}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel} restart identity cascade`,
 )
 }
 
 export const truncateAll = async (db: Database): Promise<void> => {
  await truncateWithRetry(
  db,
- sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${colosseumTurn}, ${colosseumClaim}, ${colosseumParticipant}, ${colosseumSession}, ${expertiseUse}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel}, ${workspace} restart identity cascade`,
+ sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${colosseumTurn}, ${colosseumClaim}, ${colosseumParticipant}, ${colosseumSession}, ${expertiseUse}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${personaRevision}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel}, ${workspace} restart identity cascade`,
 )
 }
 

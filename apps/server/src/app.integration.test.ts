@@ -857,6 +857,10 @@ describe('contract completeness', => {
  'update',
  'delete',
  'resetToBuiltin',
+ // Continuity mode tier 1 — the history an agent's self-edit writes, and the revert
+ // that makes writing without asking an acceptable trade.
+ 'revisions',
+ 'revert',
  ])
  expect(Object.keys(contract.personaGroup)).toEqual([
  'list',

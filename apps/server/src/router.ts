@@ -79,6 +79,8 @@ import {
  pushAgentRun,
  registerNotificationTarget,
  resetPersonaToBuiltin,
+ listPersonaRevisions,
+ revertPersonaPrompt,
  resumeAllRuns,
  setHandoffPolicy,
  setRepositoryInstallCommand,
@@ -97,11 +99,13 @@ import {
  DomainError,
  builtinPersonaStatus,
  type AgentPersona,
+ type PersonaRevision,
  type MergeQueueEntry,
  type WorkerNote,
 } from '@loom/domain'
 import {
  asAgentPersonaId,
+ asPersonaRevisionId,
  asAgentRunId,
  asSubjectMapId,
  NotFoundError,
@@ -140,6 +144,22 @@ const toWireMergeQueueEntry = (entry: MergeQueueEntry) => ({
 const toWirePersona = (persona: AgentPersona) => ({
 ...persona,
  builtinStatus: builtinPersonaStatus(persona),
+})
+
+/**
+ * A persona revision on the wire, field by field rather than
+ * spread, for the reason `toWireAtlasEdge` gives below: a spread is how a field goes
+ * missing across a port in this codebase, and this repository has now paid for that four
+ * times.
+ */
+const toWirePersonaRevision = (revision: PersonaRevision) => ({
+ id: revision.id,
+ personaId: revision.personaId,
+ markdownSource: revision.markdownSource,
+ replacedByKind: revision.replacedByKind,
+ replacedByRunId: revision.replacedByRunId,
+ rationale: revision.rationale,
+ createdAt: revision.createdAt.toISOString,
 })
 
 /** `paths` is readonly in the domain and mutable on the wire — same as `runner.allowedRoots`. */
@@ -913,6 +933,30 @@ export const router = os.router({
  workspaceId: context.principal.workspaceId,
  actor: context.principal.actor,
  personaId: asAgentPersonaId(input.personaId),
+ }),
+),
+),
+),
+
+ revisions: os.persona.revisions.handler(({ context, input }) =>
+ guard(async =>
+ (
+ await listPersonaRevisions(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ personaId: asAgentPersonaId(input.personaId),
+ })
+).map(toWirePersonaRevision),
+),
+),
+
+ revert: os.persona.revert.handler(({ context, input }) =>
+ guard(async =>
+ toWirePersona(
+ await revertPersonaPrompt(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ personaId: asAgentPersonaId(input.personaId),
+ revisionId: asPersonaRevisionId(input.revisionId),
  }),
 ),
 ),

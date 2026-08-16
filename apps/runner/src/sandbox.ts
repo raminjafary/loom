@@ -112,6 +112,17 @@ export interface SandboxOptions {
  },
 ) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
  /**
+ * The agent rewriting its own persona prompt.
+ *
+ * Answered on the host for the reason every other write channel is: the persona lives
+ * in the database, and this process has neither network nor database by design — which
+ * is also why a run cannot edit its own prompt by writing to a file.
+ */
+ readonly onSelfEdit?: (edit: {
+ body: string
+ rationale: string
+ }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
+ /**
  * The agent asking a human a question and blocking on the answer.
  * Resolves with `answer: null` when nobody answered — the run must continue either
  * way, or it blocks until the reaper takes it.
@@ -697,6 +708,20 @@ export const runAgentInSandbox = async (
  })) ?? { ok: false, error: 'this run has no atlas channel' }
  send({
  t: 'atlas_link_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? { outcome: result.outcome }: { error: result.error }),
+ })
+ })
+ return
+ case 'self_edit':
+ void (async => {
+ const result = (await options.onSelfEdit?.({
+ body: frame.body,
+ rationale: frame.rationale,
+ })) ?? { ok: false, error: 'this run has no self-edit channel' }
+ send({
+ t: 'self_edit_result',
  requestId: frame.requestId,
  ok: result.ok,
 ...(result.ok ? { outcome: result.outcome }: { error: result.error }),

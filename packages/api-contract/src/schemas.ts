@@ -819,6 +819,25 @@ export const PersonaSpecSchema = z.object({
 })
 
 /** Phase 1 subset — read/CRUD only, no git-backed versioning yet. */
+/**
+ * A prompt a persona used to have.
+ *
+ * `markdownSource` is the **superseded** document: the persona row is always the live
+ * version, so the history holds what was replaced rather than a second copy of what is
+ * already there. Newest first, so the head of the list is the version immediately before
+ * the current one — which is also the one a revert restores.
+ */
+export const PersonaRevisionSchema = z.object({
+ id: z.string,
+ personaId: z.string,
+ markdownSource: z.string,
+ replacedByKind: z.enum(['human', 'agent_run', 'platform']),
+ replacedByRunId: z.string.nullable,
+ /** What the author said they were doing. Empty for a human's edit, which has a diff. */
+ rationale: z.string,
+ createdAt: z.string,
+})
+
 export const AgentPersonaSchema = z.object({
  id: z.string,
  workspaceId: z.string,

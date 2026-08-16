@@ -13,6 +13,7 @@ import {
  asMergeQueueEntryId,
  asMessageId,
  asPersonaGroupId,
+ asPersonaRevisionId,
  asRepositoryId,
  asRunnerId,
  asThreadId,
@@ -27,6 +28,7 @@ import {
  PLATFORM_NOTE_KINDS,
  type Actor,
  type AgentPersona,
+ type PersonaRevision,
  type Envelope,
  type AgentRun,
  type AgentRunBranchDisposition,
@@ -577,6 +579,40 @@ export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
  builtinSource: row.builtinSource ?? null,
  createdAt: row.createdAt,
  updatedAt: row.updatedAt,
+})
+
+export interface PersonaRevisionRow {
+ id: string
+ workspaceId: string
+ personaId: string
+ markdownSource: string
+ replacedByKind: string
+ replacedByRunId: string | null
+ replacedByUserId: string | null
+ rationale: string
+ createdAt: Date
+}
+
+/**
+ * A superseded prompt.
+ *
+ * `replacedByKind` is narrowed rather than validated: the column is written only by this
+ * package's own repository, and an unrecognized value reads as `platform`, which is the
+ * kind that claims the least about who did it.
+ */
+export const toPersonaRevision = (row: PersonaRevisionRow): PersonaRevision => ({
+ id: asPersonaRevisionId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ personaId: asAgentPersonaId(row.personaId),
+ markdownSource: row.markdownSource,
+ replacedByKind:
+ row.replacedByKind === 'human' || row.replacedByKind === 'agent_run'
+ ? row.replacedByKind
+: 'platform',
+ replacedByRunId: row.replacedByRunId === null ? null: asAgentRunId(row.replacedByRunId),
+ replacedByUserId: row.replacedByUserId === null ? null: asUserId(row.replacedByUserId),
+ rationale: row.rationale,
+ createdAt: row.createdAt,
 })
 
 export interface PersonaGroupRow {

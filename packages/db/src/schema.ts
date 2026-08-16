@@ -1453,3 +1453,62 @@ export const atlasEdge = pgTable(
  index('atlas_edge_status_idx').on(t.workspaceId, t.status),
  ],
 )
+
+/**
+ * What a persona's prompt used to say.
+ *
+ * **The row is the text that was replaced, not the text that replaced it**, and that is
+ * the decision worth not re-deriving. The persona row is always the live version, so
+ * storing "what it became" would mean the current prompt existed in two places and could
+ * disagree with itself after any write that missed one of them. Storing what it *was*
+ * makes the history total and non-redundant: the live row plus these rows is every
+ * version there has ever been, each exactly once.
+ *
+ * It also makes revert a restore rather than a computation — the "reviewable,
+ * attributable to the authoring run, and revertible" is three properties of this table:
+ * the superseded text is the diff's other side, `replaced_by_run_id` is the attribution,
+ * and restoring a row is the revert.
+ *
+ * Written on **every** replacement, a human's included. A history that recorded only the
+ * agent's edits would show a prompt changing between revisions with nothing to explain
+ * it, which is the shape of a log nobody trusts.
+ */
+export const personaRevision = pgTable(
+ 'persona_revision',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ /** The full markdown this persona had before the edit — frontmatter included. */
+ markdownSource: text('markdown_source').notNull,
+ /** 'human' | 'agent_run' | 'platform' — who replaced it, same vocabulary as a note's author. */
+ replacedByKind: text('replaced_by_kind').notNull,
+ /**
+ * The run that rewrote it, when a run did.
+ *
+ * `set null` on delete, never cascade: the revision is the record that an agent
+ * changed what every future run of this persona is told, and that record must outlive
+ * the run's own row — the same reasoning the audit log keeps its rows under.
+ */
+ replacedByRunId: uuid('replaced_by_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ /**
+ * The human who saved it, as plain text with **no foreign key** — the same shape
+ * `audit_event.actor_user_id` uses, and for the same reason it does: this row is a
+ * record of something that happened, and a departed employee does not un-write the
+ * prompt they wrote. A key with `set null` would preserve the row and lose the one
+ * fact it is being kept for. (Found by a test: the dev principal has no `user` row at
+ * all, so the key made every revert a 500 before it made anything safe.)
+ */
+ replacedByUserId: text('replaced_by_user_id'),
+ /** What the author said they were doing. Empty for a human edit, which has a diff instead. */
+ rationale: text('rationale').notNull.default(''),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [index('persona_revision_persona_idx').on(t.workspaceId, t.personaId, t.createdAt)],
+)
