@@ -45,7 +45,7 @@ import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
-import { REVISE_PROMPT_TOOL_NAME } from '../apps/runner/src/self-tool.js'
+import { REVISE_PROMPT_TOOL_NAME, REVISE_TOOLS_TOOL_NAME } from '../apps/runner/src/self-tool.js'
 
 const execFileAsync = promisify(execFile)
 const REPO_ROOT = new URL('..', import.meta.url).pathname
@@ -71,6 +71,21 @@ const check = (ok: boolean, what: string) => {
  * prompt" true without anything having happened today.
  */
 const MARKER = `LOOM-SELF-EDIT-${Date.now.toString(36).toUpperCase}`
+
+/**
+ * A **different** marker for the control's task, and the reason is the rule this
+ * repository keeps re-learning: a driver must never assert on text its own input
+ * contains.
+ *
+ * The control is given the same instruction as the edit run, and that instruction names a
+ * marker to write. If both used `MARKER`, then "the control never said it" would fail the
+ * moment the model quoted its own task back — which is exactly what happened on the run
+ * that found this, and it is the fourth time a driver here has matched its own input
+ * (`corporation-check.mts` twice, `mastery-check.mts` once). The control's marker is
+ * never asserted on; it exists only so the control's task can be identical in shape
+ * without being identical in text.
+ */
+const CONTROL_MARKER = `LOOM-CONTROL-${Date.now.toString(36).toUpperCase}`
 
 const STARTING_PROMPT =
  'You answer questions about this repository. You have no standing lessons recorded yet.'
@@ -230,14 +245,17 @@ const main = async => {
  return started
  }
 
- const EDIT_TASK =
+ const editTask = (marker: string) =>
  'Read CONVENTIONS.md and src/money.ts. Then use your revise_own_prompt tool to record ' +
  'the convention you found as a standing instruction for future runs of your persona. ' +
  'Send the complete new prompt, and make its first line exactly this and nothing else: ' +
- `${MARKER}`
+ `${marker}`
 
  // ── 1. The enveloped persona rewrites itself ────────────────────────────────
- const editRun = await startAndWait('self-edit', { personaId: enveloped.id, task: EDIT_TASK })
+ const editRun = await startAndWait('self-edit', {
+ personaId: enveloped.id,
+ task: editTask(MARKER),
+ })
 
  const revisions = await client.persona.revisions({ personaId: enveloped.id })
  check(
@@ -280,7 +298,7 @@ const main = async => {
  // ── 2. The control: no envelope, no tool, nothing changed ───────────────────
  const controlRun = await startAndWait('control (no envelope)', {
  personaId: plain.id,
- task: EDIT_TASK,
+ task: editTask(CONTROL_MARKER),
  })
  const controlRevisions = await client.persona.revisions({ personaId: plain.id })
  check(
@@ -322,12 +340,85 @@ const main = async => {
  saidBy(quoteRun.id).includes(MARKER),
  'a later run of that persona was told the prompt the earlier one wrote',
 )
+ /**
+ * Sound only because the control's task names `CONTROL_MARKER` instead — see that
+ * constant. The claim is that `MARKER` is reachable from nowhere but the stored
+ * persona, and a run whose own instruction contained it could not have shown that.
+ */
  check(
  !saidBy(controlRun.id).includes(MARKER),
  'the control run was never told it, which is what makes the line above mean something',
 )
 
- // ── 4. The human's undo ─────────────────────────────────────────────────────
+ // ── 4. Tier 2: the tool list, within the envelope ───────────────────────────
+ //
+ // A separate persona, because tier 1 already spent this one's single revision for the
+ // run — and the cap is per run, not per tier, so reusing it would test the cap rather
+ // than the tier.
+ const retooler = await client.persona.create({
+ markdownSource: ENVELOPED_PERSONA('self-retooler'),
+ })
+ /**
+ * The fixture holds exactly what its envelope permits, and it has to: the first version
+ * of this driver tried to author three tools under an envelope of one, and the platform
+ * refused it — correctly, since continuity mode requires a persona to fit its own envelope, or the
+ * ceiling would be a decoration on a room already taller than it. So the tier-2 case
+ * here is a **drop**, which is the direction the tool's description argues for anyway;
+ * the refusal path is covered deterministically by the gateway integration test, where
+ * a frame can ask for `Bash` without a model having to be persuaded to.
+ */
+ check(
+ retooler.tools.length === (retooler.envelope?.tools.length ?? -1),
+ 'the retooling fixture fits its own envelope, which is the only state a human may author',
+)
+
+ const retoolRun = await startAndWait('tier 2 (expected to drop tools)', {
+ personaId: retooler.id,
+ /**
+ * Directive on purpose. An earlier version asked the model to "reduce your tool list
+ * to what you can still justify", and it obeyed on one run and declined on the next —
+ * so the check was measuring the model's taste rather than the mechanism. Whether an
+ * agent reaches for this tool at the right moment is a real question and it belongs to
+ * The measurement, not to a driver whose job is to prove the call works end to
+ * end.
+ */
+ task:
+ 'This persona never opens files — it answers from memory. Call your revise_own_tools ' +
+ 'tool now with an empty tools list, and say in one sentence why holding no tools is ' +
+ 'right for it. Do not read anything first.',
+ })
+
+ const retoolRevisions = await client.persona.revisions({ personaId: retooler.id })
+ check(
+ retoolRevisions.length === 1,
+ `the model called ${REVISE_TOOLS_TOOL_NAME} (${retoolRevisions.length} revision(s))`,
+)
+ const afterRetool = (await client.persona.list).find((p: any) => p.id === retooler.id)
+ check(
+ (afterRetool?.tools.length ?? 99) < retooler.tools.length,
+ `it holds fewer tools than it started with (${retooler.tools.join(', ')} → ${(afterRetool?.tools ?? []).join(', ') || 'none'})`,
+)
+ /**
+ * The envelope, checked against what actually landed rather than against the refusal
+ * path. A model that asked for something outside it was refused; a model that asked for
+ * nothing outside it proves the ceiling holds only if the stored list is inside it.
+ */
+ check(
+ (afterRetool?.tools ?? []).every((tool: string) =>
+ (retooler.envelope?.tools ?? []).includes(tool),
+),
+ 'and everything it kept is inside the envelope a human set',
+)
+ check(
+ (afterRetool?.markdownSource ?? '').includes(STARTING_PROMPT),
+ 'tier 2 moved the tool list and left the prompt alone',
+)
+ check(
+ retoolRevisions[0]?.replacedByRunId === retoolRun.id,
+ 'the tool change is attributed to the run that made it',
+)
+
+ // ── 5. The human's undo ─────────────────────────────────────────────────────
  const restored = await client.persona.revert({
  personaId: enveloped.id,
  revisionId: revisions[0].id,
