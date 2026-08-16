@@ -6,6 +6,7 @@ import {
  CONFIRMED_OPEN,
  MAX_ATLAS_LEADS,
  MAX_ATLAS_RATIONALE_CHARS,
+ atlasMatchScore,
  proposeAtlasEdge,
  renderAtlasLeads,
  renderConfirmedRelations,
@@ -360,5 +361,49 @@ describe('renderAtlasLeads with confirmed relations', => {
 )
  expect(text).toContain(CONFIRMED_OPEN)
  expect(text).toContain('That is an answer')
+ })
+})
+
+/**
+ * The inflection case, from the live run that found it (`tools/atlas-check.mts`).
+ *
+ * Two repositories had both recorded a cancellation-refund rule, a run asked about "how
+ * cancellations are refunded", and the answer was that nothing in the workspace matched.
+ * The regression is written with the exact words involved, because the general statement
+ * — "matching should tolerate plurals" — is the kind that gets satisfied by a change that
+ * does not fix this.
+ */
+describe('lexical matching across ordinary English inflection', => {
+ const candidate = (label: string, summary = ''): Parameters<typeof atlasMatchScore>[0] => ({
+ nodeId: 'n1' as never,
+ subjectRef: 'ticketing',
+ label,
+ summary,
+ personaName: 'scholar',
+ createdAt: new Date(0),
+ outcomes: { decided: 0, merged: 0, discarded: 0, failed: 0 },
+ })
+
+ const scoreFor = (label: string, topic: string) =>
+ selectAtlasLeads([candidate(label)], topic).leads.length
+
+ it('finds a singular concept from a plural topic', => {
+ expect(scoreFor('Cancellation and Refund Policy', 'how cancellations are refunded')).toBe(1)
+ })
+
+ it('finds a concept whose verb form differs from the topic"s', => {
+ expect(scoreFor('Refund calculation', 'refunding a booking')).toBe(1)
+ })
+
+ /**
+ * The bound on the fix: a suffix is only stripped when what is left is still long
+ * enough to be worth matching on, so short words do not collapse into each other.
+ */
+ it('does not collapse short words into one another', => {
+ expect(scoreFor('Fees', 'feed the queue')).toBe(0)
+ })
+
+ it('still finds nothing when there is genuinely nothing', => {
+ expect(scoreFor('Retry policy for webhooks', 'how invoices are numbered')).toBe(0)
  })
 })

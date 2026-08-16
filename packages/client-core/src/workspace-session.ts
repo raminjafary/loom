@@ -1,5 +1,6 @@
 import type { Actor, Channel, Message, ServerEvent, Thread } from '@loom/api-contract'
 import type { LoomApi } from './api.js'
+import { messageInView, DEFAULT_THREAD_VIEW, type ThreadView } from './thread-view.js'
 import {
  connectRealtime,
  type ConnectionState,
@@ -61,6 +62,17 @@ export interface WorkspaceSnapshot {
  * contract has always been paginated; this is the client finally saying so.
  */
  readonly hasMoreHistory: boolean
+ /**
+ * What the thread is showing.
+ *
+ * `headline` by default: a swarm's workers share their planner's thread, so the
+ * unfiltered view is five interleaved streams and the line a human must act on scrolls
+ * past between two file reads. Every blocking thing is system-authored, so the quiet
+ * view cannot hide one.
+ */
+ readonly threadView: ThreadView
+ /** The run whose stream is being read, when the view is `run`. Set by clicking a node. */
+ readonly focusRunId: string | null
  readonly loadingHistory: boolean
  readonly connection: ConnectionState
  readonly loading: boolean
@@ -78,6 +90,12 @@ export interface WorkspaceSession {
  onServerEvent(listener: (event: ServerEvent) => void): => void
  init: Promise<void>
  selectChannel(channelId: string): Promise<void>
+ /**
+ * Changes what the thread shows. Reloads, because the filter is applied in
+ * the query — a client-side filter over a fetched page would render three of fifty rows
+ * and report that there was nothing more to load.
+ */
+ setThreadView(view: ThreadView, focusRunId?: string): Promise<void>
  /**
  * Moves the conversation to one of this channel's threads — an area thread, or back
  * to the root.
@@ -130,6 +148,8 @@ export const createWorkspaceSession = (options: {
  channelThreads: [],
  messages: [],
  hasMoreHistory: false,
+ threadView: DEFAULT_THREAD_VIEW,
+ focusRunId: null,
  loadingHistory: false,
  connection: 'connecting',
  loading: false,
@@ -175,7 +195,17 @@ export const createWorkspaceSession = (options: {
  const known = new Set(state.messages.map((m) => m.id))
  // One patch for the whole batch: a reconnect can replay hundreds of events, and
  // notifying every listener per message would re-render the thread once per event.
- const fresh = incoming.filter((m) => m.threadId === threadId && !known.has(m.id))
+ /**
+ * The live half of the filter, and the reason `messageInView` is in the domain rather
+ * than in the query: messages arrive from two places, and a socket that ignored the
+ * view would refill a quiet thread with the firehose the moment anything happened.
+ */
+ const fresh = incoming.filter(
+ (m) =>
+ m.threadId === threadId &&
+ !known.has(m.id) &&
+ messageInView(m, state.threadView, state.focusRunId ?? undefined),
+)
  if (fresh.length === 0) return
  const next = [...state.messages,...fresh].sort((a, b) =>
  a.createdAt.getTime === b.createdAt.getTime
@@ -225,8 +255,14 @@ export const createWorkspaceSession = (options: {
 
  const PAGE_SIZE = 50
 
+ /** The view, as the wire arguments — one place, so every fetch path agrees. */
+ const viewArgs = => ({
+ view: state.threadView,
+...(state.focusRunId === null ? {}: { focusRunId: state.focusRunId }),
+ })
+
  const loadMessages = async (threadId: string) => {
- const page = await options.api.message.list({ threadId, limit: PAGE_SIZE })
+ const page = await options.api.message.list({ threadId, limit: PAGE_SIZE,...viewArgs })
  historyCursor = page.nextCursor
  // Server returns newest-first; the view renders oldest-first.
  patch({ messages: [...page.messages].reverse, hasMoreHistory: page.nextCursor !== null })
@@ -359,6 +395,26 @@ export const createWorkspaceSession = (options: {
  }
  },
 
+ async setThreadView(view, focusRunId) {
+ patch({
+ threadView: view,
+ focusRunId: view === 'run' ? (focusRunId ?? null): null,
+ messages: [],
+ hasMoreHistory: false,
+ })
+ historyCursor = null
+ const thread = state.activeThread
+ if (!thread) return
+ patch({ loading: true, error: null })
+ try {
+ await loadMessages(thread.id)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ } finally {
+ patch({ loading: false })
+ }
+ },
+
  async openThread(threadId) {
  const thread = state.channelThreads.find((candidate) => candidate.id === threadId)
  if (!thread || thread.id === state.activeThread?.id) return
@@ -438,6 +494,7 @@ export const createWorkspaceSession = (options: {
  threadId: thread.id,
  limit: PAGE_SIZE,
  cursor,
+...viewArgs,
  })
  historyCursor = page.nextCursor
  // Prepended rather than merged: this page is strictly older than everything

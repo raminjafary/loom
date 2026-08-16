@@ -646,12 +646,25 @@ const revealSwarm = ref(0)
  * The thread comes from the fetched run rather than from the board card, which does
  * not carry one — so this awaits the watch instead of firing both at once.
  */
+/**
+ * Clicking a node opens that run's own stream.
+ *
+ * **The graph is the index.** Workers share their planner's thread on purpose — the split
+ * is at planners, where the volume branches — so "its thread" cannot mean a thread of its
+ * own without turning a swarm of eight into eight conversations and a navigation problem.
+ * What the reader wants is this agent's stream, and the author column already answers
+ * that exactly, so the node sets a filter on the thread it is already in.
+ *
+ * The view is set *after* the thread opens: `openThread` reloads messages, and setting the
+ * filter first would fetch the focused stream and then throw it away.
+ */
 const openRunThread = async (agentRunId: string) => {
  await agent.watchRun(agentRunId)
  const threadId = agent.snapshot.activeRun?.threadId
  if (threadId && threadId !== snapshot.value.activeThread?.id) {
  await store.openThread(threadId)
  }
+ await store.setThreadView('run', agentRunId)
 }
 
 /**
@@ -973,6 +986,48 @@ onBeforeUnmount( => {
  <p v-if="agentSnapshot.error" class="error" role="alert">{{ agentSnapshot.error }}</p>
 
  <template v-if="view === 'workspace'">
+
+ <!--
+ What the thread shows.
+
+ Above the messages rather than in a menu, because it changes what a reader is
+ looking at and a filter you cannot see is a filter you forget is on. The run
+ view appears only while one is focused: it is reached by clicking a node on the
+ swarm graph, since the canvas is the index and a list of eight threads is not.
+ -->
+ <div class="thread-views" role="tablist" aria-label="What this thread shows">
+ <button
+ type="button"
+ role="tab"
+:aria-selected="snapshot.threadView === 'headline'"
+:class="{ on: snapshot.threadView === 'headline' }"
+ title="Decisions and structure: what the platform and people said"
+ @click="store.setThreadView('headline')"
+ >
+ Decisions
+ </button>
+ <button
+ type="button"
+ role="tab"
+:aria-selected="snapshot.threadView === 'all'"
+:class="{ on: snapshot.threadView === 'all' }"
+ title="Every message, including each agent's prose and tool calls"
+ @click="store.setThreadView('all')"
+ >
+ Everything
+ </button>
+ <button
+ v-if="snapshot.threadView === 'run' && snapshot.focusRunId"
+ type="button"
+ role="tab"
+:aria-selected="true"
+ class="on"
+ title="One agent's own stream. Click another node to follow it instead."
+ @click="store.setThreadView('all')"
+ >
+ {{ personaNameByRunId[snapshot.focusRunId] ?? 'this agent' }} only ✕
+ </button>
+ </div>
 
  <MessageList
 :messages="snapshot.messages"
@@ -1329,6 +1384,29 @@ onBeforeUnmount( => {
 </template>
 
 <style scoped>
+.thread-views {
+ display: flex;
+ gap: 0.25rem;
+ padding: 0 0.75rem 0.4rem;
+}
+
+.thread-views button {
+ background: none;
+ border: 1px solid transparent;
+ border-radius: 999px;
+ padding: 0.1rem 0.6rem;
+ font-size: 0.75rem;
+ color: inherit;
+ opacity: 0.6;
+ cursor: pointer;
+}
+
+.thread-views button.on {
+ opacity: 1;
+ border-color: var(--line, #2a2a2a);
+ background: var(--panel, #16181d);
+}
+
 .app {
  display: flex;
  height: 100vh;

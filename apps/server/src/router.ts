@@ -328,6 +328,8 @@ export const router = os.router({
  threadId: asThreadId(input.threadId),
 ...(input.limit === undefined ? {}: { limit: input.limit }),
  cursor: input.cursor,
+...(input.view === undefined ? {}: { view: input.view }),
+...(input.focusRunId === undefined ? {}: { focusRunId: input.focusRunId }),
  }),
 ),
 ),

@@ -6,7 +6,7 @@ import type {
  ThreadRepositoryPort,
 } from '@loom/application'
 import { NotFoundError, asChannelId } from '@loom/domain'
-import { and, asc, count, desc, eq, gt, lt, max, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gt, inArray, lt, max, or, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
  decodeCursor,
@@ -211,14 +211,31 @@ export const messageRepository = (db: Database): MessageRepositoryPort => ({
  return toMessage(row)
  },
 
- async listByThread({ workspaceId, threadId, limit, cursor }): Promise<MessagePage> {
- const where = cursor
- ? and(
+ async listByThread({ workspaceId, threadId, limit, cursor, view }): Promise<MessagePage> {
+ /**
+ * The view, as SQL. An agent-authored row is
+ * kept only when it is the focused run's; a system or human row is kept whatever the
+ * focus, because those are the lines that say what happened rather than who said it.
+ */
+ const viewClause =
+ view === undefined || view.authorKinds === null
+ ? undefined
+: view.agentRunId === null
+ ? inArray(message.actorKind, [...view.authorKinds])
+: or(
+ inArray(message.actorKind, ['system', 'user']),
+ and(
+ eq(message.actorKind, 'agent_run'),
+ eq(message.actorAgentRunId, view.agentRunId),
+),
+)
+
+ const where = and(
  eq(message.workspaceId, workspaceId),
  eq(message.threadId, threadId),
- lt(message.seq, decodeCursor(cursor)),
+...(cursor ? [lt(message.seq, decodeCursor(cursor))]: []),
+...(viewClause ? [viewClause]: []),
 )
-: and(eq(message.workspaceId, workspaceId), eq(message.threadId, threadId))
 
  // Over-fetch by one to learn whether another page exists without a count query.
  const rows = await db

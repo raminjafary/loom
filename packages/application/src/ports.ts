@@ -1,4 +1,5 @@
 import type {
+ ThreadViewFilter,
  Actor,
  AgentRunId,
  AuditEvent,
@@ -131,6 +132,15 @@ export interface MessageRepositoryPort {
  threadId: ThreadId
  limit: number
  cursor?: string | undefined
+ /**
+ * What this reader is looking at.
+ *
+ * Applied in the query rather than to a fetched page, and that is not an
+ * optimization: filtering fifty rows down to three in memory would render three and
+ * report that there was nothing more to load. Absent means everything, so no existing
+ * caller changes behaviour.
+ */
+ view?: ThreadViewFilter | undefined
  }): Promise<MessagePage>
  /** Backfill for a reconnecting client: everything after a known message. */
  listSince(input: {

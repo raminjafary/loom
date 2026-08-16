@@ -91,11 +91,45 @@ export interface AtlasLeads {
  */
 const MIN_TOKEN_LENGTH = 4
 
+/**
+ * A token, reduced to the part that inflection does not change.
+ *
+ * **Found by a live run, and it made the read side useless.** A driver mastered two
+ * repositories that both describe cancellation refunds, then asked
+ * `look_across_projects` for "how cancellations are refunded" — and got nothing at all.
+ * The maps held "Cancellation and Refund Policy" and "24-hour forfeit rule"; the topic
+ * held `cancellations` and `refunded`. Exact token equality made every candidate score
+ * zero, so the tool answered "no other project has recorded anything about that" about
+ * two projects that had recorded exactly that. Every test passed, because the fixtures
+ * happened to use the same word forms as their topics.
+ *
+ * The fix stays **lexical**, which is the decision and still the right one: a model
+ * call to find leads would spend tokens on every search including the empty ones, and a
+ * second model reading a first model's summaries produces confident agreement. Suffix
+ * stripping makes no semantic claim — it still only says "this is where that word
+ * appears" — it just stops the claim being defeated by a plural.
+ *
+ * Deliberately not a real stemmer. Porter would pull in a dependency and a great deal of
+ * behaviour to answer a question this size, and its aggressive stems ("polici", "cancel")
+ * would start matching words a reader would not accept as the same. Four suffixes, only
+ * when what is left is still a word worth matching on.
+ */
+const stem = (token: string): string => {
+ for (const suffix of ['ing', 'ed', 'es', 's']) {
+ if (token.endsWith(suffix)) {
+ const root = token.slice(0, -suffix.length)
+ if (root.length >= MIN_TOKEN_LENGTH) return root
+ }
+ }
+ return token
+}
+
 const tokens = (text: string): string[] =>
  text
 .toLowerCase
 .split(/[^a-z0-9]+/)
 .filter((token) => token.length >= MIN_TOKEN_LENGTH)
+.map(stem)
 
 /**
  * How well one concept answers the topic.

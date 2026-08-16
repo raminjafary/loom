@@ -1,3 +1,4 @@
+import type { ThreadView } from '@loom/client-core'
 import {
  createApi,
  createWorkspaceSession,
@@ -39,6 +40,9 @@ export const useWorkspaceStore = defineStore('workspace', => {
  start,
  selectChannel: (channelId: string) => session.selectChannel(channelId),
  openThread: (threadId: string) => session.openThread(threadId),
+ /** What the thread shows. */
+ setThreadView: (view: ThreadView, focusRunId?: string) =>
+ session.setThreadView(view, focusRunId),
  createChannel: (name: string) => session.createChannel(name),
  deleteChannel: (input: { channelId: string; acknowledge?: boolean }) =>
  session.deleteChannel(input),

@@ -12,6 +12,8 @@ import {
  type Thread,
  type ThreadId,
  type WorkspaceId,
+ threadViewFilter,
+ type ThreadView,
 } from '@loom/domain'
 import { ValidationError } from '@loom/domain'
 import type {
@@ -186,6 +188,9 @@ export const listMessages = async (
  threadId: ThreadId
  limit?: number
  cursor?: string | undefined
+ /** The product shape — see `thread-views.ts`. Absent shows everything, as it always did. */
+ view?: ThreadView | undefined
+ focusRunId?: string | undefined
  },
 ): Promise<MessagePage> => {
  const thread = await deps.threads.findById(input.workspaceId, input.threadId)
@@ -196,6 +201,9 @@ export const listMessages = async (
  threadId: input.threadId,
  limit: clampLimit(input.limit),
  cursor: input.cursor,
+...(input.view === undefined
+ ? {}
+: { view: threadViewFilter(input.view, input.focusRunId) }),
  })
 }
 

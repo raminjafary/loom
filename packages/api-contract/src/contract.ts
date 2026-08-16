@@ -149,6 +149,22 @@ export const contract = {
  threadId: z.string,
  limit: z.number.int.min(1).max(100).optional,
  cursor: z.string.optional,
+ /**
+ * What this reader is looking at.
+ *
+ * `headline` is decisions and structure — the platform's own voice and the
+ * humans'. `run` is one agent's stream, reached by clicking its node on the
+ * swarm graph. `all` is what a thread has always shown, and stays available
+ * because a merged transcript is the right thing to read when something has
+ * already gone wrong.
+ *
+ * Applied in the query, so a page of fifty filtered to three does not report
+ * that there is nothing more to load. Absent means `all`, so no existing
+ * caller changes behaviour.
+ */
+ view: z.enum(['headline', 'all', 'run']).optional,
+ /** Required by `view: 'run'` and ignored otherwise; an absent focus shows nothing. */
+ focusRunId: z.string.optional,
  }),
 )
 .output(MessagePageSchema),
