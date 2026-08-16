@@ -70,6 +70,7 @@ import {
  proxyUrlWithToken,
  runAgentInSandbox,
  sandboxConfigFromEnv,
+ killOrphanedContainers,
  sandboxEnabled,
  staleSandboxImageAcknowledged,
  unsandboxedAcknowledged,
@@ -84,6 +85,34 @@ export interface RunnerClientOptions {
 
 export const connectRunner = (options: RunnerClientOptions): { close: => void } => {
  const log = options.log ?? ((message: string) => process.stdout.write(`${message}\n`))
+
+ /**
+ * Containers this Runner left behind.
+ *
+ * **Here rather than in the connect handler, and that placement is the whole of it.**
+ * The handler below runs on every *re*connect too, and a Runner reconnecting after a
+ * dropped socket has live containers doing real work — sweeping there would kill a
+ * healthy run every time the network hiccuped. At process start there is no container
+ * this process owns, so anything wearing one of its run names is an orphan by
+ * construction.
+ *
+ * Scoped to this Runner's own state directory, so a second Runner on the same host —
+ * which is every live driver in `tools/` — keeps its containers.
+ */
+ void listRunStates
+.then(async (states) => {
+ if (states.length === 0) return
+ const killed = await killOrphanedContainers(
+ states.map((state) => state.runId),
+ sandboxConfigFromEnv,
+ log,
+)
+ if (killed > 0) log(`swept ${killed} orphaned container(s) from a previous Runner`)
+ })
+.catch( => {
+ // A state directory this Runner cannot read means nothing to sweep — and it must
+ // not stop it pairing, for the same reason the resumable-runs read below does not.
+ })
  const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>
  /**
  * Note writes and reads awaiting the server's answer, keyed by

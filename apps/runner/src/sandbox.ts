@@ -311,6 +311,44 @@ const HOME_DIR = '/home/agent'
  * Every flag the sandbox spec asks for, in one place so the spec is auditable against the code
  * rather than scattered through a spawn call.
  */
+/**
+ * Kills containers this Runner left behind.
+ *
+ * A container is started with `--rm` and killed when its run ends, so the only way one
+ * outlives its Runner is the Runner dying first — a crash, a `kill -9`, a laptop closing.
+ * What is left is not idle: it holds a lease on the egress proxy, so it can keep spending
+ * against a budget cap whose enforcer is no longer watching, and it holds the run's clone.
+ * Nothing else reaps it, because the server's dead-run reaper marks a *row* failed and has
+ * no reach onto this machine.
+ *
+ * **Scoped to the run ids this Runner knows about**, which is the whole of the safety
+ * argument. A blanket sweep of `loom-run-*` would kill containers belonging to a second
+ * Runner on the same host — an ordinary arrangement here, since every live driver in
+ * `tools/` spawns its own. A run id in this Runner's state directory is a run this Runner
+ * started, so a container wearing that name is this Runner's orphan and nobody else's.
+ *
+ * Best-effort by construction: `kill` on a container that is already gone is the expected
+ * case, not an error, and a Runner that could not clean up must still start — refusing to
+ * pair because of a stale container would turn a leak into an outage.
+ */
+export const killOrphanedContainers = async (
+ runIds: string[],
+ config: SandboxConfig = sandboxConfigFromEnv,
+ log: (message: string) => void = => {},
+): Promise<number> => {
+ let killed = 0
+ for (const runId of runIds) {
+ try {
+ await execFileAsync(config.runtime, ['kill', containerName(runId)])
+ killed += 1
+ log(`killed orphaned container for run ${runId}`)
+ } catch {
+ // Already gone, never started, or no container runtime at all — all expected.
+ }
+ }
+ return killed
+}
+
 export const buildSandboxArgs = (
  config: SandboxConfig,
  options: {

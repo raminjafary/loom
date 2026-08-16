@@ -6,6 +6,7 @@ import { closureDigest, walkClosure } from './sandbox-closure.js'
 import { depCacheEnv, depCacheFromEnv } from './dep-cache.js'
 import {
  buildSandboxArgs,
+ killOrphanedContainers,
  sandboxConfigFromEnv,
  sandboxEnabled,
  staleSandboxImageAcknowledged,
@@ -242,5 +243,44 @@ describe("the agent host's source closure", => {
  // depend on contents and not on where the files live.
  expect(closureDigest(entry)).toMatch(/^[0-9a-f]{64}$/)
  expect(closureDigest(entry)).toBe(closureDigest(entry))
+ })
+})
+
+/**
+ * Orphaned containers.
+ *
+ * The test that matters is the negative one: this must kill only the run ids it was
+ * given. A blanket sweep would be simpler and would kill a second Runner's live
+ * containers, which on this machine is every live driver in `tools/`.
+ */
+describe('orphaned-container cleanup', => {
+ const configWith = (runtime: string) => ({...sandboxConfigFromEnv, runtime })
+
+ it('names one container per run id it was given, and nothing else', async => {
+ const calls: string[][] = []
+ // `true` exits 0 whatever it is handed, so every "kill" resolves — what is being
+ // asserted is which runs were swept, not what a container runtime did with them.
+ const fakeRuntime = '/usr/bin/true'
+ const killed = await killOrphanedContainers(['run-a', 'run-b'], configWith(fakeRuntime), (m) =>
+ calls.push([m]),
+)
+ expect(killed).toBe(2)
+ expect(calls.flat.join(' ')).toContain('run-a')
+ expect(calls.flat.join(' ')).toContain('run-b')
+ })
+
+ it('is silent and harmless when there is nothing to sweep', async => {
+ expect(await killOrphanedContainers([], configWith('/usr/bin/true'))).toBe(0)
+ })
+
+ /**
+ * A container that is already gone is the expected case rather than an error: the
+ * Runner must start either way, because refusing to pair over a stale container turns
+ * a leak into an outage.
+ */
+ it('counts nothing and throws nothing when the runtime fails', async => {
+ expect(
+ await killOrphanedContainers(['run-a'], configWith('definitely-not-a-real-binary')),
+).toBe(0)
  })
 })
