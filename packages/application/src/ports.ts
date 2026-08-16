@@ -64,6 +64,36 @@ export interface ChannelRepositoryPort {
  * rather than a surprise.
  */
  delete(workspaceId: WorkspaceId, id: ChannelId): Promise<void>
+ /**
+ * How much this user has not read, per channel.
+ *
+ * One query for the whole workspace rather than one per channel: a sidebar renders
+ * every channel at once, so a per-channel read is a query per row on every poll — the
+ * shape live swarm observability refuses for the swarm board and refuses here for the same reason.
+ *
+ * A user's own messages never count. Reading what you just wrote is not a thing a
+ * person has to be told to do, and a badge that appears when you press send is a badge
+ * people learn to ignore.
+ */
+ unreadByChannel(
+ workspaceId: WorkspaceId,
+ userId: UserId,
+): Promise<{ channelId: ChannelId; unread: number }[]>
+ /**
+ * Records that this user has read up to `seq` in this channel.
+ *
+ * Never moves a marker backwards: two tabs, or a click racing a poll, would otherwise
+ * un-read messages somebody has already seen. The greatest-wins rule lives in the
+ * adapter's own UPDATE so it holds under concurrency rather than under a read-then-write.
+ */
+ markChannelRead(
+ workspaceId: WorkspaceId,
+ channelId: ChannelId,
+ userId: UserId,
+ seq: bigint,
+): Promise<void>
+ /** The newest message seq in a channel, or 0 when it has none. */
+ latestSeq(workspaceId: WorkspaceId, channelId: ChannelId): Promise<bigint>
  countByWorkspace(workspaceId: WorkspaceId): Promise<number>
 }
 

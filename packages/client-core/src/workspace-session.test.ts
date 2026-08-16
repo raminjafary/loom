@@ -71,6 +71,11 @@ const stubApi = (overrides: {
  createdAt: new Date(0),
  },
  ],
+ // Phase 0 — unread state. Loaded beside the channel list on start and
+ // cleared when a channel is opened; both are fire-and-forget from the session's
+ // point of view, so the fakes only have to exist.
+ unread: async => [],
+ markRead: async => ({ lastReadSeq: '0' }),
  },
  message: {
  list: overrides.list,

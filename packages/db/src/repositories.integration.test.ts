@@ -151,6 +151,111 @@ describe('channel repository via use-cases', => {
  })
 })
 
+/**
+ * Unread state, against real SQL.
+ *
+ * These are here rather than over HTTP because all three rules are properties of one
+ * statement, and two of them are the kind a hand-written join gets wrong quietly: an
+ * agent's message has a null `actor_user_id`, so the obvious `<>` comparison drops every
+ * one of them, and a channel nobody has opened has no marker row at all.
+ */
+describe('unread state', => {
+ const seed = async (name: string) => {
+ const { channel: created, rootThread } = await createChannel(deps, {
+ workspaceId: WS,
+ actor: human,
+ name,
+ })
+ return { channelId: created.id, threadId: rootThread.id }
+ }
+
+ const unreadFor = async (userId: string) =>
+ Object.fromEntries(
+ (await deps.channels.unreadByChannel(WS, asUserId(userId))).map((row) => [
+ row.channelId,
+ row.unread,
+ ]),
+)
+
+ it('counts what somebody else said and never what you said yourself', async => {
+ const { channelId, threadId } = await seed('general')
+ await postMessage(deps, { workspaceId: WS, actor: human, threadId, text: 'mine' })
+ await postMessage(deps, {
+ workspaceId: WS,
+ actor: userActor(asUserId('someone-else')),
+ threadId,
+ text: 'theirs',
+ })
+
+ expect(await unreadFor('user_integration')).toEqual({ [channelId]: 1 })
+ expect(await unreadFor('someone-else')).toEqual({ [channelId]: 1 })
+ })
+
+ /**
+ * The one a `<>` comparison silently loses. An agent's `actor_user_id` is null, and
+ * `null <> 'me'` is null rather than true — so the messages a human most needs to
+ * notice would be the only ones never counted.
+ */
+ it('counts an agent"s messages, whose author column is null', async => {
+ const { channelId, threadId } = await seed('agents')
+ await postMessage(deps, { workspaceId: WS, actor: agent, threadId, text: 'from a run' })
+ expect(await unreadFor('user_integration')).toEqual({ [channelId]: 1 })
+ })
+
+ it('clears on read, and stays clear until something new arrives', async => {
+ const { channelId, threadId } = await seed('reading')
+ await postMessage(deps, {
+ workspaceId: WS,
+ actor: userActor(asUserId('someone-else')),
+ threadId,
+ text: 'first',
+ })
+
+ const seq = await deps.channels.latestSeq(WS, channelId)
+ await deps.channels.markChannelRead(WS, channelId, asUserId('user_integration'), seq)
+ expect(await unreadFor('user_integration')).toEqual({})
+
+ await postMessage(deps, {
+ workspaceId: WS,
+ actor: userActor(asUserId('someone-else')),
+ threadId,
+ text: 'second',
+ })
+ expect(await unreadFor('user_integration')).toEqual({ [channelId]: 1 })
+ })
+
+ /**
+ * Two tabs, or a click racing a poll. The greatest-wins rule is inside the UPDATE
+ * rather than around it, so this holds without the caller ordering anything.
+ */
+ it('never moves a marker backwards', async => {
+ const { channelId, threadId } = await seed('races')
+ await postMessage(deps, {
+ workspaceId: WS,
+ actor: userActor(asUserId('someone-else')),
+ threadId,
+ text: 'first',
+ })
+ const seq = await deps.channels.latestSeq(WS, channelId)
+
+ await deps.channels.markChannelRead(WS, channelId, asUserId('user_integration'), seq)
+ await deps.channels.markChannelRead(WS, channelId, asUserId('user_integration'), 1n)
+
+ expect(await unreadFor('user_integration')).toEqual({})
+ })
+
+ it('keeps one workspace"s unread out of another"s', async => {
+ const { threadId } = await seed('shared-name')
+ await postMessage(deps, {
+ workspaceId: WS,
+ actor: userActor(asUserId('someone-else')),
+ threadId,
+ text: 'here',
+ })
+ expect(await deps.channels.unreadByChannel(OTHER_WS, asUserId('user_integration'))).toEqual([])
+ })
+})
+
 describe('message repository via use-cases', => {
  it('round-trips an agent actor through the actor columns', async => {
  const { rootThread } = await createChannel(deps, {

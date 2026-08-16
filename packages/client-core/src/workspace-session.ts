@@ -32,6 +32,14 @@ export interface WorkspaceSnapshot {
  */
  readonly limits: { maxDelegationDepth: number; maxConcurrentRunsPerWorkspace: number } | null
  readonly channels: Channel[]
+ /**
+ * Unread count per channel id.
+ *
+ * Absent means nothing unread, which is why this is a record rather than a field on
+ * `Channel`: a channel list arrives from one call and its counts from another, and
+ * merging them would make a stale count look like a fact about the channel.
+ */
+ readonly unread: Record<string, number>
  readonly activeChannelId: string | null
  readonly activeThread: Thread | null
  /**
@@ -116,6 +124,7 @@ export const createWorkspaceSession = (options: {
  currentActor: null,
  limits: null,
  channels: [],
+ unread: {},
  activeChannelId: null,
  activeThread: null,
  channelThreads: [],
@@ -136,6 +145,23 @@ export const createWorkspaceSession = (options: {
  const patch = (next: Partial<WorkspaceSnapshot>) => {
  state = {...state,...next }
  for (const listener of listeners) listener(state)
+ }
+
+ /**
+ * Raises the unread badge for a message that landed somewhere else.
+ *
+ * Which channel a thread belongs to is not on the frame — a message carries a thread —
+ * so this resolves it from the threads already loaded and gives up quietly when it
+ * cannot. Giving up is safe: `channel.unread` re-reads the truth on the next refresh,
+ * and the alternative — one lookup per delivered message — is a request per message on
+ * a socket that carries a whole run's transcript.
+ */
+ const bumpUnreadFor = async (message: Message): Promise<void> => {
+ if (message.threadId === state.activeThread?.id) return
+ const thread = state.channelThreads.find((entry) => entry.id === message.threadId)
+ const channelId = thread?.channelId
+ if (!channelId || channelId === state.activeChannelId) return
+ patch({ unread: {...state.unread, [channelId]: (state.unread[channelId] ?? 0) + 1 } })
  }
 
  /**
@@ -166,6 +192,15 @@ export const createWorkspaceSession = (options: {
  switch (event.type) {
  case 'message.created':
  mergeMessage(event.message)
+ /**
+ * A message in a channel the human is not looking at raises its count locally,
+ * rather than waiting for the next refresh — the badge is the one thing in the
+ * sidebar whose whole value is arriving at the moment the message does.
+ *
+ * The active channel is deliberately skipped: it is being read, and marking it
+ * unread while somebody watches the text appear is the badge nobody trusts.
+ */
+ void bumpUnreadFor(event.message)
  break
  case 'channel.created':
  if (!state.channels.some((c) => c.id === event.channel.id)) {
@@ -257,8 +292,16 @@ export const createWorkspaceSession = (options: {
  try {
  // Identity comes from the session, never from client config.
  const me = await options.api.session.me
- const channels = await options.api.channel.list
- patch({ currentActor: me.actor, limits: me.limits, channels })
+ const [channels, unread] = await Promise.all([
+ options.api.channel.list,
+ options.api.channel.unread,
+ ])
+ patch({
+ currentActor: me.actor,
+ limits: me.limits,
+ channels,
+ unread: Object.fromEntries(unread.map((row) => [row.channelId, row.unread])),
+ })
 
  realtime = connectRealtime({
  wsUrl: options.wsUrl,
@@ -283,6 +326,17 @@ export const createWorkspaceSession = (options: {
 
  async selectChannel(channelId) {
  historyCursor = null
+ /**
+ * Cleared locally the moment the channel opens, and told to the server in the
+ * background. Waiting for the round trip would leave a badge on the channel the
+ * human is already reading, and the marker is idempotent — a failed call means the
+ * count comes back on the next refresh, which is the honest outcome rather than a
+ * silent lie.
+ */
+ patch({ unread: {...state.unread, [channelId]: 0 } })
+ void options.api.channel
+.markRead({ channelId })
+.catch( => {})
  patch({
  loading: true,
  error: null,

@@ -34,6 +34,8 @@ export class FakeStore {
  threads: Thread[] = []
  messages: Message[] = []
  audits: AuditEvent[] = []
+ /** `${channelId}:${userId}` → the seq that user has read up to. */
+ reads = new Map<string, bigint>
  published: DomainEvent[] = []
  private seq = 0
 
@@ -49,6 +51,49 @@ export class FakeStore {
 }
 
 export const fakeChannels = (s: FakeStore): ChannelRepositoryPort => ({
+ /**
+ * Unread, in memory, with the same three rules the SQL has: a user's own messages do
+ * not count, an unmarked channel counts from zero, and an agent's messages do count —
+ * the last of which is the one the adapter needed `is distinct from` for.
+ */
+ async unreadByChannel(workspaceId, userId) {
+ const counts = new Map<string, number>
+ // Insertion order stands in for `message.seq`: the domain entity has no seq — it is
+ // a database ordering key, not a fact about a message — and this array is append-only
+ // in exactly the order the sequence would have assigned.
+ for (const [index, message] of s.messages.entries) {
+ const seq = BigInt(index + 1)
+ if (message.workspaceId !== workspaceId) continue
+ if (message.author.kind === 'user' && message.author.userId === userId) continue
+ const thread = s.threads.find((entry) => entry.id === message.threadId)
+ if (!thread) continue
+ const marker = s.reads.get(`${thread.channelId}:${userId}`) ?? 0n
+ if (seq <= marker) continue
+ counts.set(thread.channelId, (counts.get(thread.channelId) ?? 0) + 1)
+ }
+ return [...counts].map(([channelId, unread]) => ({ channelId: asChannelId(channelId), unread }))
+ },
+
+ async markChannelRead(_workspaceId, channelId, userId, seq) {
+ const key = `${channelId}:${userId}`
+ const current = s.reads.get(key) ?? 0n
+ // Greatest-wins, as the adapter's UPDATE does — a fake that let a marker move
+ // backwards would make the concurrency rule untested in both places.
+ s.reads.set(key, seq > current ? seq: current)
+ },
+
+ async latestSeq(workspaceId, channelId) {
+ let highest = 0n
+ for (const [index, message] of s.messages.entries) {
+ if (message.workspaceId !== workspaceId) continue
+ const thread = s.threads.find((entry) => entry.id === message.threadId)
+ if (thread?.channelId !== channelId) continue
+ const seq = BigInt(index + 1)
+ if (seq > highest) highest = seq
+ }
+ return highest
+ },
+
  async create(input) {
  const channel: Channel = {
  id: asChannelId(s.nextId('ch')),

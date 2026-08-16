@@ -79,6 +79,8 @@ import {
  pushAgentRun,
  registerNotificationTarget,
  resetPersonaToBuiltin,
+ listUnread,
+ markChannelRead,
  listPersonaRevisions,
  revertPersonaPrompt,
  resumeAllRuns,
@@ -292,6 +294,27 @@ export const router = os.router({
  })
  return { ok: true as const }
  }),
+),
+
+ unread: os.channel.unread.handler(({ context }) =>
+ guard(async =>
+ (
+ await listUnread(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ })
+).map((row) => ({ channelId: row.channelId as string, unread: row.unread })),
+),
+),
+
+ markRead: os.channel.markRead.handler(({ context, input }) =>
+ guard(async =>
+ markChannelRead(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ channelId: asChannelId(input.channelId),
+ }),
+),
 ),
  },
 

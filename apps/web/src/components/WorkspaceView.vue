@@ -838,6 +838,7 @@ onBeforeUnmount( => {
  <ChannelList
 :channels="snapshot.channels"
 :active-channel-id="snapshot.activeChannelId"
+:unread="snapshot.unread"
  @select="store.selectChannel"
  @create="store.createChannel"
  @delete="(input, done) => void store.deleteChannel(input).then(done)"

@@ -118,6 +118,27 @@ export const contract = {
  }),
 )
 .output(z.object({ ok: z.literal(true) })),
+
+ /**
+ * How much this human has not read, per channel.
+ *
+ * The whole workspace in one call, because a sidebar renders every channel at once
+ * and a per-channel read would be a query per row on every poll. Channels with
+ * nothing unread are simply absent.
+ */
+ unread: oc.output(z.array(z.object({ channelId: z.string, unread: z.number.int }))),
+
+ /**
+ * Marks a channel read up to its newest message.
+ *
+ * No seq on the way in: the client's high-water mark can only be wrong in one
+ * direction — marking read what arrived after its last poll — and the server is the
+ * side that knows what exists. `lastReadSeq` comes back as a string because it is a
+ * bigint and JSON has no such thing.
+ */
+ markRead: oc
+.input(z.object({ channelId: z.string }))
+.output(z.object({ lastReadSeq: z.string })),
  },
 
  message: {

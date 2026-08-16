@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm'
 import {
+ bigint,
  bigserial,
  boolean,
  doublePrecision,
@@ -1511,4 +1512,43 @@ export const personaRevision = pgTable(
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  },
  (t) => [index('persona_revision_persona_idx').on(t.workspaceId, t.personaId, t.createdAt)],
+)
+
+/**
+ * How far a human has read in a channel.
+ *
+ * **Keyed on `message.seq`, not on a timestamp and not on a count.** `seq` is a
+ * workspace-global bigserial the database assigns, so it is monotonic by construction: a
+ * marker of "I have read up to 4,812" stays true no matter what a clock does, and two
+ * messages written in the same millisecond still have an order. A timestamp marker would
+ * make a message posted during a clock skew unread forever, and a stored *count* would be
+ * wrong the moment anything was deleted.
+ *
+ * Per channel rather than per thread, which is a real scope decision: a channel's reply
+ * threads share the workspace's one `seq` sequence, so a single marker per channel counts
+ * unread across all of them. Per-thread markers would let a human read one thread and
+ * still see the channel bold, which is Slack's behaviour and needs a per-thread UI to be
+ * worth the extra rows.
+ */
+export const channelRead = pgTable(
+ 'channel_read',
+ {
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ channelId: uuid('channel_id')
+.notNull
+.references( => channel.id, { onDelete: 'cascade' }),
+ /**
+ * Plain text with no key to `user`, the same shape `audit_event.actor_user_id` uses.
+ * A departed user's marker is meaningless rather than harmful, and the alternative —
+ * a `set null` on a primary-key column — is not expressible.
+ */
+ userId: text('user_id').notNull,
+ // `sql` rather than a literal `0n`: drizzle-kit serializes the snapshot as JSON and
+ // cannot write a BigInt, so a bigint default has to be given as SQL.
+ lastReadSeq: bigint('last_read_seq', { mode: 'bigint' }).notNull.default(sql`0`),
+ updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [uniqueIndex('channel_read_key_idx').on(t.workspaceId, t.channelId, t.userId)],
 )
