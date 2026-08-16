@@ -1106,12 +1106,17 @@ describe('runner-gateway: warm handoff', => {
  /**
  * A longer wait than the 5s default, and a longer poll below it.
  *
- * This test failed twice under a full parallel suite while a live driver was running
- * beside it, and never once on its own or on six clean runs after — so the cause was
- * never reproduced and is recorded as unproven. What is certain is that it is the only
- * test here racing a heartbeat against two fixed budgets, and that lengthening them
- * cannot weaken what it asserts: the claim is that the nudge is delivered **once**, and
- * waiting longer for a second one makes that stronger rather than weaker.
+ * **The intermittent failure recorded across three handoffs was this budget being
+ * inert.** It was raised to 20s to survive a loaded suite, and the test around it kept
+ * vitest's default 5s timeout — no `testTimeout` is set in this package — so the outer
+ * clock always fired first and the failure read `Test timed out in 5000ms` rather than
+ * anything about a frame. Every run of it that "passed on its own" passed because the
+ * delivery took under five seconds, which is the ordinary case and not the one being
+ * guarded. The `it` below now carries a timeout larger than everything it waits on.
+ *
+ * The general lesson, which is why this is written here rather than in a commit: a
+ * timeout inside a test is bounded by the test's own, and raising one without the
+ * other buys nothing while looking exactly like a fix.
  */
  const delivered = nextFrame(socket, (v) => v.type === 'deliver_context', 20_000)
  socket.send(
@@ -1157,7 +1162,13 @@ describe('runner-gateway: warm handoff', => {
  // Still working: the nudge retired nothing.
  expect((await client.agentRun.get({ agentRunId: run.id })).status).toBe('running')
  socket.close
- })
+ /**
+ * Larger than the sum of what this test waits on — a 20s frame wait, a 10s poll and a
+ * 400ms settle — so a slow delivery under a loaded suite is slow rather than failed.
+ * It bounds nothing the test asserts: every assertion is about what arrived, and the
+ * only thing a longer clock permits is arriving late.
+ */
+ }, 45_000)
 
  /**
  * Mastery: "the threshold is a setting with a sane default." The plumbing was shaped for it

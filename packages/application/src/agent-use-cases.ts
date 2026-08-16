@@ -4276,7 +4276,29 @@ export const recordRunHeartbeat = async (
  },
  limits: handoffLimits(control),
  },
- run,
+ /**
+ * **The window this frame measured, not the one the row happens to hold**, and that
+ * override is a bug fix rather than a shortcut.
+ *
+ * The gateway handles frames concurrently — each `message` starts its own async
+ * task — so two heartbeats from one run can interleave: the 91% frame's write can
+ * land before the 10% frame's, and the re-read above then returns 10%. The nudge
+ * decides against a window that has already been superseded, `markHandoffSuggested`
+ * is never claimed, and nothing is ever delivered. Serializing the gateway would fix
+ * it by making every frame wait on every other one, which is the wrong trade for a
+ * transport that carries the transcript.
+ *
+ * Reading the sample off the frame removes the race instead of narrowing it: this
+ * *is* the measurement being acted on, and the row is only needed for the things a
+ * heartbeat does not change — status, runner and identity. Found by chasing an
+ * intermittent test that three handoffs had recorded as "cause unproven"; the
+ * failure it produces in production is a run whose window filled and was never told.
+ */
+ {
+...run,
+ contextTokens: input.context.tokens,
+ contextMaxTokens: input.context.maxTokens,
+ },
 )
  } catch {
  // See above — advice, and never a reason to lose a heartbeat.
