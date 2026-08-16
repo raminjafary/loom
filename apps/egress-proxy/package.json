@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch --env-file=../../.env src/main.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
