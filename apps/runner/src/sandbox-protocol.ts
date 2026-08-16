@@ -261,6 +261,13 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  body: z.string.max(40_000),
  rationale: z.string.max(600),
  }),
+ /** The agent changing its own tool list. */
+ z.object({
+ t: z.literal('tools_edit'),
+ requestId: z.string,
+ tools: z.array(z.string.max(80)).max(60),
+ rationale: z.string.max(600),
+ }),
  /** The agent asking a human a question, answered by `question_result`. */
  z.object({ t: z.literal('question_request'), requestId: z.string, question: z.string }),
  /**

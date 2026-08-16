@@ -122,6 +122,11 @@ export interface SandboxOptions {
  body: string
  rationale: string
  }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
+ /** The agent changing its own tool list, answered on the host. */
+ readonly onToolsEdit?: (edit: {
+ tools: string[]
+ rationale: string
+ }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
  /**
  * The agent asking a human a question and blocking on the answer.
  * Resolves with `answer: null` when nobody answered — the run must continue either
@@ -756,6 +761,20 @@ export const runAgentInSandbox = async (
  void (async => {
  const result = (await options.onSelfEdit?.({
  body: frame.body,
+ rationale: frame.rationale,
+ })) ?? { ok: false, error: 'this run has no self-edit channel' }
+ send({
+ t: 'self_edit_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? { outcome: result.outcome }: { error: result.error }),
+ })
+ })
+ return
+ case 'tools_edit':
+ void (async => {
+ const result = (await options.onToolsEdit?.({
+ tools: frame.tools,
  rationale: frame.rationale,
  })) ?? { ok: false, error: 'this run has no self-edit channel' }
  send({

@@ -4,6 +4,7 @@ import {
  MAX_PROMPT_BODY_CHARS,
  MAX_SELF_REVISIONS_PER_RUN,
  revisePromptBody,
+ reviseToolList,
 } from './self-edit.js'
 
 /**
@@ -173,5 +174,106 @@ describe('revisePromptBody', => {
  expect(verdict.ok).toBe(false)
  if (verdict.ok) return
  expect(verdict.rule).toBe('unparseable')
+ })
+})
+
+/**
+ * Tier 2 — the tool list, within the envelope.
+ *
+ * The interesting tests are the two refusals: a tool the envelope does not name, and a
+ * planner, whose own tools are read-only at every tier because "may read, may never act"
+ * is what makes delegation a boundary.
+ */
+describe('reviseToolList', => {
+ const revise = (tools: string[], over: { currentMarkdown?: string; revisionsThisRun?: number } = {}) =>
+ reviseToolList({
+ currentMarkdown: over.currentMarkdown ?? withEnvelope,
+ tools,
+ revisionsThisRun: over.revisionsThisRun ?? 0,
+ })
+
+ it('drops a tool it holds, leaving everything else alone', => {
+ const verdict = revise(['Read'])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ const before = parsePersonaMarkdown(withEnvelope)
+ const after = parsePersonaMarkdown(verdict.markdown)
+ expect(after.tools).toEqual(['Read'])
+ expect({...after, tools: [] }).toEqual({...before, tools: [] })
+ })
+
+ /** The envelope is the ceiling, and this is the only thing standing between the two. */
+ it('refuses a tool the envelope does not name, and says what to widen', => {
+ const verdict = revise(['Read', 'Edit', 'Bash'])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('envelope')
+ expect(verdict.reason).toContain('Bash')
+ })
+
+ it('refuses a persona with no envelope', => {
+ const verdict = revise(['Read'], { currentMarkdown: withoutEnvelope })
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('no-envelope')
+ })
+
+ /**
+ * The planner/worker trust boundary. A planner may read and may never act; what its children hold is `delegates`,
+ * set by a human, and this tier cannot reach it.
+ */
+ it('refuses a planner outright, whatever it asked for', => {
+ const planner = [
+ '---',
+ 'name: planner',
+ 'description: plans',
+ 'model: claude-sonnet-5',
+ 'tools: [Read]',
+ 'harness:',
+ ' planner: true',
+ ' delegates: [Read, Edit]',
+ 'envelope:',
+ ' tools: [Read, Edit]',
+ '---',
+ '',
+ 'You plan.',
+ ].join('\n')
+ const verdict = revise(['Read', 'Edit'], { currentMarkdown: planner })
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('planner')
+ })
+
+ it('refuses the list it already holds, in any order', => {
+ const verdict = revise(['Edit', 'Read'])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('unchanged')
+ })
+
+ it('refuses a second change in the same run', => {
+ const verdict = revise(['Read'], { revisionsThisRun: MAX_SELF_REVISIONS_PER_RUN })
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('cap')
+ })
+
+ /**
+ * A tool list is written as `[a, b]`, so a name with a comma in it reads back as two
+ * tools — and the envelope decided about the list it was shown, not the one that would
+ * be stored.
+ */
+ it('refuses a tool name that would not survive being written down', => {
+ const verdict = revise(['Read, Bash'])
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('frontmatter-changed')
+ })
+
+ it('may empty the list entirely, which is a real thing to want', => {
+ const verdict = revise([])
+ expect(verdict.ok).toBe(true)
+ if (!verdict.ok) return
+ expect(parsePersonaMarkdown(verdict.markdown).tools).toEqual([])
  })
 })

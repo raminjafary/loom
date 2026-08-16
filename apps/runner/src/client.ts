@@ -825,8 +825,30 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  })
  })
  }
+ /** Tier 2's channel, on the same round trip and the same pending map. */
+ const onToolsEdit = (edit: {
+ tools: string[]
+ rationale: string
+ }): Promise<{ ok: true; outcome: string } | { ok: false; error: string }> => {
+ const requestId = nextNoteRequestId
+ send({ type: 'persona_tools_revised', runId: input.runId, requestId,...edit })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingSelfEdits.delete(requestId)
+ resolve({ ok: false, error: 'the platform did not answer in time — nothing changed' })
+ }, NOTE_TIMEOUT_MS)
+ pendingSelfEdits.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok
+ ? { ok: true, outcome: result.outcome ?? '' }
+: { ok: false, error: result.error ?? 'the platform refused it' },
+)
+ })
+ })
+ }
  const selfTool = maySelfModify(input.persona.envelope ?? null)
- ? createSelfTool({ revisePrompt: onSelfEdit })
+ ? createSelfTool({ revisePrompt: onSelfEdit, reviseTools: onToolsEdit })
 : null
  // `ask_human`, on the same reasoning and the same round-trip. No
  // timeout here, unlike a notes read: this one is *meant* to block for as long as a
@@ -1004,6 +1026,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onAtlasRequest,
  onAtlasLinkRequest,
  onSelfEdit,
+ onToolsEdit,
 ...(mapTool
  ? {
  onMapWrite: (fragment: Record<string, unknown>) =>

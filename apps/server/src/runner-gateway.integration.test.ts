@@ -6214,6 +6214,73 @@ The prompt it started with.`
  socket.close
  })
 
+ /**
+ * Tier 2, over the wire. The refusal is the half worth having here: the
+ * envelope is what makes this tier bounded, and a tier that quietly widened it would
+ * pass every unit test about tool lists.
+ */
+ it('changes its own tool list within the envelope, and is refused outside it', async => {
+ const { socket, runnerId } = await pairFakeRunner('self-retool')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'self-retool' })
+ const persona = await client.persona.create({
+ markdownSource: SELF_EDITING_PERSONA.replace('self-editor', 'self-editor-tools'),
+ })
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await startFrame
+
+ // Outside the envelope: refused, and nothing moves.
+ const refused = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'tools-1',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_tools_revised',
+ runId: run.id,
+ requestId: 'tools-1',
+ tools: ['Read', 'Bash'],
+ rationale: 'I would like a shell.',
+ }),
+)
+ expect(String((await refused).outcome)).toContain('Bash')
+ expect((await client.persona.list).find((p) => p.id === persona.id)?.tools).toEqual(['Read'])
+ expect(await client.persona.revisions({ personaId: persona.id })).toHaveLength(0)
+
+ // Inside it: recorded, with the history and the revert every other self-edit gets.
+ const accepted = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'tools-2',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_tools_revised',
+ runId: run.id,
+ requestId: 'tools-2',
+ tools: [],
+ rationale: 'This persona only ever answers questions; it opened nothing.',
+ }),
+)
+ expect(String((await accepted).outcome)).toContain('Your own run is unchanged')
+
+ const after = (await client.persona.list).find((p) => p.id === persona.id)
+ expect(after?.tools).toEqual([])
+ // The prompt is untouched: this tier moves one field and the round trip proves it.
+ expect(after?.markdownSource).toContain('The prompt it started with')
+
+ const revisions = await client.persona.revisions({ personaId: persona.id })
+ expect(revisions).toHaveLength(1)
+ expect(revisions[0]?.replacedByKind).toBe('agent_run')
+
+ socket.close
+ })
+
  it('lets a human put the old prompt back', async => {
  const { socket, runnerId } = await pairFakeRunner('self-edit-revert')
  const repo = await bindViaFakeRunner(socket, runnerId)

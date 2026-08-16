@@ -154,6 +154,9 @@ describe('buildQueryOptions: the notes channel', => {
  expect(withSelf.agents?.[persona.name]?.tools).toContain(
  'mcp__loom_self__revise_own_prompt',
 )
+ // Tier 2 rides the same server; a tier that registered and was never named would be
+ // the four-times-shipped failure this whole test exists for.
+ expect(withSelf.agents?.[persona.name]?.tools).toContain('mcp__loom_self__revise_own_tools')
  expect(Object.keys(withSelf.mcpServers ?? {})).toContain('loom_self')
 
  const without = buildQueryOptions({ persona, cwd: '/clone', notesTool: fakeServer })

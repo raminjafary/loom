@@ -25,8 +25,9 @@ import { z } from 'zod'
 
 export const SELF_SERVER_NAME = 'loom_self'
 export const REVISE_PROMPT_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__revise_own_prompt`
+export const REVISE_TOOLS_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__revise_own_tools`
 
-export const SELF_TOOL_NAMES = [REVISE_PROMPT_TOOL_NAME] as const
+export const SELF_TOOL_NAMES = [REVISE_PROMPT_TOOL_NAME, REVISE_TOOLS_TOOL_NAME] as const
 
 export interface SelfToolCallbacks {
  /**
@@ -36,6 +37,17 @@ export interface SelfToolCallbacks {
  */
  readonly revisePrompt: (input: {
  body: string
+ rationale: string
+ }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
+ /**
+ * Tier 2 — the complete tool list this persona should hold.
+ *
+ * A list rather than a document, and that is the tier's whole safety story: an agent
+ * changing configuration is never handed the text of the configuration, so there is no
+ * frontmatter for it to reach and no rule needed to stop it reaching one.
+ */
+ readonly reviseTools: (input: {
+ tools: string[]
  rationale: string
  }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
 }
@@ -88,9 +100,58 @@ export const createSelfTool = (callbacks: SelfToolCallbacks) => {
  },
 )
 
+ /**
+ * Tier 2's tool, and its description is written against a different failure from tier
+ * 1's. Tier 1's risk is enthusiasm — a model that improves its prompt every run. This
+ * one's is *acquisitiveness*: a model asked what tools it wants will want more, and the
+ * useful direction here is almost always the other one. So the description leads with
+ * dropping, and says plainly that asking for something outside the envelope is a
+ * refusal rather than a request that gets queued somewhere.
+ */
+ const reviseTools = tool(
+ 'revise_own_tools',
+ 'Change which tools this persona holds, from now on, for every future run of it. ' +
+ 'The useful direction is usually **fewer**: a tool you never call still costs every ' +
+ 'run its description in the context window, and a tool you hold is one a poisoned ' +
+ 'input can reach through you. Drop what this persona has turned out not to need. ' +
+ 'Adding is possible only within the envelope a human set — anything outside it is ' +
+ 'refused on the spot and no request is queued for anybody, so asking twice achieves ' +
+ 'nothing. ' +
+ 'Send the COMPLETE list you should end up with, not a change to it. Your own run ' +
+ 'keeps the tools it started with either way. A human reviews this against the ' +
+ 'version it replaced and can put it back.',
+ {
+ tools: z
+.array(z.string.min(1).max(80))
+.max(60)
+.describe(
+ 'The complete tool list this persona should hold — every name, including the ' +
+ 'ones it already has and you are keeping. An empty list is meaningful and ' +
+ 'allowed.',
+),
+ why: z
+.string
+.min(1)
+.max(600)
+.describe('What you learned that made this the right list. A human reads this first.'),
+ },
+ async (args) => {
+ const result = await callbacks.reviseTools({ tools: args.tools, rationale: args.why })
+ return {
+ content: [
+ {
+ type: 'text' as const,
+ text: result.ok ? result.outcome: `The tool list was not changed: ${result.error}`,
+ },
+ ],
+...(result.ok ? {}: { isError: true }),
+ }
+ },
+)
+
  return createSdkMcpServer({
  name: SELF_SERVER_NAME,
  version: '1.0.0',
- tools: [revisePrompt],
+ tools: [revisePrompt, reviseTools],
  })
 }

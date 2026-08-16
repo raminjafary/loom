@@ -55,6 +55,8 @@ import {
  parsePlanDelta,
  parsePersonaMarkdown,
  revisePromptBody,
+ reviseToolList,
+ type SelfEditVerdict,
  shippedBuiltin,
  planStages,
  primaryToolArgument,
@@ -1048,6 +1050,128 @@ export const revertPersonaPrompt = async (
  * `revisePromptBody` is the only place absence-of-envelope is interpreted, so this
  * function cannot accidentally disagree with the authoring path about what null means.
  */
+/**
+ * The half of a self-edit that is the same whatever changed.
+ *
+ * Tiers 1 and 2 differ only in what they validate — prose against a round trip, a tool
+ * list against the envelope. Everything after the verdict is identical, and identical is
+ * the point: one path that resolves the persona from the run, writes the revision in the
+ * same transaction as the change, and records one audit action. Two copies of this would
+ * be two places for "which persona did that run edit" to drift.
+ */
+const applySelfRevision = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ rationale: string
+ action: string
+ /** Given the stored markdown and this run's revision count, what should be stored. */
+ decide: (currentMarkdown: string, revisionsThisRun: number) => SelfEditVerdict
+ /** What the agent is told when it worked. Takes the persona's name. */
+ outcome: (personaName: string) => string
+ },
+): Promise<{ ok: true; outcome: string } | { ok: false; reason: string }> => {
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!run) throw new NotFoundError('AgentRun')
+
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const persona = personas.find((entry) => entry.name === run.persona.name)
+ if (!persona) {
+ return {
+ ok: false,
+ reason:
+ `There is no persona called "${run.persona.name}" in this workspace any more, so ` +
+ 'there is nothing to change. Carry on with your task.',
+ }
+ }
+
+ const revisionsThisRun = await deps.personas.countRevisionsByRun(
+ input.workspaceId,
+ input.agentRunId,
+)
+ const verdict = input.decide(persona.markdownSource, revisionsThisRun)
+ if (!verdict.ok) return { ok: false, reason: verdict.reason }
+
+ const parsed = parsePersonaMarkdown(verdict.markdown)
+ await deps.personas.update(
+ input.workspaceId,
+ persona.id,
+ {
+ description: parsed.description,
+ markdownSource: verdict.markdown,
+ model: parsed.model,
+ tools: parsed.tools,
+ harnessEffort: parsed.harnessEffort,
+ harnessMaxTurns: parsed.harnessMaxTurns,
+ harnessApprovalMode: parsed.harnessApprovalMode,
+ harnessPlanner: parsed.harnessPlanner,
+ harnessDelegates: parsed.harnessDelegates,
+ harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
+ /**
+ * `builtinSource` deliberately not sent, which for a built-in means this edit makes
+ * it "touched" and `seedBuiltinPersonas` stops bringing it forward. That is the
+ * correct outcome and the same one a human's edit produces: the recorded seed exists
+ * to tell "the platform shipped this" from "somebody changed it", and an agent is
+ * somebody.
+ */
+ },
+ {
+ markdownSource: persona.markdownSource,
+ replacedByKind: 'agent_run',
+ replacedByRunId: input.agentRunId,
+ rationale: input.rationale,
+ },
+)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: agentRunActor(input.agentRunId),
+ action: input.action,
+ subjectType: 'agent_persona',
+ subjectId: persona.id,
+ metadata: { personaName: persona.name, rationale: input.rationale },
+ })
+
+ return { ok: true, outcome: input.outcome(persona.name) }
+}
+
+/**
+ * Tier 2 — a run changes the tool list of the persona it is.
+ *
+ * **Tools only, and capability selection is deliberately not here.** the tier 2 reads
+ * "tools and capabilities", and the second half is deferred for a reason that is about
+ * this platform rather than about effort: a capability is an *attachment row* with its own
+ * per-attachment scopes, not a field of the persona document. An agent changing one would
+ * produce no diff for a human to read and no revision to restore — the two properties that
+ * make an agent editing itself without asking acceptable at all. Making capabilities
+ * self-selectable means first making them part of the reviewable artifact, which is a
+ * change to the persona format and not to this tier.
+ */
+export const revisePersonaTools = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ tools: string[]
+ rationale: string
+ },
+): Promise<{ ok: true; outcome: string } | { ok: false; reason: string }> =>
+ applySelfRevision(deps, {
+ workspaceId: input.workspaceId,
+ agentRunId: input.agentRunId,
+ rationale: input.rationale,
+ action: 'persona.self_retooled',
+ decide: (currentMarkdown, revisionsThisRun) =>
+ reviseToolList({ currentMarkdown, tools: input.tools, revisionsThisRun }),
+ outcome: (personaName) =>
+ `Recorded. "${personaName}" now holds exactly the tools you named, and the next run ` +
+ 'of it will start with those. **Your own run is unchanged** — you keep what you ' +
+ 'started with, because a run is what it was launched as. A human reviews this beside ' +
+ 'the version it replaced and can put the old list back. Carry on with your task.',
+ })
+
 export const revisePersonaPrompt = async (
  deps: AgentDeps,
  input: {

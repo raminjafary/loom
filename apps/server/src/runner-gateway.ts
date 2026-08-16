@@ -32,6 +32,7 @@ import {
  readAtlasLeads,
  proposeCrossSubjectRelation,
  revisePersonaPrompt,
+ revisePersonaTools,
  renderProposalOutcome,
  readContextLedger,
  reconcileRunnerRuns,
@@ -1003,6 +1004,36 @@ export const createRunnerGateway = (
  workspaceId,
  agentRunId: asAgentRunId(frame.runId),
  body: frame.body,
+ rationale: frame.rationale,
+ })
+ send(from, {
+ type: 'persona_prompt_result',
+ requestId: frame.requestId,
+ ok: true,
+ outcome: result.ok ? result.outcome: result.reason,
+ })
+ } catch (error) {
+ send(from, {
+ type: 'persona_prompt_result',
+ requestId: frame.requestId,
+ ok: false,
+ error: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
+ /**
+ * A run changing its own tool list. Same channel, same
+ * result frame and same refusal discipline as tier 1: the target is resolved from
+ * the run, and a refusal is an outcome rather than an error.
+ */
+ case 'persona_tools_revised': {
+ try {
+ const result = await revisePersonaTools(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ tools: frame.tools,
  rationale: frame.rationale,
  })
  send(from, {

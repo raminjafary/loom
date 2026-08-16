@@ -383,6 +383,20 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  rationale: z.string.max(600),
  }),
  /**
+ * A run changing its own tool list.
+ *
+ * A list rather than a document, which is the tier's safety property expressed on the
+ * wire: this frame cannot carry a model tier, a budget cap, an approval mode or an
+ * envelope, so nothing has to refuse them.
+ */
+ z.object({
+ type: z.literal('persona_tools_revised'),
+ runId: z.string,
+ requestId: z.string,
+ tools: z.array(z.string.max(80)).max(60),
+ rationale: z.string.max(600),
+ }),
+ /**
  * One fragment of a map a mastery run wrote, sent **as it is written**.
  *
  * Same requirement and same reasoning as `note_written`, and it bites harder here: a

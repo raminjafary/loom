@@ -82,6 +82,8 @@ export type SelfEditRule =
  | 'envelope'
  /** The stored markdown could not be parsed, so there is nothing to edit safely. */
  | 'unparseable'
+ /** A planner's own tools are read-only, at every tier. */
+ | 'planner'
 
 export type SelfEditVerdict =
  | { readonly ok: true; readonly markdown: string; readonly body: string }
@@ -286,3 +288,155 @@ export const revisePromptBody = (input: {
 
  return { ok: true, markdown, body }
 }
+
+/**
+ * Tier 2 — the agent changes its own tool list, within its envelope.
+ *
+ * **A structure, never markdown.** Tier 1 takes prose and refuses any frontmatter
+ * movement; this takes a list of tool names and the platform writes the document. An
+ * agent editing configuration must never be handed the text of the configuration: the
+ * round-trip check in `revisePromptBody` exists because a body *could* contain
+ * frontmatter, and the fix for the tier where frontmatter is the point is not a stricter
+ * check but a narrower input. What crosses the wire here cannot express a model tier, a
+ * budget cap, an approval mode or an envelope, so no rule is needed to refuse them.
+ *
+ * **Only tools.** the tier 2 is "tools and capabilities", and capability *selection* is
+ * deliberately not here — see the caller. Model, budget and approval mode stay human-only
+ * at every tier: they are what the envelope bounds, and a tier that could set them would
+ * be an agent moving inside its ceiling by moving the ceiling's own axes.
+ *
+ * The envelope does the deciding. `envelopeAllows` is the same function the authoring
+ * path calls, so a tool list this refuses is one a human could not have written either —
+ * which is the property that keeps a self-edit from reaching a state no human could.
+ */
+export const reviseToolList = (input: {
+ readonly currentMarkdown: string
+ /** The complete list this persona should hold — not a delta. */
+ readonly tools: string[]
+ readonly revisionsThisRun: number
+}): SelfEditVerdict => {
+ let current: ParsedPersonaMarkdown
+ try {
+ current = parsePersonaMarkdown(input.currentMarkdown)
+ } catch (error) {
+ return {
+ ok: false,
+ rule: 'unparseable',
+ reason:
+ 'Your persona could not be read as a persona document, so it cannot be edited ' +
+ `safely: ${error instanceof Error ? error.message: String(error)}. A human has ` +
+ 'to fix it. Carry on with your task.',
+ }
+ }
+
+ if (!maySelfModify(current.envelope)) {
+ return {
+ ok: false,
+ rule: 'no-envelope',
+ reason:
+ `${current.name} has no self-modification envelope, so it may not change its own ` +
+ 'tools. An absent envelope is no permission, not an unlimited one — a human sets ' +
+ 'a ceiling first. Carry on with your task.',
+ }
+ }
+
+ /**
+ * A planner's own tools are read-only, and this is the one place that rule
+ * could be walked around: a planner may read and may not act, and what it hands down is
+ * `delegates`, which is not reachable from here at all. Refused with the reason rather
+ * than silently ignored, because a planner told "done" would reason as though it had
+ * gained a tool.
+ */
+ if (current.harnessPlanner) {
+ return {
+ ok: false,
+ rule: 'planner',
+ reason:
+ 'A planner\'s own tools are fixed: it may read and may never act, which is what ' +
+ 'makes handing work to a worker a boundary rather than a preference. What your ' +
+ 'children may hold is set by a human on your delegation envelope, not by you.',
+ }
+ }
+
+ if (input.revisionsThisRun >= MAX_SELF_REVISIONS_PER_RUN) {
+ return {
+ ok: false,
+ rule: 'cap',
+ reason:
+ 'You have already changed this persona once in this run, which is the limit. A ' +
+ 'human reviews the first change; a second would overwrite it before anybody saw ' +
+ 'it.',
+ }
+ }
+
+ const tools = [...new Set(input.tools.map((tool) => tool.trim).filter((t) => t.length > 0))]
+ if (sameList(tools, current.tools)) {
+ return {
+ ok: false,
+ rule: 'unchanged',
+ reason:
+ `That is the tool list you already hold (${current.tools.join(', ') || 'none'}). ` +
+ 'Nothing was recorded.',
+ }
+ }
+
+ const markdown = serializePersonaMarkdown({...current, tools })
+
+ let reparsed: ParsedPersonaMarkdown
+ try {
+ reparsed = parsePersonaMarkdown(markdown)
+ } catch {
+ return {
+ ok: false,
+ rule: 'frontmatter-changed',
+ reason: 'That tool list cannot be written into a persona document. Nothing was changed.',
+ }
+ }
+ /**
+ * The same outcome check tier 1 makes, and it is not redundant here: a tool name
+ * containing a comma or a bracket would round-trip into a *different* list, and the
+ * whole point of this tier is that the envelope decided which list is allowed.
+ */
+ if (!sameList(reparsed.tools, tools)) {
+ return {
+ ok: false,
+ rule: 'frontmatter-changed',
+ reason:
+ 'Those tool names do not survive being written into a persona document — a name ' +
+ 'with a comma or a bracket in it cannot be stored. Nothing was changed.',
+ }
+ }
+ if (frontmatterExceptTools(reparsed) !== frontmatterExceptTools(current)) {
+ return {
+ ok: false,
+ rule: 'frontmatter-changed',
+ reason: 'That change would move something other than the tool list. Nothing was changed.',
+ }
+ }
+
+ const fits = envelopeAllows(reparsed.envelope, {
+ name: reparsed.name,
+ tools: reparsed.tools,
+ model: reparsed.model,
+ budgetCapUsd: reparsed.harnessBudgetCapUsd,
+ approvalMode: reparsed.harnessApprovalMode,
+ planner: reparsed.harnessPlanner,
+ delegates: reparsed.harnessDelegates,
+ })
+ if (!fits.ok) {
+ return {
+ ok: false,
+ rule: 'envelope',
+ reason: `That is outside your envelope. ${envelopeRefusalSummary(fits)}`,
+ }
+ }
+
+ return { ok: true, markdown, body: reparsed.systemPrompt }
+}
+
+const sameList = (a: string[], b: string[]): boolean =>
+ a.length === b.length && [...a].sort.join('\u0000') === [...b].sort.join('\u0000')
+
+/** Everything `frontmatterOf` compares except the one field this tier is allowed to move. */
+const frontmatterExceptTools = (parsed: ParsedPersonaMarkdown): string =>
+ JSON.stringify({...JSON.parse(frontmatterOf(parsed)), tools: null })
