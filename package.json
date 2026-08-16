@@ -9,7 +9,9 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "turbo run typecheck && pnpm typecheck:tools",
+    "//typecheck:tools": "tools/ is not a workspace package — the drivers are scripts, not a library — so turbo never saw them and a .mts driver could rot for months. It had: reseed-builtins.mts still wrote a column removed several migrations ago.",
+    "typecheck:tools": "tsc -p tools/tsconfig.json",
     "lint": "turbo run lint",
     "test": "turbo run test",
     "db:generate": "pnpm --filter @loom/db db:generate",

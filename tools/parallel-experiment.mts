@@ -46,6 +46,7 @@ import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
 import { advanceMergeQueue, seedBuiltinPersonas } from '../packages/application/src/index.js'
+import { asWorkspaceId } from '../packages/domain/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
 
 const execFileAsync = promisify(execFile)
@@ -122,7 +123,7 @@ const main = async => {
 
  // seedWorkspace writes the row directly, bypassing the server's ensureWorkspace path
  // where built-ins are seeded — and `startReconciler` finds its persona by name.
- if (RECONCILE) await seedBuiltinPersonas(app.deps, { workspaceId: ws.id })
+ if (RECONCILE) await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(ws.id) })
 
  const repoPath = REPO_ARG ?? (await buildFixtureRepo)
  const baseSha = await git(repoPath, ['rev-parse', 'HEAD'])

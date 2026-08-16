@@ -393,7 +393,8 @@ const main = async => {
 .map((w: string) => w.toLowerCase),
 ),
  ]
- const usedMapWords = (runId: string) => mapWords.filter((w) => saidBy(runId).includes(w))
+ const usedMapWords = (runId: string) =>
+ mapWords.filter((word) => saidBy(runId).includes(String(word)))
 
  /**
  * **Where the prompt is not.** Worth recording, because checking it here was the

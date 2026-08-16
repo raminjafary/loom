@@ -43,6 +43,7 @@ import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
 import { seedBuiltinPersonas } from '../packages/application/src/index.js'
+import { asWorkspaceId } from '../packages/domain/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
 
 const execFileAsync = promisify(execFile)
@@ -162,7 +163,7 @@ const main = async => {
  // seedWorkspace writes the row directly; the built-ins are seeded by the server's
  // ensureWorkspace path, which that bypasses. Called here so the persona under
  // measurement is the seeded built-in rather than one this script wrote.
- await seedBuiltinPersonas(app.deps, { workspaceId: ws.id })
+ await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(ws.id) })
 
  const repoPath = await mkdtemp(join(tmpdir, 'reconciler-repo-'))
  await execFileAsync('git', ['init', '--quiet', '-b', 'main', repoPath])

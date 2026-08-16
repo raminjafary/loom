@@ -57,6 +57,7 @@ import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
 import { advanceMergeQueue, seedBuiltinPersonas } from '../packages/application/src/index.js'
+import { asWorkspaceId } from '../packages/domain/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
 
 const execFileAsync = promisify(execFile)
@@ -306,7 +307,7 @@ const main = async => {
  const client: any = createORPCClient(new RPCLink({ url: `http://127.0.0.1:${addr.port}/rpc` }))
  // seedWorkspace bypasses the server's ensureWorkspace path, where built-ins are
  // seeded — and `startReconciler` finds its persona by name.
- await seedBuiltinPersonas(app.deps, { workspaceId: ws.id })
+ await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(ws.id) })
 
  const { runnerId, rawToken } = await client.runner.createPairingToken({ name: 'rq-runner' })
  const runner = spawn('npx', ['tsx', 'apps/runner/src/main.ts'], {
@@ -565,10 +566,13 @@ const main = async => {
 )
  console.log(` default branch after: tests ${after ? 'pass': 'FAIL'}`)
  if (!after) {
+ const last = outcomes[outcomes.length - 1]
+ if (last) {
  outcomes[outcomes.length - 1] = {
-...outcomes[outcomes.length - 1],
+...last,
  unsafe: true,
  detail: `${detail} — AND the default branch no longer passes its own tests`,
+ }
  }
  }
  }
