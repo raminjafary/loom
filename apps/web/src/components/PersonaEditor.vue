@@ -5,6 +5,7 @@ import type {
  Capability,
  PersonaCapability,
  PersonaDraft,
+ PersonaRevision,
 } from '@loom/api-contract'
 import {
  EMPTY_PERSONA_FORM,
@@ -16,6 +17,9 @@ import {
  personaFormProblems,
  personaFormToMarkdown,
  personaSaveDiscrepancies,
+ describeRevision,
+ personaHistory,
+ promptWrittenByAgent,
  type PersonaFormState,
 } from '@loom/client-core'
 import { computed, ref, watch } from 'vue'
@@ -46,6 +50,13 @@ const props = defineProps<{
  personas: AgentPersona[]
  capabilities: Capability[]
  attachments: PersonaCapability[]
+ /**
+ * Every persona's superseded prompts, workspace-wide and newest
+ * first. Passed in rather than fetched here for the reason the capability lists are:
+ * this component renders what a session loaded, and a component that fetched would be a
+ * second place deciding when the data is stale.
+ */
+ revisions: PersonaRevision[]
 }>
 
 const emit = defineEmits<{
@@ -63,6 +74,14 @@ const emit = defineEmits<{
  detach: [input: { personaId: string; capabilityId: string }]
  /** Parses a draft server-side. */
  parse: [markdownSource: string, done: (draft: PersonaDraft) => void]
+ /**
+ * Puts a superseded prompt back.
+ *
+ * The half of self-editing that makes the other half an acceptable trade: an agent
+ * inside its envelope rewrites itself without asking, and a human who disagrees undoes
+ * it in one gesture.
+ */
+ 'revert-persona': [input: { personaId: string; revisionId: string }]
 }>
 
 type Mode = 'closed' | 'create' | 'edit'
@@ -100,6 +119,11 @@ const APPROVAL_MODE_HINT: Record<ApprovalMode, string> = {
 
 const editingPersona = computed(
  => props.personas.find((persona) => persona.id === editingId.value) ?? null,
+)
+
+/** This persona's superseded prompts, newest first. Empty until something replaced one. */
+const history = computed( =>
+ editingId.value === '' ? []: personaHistory(props.revisions, editingId.value),
 )
 
 const existingNames = computed( => props.personas.map((persona) => persona.name))
@@ -362,6 +386,15 @@ const harnessSummary = (persona: AgentPersona): string => {
  -->
  <span v-if="persona.builtinStatus === 'stale'" class="stale">
  differs from the shipped version
+ </span>
+ <!--
+ An agent wrote the prompt this persona is running with.
+ On the row rather than only inside the editor, because a self-edit nobody
+ notices until they happen to open the right persona is the "correct and
+ invisible" failure this project has shipped three times.
+ -->
+ <span v-if="promptWrittenByAgent(props.revisions, persona.id)" class="self-edited">
+ prompt rewritten by an agent
  </span>
  </div>
  <div class="row-actions">
@@ -757,11 +790,101 @@ const harnessSummary = (persona: AgentPersona): string => {
  </button>
  <button type="button" class="link" @click="close">Cancel</button>
  </div>
+
+ <!--
+ The prompt's history, above nothing and below the save
+ because it is a record rather than an action — but the *revert* in it is the
+ thing that makes an agent editing itself without asking an acceptable trade.
+ Rendered as whole documents rather than parsed: this client does not read the
+ persona format, which is the rule the raw tab follows for the same reason.
+ -->
+ <section v-if="mode === 'edit' && history.length > 0" class="history">
+ <h4>Earlier prompts</h4>
+ <p class="hint">
+ What this persona said before. Each entry is the version that was replaced, so
+ restoring one puts that text back and records the swap as its own entry.
+ </p>
+ <ul>
+ <li v-for="revision in history":key="revision.id">
+ <div class="revision-head">
+ <span:class="{ by: true, agent: revision.replacedByKind === 'agent_run' }">
+ {{ describeRevision(revision) }}
+ </span>
+ <ConfirmButton
+ variant="link"
+ label="Restore"
+ confirm-label="Put this prompt back"
+ @confirm="
+ emit('revert-persona', { personaId: editingId, revisionId: revision.id })
+ "
+ />
+ </div>
+ <p v-if="revision.rationale" class="why">{{ revision.rationale }}</p>
+ <pre>{{ revision.markdownSource }}</pre>
+ </li>
+ </ul>
+ </section>
  </form>
  </div>
 </template>
 
 <style scoped>
+.self-edited {
+ color: var(--accent, #7aa2f7);
+}
+
+.history {
+ margin-top: 1rem;
+ border-top: 1px solid var(--line, #2a2a2a);
+ padding-top: 0.75rem;
+}
+
+.history h4 {
+ margin: 0 0 0.25rem;
+ font-size: 0.85rem;
+}
+
+.history ul {
+ margin: 0.5rem 0 0;
+ padding: 0;
+ list-style: none;
+ display: grid;
+ gap: 0.75rem;
+}
+
+.history li {
+ border: 1px solid var(--line, #2a2a2a);
+ border-radius: 4px;
+ padding: 0.5rem;
+}
+
+.revision-head {
+ display: flex;
+ align-items: baseline;
+ justify-content: space-between;
+ gap: 0.5rem;
+}
+
+.revision-head.agent {
+ color: var(--accent, #7aa2f7);
+}
+
+.history.why {
+ margin: 0.25rem 0 0.5rem;
+ font-size: 0.85rem;
+ opacity: 0.85;
+}
+
+.history pre {
+ margin: 0;
+ /* A superseded prompt is a whole document; it scrolls rather than stretching the sheet. */
+ max-height: 12rem;
+ overflow: auto;
+ white-space: pre-wrap;
+ font-size: 0.8rem;
+ opacity: 0.8;
+}
+
 .personas {
  margin: 0;
  padding: 0;

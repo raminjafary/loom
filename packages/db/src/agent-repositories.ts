@@ -1362,6 +1362,16 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  return rows.map((row) => toPersonaRevision(row as PersonaRevisionRow))
  },
 
+ async listRevisionsByWorkspace(workspaceId, limit) {
+ const rows = await db
+.select
+.from(personaRevision)
+.where(eq(personaRevision.workspaceId, workspaceId))
+.orderBy(desc(personaRevision.createdAt))
+.limit(limit ?? 200)
+ return rows.map((row) => toPersonaRevision(row as PersonaRevisionRow))
+ },
+
  async countRevisionsByRun(workspaceId, agentRunId) {
  const [row] = await db
 .select({ value: count })

@@ -943,7 +943,9 @@ export const router = os.router({
  (
  await listPersonaRevisions(context.deps, {
  workspaceId: context.principal.workspaceId,
- personaId: asAgentPersonaId(input.personaId),
+...(input.personaId === undefined
+ ? {}
+: { personaId: asAgentPersonaId(input.personaId) }),
  })
 ).map(toWirePersonaRevision),
 ),

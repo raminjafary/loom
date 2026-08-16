@@ -1208,6 +1208,7 @@ export type DirectoryEntry = z.infer<typeof DirectoryEntrySchema>
 export type DirectoryListing = z.infer<typeof DirectoryListingSchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
+export type PersonaRevision = z.infer<typeof PersonaRevisionSchema>
 export type PersonaDraft = z.infer<typeof PersonaDraftSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>

@@ -714,9 +714,15 @@ export const contract = {
  * Readable by anyone who can read the persona, deliberately: hiding the history would
  * hide only the fact that an agent wrote one of these versions, which is the single
  * thing a reader most needs to know.
+ *
+ * `personaId` is optional and omitting it returns the workspace's, newest first. That
+ * is not a convenience: the surface that has to say *which* persona an agent rewrote
+ * cannot ask per persona without one query per row, and a self-edit nobody notices
+ * until they open the right editor is the "correct and invisible" failure this
+ * project has now shipped three times.
  */
  revisions: oc
-.input(z.object({ personaId: z.string }))
+.input(z.object({ personaId: z.string.optional }))
 .output(z.array(PersonaRevisionSchema)),
 
  /**

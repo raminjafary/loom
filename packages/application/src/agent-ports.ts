@@ -659,6 +659,11 @@ export interface PersonaRepositoryPort {
  personaId: AgentPersonaId,
  limit?: number,
 ): Promise<PersonaRevision[]>
+ /**
+ * Every persona's, newest first — one query rather than one per persona, which is what
+ * lets a list of personas say which of them an agent has rewritten.
+ */
+ listRevisionsByWorkspace(workspaceId: WorkspaceId, limit?: number): Promise<PersonaRevision[]>
  findRevision(
  workspaceId: WorkspaceId,
  revisionId: PersonaRevisionId,

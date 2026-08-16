@@ -934,8 +934,11 @@ export const updatePersona = async (
  */
 export const listPersonaRevisions = async (
  deps: AgentDeps,
- input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+ input: { workspaceId: WorkspaceId; personaId?: AgentPersonaId },
 ): Promise<PersonaRevision[]> => {
+ if (input.personaId === undefined) {
+ return deps.personas.listRevisionsByWorkspace(input.workspaceId)
+ }
  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
  if (!persona) throw new NotFoundError('AgentPersona')
  return deps.personas.listRevisions(input.workspaceId, input.personaId)

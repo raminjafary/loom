@@ -9,6 +9,7 @@ import type {
  ColosseumView,
  SubjectMapListing,
  PersonaCapability,
+ PersonaRevision,
  PersonaDraft,
  PersonaGroup,
  Repository,
@@ -43,6 +44,8 @@ const props = defineProps<{
  personas: AgentPersona[]
  personaGroups: PersonaGroup[]
  capabilities: Capability[]
+ /** Superseded persona prompts, workspace-wide. */
+ personaRevisions: PersonaRevision[]
  capabilityAttachments: PersonaCapability[]
  lastPairing: { runnerId: string; name: string; rawToken: string } | null
  /** The expertise tab — fetched on demand, so never part of the session snapshot. */
@@ -134,6 +137,8 @@ const emit = defineEmits<{
  'update-persona': [input: { personaId: string; markdownSource: string }]
  'parse-persona': [markdownSource: string, done: (draft: PersonaDraft) => void]
  'reset-persona': [personaId: string]
+ /** Restores a superseded prompt. */
+ 'revert-persona': [input: { personaId: string; revisionId: string }]
  register: [
  input: {
  kind: 'mcp' | 'skill'
@@ -289,6 +294,7 @@ onMounted( => scrim.value?.focus)
 :personas="personas"
 :capabilities="capabilities"
 :attachments="capabilityAttachments"
+:revisions="personaRevisions"
  @create-persona="(source) => emit('create-persona', source)"
  @update-persona="(input) => emit('update-persona', input)"
  @delete-persona="(personaId) => emit('delete-persona', personaId)"
@@ -296,6 +302,7 @@ onMounted( => scrim.value?.focus)
  @detach="(input) => emit('detach', input)"
  @parse="(source, done) => emit('parse-persona', source, done)"
  @reset-persona="(personaId) => emit('reset-persona', personaId)"
+ @revert-persona="(input) => emit('revert-persona', input)"
  />
  <PersonaGroupPanel
 :personas="personas"

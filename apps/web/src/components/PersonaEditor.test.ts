@@ -1,4 +1,4 @@
-import type { AgentPersona, PersonaDraft } from '@loom/api-contract'
+import type { AgentPersona, PersonaDraft, PersonaRevision } from '@loom/api-contract'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PersonaEditor from './PersonaEditor.vue'
@@ -53,8 +53,22 @@ const draft = (overrides: Partial<PersonaDraft> = {}): PersonaDraft => ({
 ...overrides,
 })
 
-const editor = (personas: AgentPersona[] = [persona]) =>
- mount(PersonaEditor, { props: { personas, capabilities: [], attachments: [] } })
+const editor = (
+ personas: AgentPersona[] = [persona],
+ revisions: PersonaRevision[] = [],
+) =>
+ mount(PersonaEditor, { props: { personas, capabilities: [], attachments: [], revisions } })
+
+const revision = (over: Partial<PersonaRevision> = {}): PersonaRevision => ({
+ id: 'r1',
+ personaId: 'p1',
+ markdownSource: '---\nname: swe\n---\n\nThe prompt it had before.',
+ replacedByKind: 'agent_run',
+ replacedByRunId: 'run-1',
+ rationale: 'The tests are the definition of done here.',
+ createdAt: '2026-08-16T10:00:00.000Z',
+...over,
+})
 
 const openNew = async (wrapper: ReturnType<typeof editor>) => {
  await wrapper.get('.add').trigger('click')
@@ -214,5 +228,64 @@ describe('PersonaEditor', => {
  await wrapper.vm.$nextTick
 
  expect(wrapper.find('.discrepancy').exists).toBe(false)
+ })
+})
+
+/**
+ * Continuity mode tier 1 — an agent rewriting its own prompt, from the side a human sees it.
+ *
+ * The component half is where "correct and invisible" lives: the mechanism can be right
+ * in every test below the UI and still ship a self-edit nobody notices and cannot undo.
+ */
+describe('self-edit history', => {
+ it('says on the row when an agent wrote the prompt a persona is running with', => {
+ const wrapper = editor([persona], [revision])
+ expect(wrapper.text).toContain('prompt rewritten by an agent')
+ })
+
+ it('says nothing when the last word was a human"s', => {
+ const wrapper = editor(
+ [persona],
+ [
+ revision({ id: 'r1', replacedByKind: 'agent_run', createdAt: '2026-08-16T10:00:00.000Z' }),
+ revision({ id: 'r2', replacedByKind: 'human', createdAt: '2026-08-16T12:00:00.000Z' }),
+ ],
+)
+ expect(wrapper.text).not.toContain('prompt rewritten by an agent')
+ })
+
+ it('shows the superseded prompt and its reason when the persona is opened', async => {
+ const wrapper = editor([persona], [revision])
+ await wrapper.get('.row-actions.link').trigger('click')
+ expect(wrapper.text).toContain('The prompt it had before.')
+ expect(wrapper.text).toContain('The tests are the definition of done here.')
+ expect(wrapper.text).toContain('Replaced by an agent')
+ })
+
+ /**
+ * The gesture that makes an agent editing itself without asking an acceptable trade —
+ * asserted as an emitted event with its payload, because an unwired emit passes every
+ * static check this repository has.
+ */
+ it('emits a revert naming the persona and the revision', async => {
+ const wrapper = editor([persona], [revision])
+ await wrapper.get('.row-actions.link').trigger('click')
+ const restore = wrapper
+.findAll('.history button')
+.find((button) => button.text === 'Restore')
+ expect(restore).toBeDefined
+ await restore!.trigger('click')
+ // ConfirmButton asks first; the second press is the confirmation.
+ await wrapper
+.findAll('.history button')
+.find((button) => button.text.includes('Put this prompt back'))!
+.trigger('click')
+ expect(wrapper.emitted('revert-persona')).toEqual([[{ personaId: 'p1', revisionId: 'r1' }]])
+ })
+
+ it('offers no history for a persona nothing has replaced', async => {
+ const wrapper = editor
+ await wrapper.get('.row-actions.link').trigger('click')
+ expect(wrapper.find('.history').exists).toBe(false)
  })
 })

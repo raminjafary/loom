@@ -13,6 +13,7 @@ import type {
  SubjectMap,
  SubjectMapListing,
  PersonaCapability,
+ PersonaRevision,
  MergeQueueEntry,
  NotificationConfig,
  DelegationEdge,
@@ -81,6 +82,14 @@ export interface AgentSnapshot {
  /** The capability registry and its attachments. */
  readonly capabilities: Capability[]
  readonly capabilityAttachments: PersonaCapability[]
+ /**
+ * Every persona's superseded prompts, newest first.
+ *
+ * Workspace-wide in one read rather than per persona, because the question a human has
+ * is "did an agent rewrite any of these" and asking it per row is one query per row.
+ * The newest entry for a persona names who wrote the version that is live *now*.
+ */
+ readonly personaRevisions: PersonaRevision[]
  /**
  * The run this client is *watching* — the one whose approvals and diff the
  * workspace view shows. Distinct from `activeRuns` now that a workspace may run
@@ -437,6 +446,12 @@ export interface AgentSession {
  /** Takes the shipped version of a built-in, discarding what the row said. */
  resetPersonaToBuiltin(personaId: string): Promise<void>
  /**
+ * Puts a superseded prompt back. The half of self-editing that
+ * makes the other half an acceptable trade: an agent rewrites itself without asking,
+ * and a human who disagrees undoes it in one click.
+ */
+ revertPersonaPrompt(input: { personaId: string; revisionId: string }): Promise<void>
+ /**
  * Unbinds a repository, deleting its runs and their recorded spend with it.
  * Resolves `{ ok: false, reason }` when the server wants that loss acknowledged,
  * so a caller can show the count before asking again with `acknowledge`.
@@ -659,6 +674,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  delegationMatrix: [],
  capabilities: [],
  capabilityAttachments: [],
+ personaRevisions: [],
  activeRun: null,
  activeRuns: [],
  pendingApprovals: [],
@@ -934,12 +950,14 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  const readPersonasAndMatrix = async : Promise<{
  personas: AgentPersona[]
  delegationMatrix: DelegationEdge[]
+ personaRevisions: PersonaRevision[]
  }> => {
- const [personas, delegationMatrix] = await Promise.all([
+ const [personas, delegationMatrix, personaRevisions] = await Promise.all([
  options.api.persona.list,
  options.api.personaGroup.delegationMatrix,
+ options.api.persona.revisions({}),
  ])
- return { personas, delegationMatrix }
+ return { personas, delegationMatrix, personaRevisions }
  }
 
  const loadAll = async : Promise<void> => {
@@ -956,6 +974,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  capabilities,
  capabilityAttachments,
  delegationMatrix,
+ personaRevisions,
  ] = await Promise.all([
  options.api.runner.list,
  options.api.repository.list,
@@ -969,6 +988,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.capability.list,
  options.api.capability.listAttachments,
  options.api.personaGroup.delegationMatrix,
+ options.api.persona.revisions({}),
  ])
  patch({
  runners,
@@ -982,6 +1002,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  mergeQueue,
  capabilities,
  capabilityAttachments,
+ personaRevisions,
  })
  rememberPersonaNames([
 ...fromRuns(activeRuns),
@@ -1395,6 +1416,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  } catch (error) {
  patch({ error: errorMessage(error) })
  return null
+ }
+ },
+
+ async revertPersonaPrompt(input) {
+ patch({ error: null })
+ try {
+ await options.api.persona.revert(input)
+ patch(await readPersonasAndMatrix)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
  }
  },
 
