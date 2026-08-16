@@ -6281,6 +6281,96 @@ The prompt it started with.`
  socket.close
  })
 
+ /**
+ * The self-improvement loop — the measurement that decides whether a self-edit was an improvement.
+ *
+ * The half only an integration test can show is that the arms are *real*: two runs of
+ * the same persona are dispatched with two different system prompts, one carrying the
+ * agent's edit and one carrying the version it replaced. Everything downstream — the
+ * tally, the verdict, the Keep button — is arithmetic over rows, and arithmetic over
+ * rows that were never produced is the failure mode this catches.
+ */
+ it('runs the new prompt against the one it replaced, and says so', async => {
+ const { socket, runnerId } = await pairFakeRunner('prompt-trial')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'prompt-trial' })
+ const persona = await client.persona.create({
+ markdownSource: SELF_EDITING_PERSONA.replace('self-editor', 'self-editor-trial'),
+ })
+
+ // The edit under test, made by a run as tier 1 does.
+ const firstFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const editRun = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await firstFrame
+ const edited = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'trial-edit',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_prompt_revised',
+ runId: editRun.id,
+ requestId: 'trial-edit',
+ body: 'THE AGENT VERSION. Always run the verification command first.',
+ rationale: 'The tests are the definition of done here.',
+ }),
+)
+ await edited
+
+ const firstArm = nextFrame(socket, (v) => v.type === 'start_run')
+ await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ const firstSpec = (await firstArm).persona as { systemPrompt: string }
+
+ const secondArm = nextFrame(socket, (v) => v.type === 'start_run')
+ await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ const secondSpec = (await secondArm).persona as { systemPrompt: string }
+
+ // A tie goes to the revision: the edit is live, so the first run gets what the
+ // persona actually says now. The second is the control.
+ expect(firstSpec.systemPrompt).toContain('THE AGENT VERSION')
+ expect(secondSpec.systemPrompt).toContain('The prompt it started with')
+ expect(secondSpec.systemPrompt).not.toContain('THE AGENT VERSION')
+
+ // And the persona row is untouched throughout: a trial measures, it does not revert.
+ const live = (await client.persona.list).find((p) => p.id === persona.id)
+ expect(live?.markdownSource).toContain('THE AGENT VERSION')
+
+ const trial = await client.persona.trial({ personaId: persona.id })
+ expect(trial?.verdict).toBe('undecided')
+ expect(trial?.detail).toContain('Still measuring')
+
+ // A human settling it ends the trial, so later runs stop being split.
+ await client.persona.keepRevision({
+ personaId: persona.id,
+ revisionId: trial!.revisionId,
+ })
+ expect(await client.persona.trial({ personaId: persona.id })).toBeNull
+
+ const afterKeep = nextFrame(socket, (v) => v.type === 'start_run')
+ await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ expect(String(((await afterKeep).persona as { systemPrompt: string }).systemPrompt)).toContain(
+ 'THE AGENT VERSION',
+)
+
+ socket.close
+ })
+
  it('lets a human put the old prompt back', async => {
  const { socket, runnerId } = await pairFakeRunner('self-edit-revert')
  const repo = await bindViaFakeRunner(socket, runnerId)

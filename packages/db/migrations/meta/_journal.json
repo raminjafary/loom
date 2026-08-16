@@ -393,6 +393,13 @@
       "when": 1786910833441,
       "tag": "0055_goofy_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1786912537151,
+      "tag": "0056_goofy_clea",
+      "breakpoints": true
     }
   ]
 }

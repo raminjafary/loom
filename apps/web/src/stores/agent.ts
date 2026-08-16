@@ -92,6 +92,9 @@ export const useAgentStore = defineStore('agent', => {
  /** Restores a superseded persona prompt. */
  revertPersonaPrompt: (input: { personaId: string; revisionId: string }) =>
  session.revertPersonaPrompt(input),
+ /** Ends a trial by keeping the agent's edit. */
+ keepPersonaRevision: (input: { personaId: string; revisionId: string }) =>
+ session.keepPersonaRevision(input),
  unbindRepository: (input: { repositoryId: string; acknowledge?: boolean }) =>
  session.unbindRepository(input),
  removeRunner: (runnerId: string) => session.removeRunner(runnerId),

@@ -10,6 +10,7 @@ import type {
  SubjectMapListing,
  PersonaCapability,
  PersonaRevision,
+ PromptTrial,
  PersonaDraft,
  PersonaGroup,
  Repository,
@@ -46,6 +47,8 @@ const props = defineProps<{
  capabilities: Capability[]
  /** Superseded persona prompts, workspace-wide. */
  personaRevisions: PersonaRevision[]
+ /** What the runs say about each persona's live self-edit. */
+ promptTrials: Record<string, PromptTrial>
  capabilityAttachments: PersonaCapability[]
  lastPairing: { runnerId: string; name: string; rawToken: string } | null
  /** The expertise tab — fetched on demand, so never part of the session snapshot. */
@@ -139,6 +142,8 @@ const emit = defineEmits<{
  'reset-persona': [personaId: string]
  /** Restores a superseded prompt. */
  'revert-persona': [input: { personaId: string; revisionId: string }]
+ /** Ends a trial by keeping the agent's edit. */
+ 'keep-revision': [input: { personaId: string; revisionId: string }]
  register: [
  input: {
  kind: 'mcp' | 'skill'
@@ -295,6 +300,7 @@ onMounted( => scrim.value?.focus)
 :capabilities="capabilities"
 :attachments="capabilityAttachments"
 :revisions="personaRevisions"
+:trials="promptTrials"
  @create-persona="(source) => emit('create-persona', source)"
  @update-persona="(input) => emit('update-persona', input)"
  @delete-persona="(personaId) => emit('delete-persona', personaId)"
@@ -303,6 +309,7 @@ onMounted( => scrim.value?.focus)
  @parse="(source, done) => emit('parse-persona', source, done)"
  @reset-persona="(personaId) => emit('reset-persona', personaId)"
  @revert-persona="(input) => emit('revert-persona', input)"
+ @keep-revision="(input) => emit('keep-revision', input)"
  />
  <PersonaGroupPanel
 :personas="personas"

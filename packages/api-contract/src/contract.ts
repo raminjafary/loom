@@ -7,6 +7,7 @@ import {
  PersonaCapabilitySchema,
  AgentPersonaSchema,
  PersonaRevisionSchema,
+ PromptTrialSchema,
  AgentRunSchema,
  ApprovalRequestSchema,
  ChannelSchema,
@@ -757,6 +758,27 @@ export const contract = {
  revert: oc
 .input(z.object({ personaId: z.string, revisionId: z.string }))
 .output(AgentPersonaSchema),
+
+ /**
+ * Whether an agent's edit was an **improvement**.
+ *
+ * Null when nothing is being measured, which is the ordinary state. Continuity mode gives an
+ * agent five tiers of self-editing and nothing that decides whether an edit helped;
+ * this is the reading that closes that, from run dispositions and metered spend
+ * rather than from anything a model said about its own work.
+ */
+ trial: oc
+.input(z.object({ personaId: z.string }))
+.output(PromptTrialSchema.nullable),
+
+ /**
+ * A human keeps the edit and ends the trial. Rejecting it is `revert`, which ends the
+ * trial too — both outcomes are a human act, and the platform never settles one on
+ * their behalf however lopsided the evidence gets.
+ */
+ keepRevision: oc
+.input(z.object({ personaId: z.string, revisionId: z.string }))
+.output(z.object({ ok: z.literal(true) })),
  },
 
  /**

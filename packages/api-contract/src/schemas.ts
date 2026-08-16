@@ -838,6 +838,29 @@ export const PersonaRevisionSchema = z.object({
  createdAt: z.string,
 })
 
+/**
+ * What the runs so far say about an agent's edit.
+ *
+ * `verdict` is `undecided` until both arms have enough finished runs, and that is the
+ * common state rather than an error one: an edit is live and unproven for as long as it
+ * takes a workspace to run the persona ten times.
+ */
+export const PromptTrialSchema = z.object({
+ revisionId: z.string,
+ verdict: z.enum(['undecided', 'better', 'worse', 'no-better']),
+ /** One sentence a human reads instead of doing the arithmetic. */
+ detail: z.string,
+ arms: z.array(
+ z.object({
+ arm: z.enum(['revised', 'previous']),
+ decided: z.number.int,
+ merged: z.number.int,
+ failed: z.number.int,
+ meanCostUsd: z.number,
+ }),
+),
+})
+
 export const AgentPersonaSchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -1209,6 +1232,7 @@ export type DirectoryListing = z.infer<typeof DirectoryListingSchema>
 export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type PersonaRevision = z.infer<typeof PersonaRevisionSchema>
+export type PromptTrial = z.infer<typeof PromptTrialSchema>
 export type PersonaDraft = z.infer<typeof PersonaDraftSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>

@@ -82,6 +82,8 @@ import {
  listUnread,
  markChannelRead,
  listPersonaRevisions,
+ promptTrialFor,
+ keepPromptRevision,
  revertPersonaPrompt,
  resumeAllRuns,
  setHandoffPolicy,
@@ -985,6 +987,43 @@ export const router = os.router({
  }),
 ),
 ),
+),
+
+ trial: os.persona.trial.handler(({ context, input }) =>
+ guard(async => {
+ const found = await promptTrialFor(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ personaId: asAgentPersonaId(input.personaId),
+ })
+ if (!found) return null
+ return {
+ revisionId: found.revisionId as string,
+ verdict: found.effect.verdict,
+ detail: found.effect.detail,
+ // Named field by field rather than spread: an excess-property check does not
+ // fire on a spread, which is how four fields have gone missing across a port
+ // in this codebase.
+ arms: [found.effect.revised, found.effect.previous].map((arm) => ({
+ arm: arm.arm,
+ decided: arm.decided,
+ merged: arm.merged,
+ failed: arm.failed,
+ meanCostUsd: arm.meanCostUsd,
+ })),
+ }
+ }),
+),
+
+ keepRevision: os.persona.keepRevision.handler(({ context, input }) =>
+ guard(async => {
+ await keepPromptRevision(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ personaId: asAgentPersonaId(input.personaId),
+ revisionId: asPersonaRevisionId(input.revisionId),
+ })
+ return { ok: true as const }
+ }),
 ),
 
  delete: os.persona.delete.handler(({ context, input }) =>

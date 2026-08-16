@@ -1509,6 +1509,17 @@ export const personaRevision = pgTable(
  replacedByUserId: text('replaced_by_user_id'),
  /** What the author said they were doing. Empty for a human edit, which has a diff instead. */
  rationale: text('rationale').notNull.default(''),
+ /**
+ * When a human settled the trial on this revision, or null while it
+ * is still being measured.
+ *
+ * On the revision rather than in the trial table because it is a fact about the
+ * *edit*, not about any run: "somebody looked at the evidence and decided" outlives
+ * every run that produced the evidence. Null on every human edit too — a human's edit
+ * is a decision rather than a hypothesis, so it never goes on trial and never needs
+ * deciding.
+ */
+ trialDecidedAt: timestamp('trial_decided_at', { withTimezone: true }),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
  },
  (t) => [index('persona_revision_persona_idx').on(t.workspaceId, t.personaId, t.createdAt)],
@@ -1551,4 +1562,45 @@ export const channelRead = pgTable(
  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
  },
  (t) => [uniqueIndex('channel_read_key_idx').on(t.workspaceId, t.channelId, t.userId)],
+)
+
+/**
+ * Which prompt a run was given while an agent's revision is on trial.
+ *
+ * The self-improvement loop says the unit of variation is a **persona revision**, and this is the row that
+ * makes that literal: one entry per run, naming the revision under test and which side of
+ * it that run went on. Everything the verdict needs beyond this — disposition and metered
+ * spend — already lives on `agent_run`, so this table deliberately stores neither. A
+ * second copy of a run's cost would be a second answer to what a run cost.
+ *
+ * Its own table rather than a column on `agent_run`, for the reason `plan_subtask` is its
+ * own table: `agent_run` is the row four different invariants already read, and a nullable
+ * pair of trial columns on it would be two more fields every one of them has to ignore.
+ */
+export const promptTrialUse = pgTable(
+ 'prompt_trial_use',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ /** The agent-authored revision under test — the arms are it and what it replaced. */
+ revisionId: uuid('revision_id')
+.notNull
+.references( => personaRevision.id, { onDelete: 'cascade' }),
+ agentRunId: uuid('agent_run_id')
+.notNull
+.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+ /** 'revised' | 'previous' — see PromptArm. */
+ arm: text('arm').notNull,
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ // One arm per run: a run is on one side of the comparison or it is not in it.
+ uniqueIndex('prompt_trial_run_idx').on(t.agentRunId),
+ index('prompt_trial_revision_idx').on(t.workspaceId, t.revisionId),
+ ],
 )

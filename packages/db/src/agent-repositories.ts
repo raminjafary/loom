@@ -88,6 +88,7 @@ import {
  notificationTarget,
  personaGroup,
  personaRevision,
+ promptTrialUse,
  planSubtask,
  repository,
  runner,
@@ -1370,6 +1371,96 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
 .orderBy(desc(personaRevision.createdAt))
 .limit(limit ?? 200)
  return rows.map((row) => toPersonaRevision(row as PersonaRevisionRow))
+ },
+
+ async findRevisionOnTrial(workspaceId, personaId) {
+ const [row] = await db
+.select
+.from(personaRevision)
+.where(
+ and(
+ eq(personaRevision.workspaceId, workspaceId),
+ eq(personaRevision.personaId, personaId),
+ // Only an agent's edit is a hypothesis; a human's is a decision.
+ eq(personaRevision.replacedByKind, 'agent_run'),
+ isNull(personaRevision.trialDecidedAt),
+),
+)
+.orderBy(desc(personaRevision.createdAt))
+.limit(1)
+ return row ? toPersonaRevision(row as PersonaRevisionRow): null
+ },
+
+ async decideTrial(workspaceId, revisionId) {
+ await db
+.update(personaRevision)
+.set({ trialDecidedAt: new Date })
+.where(
+ and(eq(personaRevision.workspaceId, workspaceId), eq(personaRevision.id, revisionId)),
+)
+ },
+
+ async recordTrialUse(input) {
+ await db
+.insert(promptTrialUse)
+.values({
+ workspaceId: input.workspaceId,
+ personaId: input.personaId,
+ revisionId: input.revisionId,
+ agentRunId: input.agentRunId,
+ arm: input.arm,
+ })
+ // A run is on one side or it is not in the comparison — re-recording is a no-op
+ // rather than a second vote.
+.onConflictDoNothing({ target: promptTrialUse.agentRunId })
+ },
+
+ async countTrialArms(workspaceId, revisionId) {
+ const rows = await db
+.select({ arm: promptTrialUse.arm, value: count })
+.from(promptTrialUse)
+.where(
+ and(
+ eq(promptTrialUse.workspaceId, workspaceId),
+ eq(promptTrialUse.revisionId, revisionId),
+),
+)
+.groupBy(promptTrialUse.arm)
+ const of = (arm: string) => rows.find((row) => row.arm === arm)?.value ?? 0
+ return { revised: of('revised'), previous: of('previous') }
+ },
+
+ /** Mirrors `tallyExpertiseOutcomes` exactly — same join, same definition of "decided". */
+ async tallyTrialOutcomes(workspaceId, revisionId) {
+ const rows = await db
+.select({
+ arm: promptTrialUse.arm,
+ decided: sql<number>`count(*) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed')::int`,
+ merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+ discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
+ failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
+ costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed'), 0)::double precision`,
+ })
+.from(promptTrialUse)
+.innerJoin(agentRun, eq(agentRun.id, promptTrialUse.agentRunId))
+.where(
+ and(
+ eq(promptTrialUse.workspaceId, workspaceId),
+ eq(promptTrialUse.revisionId, revisionId),
+),
+)
+.groupBy(promptTrialUse.arm)
+
+ return rows
+.filter((row) => row.arm === 'revised' || row.arm === 'previous')
+.map((row) => ({
+ arm: row.arm as 'revised' | 'previous',
+ decided: row.decided,
+ merged: row.merged,
+ discarded: row.discarded,
+ failed: row.failed,
+ costUsdTotal: row.costUsdTotal,
+ }))
  },
 
  async countRevisionsByRun(workspaceId, agentRunId) {

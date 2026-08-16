@@ -39,6 +39,8 @@ import type {
  PersonaRevision,
  PersonaRevisionAuthorKind,
  PersonaRevisionId,
+ PromptArm,
+ PromptArmTally,
  PersonaSpec,
  Repository,
  RepositoryId,
@@ -670,6 +672,44 @@ export interface PersonaRepositoryPort {
 ): Promise<PersonaRevision | null>
  /** Backs the per-run self-edit cap — the same shape `worker_note` uses for its own. */
  countRevisionsByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<number>
+
+ /**
+ * The agent-authored revision currently being measured, or null.
+ *
+ * Newest first and undecided: an edit a human has ruled on is settled, and only the
+ * most recent one is on trial — two live trials on one persona would be two
+ * counterfactuals with no way to tell which prompt produced which outcome.
+ */
+ findRevisionOnTrial(
+ workspaceId: WorkspaceId,
+ personaId: AgentPersonaId,
+): Promise<PersonaRevision | null>
+ /** Ends the trial. Called by a human keeping the edit, and by a revert discarding it. */
+ decideTrial(workspaceId: WorkspaceId, revisionId: PersonaRevisionId): Promise<void>
+ /** Which prompt this run was given while a revision is on trial. */
+ recordTrialUse(input: {
+ workspaceId: WorkspaceId
+ personaId: AgentPersonaId
+ revisionId: PersonaRevisionId
+ agentRunId: AgentRunId
+ arm: PromptArm
+ }): Promise<void>
+ /**
+ * How many runs each arm has been *assigned*, in flight included.
+ *
+ * Distinct from the tally below, which counts only decided runs: alternation has to
+ * balance what has been handed out, or a burst of concurrent starts all land on the
+ * same side while none of them has finished.
+ */
+ countTrialArms(
+ workspaceId: WorkspaceId,
+ revisionId: PersonaRevisionId,
+): Promise<{ revised: number; previous: number }>
+ /** Outcomes per arm, joined from the runs — never copied onto the use row. */
+ tallyTrialOutcomes(
+ workspaceId: WorkspaceId,
+ revisionId: PersonaRevisionId,
+): Promise<PromptArmTally[]>
 }
 
 export interface PersonaGroupRepositoryPort {

@@ -6,6 +6,7 @@ import type {
  PersonaCapability,
  PersonaDraft,
  PersonaRevision,
+ PromptTrial,
 } from '@loom/api-contract'
 import {
  EMPTY_PERSONA_FORM,
@@ -57,6 +58,11 @@ const props = defineProps<{
  * second place deciding when the data is stale.
  */
  revisions: PersonaRevision[]
+ /**
+ * What the runs say about each persona's live self-edit, by persona
+ * id. Absent means nothing is being measured.
+ */
+ trials?: Record<string, PromptTrial>
 }>
 
 const emit = defineEmits<{
@@ -82,6 +88,8 @@ const emit = defineEmits<{
  * it in one gesture.
  */
  'revert-persona': [input: { personaId: string; revisionId: string }]
+ /** Ends a trial by keeping the agent's edit. */
+ 'keep-revision': [input: { personaId: string; revisionId: string }]
 }>
 
 type Mode = 'closed' | 'create' | 'edit'
@@ -125,6 +133,18 @@ const editingPersona = computed(
 const history = computed( =>
  editingId.value === '' ? []: personaHistory(props.revisions, editingId.value),
 )
+
+/** The trial on the persona being edited, if one of its edits is still being measured. */
+const trial = computed( =>
+ editingId.value === '' ? null: (props.trials?.[editingId.value] ?? null),
+)
+
+const VERDICT_LABEL: Record<PromptTrial['verdict'], string> = {
+ undecided: 'Still measuring',
+ better: 'The agent\'s version is doing better',
+ worse: 'The agent\'s version is doing worse',
+ 'no-better': 'No measurable difference',
+}
 
 const existingNames = computed( => props.personas.map((persona) => persona.name))
 
@@ -798,6 +818,40 @@ const harnessSummary = (persona: AgentPersona): string => {
  Rendered as whole documents rather than parsed: this client does not read the
  persona format, which is the rule the raw tab follows for the same reason.
  -->
+ <!--
+ The measurement, above the history rather than inside it. It is
+ the thing that decides what a human does with the entry below it, and this
+ project has three times shipped the answer below the controls.
+ -->
+ <section v-if="mode === 'edit' && trial" class="trial":class="trial.verdict">
+ <h4>{{ VERDICT_LABEL[trial.verdict] }}</h4>
+ <p class="detail">{{ trial.detail }}</p>
+ <ul class="arms">
+ <li v-for="arm in trial.arms":key="arm.arm">
+ <strong>{{ arm.arm === 'revised' ? "the agent's version": 'the one it replaced' }}</strong>
+ <span>{{ arm.merged }} merged of {{ arm.decided }} finished</span>
+ <span v-if="arm.decided > 0">${{ arm.meanCostUsd.toFixed(4) }} a run</span>
+ </li>
+ </ul>
+ <div class="trial-actions">
+ <button
+ type="button"
+ class="link"
+ @click="emit('keep-revision', { personaId: editingId, revisionId: trial.revisionId })"
+ >
+ Keep it
+ </button>
+ <ConfirmButton
+ variant="link"
+ label="Restore the old one"
+ confirm-label="Put the previous prompt back"
+ @confirm="
+ emit('revert-persona', { personaId: editingId, revisionId: trial.revisionId })
+ "
+ />
+ </div>
+ </section>
+
  <section v-if="mode === 'edit' && history.length > 0" class="history">
  <h4>Earlier prompts</h4>
  <p class="hint">
@@ -829,6 +883,49 @@ const harnessSummary = (persona: AgentPersona): string => {
 </template>
 
 <style scoped>
+.trial {
+ margin-top: 1rem;
+ border: 1px solid var(--line, #2a2a2a);
+ border-left: 3px solid var(--accent, #7aa2f7);
+ border-radius: 4px;
+ padding: 0.6rem;
+}
+
+.trial.worse {
+ border-left-color: var(--danger, #f7768e);
+}
+
+.trial h4 {
+ margin: 0 0 0.25rem;
+ font-size: 0.85rem;
+}
+
+.trial.detail {
+ margin: 0 0 0.5rem;
+ font-size: 0.85rem;
+ opacity: 0.9;
+}
+
+.trial.arms {
+ margin: 0 0 0.5rem;
+ padding: 0;
+ list-style: none;
+ display: grid;
+ gap: 0.2rem;
+ font-size: 0.8rem;
+}
+
+.trial.arms li {
+ display: flex;
+ gap: 0.6rem;
+ flex-wrap: wrap;
+}
+
+.trial-actions {
+ display: flex;
+ gap: 0.75rem;
+}
+
 .self-edited {
  color: var(--accent, #7aa2f7);
 }

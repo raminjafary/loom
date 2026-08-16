@@ -14,6 +14,7 @@ import type {
  SubjectMapListing,
  PersonaCapability,
  PersonaRevision,
+ PromptTrial,
  MergeQueueEntry,
  NotificationConfig,
  DelegationEdge,
@@ -90,6 +91,11 @@ export interface AgentSnapshot {
  * The newest entry for a persona names who wrote the version that is live *now*.
  */
  readonly personaRevisions: PersonaRevision[]
+ /**
+ * What the runs so far say about each persona's live self-edit, keyed
+ * by persona id. Absent means nothing is being measured, which is the ordinary state.
+ */
+ readonly promptTrials: Record<string, PromptTrial>
  /**
  * The run this client is *watching* — the one whose approvals and diff the
  * workspace view shows. Distinct from `activeRuns` now that a workspace may run
@@ -451,6 +457,8 @@ export interface AgentSession {
  * and a human who disagrees undoes it in one click.
  */
  revertPersonaPrompt(input: { personaId: string; revisionId: string }): Promise<void>
+ /** Ends a trial by keeping the agent's edit. */
+ keepPersonaRevision(input: { personaId: string; revisionId: string }): Promise<void>
  /**
  * Unbinds a repository, deleting its runs and their recorded spend with it.
  * Resolves `{ ok: false, reason }` when the server wants that loss acknowledged,
@@ -675,6 +683,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  capabilities: [],
  capabilityAttachments: [],
  personaRevisions: [],
+ promptTrials: {},
  activeRun: null,
  activeRuns: [],
  pendingApprovals: [],
@@ -951,13 +960,36 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  personas: AgentPersona[]
  delegationMatrix: DelegationEdge[]
  personaRevisions: PersonaRevision[]
+ promptTrials: Record<string, PromptTrial>
  }> => {
  const [personas, delegationMatrix, personaRevisions] = await Promise.all([
  options.api.persona.list,
  options.api.personaGroup.delegationMatrix,
  options.api.persona.revisions({}),
  ])
- return { personas, delegationMatrix, personaRevisions }
+ /**
+ * Trials are read only for personas that actually have a revision, which is almost
+ * never all of them — the alternative is a request per persona on every refresh for a
+ * state most personas are never in.
+ */
+ const withRevisions = [...new Set(personaRevisions.map((entry) => entry.personaId))]
+ const trials = await Promise.all(
+ withRevisions.map(async (personaId) => {
+ try {
+ return [personaId, await options.api.persona.trial({ personaId })] as const
+ } catch {
+ return [personaId, null] as const
+ }
+ }),
+)
+ return {
+ personas,
+ delegationMatrix,
+ personaRevisions,
+ promptTrials: Object.fromEntries(
+ trials.filter((entry): entry is readonly [string, PromptTrial] => entry[1] !== null),
+),
+ }
  }
 
  const loadAll = async : Promise<void> => {
@@ -1416,6 +1448,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  } catch (error) {
  patch({ error: errorMessage(error) })
  return null
+ }
+ },
+
+ async keepPersonaRevision(input) {
+ patch({ error: null })
+ try {
+ await options.api.persona.keepRevision(input)
+ patch(await readPersonasAndMatrix)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
  }
  },
 

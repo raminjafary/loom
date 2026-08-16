@@ -56,6 +56,10 @@ import {
  parsePersonaMarkdown,
  revisePromptBody,
  reviseToolList,
+ nextPromptArm,
+ summarizePromptEffect,
+ type PromptArm,
+ type PromptTrialEffect,
  type SelfEditVerdict,
  shippedBuiltin,
  planStages,
@@ -947,6 +951,55 @@ export const listPersonaRevisions = async (
 }
 
 /**
+ * What the runs so far say about an agent's edit.
+ *
+ * Returns null when nothing is being measured, which is the normal state: only an
+ * agent-authored revision that no human has ruled on goes on trial.
+ */
+export const promptTrialFor = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<{ revisionId: PersonaRevisionId; effect: PromptTrialEffect } | null> => {
+ const revision = await deps.personas.findRevisionOnTrial(input.workspaceId, input.personaId)
+ if (!revision) return null
+ const tallies = await deps.personas.tallyTrialOutcomes(input.workspaceId, revision.id)
+ return { revisionId: revision.id, effect: summarizePromptEffect(tallies) }
+}
+
+/**
+ * A human ends the trial by keeping the edit.
+ *
+ * Rejecting it is `revertPersonaPrompt`, which ends the trial too — so both outcomes are
+ * a human act and neither is the platform's. The "the loop needs no new gate" cuts
+ * both ways: it grants no authority, and it takes none either, so nothing here ever
+ * decides on a human's behalf however lopsided the evidence gets.
+ */
+export const keepPromptRevision = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ personaId: AgentPersonaId
+ revisionId: PersonaRevisionId
+ },
+): Promise<void> => {
+ if (!isHuman(input.actor)) throw new ForbiddenError('Only a human may settle a trial')
+ const revision = await deps.personas.findRevision(input.workspaceId, input.revisionId)
+ if (!revision || revision.personaId !== input.personaId) {
+ throw new NotFoundError('PersonaRevision')
+ }
+ await deps.personas.decideTrial(input.workspaceId, input.revisionId)
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'persona.trial_kept',
+ subjectType: 'agent_persona',
+ subjectId: input.personaId,
+ metadata: { revisionId: input.revisionId },
+ })
+}
+
+/**
  * Puts a superseded prompt back.
  *
  * **Human-only, and it is the half of tier 1 that makes the other half safe.** An agent
@@ -1015,6 +1068,13 @@ export const revertPersonaPrompt = async (
  rationale: `Reverted to the version superseded on ${revision.createdAt.toISOString}.`,
  },
 )
+
+ /**
+ * A revert settles the trial as well: the version being measured is
+ * no longer the version running, so continuing to hand runs the "previous" prompt would
+ * be comparing two prompts against a third.
+ */
+ await deps.personas.decideTrial(input.workspaceId, input.revisionId)
 
  await deps.audit.record({
  workspaceId: input.workspaceId,
@@ -2027,6 +2087,51 @@ export const listChildAgentRuns = (
  * than a human — which is the whole point of a Planner, and is safe *only*
  * because of that attenuation.
  */
+/**
+ * Assigns this run to one side of a prompt trial, or to nothing when there is no edit being measured.
+ *
+ * **The control group is the archive.** the "losing variant is archived, not
+ * deleted" is what makes this cheap: the previous prompt is already stored as the
+ * revision the agent's edit replaced, so measuring against it needs no second persona, no
+ * shadow row and no copy of anything. It reads the old document and uses its body.
+ *
+ * Returns `null` — and the run proceeds normally on the live prompt — whenever anything is
+ * missing or unreadable. That is deliberate and it is the difference between a
+ * measurement and a gate: the self-improvement loop is explicit that this loop adds no new authority, and a
+ * trial that could refuse a run would be one.
+ */
+const assignPromptTrial = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; personaId: AgentPersonaId; markdownSource: string },
+): Promise<{ revisionId: PersonaRevisionId; arm: PromptArm; systemPrompt: string } | null> => {
+ try {
+ const revision = await deps.personas.findRevisionOnTrial(input.workspaceId, input.personaId)
+ if (!revision) return null
+
+ const used = await deps.personas.countTrialArms(input.workspaceId, revision.id)
+ const arm = nextPromptArm(used)
+ if (arm === 'revised') {
+ return {
+ revisionId: revision.id,
+ arm,
+ systemPrompt: parsePersonaMarkdown(input.markdownSource).systemPrompt,
+ }
+ }
+ /**
+ * The `previous` arm runs the superseded prompt **in this run's snapshot only**. The
+ * persona row is untouched: the agent's edit is live and stays live, and a trial that
+ * quietly reverted the thing it was measuring would be measuring something else.
+ */
+ return {
+ revisionId: revision.id,
+ arm,
+ systemPrompt: parsePersonaMarkdown(revision.markdownSource).systemPrompt,
+ }
+ } catch {
+ return null
+ }
+}
+
 export const startAgentRun = async (
  deps: AgentDeps,
  input: {
@@ -2242,10 +2347,24 @@ export const startAgentRun = async (
 )
  }
 
+ /**
+ * Which prompt this run gets, while an agent's edit is being measured.
+ *
+ * Assigned *before* the snapshot is built, because the arm decides what the snapshot
+ * says — and recorded after the run row exists, since the row is what the outcome will
+ * be read from. Nothing here can fail the start: a trial is a measurement, and a
+ * persona that cannot be measured is still a persona that can run.
+ */
+ const trial = await assignPromptTrial(deps, {
+ workspaceId: input.workspaceId,
+ personaId: input.personaId,
+ markdownSource: persona.markdownSource,
+ })
+
  const baseSpec: PersonaSpec = {
  name: persona.name,
  systemPrompt: applyResponseStyle(
- parsePersonaMarkdown(persona.markdownSource).systemPrompt,
+ trial?.systemPrompt ?? parsePersonaMarkdown(persona.markdownSource).systemPrompt,
  responseStyle,
 ),
  responseStyle,
@@ -2459,6 +2578,25 @@ export const startAgentRun = async (
  // it asked to do", which is the question a human asks about exactly those runs.
 ...(input.task === undefined ? {}: { task: input.task }),
  })
+
+ /**
+ * The trial row, after the run exists. Best-effort for the reason
+ * `assignPromptTrial` is: a measurement must never be able to fail a run, and a run
+ * missing from the tally makes the comparison slower rather than wrong.
+ */
+ if (trial) {
+ try {
+ await deps.personas.recordTrialUse({
+ workspaceId: input.workspaceId,
+ personaId: input.personaId,
+ revisionId: trial.revisionId,
+ agentRunId: run.id,
+ arm: trial.arm,
+ })
+ } catch {
+ // See above.
+ }
+ }
 
  await deps.audit.record({
  workspaceId: input.workspaceId,

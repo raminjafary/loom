@@ -870,6 +870,9 @@ describe('contract completeness', => {
  // that makes writing without asking an acceptable trade.
  'revisions',
  'revert',
+ // The self-improvement loop — whether the edit was an improvement, and a human settling it.
+ 'trial',
+ 'keepRevision',
  ])
  expect(Object.keys(contract.personaGroup)).toEqual([
  'list',
