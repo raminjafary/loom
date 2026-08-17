@@ -1,6 +1,7 @@
 import type { Contract } from '@loom/api-contract'
 import {
  advanceMergeQueue,
+ advanceVerificationQueue,
  expireStaleApprovals,
  reapStuckRuns,
  startAgentRun,
@@ -2894,6 +2895,259 @@ describe('runner-gateway: serialized merge queue', => {
  expect(afterLate?.mergedCommitSha).toBeNull
  expect((await client.agentRun.get({ agentRunId: run.id })).branchDisposition).toBeNull
 
+ socket.close
+ })
+})
+
+/**
+ * The verification harness, driven over the real protocol.
+ *
+ * The frame is where this is worth asserting, for the reason the mastery block above
+ * says: the definition of done crosses a port, a dispatch adapter and a wire schema
+ * before it reaches the thing that runs it, and a check list that arrives empty looks
+ * exactly like a repository nobody configured.
+ */
+describe('runner-gateway: the verification harness', => {
+ const finishRun = async (
+ socket: WebSocket,
+ threadId: string,
+ repositoryId: string,
+ branchName: string,
+ outcome: 'completed' | 'failed' = 'completed',
+) => {
+ const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+ const runPromise = client.agentRun.start({ threadId, repositoryId, personaId: testPersonaId })
+ await startRun
+ const run = await runPromise
+
+ socket.send(
+ JSON.stringify({ type: 'run_workspace_ready', runId: run.id, clonePath: `/tmp/${branchName}`, branchName }),
+)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: run.id,
+ seq: 1,
+ event:
+ outcome === 'completed'
+ ? { kind: 'run_completed', totalCostUsd: 0.01, result: 'done' }
+: { kind: 'run_failed', message: 'gave up' },
+ }),
+)
+
+ for (let i = 0; i < 40; i += 1) {
+ const current = await client.agentRun.get({ agentRunId: run.id })
+ if (current.status === outcome && current.branchName === branchName) return current
+ await new Promise((resolve) => setTimeout(resolve, 25))
+ }
+ throw new Error(`run never reached ${outcome} with a branch`)
+ }
+
+ const answerVerify = async (
+ socket: WebSocket,
+ reply: Record<string, unknown>,
+): Promise<Record<string, unknown>> => {
+ const frame = await nextFrame(socket, (v) => v.type === 'verify_run', 10_000)
+ socket.send(JSON.stringify({ type: 'verification_result', requestId: frame.requestId,...reply }))
+ return frame
+ }
+
+ const sweep = => advanceVerificationQueue(app.deps, { verificationStuckMs: 1_800_000 })
+
+ const verificationFor = async (runId: string) =>
+ (await client.agentRun.listVerifications({ agentRunIds: [runId] }))[0]
+
+ it('runs a finished run\'s branch against the repository\'s checks, in order', async => {
+ const { socket, runnerId } = await pairFakeRunner('verify-happy')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ await client.repository.setVerificationChecks({
+ repositoryId: repo.id,
+ checks: [
+ { name: 'build', command: 'pnpm build' },
+ { name: 'tests', command: 'pnpm test' },
+ ],
+ })
+ const created = await client.channel.create({ name: 'verify-happy' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/verify-1')
+
+ // Queued by the run finishing, and still unrun: a run's completion must not wait
+ // on a test suite.
+ expect((await verificationFor(run.id))?.status).toBe('pending')
+
+ const swept = sweep
+ const asked = await answerVerify(socket, {
+ status: 'ran',
+ commitSha: 'feed1234567890',
+ checks: [
+ { name: 'build', status: 'passed', detail: 'ok', durationMs: 10 },
+ { name: 'tests', status: 'passed', detail: 'ok', durationMs: 20 },
+ ],
+ })
+ expect(asked.runId).toBe(run.id)
+ expect(asked.checks).toEqual([
+ { name: 'build', command: 'pnpm build' },
+ { name: 'tests', command: 'pnpm test' },
+ ])
+ await swept
+
+ const record = await verificationFor(run.id)
+ expect(record?.status).toBe('passed')
+ expect(record?.commitSha).toBe('feed1234567890')
+ expect(record?.checks.map((check) => check.name)).toEqual(['build', 'tests'])
+
+ socket.close
+ })
+
+ /**
+ * The verdict is the platform's, not the Runner's. A frame reporting two passes and
+ * one failure is a failure whatever anybody calls it, and this is the assertion that
+ * a Runner cannot certify its own work.
+ */
+ it('fails on a failing check and names it, and keeps what was never reached', async => {
+ const { socket, runnerId } = await pairFakeRunner('verify-fail')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ await client.repository.setVerificationChecks({
+ repositoryId: repo.id,
+ checks: [
+ { name: 'build', command: 'pnpm build' },
+ { name: 'tests', command: 'pnpm test' },
+ ],
+ })
+ const created = await client.channel.create({ name: 'verify-fail' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/verify-2')
+
+ const swept = sweep
+ await answerVerify(socket, {
+ status: 'ran',
+ commitSha: 'dead1234567890',
+ checks: [
+ { name: 'build', status: 'failed', detail: 'error TS2345', durationMs: 10 },
+ { name: 'tests', status: 'not_run', detail: null, durationMs: null },
+ ],
+ })
+ await swept
+
+ const record = await verificationFor(run.id)
+ expect(record?.status).toBe('failed')
+ expect(record?.checks.find((check) => check.name === 'tests')?.status).toBe('not_run')
+
+ // The thread says which check, not merely that something failed.
+ const page = await client.message.list({ threadId: created.rootThread.id })
+ const line = page.messages.find((message) => message.body.text?.includes('loom/verify-2 at dead1234'))
+ expect(line?.body.text).toContain('build')
+ // And so does the ledger, which is what stops the next worker building on it.
+ const notes = await client.workerNote.listByTree({ agentRunId: run.id })
+ expect(notes.some((note) => note.kind === 'verification_result')).toBe(true)
+
+ socket.close
+ })
+
+ // A repository with no definition of done has nothing to say about a branch, and a
+ // row per run saying so would be noise on every surface that reads them.
+ it('records nothing at all for a repository with no checks', async => {
+ const { socket, runnerId } = await pairFakeRunner('verify-unconfigured')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'verify-unconfigured' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/verify-3')
+
+ expect(await verificationFor(run.id)).toBeUndefined
+
+ socket.close
+ })
+
+ /**
+ * A failed run may still have committed work, and the human deciding what to do with
+ * the branch needs to know whether it compiles.
+ */
+ it('verifies a failed run\'s branch too', async => {
+ const { socket, runnerId } = await pairFakeRunner('verify-failed-run')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ await client.repository.setVerificationChecks({
+ repositoryId: repo.id,
+ checks: [{ name: 'tests', command: 'pnpm test' }],
+ })
+ const created = await client.channel.create({ name: 'verify-failed-run' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/verify-4', 'failed')
+
+ expect((await verificationFor(run.id))?.status).toBe('pending')
+
+ socket.close
+ })
+
+ /**
+ * The serialization, on the harness. Two finished runs in one repository must not
+ * start two test suites at once — the limit is the unique partial index, and this is
+ * what proves the sweep actually meets it rather than merely intending to.
+ */
+ it('verifies one branch per repository at a time', async => {
+ const { socket, runnerId } = await pairFakeRunner('verify-serial')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ await client.repository.setVerificationChecks({
+ repositoryId: repo.id,
+ checks: [{ name: 'tests', command: 'pnpm test' }],
+ })
+ const created = await client.channel.create({ name: 'verify-serial' })
+ const first = await finishRun(socket, created.rootThread.id, repo.id, 'loom/serial-1')
+ const second = await finishRun(socket, created.rootThread.id, repo.id, 'loom/serial-2')
+
+ const verified: string[] = []
+ for (const expected of [first.id, second.id]) {
+ const swept = sweep
+ const frame = await answerVerify(socket, {
+ status: 'ran',
+ commitSha: `sha-${expected}`,
+ checks: [{ name: 'tests', status: 'passed', detail: 'ok', durationMs: 1 }],
+ })
+ // One verify_run per sweep — a second in-flight frame here would mean the
+ // serialization is decorative.
+ expect(frame.runId).toBe(expected)
+ await swept
+ verified.push(frame.runId as string)
+ }
+ expect(verified).toEqual([first.id, second.id])
+
+ socket.close
+ })
+
+ // A refusal is the platform declining to run agent code unsandboxed. It says
+ // nothing about the branch, so it must not read as one that failed.
+ it('keeps a refusal distinguishable from a failure', async => {
+ const { socket, runnerId } = await pairFakeRunner('verify-refused')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ await client.repository.setVerificationChecks({
+ repositoryId: repo.id,
+ checks: [{ name: 'tests', command: 'pnpm test' }],
+ })
+ const created = await client.channel.create({ name: 'verify-refused' })
+ const run = await finishRun(socket, created.rootThread.id, repo.id, 'loom/verify-5')
+
+ const swept = sweep
+ await answerVerify(socket, { status: 'refused', reason: 'no sandbox is available' })
+ await swept
+
+ const record = await verificationFor(run.id)
+ expect(record?.status).toBe('refused')
+ expect(record?.reason).toContain('no sandbox')
+
+ socket.close
+ })
+
+ /**
+ * An agent editing the checks that judge it is the failure the roadmap sequences the tiers 3
+ * and 4 behind, arriving from the other direction.
+ */
+ it('refuses a definition of done with two checks of the same name', async => {
+ const { socket, runnerId } = await pairFakeRunner('verify-dupe')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ await expect(
+ client.repository.setVerificationChecks({
+ repositoryId: repo.id,
+ checks: [
+ { name: 'tests', command: 'a' },
+ { name: 'Tests', command: 'b' },
+ ],
+ }),
+).rejects.toThrow
  socket.close
  })
 })
