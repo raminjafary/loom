@@ -150,6 +150,42 @@ describe('proposeVariantSet', => {
  }
  })
 
+ /**
+ * The archive, forwarded to tier 1's validator.
+ *
+ * This is where the check earns its keep: a re-proposed *candidate* would occupy the one
+ * measurement slot a persona has for as long as five decided runs an arm takes, to reach a
+ * verdict the revision history already holds. The whole set is refused rather than the one
+ * candidate dropped, because a set is what the agent proposed and silently measuring two
+ * arms where it asked for three is a search it never designed.
+ */
+ it('refuses a candidate the persona already had, and says which of them it was', => {
+ const verdict = proposeVariantSet({
+ currentMarkdown: PERSONA,
+ proposals: proposals('A new idea.', 'A prompt from before.'),
+ revisionsThisRun: 0,
+ measurementOpen: false,
+ supersededPrompts: [{ body: 'A prompt from before.', replacedByKind: 'agent_run' }],
+ })
+ expect(verdict.ok).toBe(false)
+ if (!verdict.ok) {
+ expect(verdict.rule).toBe('candidate-refused')
+ expect(verdict.reason).toContain('Candidate 2 of 2')
+ expect(verdict.reason).toContain('already had')
+ }
+ })
+
+ it('accepts a set when the archive holds none of the candidates', => {
+ const verdict = proposeVariantSet({
+ currentMarkdown: PERSONA,
+ proposals: proposals('One idea.', 'Another idea.'),
+ revisionsThisRun: 0,
+ measurementOpen: false,
+ supersededPrompts: [{ body: 'Something else entirely.', replacedByKind: 'human' }],
+ })
+ expect(verdict.ok).toBe(true)
+ })
+
  it('applies tier 1"s per-run cap, so a run proposes a set or makes an edit', => {
  const verdict = proposeVariantSet({
  currentMarkdown: PERSONA,

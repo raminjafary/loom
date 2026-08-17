@@ -49,7 +49,11 @@ import {
  type VerificationTally,
 } from './expertise-trial.js'
 import type { PersonaVariantId } from './ids.js'
-import { revisePromptBody, type SelfEditVerdict } from './self-edit.js'
+import {
+ revisePromptBody,
+ type SelfEditVerdict,
+ type SupersededPrompt,
+} from './self-edit.js'
 
 /**
  * How many candidates one search may hold, and why it is small.
@@ -110,6 +114,15 @@ export const proposeVariantSet = (input: {
  /** How many self-revisions this run has already made — tier 1's per-run cap applies. */
  readonly revisionsThisRun: number
  readonly measurementOpen: boolean
+ /**
+ * Every prompt this persona used to have, forwarded to tier 1's validator.
+ *
+ * A search is where this check pays most. A re-proposed tier-1 edit costs one refusal; a
+ * re-proposed *candidate* opens an arm that needs five decided runs to reach a verdict the
+ * revision history already holds, and it does so while occupying the one measurement slot
+ * a persona has.
+ */
+ readonly supersededPrompts?: readonly SupersededPrompt[]
 }): VariantSetVerdict => {
  if (input.measurementOpen) {
  return {
@@ -164,6 +177,7 @@ export const proposeVariantSet = (input: {
  currentMarkdown: input.currentMarkdown,
  body: proposal.body,
  revisionsThisRun: input.revisionsThisRun,
+...(input.supersededPrompts ? { supersededPrompts: input.supersededPrompts }: {}),
  })
  if (!verdict.ok) {
  return {

@@ -59,9 +59,11 @@ import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
 import {
  advanceVerificationQueue,
+ revisePersonaPrompt,
  seedBuiltinPersonas,
 } from '../packages/application/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
+import { asAgentRunId, asWorkspaceId, parsedPromptBody } from '../packages/domain/src/index.js'
 import {
  PROPOSE_VARIANTS_TOOL_NAME,
  REVISE_PROMPT_TOOL_NAME,
@@ -234,7 +236,13 @@ const main = async => {
  * search still opens and measures itself — which is the right behaviour and not what this
  * driver is here to check.
  */
- await seedBuiltinPersonas(app.deps, { workspaceId: ws.id })
+ /**
+ * `asWorkspaceId` because the RPC client hands back a plain string and the use-case takes
+ * the branded id. It was `ws.id` and had not typechecked since `typecheck:tools` started
+ * covering this directory — the rot that script exists to catch, in the driver for the
+ * feature it covers.
+ */
+ await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(ws.id) })
 
  const enveloped = await client.persona.create({ markdownSource: ENVELOPED_PERSONA('self-editor') })
  const plain = await client.persona.create({ markdownSource: PLAIN_PERSONA('no-envelope') })
@@ -388,6 +396,52 @@ const main = async => {
  !saidBy(controlRun.id).includes(MARKER),
  'the control run was never told it, which is what makes the line above mean something',
 )
+
+ // ── 3b. The archive refuses a prompt this persona already had ───────────────
+ //
+ // The self-improvement loop says the archive "stops the loop re-proposing a failure it already paid for",
+ // and until this check nothing did. Driven through the same use-case a run's tool calls
+ // rather than by persuading a model to re-propose something, for the reason section 4
+ // gives about directives: what is under test is the mechanism, not a model's taste.
+ //
+ // `quoteRun` rather than the run that made the edit — that one has spent its single
+ // revision, so the per-run cap would refuse this before the archive ever looked, and the
+ // check would pass while proving nothing. This is the ordering the domain test asserts.
+ {
+ const revisions = await client.persona.revisions({ personaId: enveloped.id })
+ const archivedBody = parsedPromptBody(revisions[0]?.markdownSource ?? '')
+ check(
+ archivedBody !== null && archivedBody.includes(STARTING_PROMPT),
+ 'the revision holds the prompt a human wrote, which is what the archive check compares against',
+)
+
+ const replay = await revisePersonaPrompt(app.deps, {
+ workspaceId: asWorkspaceId(ws.id),
+ agentRunId: asAgentRunId(quoteRun.id),
+ body: archivedBody ?? '',
+ rationale: 'Re-proposing the prompt this persona started with.',
+ })
+ check(!replay.ok, 'a body the persona already had is refused rather than recorded')
+ check(
+ !replay.ok && replay.reason.includes('already had'),
+ 'the refusal tells the run it is proposing a version this persona moved away from',
+)
+ check(
+ !replay.ok && replay.reason.includes("an agent's edit replaced it"),
+ 'the refusal names who replaced it, which is the one fact a run cannot look up',
+)
+
+ const stillTwo = await client.persona.revisions({ personaId: enveloped.id })
+ check(
+ stillTwo.length === revisions.length,
+ `the refusal recorded nothing (${revisions.length} revision(s) before, ${stillTwo.length} after)`,
+)
+ const afterReplay = (await client.persona.list).find((p: any) => p.id === enveloped.id)
+ check(
+ (afterReplay?.markdownSource ?? '').includes(MARKER),
+ 'the live prompt is still the one the edit wrote, so the replay reverted nothing',
+)
+ }
 
  // ── 4. Tier 2: the tool list, within the envelope ───────────────────────────
  //

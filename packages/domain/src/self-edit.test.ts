@@ -3,8 +3,10 @@ import { parsePersonaMarkdown } from './persona-markdown.js'
 import {
  MAX_PROMPT_BODY_CHARS,
  MAX_SELF_REVISIONS_PER_RUN,
+ parsedPromptBody,
  revisePromptBody,
  reviseToolList,
+ type SupersededPrompt,
 } from './self-edit.js'
 
 /**
@@ -38,12 +40,24 @@ const withoutEnvelope = [
  'You write code carefully.',
 ].join('\n')
 
-const revise = (body: string, over: { currentMarkdown?: string; revisionsThisRun?: number } = {}) =>
+const revise = (
+ body: string,
+ over: {
+ currentMarkdown?: string
+ revisionsThisRun?: number
+ supersededPrompts?: readonly SupersededPrompt[]
+ } = {},
+) =>
  revisePromptBody({
  currentMarkdown: over.currentMarkdown ?? withEnvelope,
  body,
  revisionsThisRun: over.revisionsThisRun ?? 0,
+...(over.supersededPrompts ? { supersededPrompts: over.supersededPrompts }: {}),
  })
+
+/** A persona document whose body is `body`, for building an archive to compare against. */
+const documentWithBody = (body: string) =>
+ withEnvelope.replace('You write code carefully.', body)
 
 describe('revisePromptBody', => {
  it('replaces the body and leaves every frontmatter field alone', => {
@@ -109,6 +123,97 @@ describe('revisePromptBody', => {
  expect(verdict.ok).toBe(false)
  if (verdict.ok) return
  expect(verdict.rule).toBe('unchanged')
+ })
+
+ /**
+ * The archive check — the piece the section claimed and nothing had.
+ *
+ * The value is not the refusal, it is what the refusal says: a run cannot read the
+ * revision history, so this is the only moment it can be told that the version it just
+ * proposed is one this persona already moved away from.
+ */
+ describe('a prompt this persona used to have', => {
+ const archived = 'You write code fast and ask no questions.'
+
+ it('is refused, naming who replaced it and when', => {
+ const verdict = revise(archived, {
+ supersededPrompts: [
+ {
+ body: archived,
+ replacedByKind: 'agent_run',
+ replacedAt: new Date('2026-07-04T10:00:00Z'),
+ },
+ ],
+ })
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('already-tried')
+ expect(verdict.reason).toContain("an agent's edit replaced it")
+ expect(verdict.reason).toContain('2026-07-04')
+ /** The one thing it must tell the model to do instead, since it cannot revert. */
+ expect(verdict.reason).toContain('note')
+ })
+
+ it("says a person replaced it when a person did, because that is a decision and not a hypothesis", => {
+ const verdict = revise(archived, {
+ supersededPrompts: [{ body: archived, replacedByKind: 'human' }],
+ })
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.reason).toContain('a person replaced it')
+ })
+
+ /** Whitespace is not a new idea. The stored body is trimmed; so is the proposal. */
+ it('is refused when it differs only in surrounding whitespace', => {
+ const verdict = revise(`\n ${archived} \n`, {
+ supersededPrompts: [{ body: `${archived}\n`, replacedByKind: 'agent_run' }],
+ })
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('already-tried')
+ })
+
+ it('permits a body the archive does not hold', => {
+ const verdict = revise('You write code carefully, and you run the tests first.', {
+ supersededPrompts: [{ body: archived, replacedByKind: 'agent_run' }],
+ })
+ expect(verdict.ok).toBe(true)
+ })
+
+ /**
+ * Ordering, and it is a disclosure rule rather than a style one: a persona that may not
+ * edit at all must not learn from the refusal that some earlier version of itself said
+ * this, because the permission check was about to deny it everything.
+ */
+ it('does not preempt the envelope refusal', => {
+ const verdict = revise(archived, {
+ currentMarkdown: withoutEnvelope,
+ supersededPrompts: [{ body: archived, replacedByKind: 'agent_run' }],
+ })
+ expect(verdict.ok).toBe(false)
+ if (verdict.ok) return
+ expect(verdict.rule).toBe('no-envelope')
+ })
+
+ /** An empty archive is the normal state and must not be mistaken for a match. */
+ it('permits anything when the archive is empty', => {
+ expect(revise(archived, { supersededPrompts: [] }).ok).toBe(true)
+ })
+ })
+
+ /**
+ * The parse that builds the archive, and why it swallows: a persona whose *history* holds
+ * an unreadable document is not a persona that may no longer be edited. A gap in the
+ * check is the honest failure; a refusal is not.
+ */
+ describe('parsedPromptBody', => {
+ it('returns the trimmed body of a persona document', => {
+ expect(parsedPromptBody(documentWithBody('Be brief.'))).toBe('Be brief.')
+ })
+
+ it('returns null for something that is not one, rather than throwing', => {
+ expect(parsedPromptBody('not a persona document at all')).toBeNull
+ })
  })
 
  /**

@@ -35,8 +35,26 @@
  * model, and continuity mode is explicit that a refusal must arrive as a request a human could grant:
  * "rejected and surfaced to a human as a request, not silently clamped — clamping teaches
  * an agent to probe."
+ *
+ * ## Why a prompt this persona *used* to have is a refusal too
+ *
+ * The self-improvement loop names the archive as one of the four pieces an evolutionary loop needs, and says
+ * what it is for beyond the record: it "stops the loop re-proposing a failure it already
+ * paid for". Nothing implemented that. `unchanged` below compares against the *live*
+ * prompt and `proposeVariantSet`'s `duplicate` compares candidates against each other, so
+ * a body byte-identical to a revision this persona already moved away from was accepted —
+ * and, for a variant, opened an arm that costs five decided runs to re-derive a verdict the
+ * history already holds.
+ *
+ * The refusal is also the cheapest feedback channel the loop has. A run cannot read the
+ * revision history — `listPersonaRevisions` is reachable from the contract and never from
+ * the agent path, deliberately, since it is a persona's whole editing lineage — so the one
+ * moment where telling it "you already tried this, and here is what happened to it" costs
+ * nothing extra is the moment it tries. That is why the reason names *who* replaced the
+ * text and *when*, rather than only refusing.
  */
 
+import type { PersonaRevisionAuthorKind } from './agents.js'
 import { envelopeAllows, envelopeRefusalSummary, maySelfModify } from './envelope.js'
 import {
  parsePersonaMarkdown,
@@ -74,6 +92,8 @@ export type SelfEditRule =
  | 'too-long'
  /** Byte-identical to the prompt it already has. */
  | 'unchanged'
+ /** Byte-identical to a prompt it *used* to have — see this file's header. */
+ | 'already-tried'
  /** The round trip did not preserve the frontmatter — see this file's header. */
  | 'frontmatter-changed'
  /** The body opens with a frontmatter delimiter, so the document reads as two of them. */
@@ -88,6 +108,47 @@ export type SelfEditRule =
 export type SelfEditVerdict =
  | { readonly ok: true; readonly markdown: string; readonly body: string }
  | { readonly ok: false; readonly rule: SelfEditRule; readonly reason: string }
+
+/**
+ * A prompt this persona used to have, as the archive check needs it.
+ *
+ * A body rather than a document, because that is what is being compared and the caller has
+ * already had to parse the stored markdown to get it. `parsedPromptBody` is that parse, in
+ * one place, so an unparseable old revision cannot break an edit to a persona that is fine
+ * now — an archive entry nobody can read is a gap in the check and never a refusal.
+ */
+export interface SupersededPrompt {
+ readonly body: string
+ readonly replacedByKind: PersonaRevisionAuthorKind
+ readonly replacedAt?: Date
+}
+
+/**
+ * The body of a stored persona document, or `null` if it cannot be read as one.
+ *
+ * Deliberately swallowing: this is only ever used to build the archive to compare against,
+ * where the honest failure is "this check saw one fewer entry" rather than "an edit was
+ * refused because something unrelated in the history is malformed".
+ */
+export const parsedPromptBody = (markdownSource: string): string | null => {
+ try {
+ return parsePersonaMarkdown(markdownSource).systemPrompt.trim
+ } catch {
+ return null
+ }
+}
+
+/** How the refusal names what the archive recorded. */
+const describeSupersession = (entry: SupersededPrompt): string => {
+ const who =
+ entry.replacedByKind === 'human'
+ ? 'a person replaced it'
+: entry.replacedByKind === 'agent_run'
+ ? "an agent's edit replaced it"
+: 'the platform replaced it'
+ const when = entry.replacedAt ? ` on ${entry.replacedAt.toISOString.slice(0, 10)}`: ''
+ return `${who}${when}`
+}
 
 /** Every frontmatter field, compared as a whole. Adding a field to the format adds it here. */
 const frontmatterOf = (parsed: ParsedPersonaMarkdown): string =>
@@ -118,6 +179,16 @@ export const revisePromptBody = (input: {
  readonly body: string
  /** How many times this run has already done this. */
  readonly revisionsThisRun: number
+ /**
+ * Every prompt this persona used to have, in any order.
+ *
+ * Optional, and absent means the caller is not checking — which is the right default for
+ * the authoring paths a human drives, where re-proposing an old prompt is a revert
+ * somebody chose. Not capped: the whole point is that the loop stops paying twice for a
+ * failure, and a check that quietly stopped looking after N entries would be a check that
+ * reports "new" about something the history holds.
+ */
+ readonly supersededPrompts?: readonly SupersededPrompt[]
 }): SelfEditVerdict => {
  let current: ParsedPersonaMarkdown
  try {
@@ -215,6 +286,28 @@ export const revisePromptBody = (input: {
  reason:
  'That is the prompt you already have, character for character. Nothing was ' +
  'recorded — a revision a human has to read should be one that says something new.',
+ }
+ }
+
+ /**
+ * The archive, immediately after the live prompt, because the two refusals are the same
+ * sentence about different documents: this text is not new. After the envelope and the
+ * per-run cap rather than before them, so a persona that may not edit at all hears only
+ * that — a refusal naming a version of itself would tell a run something about the
+ * persona's history that the permission check was about to deny it.
+ */
+ const alreadyTried = input.supersededPrompts?.find((entry) => entry.body.trim === body)
+ if (alreadyTried) {
+ return {
+ ok: false,
+ rule: 'already-tried',
+ reason:
+ `That is a prompt this persona already had — ${describeSupersession(alreadyTried)}, and ` +
+ 'it is in the revision history where a human can restore it. Nothing was recorded. ' +
+ 'Re-proposing it does not measure anything new: the platform would spend a fresh ' +
+ 'trial re-deriving a verdict the history already holds. If you believe that version ' +
+ 'was the better one, write a note saying so — restoring a revision is a human\'s ' +
+ 'call and they can see both.',
  }
  }
 

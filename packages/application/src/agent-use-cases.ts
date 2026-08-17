@@ -54,8 +54,10 @@ import {
  parseDecomposition,
  parsePlanDelta,
  parsePersonaMarkdown,
+ parsedPromptBody,
  revisePromptBody,
  reviseToolList,
+ type SupersededPrompt,
  nextPromptArm,
  blindVariantOptions,
  describeVerifierVerdict,
@@ -1013,6 +1015,31 @@ const measurementOpenFor = async (
 }
 
 /**
+ * Every prompt this persona used to have, for the archive check.
+ *
+ * The whole history rather than a window, for the reason `supersededPrompts` documents: a
+ * check that stops looking reports "new" about a body the history holds. A revision that no
+ * longer parses is dropped rather than refused — `parsedPromptBody` is where that decision
+ * lives, so it is made once and the same way for every caller.
+ *
+ * Read here and never handed to a run: the refusal text is the only thing that crosses back,
+ * which keeps a persona's editing lineage out of a model's context while still telling it
+ * the one fact it needs.
+ */
+const supersededPromptsFor = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<SupersededPrompt[]> => {
+ const revisions = await deps.personas.listRevisions(input.workspaceId, input.personaId)
+ return revisions.flatMap((revision) => {
+ const body = parsedPromptBody(revision.markdownSource)
+ return body === null
+ ? []
+: [{ body, replacedByKind: revision.replacedByKind, replacedAt: revision.createdAt }]
+ })
+}
+
+/**
  * The searching half — a run proposes several candidate prompts instead of making one
  * edit.
  *
@@ -1049,9 +1076,10 @@ export const proposeOwnVariants = async (
  }
  }
 
- const [revisionsThisRun, measurementOpen] = await Promise.all([
+ const [revisionsThisRun, measurementOpen, supersededPrompts] = await Promise.all([
  deps.personas.countRevisionsByRun(input.workspaceId, input.agentRunId),
  measurementOpenFor(deps, { workspaceId: input.workspaceId, personaId: persona.id }),
+ supersededPromptsFor(deps, { workspaceId: input.workspaceId, personaId: persona.id }),
  ])
 
  const verdict = proposeVariantSet({
@@ -1059,6 +1087,7 @@ export const proposeOwnVariants = async (
  proposals: input.proposals,
  revisionsThisRun,
  measurementOpen,
+ supersededPrompts,
  })
  if (!verdict.ok) return { ok: false, reason: verdict.reason }
 
@@ -1828,14 +1857,15 @@ export const revisePersonaPrompt = async (
  }
  }
 
- const revisionsThisRun = await deps.personas.countRevisionsByRun(
- input.workspaceId,
- input.agentRunId,
-)
+ const [revisionsThisRun, supersededPrompts] = await Promise.all([
+ deps.personas.countRevisionsByRun(input.workspaceId, input.agentRunId),
+ supersededPromptsFor(deps, { workspaceId: input.workspaceId, personaId: persona.id }),
+ ])
  const verdict = revisePromptBody({
  currentMarkdown: persona.markdownSource,
  body: input.body,
  revisionsThisRun,
+ supersededPrompts,
  })
  if (!verdict.ok) return { ok: false, reason: verdict.reason }
 
