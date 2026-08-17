@@ -10,6 +10,7 @@ import type {
  NotificationTargetRepositoryPort,
  PersonaGroupRepositoryPort,
  PersonaRepositoryPort,
+ PersonaVariantRepositoryPort,
  PlanSubtaskRepositoryPort,
  RepositoryRepositoryPort,
  RunLiveActivity,
@@ -28,6 +29,7 @@ import {
  asThreadId,
  primaryToolArgument,
  asAgentPersonaId,
+ asPersonaVariantId,
  asRepositoryId,
  asSubjectMapId,
  asWorkspaceId,
@@ -55,6 +57,8 @@ import {
  toNotificationTarget,
  toPersonaGroup,
  toPersonaRevision,
+ toPersonaVariant,
+ toPersonaVariantSet,
  toPlanSubtask,
  toRepository,
  toRunner,
@@ -69,6 +73,8 @@ import {
  type NotificationTargetRow,
  type PersonaGroupRow,
  type PersonaRevisionRow,
+ type PersonaVariantRow,
+ type PersonaVariantSetRow,
  type PlanSubtaskRow,
  type RepositoryRow,
  type RunnerRow,
@@ -92,7 +98,10 @@ import {
  notificationTarget,
  personaGroup,
  personaRevision,
+ personaVariant,
+ personaVariantSet,
  promptTrialUse,
+ variantUse,
  planSubtask,
  repository,
  runner,
@@ -1751,6 +1760,224 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  return toAgentPersona(row as AgentPersonaRow)
  },
 })
+
+/**
+ * The searching half of the loop, in storage.
+ *
+ * Its own port rather than more methods on `PersonaRepositoryPort`, which is already the
+ * largest one here: a search has its own lifecycle — opened by a run, measured by every
+ * subsequent run, settled by a human — and none of it is a read or write of a persona row.
+ */
+export const personaVariantRepository = (db: Database): PersonaVariantRepositoryPort => ({
+ /**
+ * One transaction, because a set with no candidates is a persona's search slot held by
+ * nothing. The unique partial index on `status = 'open'` is what refuses a second open
+ * search, so a race between two runs proposing at once loses one of them here rather
+ * than producing two searches nobody can settle.
+ */
+ async openSet(input) {
+ return db.transaction(async (tx) => {
+ const [setRow] = await tx
+.insert(personaVariantSet)
+.values({
+ workspaceId: input.workspaceId,
+ personaId: input.personaId,
+ proposedByRunId: input.proposedByRunId ?? null,
+ })
+.returning
+ if (!setRow) throw new Error('variant set insert returned nothing')
+ const variantRows = await tx
+.insert(personaVariant)
+.values(
+ input.candidates.map((candidate, index) => ({
+ workspaceId: input.workspaceId,
+ setId: setRow.id,
+ personaId: input.personaId,
+ markdownSource: candidate.markdownSource,
+ rationale: candidate.rationale,
+ position: index,
+ })),
+)
+.returning
+ return {
+ set: toPersonaVariantSet(setRow as PersonaVariantSetRow),
+ variants: variantRows.map((row) => toPersonaVariant(row as PersonaVariantRow)),
+ }
+ })
+ },
+
+ async findOpenSet(workspaceId, personaId) {
+ const [setRow] = await db
+.select
+.from(personaVariantSet)
+.where(
+ and(
+ eq(personaVariantSet.workspaceId, workspaceId),
+ eq(personaVariantSet.personaId, personaId),
+ eq(personaVariantSet.status, 'open'),
+),
+)
+.limit(1)
+ if (!setRow) return null
+ return {
+ set: toPersonaVariantSet(setRow as PersonaVariantSetRow),
+ variants: await listVariantsOf(db, workspaceId, setRow.id),
+ }
+ },
+
+ async findSet(workspaceId, setId) {
+ const [setRow] = await db
+.select
+.from(personaVariantSet)
+.where(
+ and(eq(personaVariantSet.workspaceId, workspaceId), eq(personaVariantSet.id, setId)),
+)
+.limit(1)
+ if (!setRow) return null
+ return {
+ set: toPersonaVariantSet(setRow as PersonaVariantSetRow),
+ variants: await listVariantsOf(db, workspaceId, setRow.id),
+ }
+ },
+
+ async listOpenSets(workspaceId) {
+ const setRows = await db
+.select
+.from(personaVariantSet)
+.where(
+ and(
+ eq(personaVariantSet.workspaceId, workspaceId),
+ eq(personaVariantSet.status, 'open'),
+),
+)
+.orderBy(desc(personaVariantSet.createdAt))
+ if (setRows.length === 0) return []
+ /**
+ * One query for every candidate of every open set, grouped in memory. A query per set
+ * would be a round trip per persona being searched, which is the cost this method
+ * exists to avoid.
+ */
+ const variantRows = await db
+.select
+.from(personaVariant)
+.where(
+ and(
+ eq(personaVariant.workspaceId, workspaceId),
+ inArray(
+ personaVariant.setId,
+ setRows.map((row) => row.id),
+),
+),
+)
+.orderBy(personaVariant.position)
+ return setRows.map((setRow) => ({
+ set: toPersonaVariantSet(setRow as PersonaVariantSetRow),
+ variants: variantRows
+.filter((row) => row.setId === setRow.id)
+.map((row) => toPersonaVariant(row as PersonaVariantRow)),
+ }))
+ },
+
+ async recordVariantUse(input) {
+ await db
+.insert(variantUse)
+.values({
+ workspaceId: input.workspaceId,
+ setId: input.setId,
+ variantId: input.variantId ?? null,
+ agentRunId: input.agentRunId,
+ })
+ // A run is on one arm or it is not in the comparison — re-recording is a no-op
+ // rather than a second vote, exactly as `recordTrialUse` is.
+.onConflictDoNothing({ target: variantUse.agentRunId })
+ },
+
+ /**
+ * Assigned runs per arm, in-flight included — the count `nextVariantArm` balances.
+ *
+ * Distinct from the tally, which counts only decided runs: alternation has to balance
+ * what has been handed out, or a burst of concurrent starts all lands on the arm that
+ * happens to have finished least.
+ */
+ async countVariantArms(workspaceId, setId) {
+ const rows = await db
+.select({ variantId: variantUse.variantId, value: count })
+.from(variantUse)
+.where(and(eq(variantUse.workspaceId, workspaceId), eq(variantUse.setId, setId)))
+.groupBy(variantUse.variantId)
+ return rows.map((row) => ({
+ variantId: row.variantId === null ? null: asPersonaVariantId(row.variantId),
+ count: Number(row.value),
+ }))
+ },
+
+ /** The same joins and the same `decidedRun` as both trials. See `decidedRun`. */
+ async tallyVariantOutcomes(workspaceId, setId) {
+ const rows = await db
+.select({
+ variantId: variantUse.variantId,
+ decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
+ merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+ discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
+ failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
+ verificationFailed: verificationFailedCount,
+ failingCheck: modalFailingCheck,
+ costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${decidedRun}), 0)::double precision`,
+ })
+.from(variantUse)
+.innerJoin(agentRun, eq(agentRun.id, variantUse.agentRunId))
+.leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+.where(and(eq(variantUse.workspaceId, workspaceId), eq(variantUse.setId, setId)))
+.groupBy(variantUse.variantId)
+
+ return rows.map((row) => ({
+ variantId: row.variantId === null ? null: asPersonaVariantId(row.variantId),
+ decided: row.decided,
+ merged: row.merged,
+ discarded: row.discarded,
+ failed: row.failed,
+ verificationFailed: row.verificationFailed,
+ failingCheck: row.failingCheck,
+ costUsdTotal: row.costUsdTotal,
+ }))
+ },
+
+ /**
+ * Settles a search, and only one that is open.
+ *
+ * The `status = 'open'` predicate is what makes a double settle a no-op rather than a
+ * second decision: two humans clicking promote on two candidates at once would otherwise
+ * both write, and the set would record the loser.
+ */
+ async settleSet(workspaceId, setId, input) {
+ const [row] = await db
+.update(personaVariantSet)
+.set({
+ status: 'settled',
+ promotedVariantId: input.promotedVariantId ?? null,
+ settledByUserId: input.settledByUserId ?? null,
+ settledAt: new Date,
+ })
+.where(
+ and(
+ eq(personaVariantSet.workspaceId, workspaceId),
+ eq(personaVariantSet.id, setId),
+ eq(personaVariantSet.status, 'open'),
+),
+)
+.returning
+ return row ? toPersonaVariantSet(row as PersonaVariantSetRow): null
+ },
+})
+
+const listVariantsOf = async (db: Database, workspaceId: WorkspaceId, setId: string) => {
+ const rows = await db
+.select
+.from(personaVariant)
+.where(and(eq(personaVariant.workspaceId, workspaceId), eq(personaVariant.setId, setId)))
+.orderBy(personaVariant.position)
+ return rows.map((row) => toPersonaVariant(row as PersonaVariantRow))
+}
 
 export const personaGroupRepository = (db: Database): PersonaGroupRepositoryPort => ({
  async create(input) {

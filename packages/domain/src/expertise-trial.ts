@@ -185,6 +185,72 @@ export const verificationFailureRate = (tally: {
 }): number => (tally.decided === 0 ? 0: tally.verificationFailed / tally.decided)
 
 /**
+ * Which of two arms did better, and **on which term**.
+ *
+ * The one comparison every trial in this platform makes, written once. The map trial,
+ * The prompt trial and the variant search all ask the same question of two arms
+ * and have to answer it the same way, or a human reading two panels sees two verdicts about
+ * the same evidence. Only the *sentences* belong to the callers, because "runs that read
+ * this map" and "the agent's version" are not the same phrase.
+ *
+ * **The order is the judgement**, and it is the whole content of this function:
+ *
+ * 1. **What a human decided** — merged over decided. The strongest evidence there is,
+ * because somebody looked at the work and took it.
+ * 2. **What the repository's definition of done decided**. The strongest
+ * evidence available *without* waiting for a human, and the reason this is a fitness
+ * rather than a record of what reviewers had time for.
+ * 3. **Money**. Last, and only where the first two are level: a version that produces
+ * the same results for materially less is worth having, and one that costs materially
+ * more for the same results is not.
+ *
+ * `term` is returned rather than inferred by the caller so a sentence cannot claim cost
+ * decided something outcomes did.
+ */
+export interface TrialArmFacts {
+ readonly successRate: number
+ readonly verificationFailureRate: number
+ readonly meanCostUsd: number
+}
+
+export type TrialTerm = 'outcomes' | 'verification' | 'cost' | 'none'
+
+export interface TrialComparison {
+ readonly favours: 'candidate' | 'control' | 'neither'
+ readonly term: TrialTerm
+}
+
+export const compareTrialArms = (
+ candidate: TrialArmFacts,
+ control: TrialArmFacts,
+): TrialComparison => {
+ const outcomeGap = candidate.successRate - control.successRate
+ if (outcomeGap > SUCCESS_RATE_TOLERANCE) return { favours: 'candidate', term: 'outcomes' }
+ if (outcomeGap < -SUCCESS_RATE_TOLERANCE) return { favours: 'control', term: 'outcomes' }
+
+ const verificationGap = control.verificationFailureRate - candidate.verificationFailureRate
+ if (verificationGap > SUCCESS_RATE_TOLERANCE) {
+ return { favours: 'candidate', term: 'verification' }
+ }
+ if (verificationGap < -SUCCESS_RATE_TOLERANCE) {
+ return { favours: 'control', term: 'verification' }
+ }
+
+ /**
+ * A zero-cost control means nothing has been metered on that side, not that it was free —
+ * so there is no ratio to take and cost decides nothing.
+ */
+ const costGap =
+ control.meanCostUsd === 0
+ ? 0
+: (candidate.meanCostUsd - control.meanCostUsd) / control.meanCostUsd
+ if (costGap < -COST_TOLERANCE) return { favours: 'candidate', term: 'cost' }
+ if (costGap > COST_TOLERANCE) return { favours: 'control', term: 'cost' }
+
+ return { favours: 'neither', term: 'none' }
+}
+
+/**
  * One clause a human reads, naming the check rather than only the count.
  *
  * Empty string when nothing failed on either side, so a caller can append it
@@ -246,89 +312,75 @@ export const summarizeExpertiseEffect = (
  }
  }
 
- const outcomeGap = retrieved.successRate - withheld.successRate
  const asPercent = (rate: number) => `${Math.round(rate * 100)}%`
-
- if (outcomeGap > SUCCESS_RATE_TOLERANCE) {
- return {
- retrieved,
- withheld,
- verdict: 'helps',
- detail:
- `Runs that read this map merged ${asPercent(retrieved.successRate)} of the time ` +
- `against ${asPercent(withheld.successRate)} for runs deliberately denied it.`,
- }
- }
-
- if (outcomeGap < -SUCCESS_RATE_TOLERANCE) {
- return {
- retrieved,
- withheld,
- verdict: 'no-better',
- detail:
- `Runs that read this map merged ${asPercent(retrieved.successRate)} of the time ` +
- `against ${asPercent(withheld.successRate)} without it — it is making things worse, ` +
- 'not better.',
- }
- }
-
- /**
- * Level on what a human said, so the machine's check decides next — the * definition of done, ahead of cost and behind the disposition.
- *
- * The order is the judgement, again. A human merging is the strongest evidence there
- * is, so it goes first; a branch that fails the build is the strongest evidence
- * *available without waiting for one*, so it goes second; money goes last. Skipping
- * this term would let two arms that merge equally often be separated by pennies while
- * one of them was leaving branches that do not compile.
- */
- const verificationGap = withheld.verificationFailureRate - retrieved.verificationFailureRate
+ const money = (usd: number) => `$${usd.toFixed(4)}`
  const verification = describeVerificationFailures(
  { label: 'runs that read it',...retrieved },
  { label: 'runs denied it',...withheld },
 )
+ const level = `${asPercent(retrieved.successRate)} against ${asPercent(withheld.successRate)}`
 
- if (verificationGap > SUCCESS_RATE_TOLERANCE) {
- return {
+ // The comparison is `compareTrialArms`; only the wording is this section's. `no-better`
+ // covers both "worse" and "level" here on purpose — the default is off, and an
+ // expertise that cannot be shown to help is context spent for nothing either way.
+ const { favours, term } = compareTrialArms(retrieved, withheld)
+
+ if (term === 'outcomes') {
+ return favours === 'candidate'
+ ? {
  retrieved,
  withheld,
  verdict: 'helps',
  detail:
- `Outcomes are level (${asPercent(retrieved.successRate)} against ` +
- `${asPercent(withheld.successRate)}), and runs that read this map leave fewer ` +
- `branches failing their checks.${verification}`,
+ `Runs that read this map merged ${asPercent(retrieved.successRate)} of the time ` +
+ `against ${asPercent(withheld.successRate)} for runs deliberately denied it.` +
+ verification,
  }
- }
-
- if (verificationGap < -SUCCESS_RATE_TOLERANCE) {
- return {
+: {
  retrieved,
  withheld,
  verdict: 'no-better',
  detail:
- `Outcomes are level (${asPercent(retrieved.successRate)} against ` +
- `${asPercent(withheld.successRate)}), and runs that read this map leave *more* ` +
- `branches failing their checks.${verification}`,
+ `Runs that read this map merged ${asPercent(retrieved.successRate)} of the time ` +
+ `against ${asPercent(withheld.successRate)} without it — it is making things ` +
+ `worse, not better.${verification}`,
+ }
+ }
+
+ if (term === 'verification') {
+ return favours === 'candidate'
+ ? {
+ retrieved,
+ withheld,
+ verdict: 'helps',
+ detail:
+ `Outcomes are level (${level}), and runs that read this map leave fewer branches ` +
+ `failing their checks.${verification}`,
+ }
+: {
+ retrieved,
+ withheld,
+ verdict: 'no-better',
+ detail:
+ `Outcomes are level (${level}), and runs that read this map leave *more* branches ` +
+ `failing their checks.${verification}`,
  }
  }
 
  /**
- * Outcomes are within the band, so cost decides. This is where "a context-window tax
- * with a reassuring name" is actually caught: the same work, done as well, for more
- * money, is the shape a useless map takes when it is not an actively harmful one.
+ * Cost, last. This is where "a context-window tax with a reassuring name" is actually
+ * caught: the same work, done as well, for more money, is the shape a useless map takes
+ * when it is not an actively harmful one.
  */
- const costRatio = withheld.meanCostUsd === 0 ? 1: retrieved.meanCostUsd / withheld.meanCostUsd
- const money = (usd: number) => `$${usd.toFixed(4)}`
-
- if (costRatio < 1 - COST_TOLERANCE) {
+ if (term === 'cost' && favours === 'candidate') {
  return {
  retrieved,
  withheld,
  verdict: 'helps',
  detail:
- `Outcomes are level (${asPercent(retrieved.successRate)} against ` +
- `${asPercent(withheld.successRate)}), and runs that read this map cost ` +
+ `Outcomes are level (${level}), and runs that read this map cost ` +
  `${money(retrieved.meanCostUsd)} against ${money(withheld.meanCostUsd)} — it is ` +
- 'paying for itself in rediscovery it replaced.',
+ `paying for itself in rediscovery it replaced.${verification}`,
  }
  }
 

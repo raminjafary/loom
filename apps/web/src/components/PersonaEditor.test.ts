@@ -1,4 +1,10 @@
-import type { AgentPersona, PersonaDraft, PersonaRevision, PromptTrial } from '@loom/api-contract'
+import type {
+ AgentPersona,
+ PersonaDraft,
+ PersonaRevision,
+ PromptTrial,
+ VariantSearch,
+} from '@loom/api-contract'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PersonaEditor from './PersonaEditor.vue'
@@ -353,5 +359,118 @@ describe('the prompt trial panel', => {
  it('says nothing about checks when neither arm has failed one', async => {
  const wrapper = await opened(trial({ verificationFailed: 0, failingCheck: null }))
  expect(wrapper.get('.trial').text).not.toContain('failed checks')
+ })
+})
+
+/**
+ * The variant search panel.
+ *
+ * Two claims worth asserting on the mounted component. A human promoting a candidate is
+ * agreeing to a document an agent wrote, so the panel has to *show* that document — a score
+ * with no text asks somebody to approve what they cannot read. And both gestures that end a
+ * search emit the same event with the same payload shape, which is the sort of thing an
+ * unwired emit passes every static check while doing nothing.
+ */
+describe('the variant search panel', => {
+ const search = (over: Partial<VariantSearch> = {}): VariantSearch => ({
+ personaId: 'p1',
+ setId: 's1',
+ detail: 'One candidate is ahead.',
+ leader: 'v2',
+ candidates: [
+ { variantId: 'v1', body: 'READ THE TESTS FIRST.', rationale: 'tests before code' },
+ { variantId: 'v2', body: 'WRITE THE SMALLEST DIFF.', rationale: 'small diffs land' },
+ ],
+ arms: [
+ {
+ variantId: null,
+ decided: 5,
+ merged: 2,
+ failed: 0,
+ verificationFailed: 0,
+ failingCheck: null,
+ meanCostUsd: 0.1,
+ standing: 'undecided',
+ },
+ {
+ variantId: 'v1',
+ decided: 5,
+ merged: 1,
+ failed: 0,
+ verificationFailed: 3,
+ failingCheck: 'build',
+ meanCostUsd: 0.1,
+ standing: 'worse',
+ },
+ {
+ variantId: 'v2',
+ decided: 5,
+ merged: 5,
+ failed: 0,
+ verificationFailed: 0,
+ failingCheck: null,
+ meanCostUsd: 0.1,
+ standing: 'better',
+ },
+ ],
+...over,
+ })
+
+ const openedSearch = async (variantSearch: VariantSearch) => {
+ const wrapper = mount(PersonaEditor, {
+ props: {
+ personas: [persona],
+ capabilities: [],
+ attachments: [],
+ revisions: [],
+ searches: { p1: variantSearch },
+ },
+ })
+ await wrapper.get('.row-actions.link').trigger('click')
+ return wrapper
+ }
+
+ it('shows every arm including the prompt in use, and each candidate"s own text', async => {
+ const wrapper = await openedSearch(search)
+ const panel = wrapper.get('.trial.search')
+ expect(panel.text).toContain('the prompt in use')
+ expect(panel.text).toContain('ahead of the prompt in use')
+ expect(panel.text).toContain('behind the prompt in use')
+ // The document a promotion would write, on the page.
+ expect(panel.text).toContain('WRITE THE SMALLEST DIFF.')
+ // And a candidate's failing check, named.
+ expect(panel.text).toContain('mostly build')
+ })
+
+ it('emits a promotion naming the candidate, and a discard naming none', async => {
+ const wrapper = await openedSearch(search)
+ const promote = wrapper
+.findAll('.trial.search.arms button')
+.find((button) => button.text === 'Promote')
+ expect(promote).toBeDefined
+ await promote!.trigger('click')
+ await wrapper
+.findAll('.trial.search.arms button')
+.find((button) => button.text.includes('Make this the prompt'))!
+.trigger('click')
+ expect(wrapper.emitted('settle-search')).toEqual([[{ personaId: 'p1', variantId: 'v1' }]])
+
+ const discard = wrapper
+.findAll('.trial.search.trial-actions button')
+.find((button) => button.text === 'Discard the search')
+ await discard!.trigger('click')
+ await wrapper
+.findAll('.trial.search.trial-actions button')
+.find((button) => button.text.includes('Keep the prompt it has'))!
+.trigger('click')
+ expect(wrapper.emitted('settle-search')?.[1]).toEqual([{ personaId: 'p1', variantId: null }])
+ })
+
+ it('offers no panel for a persona nothing is being searched over', async => {
+ const wrapper = mount(PersonaEditor, {
+ props: { personas: [persona], capabilities: [], attachments: [], revisions: [] },
+ })
+ await wrapper.get('.row-actions.link').trigger('click')
+ expect(wrapper.find('.trial.search').exists).toBe(false)
  })
 })

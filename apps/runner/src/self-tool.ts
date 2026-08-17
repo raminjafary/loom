@@ -26,8 +26,13 @@ import { z } from 'zod'
 export const SELF_SERVER_NAME = 'loom_self'
 export const REVISE_PROMPT_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__revise_own_prompt`
 export const REVISE_TOOLS_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__revise_own_tools`
+export const PROPOSE_VARIANTS_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__propose_own_variants`
 
-export const SELF_TOOL_NAMES = [REVISE_PROMPT_TOOL_NAME, REVISE_TOOLS_TOOL_NAME] as const
+export const SELF_TOOL_NAMES = [
+ REVISE_PROMPT_TOOL_NAME,
+ REVISE_TOOLS_TOOL_NAME,
+ PROPOSE_VARIANTS_TOOL_NAME,
+] as const
 
 export interface SelfToolCallbacks {
  /**
@@ -49,6 +54,16 @@ export interface SelfToolCallbacks {
  readonly reviseTools: (input: {
  tools: string[]
  rationale: string
+ }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
+ /**
+ * The searching half — several candidate prompts, none of them live.
+ *
+ * Separate from `revisePrompt` rather than an option on it, because the two do different
+ * things to the persona: an edit changes what every future run is told now, and a search
+ * changes nothing until a human settles it.
+ */
+ readonly proposeVariants: (input: {
+ variants: { body: string; rationale: string }[]
  }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
 }
 
@@ -149,9 +164,77 @@ export const createSelfTool = (callbacks: SelfToolCallbacks) => {
  },
 )
 
+ /**
+ * The searching half, as a tool — and its description is written against the
+ * failure mode that makes a search worthless rather than merely wasteful.
+ *
+ * Tier 1's risk is enthusiasm and tier 2's is acquisitiveness. This one's is **variants
+ * that are not variants**: a model asked for three versions of a prompt will happily send
+ * the same instruction reworded three ways, and three arms measuring the same behaviour
+ * cost three times as much and separate nothing. So the description spends its length on
+ * what "different" has to mean — a different thing a future run would *do* — and on the
+ * one fact a model reliably gets wrong here: none of these becomes the prompt. A human
+ * promotes the winner, or discards all of them.
+ */
+ const proposeVariants = tool(
+ 'propose_own_variants',
+ 'Propose two or three DIFFERENT candidate prompts for this persona and let the platform ' +
+ 'find out which one actually works better. Nothing goes live: later runs of this ' +
+ 'persona are dealt out between your candidates and the prompt it has now, and a human ' +
+ 'promotes whichever produced the better outcomes — or discards them all. ' +
+ 'Use this instead of revise_own_prompt when you can see more than one plausible way ' +
+ 'to instruct a future run and you genuinely do not know which is right. If you *do* ' +
+ 'know, revise_own_prompt is the honest call and it takes effect immediately. ' +
+ 'Each candidate must be the COMPLETE prompt, as prose, and they must differ in what ' +
+ 'they would make a future run **do** — a different order of work, a different default, ' +
+ 'a different thing to check first. Three rewordings of one instruction are three arms ' +
+ 'measuring the same behaviour: they cost three times as much and settle nothing. ' +
+ 'Your own instructions do not change, and one run may open one search.',
+ {
+ variants: z
+.array(
+ z.object({
+ prompt: z
+.string
+.min(1)
+.max(MAX_PROMPT_BODY_CHARS)
+.describe('One complete candidate prompt, as prose. Not a diff, not an addition.'),
+ why: z
+.string
+.min(1)
+.max(600)
+.describe(
+ 'What this candidate does differently from the others, and what you expect ' +
+ 'that to change. A human reads this beside the measured outcomes.',
+),
+ }),
+)
+.min(2)
+.max(3)
+.describe('Two or three candidates. They must be genuinely different instructions.'),
+ },
+ async (args) => {
+ const result = await callbacks.proposeVariants({
+ variants: args.variants.map((variant) => ({
+ body: variant.prompt,
+ rationale: variant.why,
+ })),
+ })
+ return {
+ content: [
+ {
+ type: 'text' as const,
+ text: result.ok ? result.outcome: `No search was opened: ${result.error}`,
+ },
+ ],
+...(result.ok ? {}: { isError: true }),
+ }
+ },
+)
+
  return createSdkMcpServer({
  name: SELF_SERVER_NAME,
  version: '1.0.0',
- tools: [revisePrompt, reviseTools],
+ tools: [revisePrompt, reviseTools, proposeVariants],
  })
 }

@@ -57,6 +57,9 @@ import {
  revisePromptBody,
  reviseToolList,
  nextPromptArm,
+ nextVariantArm,
+ proposeVariantSet,
+ summarizeVariantSearch,
  summarizePromptEffect,
  type PromptArm,
  type PromptTrialEffect,
@@ -100,6 +103,12 @@ import {
  type PersonaGroupId,
  type PersonaRevision,
  type PersonaRevisionId,
+ type PersonaVariant,
+ type PersonaVariantId,
+ type PersonaVariantSet,
+ type PersonaVariantSetId,
+ type VariantProposal,
+ type VariantSearchEffect,
  type PersonaSpec,
  type AppliedDeltaOp,
  type PlanDeltaOp,
@@ -134,6 +143,7 @@ import type {
  PersonaGroupRepositoryPort,
  AtlasRepositoryPort,
  PersonaRepositoryPort,
+ PersonaVariantRepositoryPort,
  PlanSubtaskRecord,
  PlanSubtaskRepositoryPort,
  RepositoryRepositoryPort,
@@ -177,6 +187,8 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
  readonly runVerifications: RunVerificationRepositoryPort
  readonly capabilities: CapabilityRepositoryPort
  readonly personas: PersonaRepositoryPort
+ /** The searching half — candidate prompts and the search they belong to. */
+ readonly personaVariants: PersonaVariantRepositoryPort
  readonly personaGroups: PersonaGroupRepositoryPort
  readonly runControl: WorkspaceRunControlRepositoryPort
  /** The venue — a session is not a run and not a map, so it has its own port. */
@@ -978,6 +990,324 @@ export const promptTrialFor = async (
 }
 
 /**
+ * Whether anything is being measured for this persona.
+ *
+ * One question with two storage answers — a prompt trial on a revision (tier 1's edit) or
+ * an open variant search — because both substitute the same field of the same snapshot. Two
+ * of them at once means the runs are split across five or six arms and neither converges,
+ * so whichever starts second is refused.
+ */
+const measurementOpenFor = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<boolean> => {
+ const [revision, search] = await Promise.all([
+ deps.personas.findRevisionOnTrial(input.workspaceId, input.personaId),
+ deps.personaVariants.findOpenSet(input.workspaceId, input.personaId),
+ ])
+ return revision !== null || search !== null
+}
+
+/**
+ * The searching half — a run proposes several candidate prompts instead of making one
+ * edit.
+ *
+ * **The candidates do not go live.** That is the difference from tier 1 and the whole point:
+ * an edit changes what every future run is told immediately and is measured against the
+ * document it replaced; a search holds every candidate back and hands them out an arm at a
+ * time beside the prompt the persona actually has. So a search cannot make a persona worse
+ * while it runs — the worst case is that some runs used a candidate a human then discarded.
+ *
+ * Every candidate goes through tier 1's own validator (`proposeVariantSet` →
+ * `revisePromptBody`), so nothing here can reach a configuration a tier-1 edit could not.
+ * The persona is resolved from the run's snapshot by name, never from a payload — the same
+ * rule and the same reason as tier 1: an id in a tool call is model output.
+ */
+export const proposeOwnVariants = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ proposals: readonly VariantProposal[]
+ },
+): Promise<{ ok: true; outcome: string } | { ok: false; reason: string }> => {
+ const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+ if (!run) throw new NotFoundError('AgentRun')
+
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const persona = personas.find((entry) => entry.name === run.persona.name)
+ if (!persona) {
+ return {
+ ok: false,
+ reason:
+ `There is no persona called "${run.persona.name}" in this workspace any more, so ` +
+ 'there is nothing to search over. Carry on with your task.',
+ }
+ }
+
+ const [revisionsThisRun, measurementOpen] = await Promise.all([
+ deps.personas.countRevisionsByRun(input.workspaceId, input.agentRunId),
+ measurementOpenFor(deps, { workspaceId: input.workspaceId, personaId: persona.id }),
+ ])
+
+ const verdict = proposeVariantSet({
+ currentMarkdown: persona.markdownSource,
+ proposals: input.proposals,
+ revisionsThisRun,
+ measurementOpen,
+ })
+ if (!verdict.ok) return { ok: false, reason: verdict.reason }
+
+ let opened: { set: PersonaVariantSet; variants: PersonaVariant[] }
+ try {
+ opened = await deps.personaVariants.openSet({
+ workspaceId: input.workspaceId,
+ personaId: persona.id,
+ proposedByRunId: input.agentRunId,
+ candidates: verdict.candidates.map((candidate) => ({
+ markdownSource: candidate.markdown,
+ rationale: candidate.rationale,
+ })),
+ })
+ } catch {
+ /**
+ * The unique partial index refused it, which means another run opened a search between
+ * the check above and this write. Reported as the same refusal that check produces —
+ * the agent asked for something reasonable and lost a race, and telling it that as an
+ * error would invite a retry that cannot succeed.
+ */
+ return {
+ ok: false,
+ reason:
+ 'Another run opened a search over this persona a moment ago, and one persona can ' +
+ 'only be measured one way at a time. Nothing was recorded. A human settles that one ' +
+ 'first.',
+ }
+ }
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: agentRunActor(input.agentRunId),
+ action: 'persona.variants_proposed',
+ subjectType: 'agent_persona',
+ subjectId: persona.id,
+ metadata: {
+ personaName: persona.name,
+ setId: opened.set.id,
+ candidates: opened.variants.length,
+ },
+ })
+
+ return {
+ ok: true,
+ outcome:
+ `Recorded ${opened.variants.length} candidate prompts for "${persona.name}". None of ` +
+ 'them is live: the next runs of this persona alternate between them and the prompt it ' +
+ 'has now, and a human promotes whichever the outcomes favour — or discards all of ' +
+ 'them. **Your own run is unchanged.** Carry on with your task.',
+ }
+}
+
+/**
+ * What the runs so far say about a search.
+ *
+ * Null when nothing is being searched, which is the ordinary state. The verdict is computed
+ * on every read rather than stored, for the reason: a stored decision goes stale, and
+ * this one tightens as evidence accumulates.
+ */
+export const variantSearchFor = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<{
+ setId: PersonaVariantSetId
+ candidates: PersonaVariant[]
+ effect: VariantSearchEffect
+} | null> => {
+ const open = await deps.personaVariants.findOpenSet(input.workspaceId, input.personaId)
+ if (!open) return null
+ const tallies = await deps.personaVariants.tallyVariantOutcomes(
+ input.workspaceId,
+ open.set.id,
+)
+ return {
+ setId: open.set.id,
+ candidates: open.variants,
+ effect: summarizeVariantSearch(
+ tallies,
+ open.variants.map((variant) => variant.id),
+),
+ }
+}
+
+/**
+ * Every search running in the workspace, each with its own reading.
+ *
+ * The list a settings surface renders from. Empty is the ordinary answer: a search is
+ * something a run opens deliberately and a human closes, not a standing state.
+ */
+export const listVariantSearches = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId },
+): Promise<
+ {
+ personaId: AgentPersonaId
+ setId: PersonaVariantSetId
+ candidates: PersonaVariant[]
+ effect: VariantSearchEffect
+ }[]
+> => {
+ const open = await deps.personaVariants.listOpenSets(input.workspaceId)
+ return Promise.all(
+ open.map(async (entry) => ({
+ personaId: entry.set.personaId,
+ setId: entry.set.id,
+ candidates: entry.variants,
+ effect: summarizeVariantSearch(
+ await deps.personaVariants.tallyVariantOutcomes(input.workspaceId, entry.set.id),
+ entry.variants.map((variant) => variant.id),
+),
+ })),
+)
+}
+
+/**
+ * A human promotes one candidate and the search ends.
+ *
+ * **Human-only, and the loop is what makes that necessary rather than cautious.** the self-improvement loop
+ * grants the loop no new authority: it ranks, and every write it makes is one a run could
+ * have made through tier 1. Promoting is different in kind — it takes a document no human
+ * has read and makes it what every future run of this persona is told — so it is the same
+ * act as `keepPromptRevision` and is gated the same way.
+ *
+ * **The body, and only the body** — the candidate's prose applied to the persona *as it is
+ * now*, not the document the candidate was serialized as. A search takes days, and in that
+ * time a human or a tier-2 edit may have changed the tool list; writing the candidate's
+ * whole document would silently undo that. It is also why this goes back through
+ * `revisePromptBody`: the envelope, the round trip and the name are re-checked against the
+ * current document rather than against the one that was validated when the search opened.
+ */
+export const promoteVariant = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ personaId: AgentPersonaId
+ variantId: PersonaVariantId
+ },
+): Promise<AgentPersona> => {
+ if (!isHuman(input.actor)) throw new ForbiddenError('Only a human may promote a variant')
+ const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+ if (!persona) throw new NotFoundError('AgentPersona')
+ const open = await deps.personaVariants.findOpenSet(input.workspaceId, input.personaId)
+ const variant = open?.variants.find((entry) => entry.id === input.variantId)
+ if (!open || !variant) throw new NotFoundError('PersonaVariant')
+
+ const applied = revisePromptBody({
+ currentMarkdown: persona.markdownSource,
+ body: parsePersonaMarkdown(variant.markdownSource).systemPrompt,
+ // A human's act, not a run's: tier 1's one-edit-per-run cap does not apply.
+ revisionsThisRun: 0,
+ })
+ if (!applied.ok) {
+ throw new ValidationError(
+ `That candidate can no longer be applied to "${persona.name}": ${applied.reason}`,
+)
+ }
+ const parsed = parsePersonaMarkdown(applied.markdown)
+ assertPlannerToolsAreReadOnly(parsed)
+ assertFitsItsEnvelope(parsed)
+
+ /**
+ * Settled first. If this loses the race with another human's click the update returns
+ * null and nothing is written to the persona — the alternative order would promote a
+ * candidate into a search somebody else had already closed on a different one.
+ */
+ const settled = await deps.personaVariants.settleSet(input.workspaceId, open.set.id, {
+ promotedVariantId: variant.id,
+ settledByUserId: input.actor.kind === 'user' ? input.actor.userId: null,
+ })
+ if (!settled) {
+ throw new ValidationError(
+ 'That search has already been settled — somebody promoted or discarded it. Nothing was changed.',
+)
+ }
+
+ const promoted = await deps.personas.update(
+ input.workspaceId,
+ input.personaId,
+ {
+ description: parsed.description,
+ markdownSource: applied.markdown,
+ model: parsed.model,
+ tools: parsed.tools,
+ harnessEffort: parsed.harnessEffort,
+ harnessMaxTurns: parsed.harnessMaxTurns,
+ harnessApprovalMode: parsed.harnessApprovalMode,
+ harnessPlanner: parsed.harnessPlanner,
+ harnessDelegates: parsed.harnessDelegates,
+ harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+ envelope: parsed.envelope,
+ },
+ /**
+ * Recorded as a **human's** revision, because it is one. An agent wrote the text and a
+ * person decided it should be what this persona says — the rationale names both, so the
+ * history does not have to choose between two half-true attributions.
+ *
+ * It also deliberately does not go on trial: `findRevisionOnTrial` looks for
+ * `agent_run`, and a promotion has just been measured for five runs a side. Measuring
+ * it again against what it replaced would be the same comparison, restarted.
+ */
+ {
+ markdownSource: persona.markdownSource,
+ replacedByKind: 'human',
+ replacedByUserId: input.actor.kind === 'user' ? input.actor.userId: null,
+ rationale:
+ `Promoted from a variant search a human settled. The candidate was written by a run ` +
+ `and said: ${variant.rationale || '(no rationale given)'}`,
+ },
+)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'persona.variant_promoted',
+ subjectType: 'agent_persona',
+ subjectId: input.personaId,
+ metadata: { setId: open.set.id, variantId: variant.id, personaName: persona.name },
+ })
+
+ return promoted
+}
+
+/**
+ * A human ends a search without taking any of it.
+ *
+ * The candidates stay. The self-improvement loop: "a losing variant is archived, not deleted" — deleting is
+ * the one self-modification with no diff to review, and the archive is also what stops the
+ * loop re-proposing something this workspace already paid to reject.
+ */
+export const discardVariantSearch = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; actor: Actor; personaId: AgentPersonaId },
+): Promise<void> => {
+ if (!isHuman(input.actor)) throw new ForbiddenError('Only a human may settle a search')
+ const open = await deps.personaVariants.findOpenSet(input.workspaceId, input.personaId)
+ if (!open) throw new NotFoundError('PersonaVariantSet')
+ await deps.personaVariants.settleSet(input.workspaceId, open.set.id, {
+ promotedVariantId: null,
+ settledByUserId: input.actor.kind === 'user' ? input.actor.userId: null,
+ })
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'persona.variants_discarded',
+ subjectType: 'agent_persona',
+ subjectId: input.personaId,
+ metadata: { setId: open.set.id, candidates: open.variants.length },
+ })
+}
+
+/**
  * A human ends the trial by keeping the edit.
  *
  * Rejecting it is `revertPersonaPrompt`, which ends the trial too — so both outcomes are
@@ -1268,6 +1598,28 @@ export const revisePersonaPrompt = async (
  reason:
  `There is no persona called "${run.persona.name}" in this workspace any more, so ` +
  'there is nothing to rewrite. Carry on with your task.',
+ }
+ }
+
+ /**
+ * Refused while a variant search is running.
+ *
+ * The search's control arm *is* this prompt. Rewriting it mid-search would leave the
+ * control group as two different documents — the early runs measured one and the later
+ * ones another — and every candidate's standing would be against a moving target. Only
+ * the prompt: a tier-2 tool change touches every arm equally and stays allowed.
+ *
+ * Phrased as a request rather than a wall, which is what continuity mode asks of a refusal.
+ */
+ if (await deps.personaVariants.findOpenSet(input.workspaceId, persona.id)) {
+ return {
+ ok: false,
+ reason:
+ `"${persona.name}" is in the middle of a variant search — candidate prompts are being ` +
+ 'measured against the one it has now, and rewriting that one would leave the ' +
+ 'comparison with no fixed thing to compare against. A human settles the search ' +
+ '(promote a candidate, or discard them all) and then this is open again. If the ' +
+ 'lesson matters now, write a note: your siblings read those.',
  }
  }
 
@@ -2118,6 +2470,13 @@ const assignPromptTrial = async (
  try {
  const revision = await deps.personas.findRevisionOnTrial(input.workspaceId, input.personaId)
  if (!revision) return null
+ /**
+ * A search wins the tie, and it cannot normally happen: `proposeOwnVariants` refuses
+ * while a revision is on trial and vice versa. It stays because "cannot happen" is a
+ * property of today's two use cases and the cost of being wrong is a run assigned to
+ * two measurements at once, which would corrupt both tallies rather than either.
+ */
+ if (await deps.personaVariants.findOpenSet(input.workspaceId, input.personaId)) return null
 
  const used = await deps.personas.countTrialArms(input.workspaceId, revision.id)
  const arm = nextPromptArm(used)
@@ -2137,6 +2496,49 @@ const assignPromptTrial = async (
  revisionId: revision.id,
  arm,
  systemPrompt: parsePersonaMarkdown(revision.markdownSource).systemPrompt,
+ }
+ } catch {
+ return null
+ }
+}
+
+/**
+ * Assigns this run to one arm of an open variant search, or to nothing when no search is running.
+ *
+ * `variantId: null` is the **incumbent** — the prompt the persona actually has, which is the
+ * control group and needs no substitution at all. A candidate substitutes its body into
+ * *this run's snapshot only*: the persona row is untouched for the whole search, because a
+ * search that changed the thing it was measuring would be measuring something else.
+ *
+ * Returns null on anything missing or unreadable, and the run proceeds on the live prompt.
+ * Same discipline as `assignPromptTrial`, and the same reason: the loop adds no
+ * authority, and a measurement that could refuse a run would have taken some.
+ */
+const assignVariantSearch = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<{
+ setId: PersonaVariantSetId
+ variantId: PersonaVariantId | null
+ systemPrompt?: string
+} | null> => {
+ try {
+ const open = await deps.personaVariants.findOpenSet(input.workspaceId, input.personaId)
+ if (!open || open.variants.length === 0) return null
+
+ const used = await deps.personaVariants.countVariantArms(input.workspaceId, open.set.id)
+ const variantId = nextVariantArm(
+ used,
+ open.variants.map((variant) => variant.id),
+)
+ if (variantId === null) return { setId: open.set.id, variantId: null }
+
+ const chosen = open.variants.find((variant) => variant.id === variantId)
+ if (!chosen) return { setId: open.set.id, variantId: null }
+ return {
+ setId: open.set.id,
+ variantId,
+ systemPrompt: parsePersonaMarkdown(chosen.markdownSource).systemPrompt,
  }
  } catch {
  return null
@@ -2372,10 +2774,21 @@ export const startAgentRun = async (
  markdownSource: persona.markdownSource,
  })
 
+ /**
+ * And which candidate, when a search is open instead. Mutually exclusive with the trial above by construction: one persona is measured
+ * one way at a time, or the runs are split across more arms than a workspace can fill.
+ */
+ const search = trial ? null: await assignVariantSearch(deps, {
+ workspaceId: input.workspaceId,
+ personaId: input.personaId,
+ })
+
  const baseSpec: PersonaSpec = {
  name: persona.name,
  systemPrompt: applyResponseStyle(
- trial?.systemPrompt ?? parsePersonaMarkdown(persona.markdownSource).systemPrompt,
+ trial?.systemPrompt ??
+ search?.systemPrompt ??
+ parsePersonaMarkdown(persona.markdownSource).systemPrompt,
  responseStyle,
 ),
  responseStyle,
@@ -2603,6 +3016,20 @@ export const startAgentRun = async (
  revisionId: trial.revisionId,
  agentRunId: run.id,
  arm: trial.arm,
+ })
+ } catch {
+ // See above.
+ }
+ }
+
+ /** The search's arm row, on the same terms. */
+ if (search) {
+ try {
+ await deps.personaVariants.recordVariantUse({
+ workspaceId: input.workspaceId,
+ setId: search.setId,
+ variantId: search.variantId,
+ agentRunId: run.id,
  })
  } catch {
  // See above.

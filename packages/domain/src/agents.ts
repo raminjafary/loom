@@ -9,6 +9,8 @@ import type {
  ApprovalRequestId,
  PersonaGroupId,
  PersonaRevisionId,
+ PersonaVariantId,
+ PersonaVariantSetId,
  RepositoryId,
  RunnerId,
  ThreadId,
@@ -231,6 +233,46 @@ export interface PersonaRevision {
  readonly replacedByUserId: UserId | null
  /** What the author said they were doing. Empty for a human's edit, which has a diff. */
  readonly rationale: string
+ readonly createdAt: Date
+}
+
+/**
+ * One search over candidate prompts.
+ *
+ * Open or settled, and open is serialized per persona: two searches would split one
+ * workspace's runs across more arms than it can fill. Settling is a human's act in both
+ * directions — promoting a candidate or discarding the search — because the loop ranks and
+ * never swaps a prompt on anybody's behalf.
+ */
+export interface PersonaVariantSet {
+ readonly id: PersonaVariantSetId
+ readonly workspaceId: WorkspaceId
+ readonly personaId: AgentPersonaId
+ /** The run that proposed it. Null once that run is deleted; the search still stands. */
+ readonly proposedByRunId: AgentRunId | null
+ readonly status: 'open' | 'settled'
+ readonly promotedVariantId: PersonaVariantId | null
+ readonly settledAt: Date | null
+ readonly settledByUserId: UserId | null
+ readonly createdAt: Date
+}
+
+/**
+ * One candidate prompt in a search.
+ *
+ * `markdownSource` is a complete persona document, validated when it was proposed by the
+ * same rules a tier-1 edit passes — so promoting it is a write of something already
+ * checked rather than a re-derivation at the moment somebody clicks.
+ */
+export interface PersonaVariant {
+ readonly id: PersonaVariantId
+ readonly workspaceId: WorkspaceId
+ readonly setId: PersonaVariantSetId
+ readonly personaId: AgentPersonaId
+ readonly markdownSource: string
+ /** What the agent said this candidate is for. Read first by whoever decides. */
+ readonly rationale: string
+ readonly position: number
  readonly createdAt: Date
 }
 

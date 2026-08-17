@@ -25,6 +25,7 @@ import {
  atlasRepository,
  personaGroupRepository,
  personaRepository,
+ personaVariantRepository,
  subjectMapRepository,
 } from './agent-repositories.js'
 import {
@@ -617,6 +618,8 @@ describe('prompt trial outcomes', => {
  disposition?: 'merged' | 'discarded' | null
  costUsd?: number
  verification?: { status: VerificationStatus; failing?: string }
+ /** For the variant search, whose arms are `variant_use` rows rather than trial ones. */
+ skipTrialRow?: boolean
  },
 ) => {
  const [run] = await db
@@ -633,6 +636,7 @@ describe('prompt trial outcomes', => {
  totalCostUsd: input.costUsd ?? 0.1,
  })
 .returning({ id: agentRun.id })
+ if (!input.skipTrialRow) {
  await db.insert(promptTrialUse).values({
  workspaceId,
  personaId: s.personaId,
@@ -640,6 +644,7 @@ describe('prompt trial outcomes', => {
  agentRunId: run!.id,
  arm: input.arm,
  })
+ }
  if (input.verification) {
  await db.insert(runVerification).values({
  workspaceId,
@@ -761,6 +766,92 @@ describe('prompt trial outcomes', => {
  })
 
  expect(await personas.tallyTrialOutcomes(WS, mine.revisionId as never)).toEqual([])
+ })
+
+ /**
+ * The searching half, against real Postgres.
+ *
+ * Two things here are only answerable against a database. The incumbent arm is a **null**
+ * `variant_id`, and `group by` on a nullable column is exactly where an arm quietly
+ * disappears — a `where variant_id is not null` anywhere in the aggregate would drop the
+ * control group and every candidate would look unbeatable. And the one-open-search rule is
+ * a partial unique index, so what enforces it is the index, not the use case that checks
+ * first.
+ */
+ describe('the variant search', => {
+ const variants = personaVariantRepository(db)
+
+ const openSearch = async (workspaceId: WorkspaceId, s: Scaffolding) =>
+ variants.openSet({
+ workspaceId,
+ personaId: s.personaId as never,
+ candidates: [
+ { markdownSource: 'alpha doc', rationale: 'alpha' },
+ { markdownSource: 'beta doc', rationale: 'beta' },
+ ],
+ })
+
+ it('refuses a second open search for one persona, at the database', async => {
+ const s = await scaffold(WS)
+ await openSearch(WS, s)
+ await expect(openSearch(WS, s)).rejects.toThrow
+
+ // Settled frees the slot — which is what makes "discard and try again" work at all.
+ const open = await variants.findOpenSet(WS, s.personaId as never)
+ await variants.settleSet(WS, open!.set.id, { promotedVariantId: null })
+ await expect(openSearch(WS, s)).resolves.toBeDefined
+ })
+
+ it('tallies the incumbent arm, which is a null variant id', async => {
+ const s = await scaffold(WS)
+ const { set, variants: candidates } = await openSearch(WS, s)
+ const alpha = candidates[0]!
+
+ const runOn = async (variantId: string | null, input: Parameters<typeof addTrialRun>[2]) => {
+ const runId = await addTrialRun(WS, s, {...input, arm: 'revised', skipTrialRow: true })
+ await variants.recordVariantUse({
+ workspaceId: WS,
+ setId: set.id,
+ variantId: variantId as never,
+ agentRunId: runId as never,
+ })
+ }
+
+ await runOn(null, { arm: 'revised', disposition: 'merged' })
+ await runOn(null, { arm: 'revised', disposition: 'discarded' })
+ await runOn(alpha.id, {
+ arm: 'revised',
+ verification: { status: 'failed', failing: 'build' },
+ })
+
+ const tallies = await variants.tallyVariantOutcomes(WS, set.id)
+ const incumbent = tallies.find((tally) => tally.variantId === null)
+ expect(incumbent).toMatchObject({ decided: 2, merged: 1, discarded: 1 })
+ expect(tallies.find((tally) => tally.variantId === alpha.id)).toMatchObject({
+ decided: 1,
+ merged: 0,
+ verificationFailed: 1,
+ failingCheck: 'build',
+ })
+
+ // Assignment counts every run handed out, decided or not — that is what balances.
+ const arms = await variants.countVariantArms(WS, set.id)
+ expect(arms.find((arm) => arm.variantId === null)?.count).toBe(2)
+ expect(arms.find((arm) => arm.variantId === alpha.id)?.count).toBe(1)
+ })
+
+ /** A double settle is a no-op, so two humans clicking at once cannot both decide. */
+ it('settles once', async => {
+ const s = await scaffold(WS)
+ const { set, variants: candidates } = await openSearch(WS, s)
+ expect(await variants.settleSet(WS, set.id, { promotedVariantId: candidates[0]!.id })).not.toBeNull
+ expect(await variants.settleSet(WS, set.id, { promotedVariantId: candidates[1]!.id })).toBeNull
+
+ const settled = await variants.findSet(WS, set.id)
+ expect(settled?.set.promotedVariantId).toBe(candidates[0]!.id)
+ // Both candidates survive: a loser is archived, never deleted.
+ expect(settled?.variants).toHaveLength(2)
+ })
  })
 })
 

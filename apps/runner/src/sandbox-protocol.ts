@@ -268,6 +268,20 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  tools: z.array(z.string.max(80)).max(60),
  rationale: z.string.max(600),
  }),
+ /**
+ * The agent proposing candidate prompts.
+ *
+ * Answered on the host like every other write channel, and it has to exist in *both*
+ * paths: a self-tool offered outside the container and not inside it is a feature that
+ * works until an operator turns the sandbox on.
+ */
+ z.object({
+ t: z.literal('variants_propose'),
+ requestId: z.string,
+ variants: z
+.array(z.object({ body: z.string.max(40_000), rationale: z.string.max(600) }))
+.max(8),
+ }),
  /** The agent asking a human a question, answered by `question_result`. */
  z.object({ t: z.literal('question_request'), requestId: z.string, question: z.string }),
  /**

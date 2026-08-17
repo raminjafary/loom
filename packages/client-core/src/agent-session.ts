@@ -15,6 +15,7 @@ import type {
  PersonaCapability,
  PersonaRevision,
  PromptTrial,
+ VariantSearch,
  MergeQueueEntry,
  RunVerification,
  NotificationConfig,
@@ -97,6 +98,11 @@ export interface AgentSnapshot {
  * by persona id. Absent means nothing is being measured, which is the ordinary state.
  */
  readonly promptTrials: Record<string, PromptTrial>
+ /**
+ * The variant search running over each persona,
+ * keyed by persona id. Absent is the ordinary state, and usually there are none at all.
+ */
+ readonly variantSearches: Record<string, VariantSearch>
  /**
  * The run this client is *watching* — the one whose approvals and diff the
  * workspace view shows. Distinct from `activeRuns` now that a workspace may run
@@ -470,6 +476,12 @@ export interface AgentSession {
  /** Ends a trial by keeping the agent's edit. */
  keepPersonaRevision(input: { personaId: string; revisionId: string }): Promise<void>
  /**
+ * Ends a search by making one candidate the persona's prompt. The only gesture in the loop that writes one.
+ */
+ promoteVariant(input: { personaId: string; variantId: string }): Promise<void>
+ /** Ends a search taking none of them. Every candidate stays on the record. */
+ discardVariants(personaId: string): Promise<void>
+ /**
  * Unbinds a repository, deleting its runs and their recorded spend with it.
  * Resolves `{ ok: false, reason }` when the server wants that loss acknowledged,
  * so a caller can show the count before asking again with `acknowledge`.
@@ -701,6 +713,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  capabilityAttachments: [],
  personaRevisions: [],
  promptTrials: {},
+ variantSearches: {},
  activeRun: null,
  activeRuns: [],
  pendingApprovals: [],
@@ -992,11 +1005,18 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  delegationMatrix: DelegationEdge[]
  personaRevisions: PersonaRevision[]
  promptTrials: Record<string, PromptTrial>
+ variantSearches: Record<string, VariantSearch>
  }> => {
- const [personas, delegationMatrix, personaRevisions] = await Promise.all([
+ /**
+ * The searches come workspace-wide in one call, unlike the trials below: there is no
+ * cheap filter for "might have a search", so a per-persona read would be a round trip
+ * each for a state almost no persona is ever in.
+ */
+ const [personas, delegationMatrix, personaRevisions, searches] = await Promise.all([
  options.api.persona.list,
  options.api.personaGroup.delegationMatrix,
  options.api.persona.revisions({}),
+ options.api.persona.variantSearches.catch( => []),
  ])
  /**
  * Trials are read only for personas that actually have a revision, which is almost
@@ -1019,6 +1039,9 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  personaRevisions,
  promptTrials: Object.fromEntries(
  trials.filter((entry): entry is readonly [string, PromptTrial] => entry[1] !== null),
+),
+ variantSearches: Object.fromEntries(
+ searches.map((search) => [search.personaId, search] as const),
 ),
  }
  }
@@ -1486,6 +1509,26 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  patch({ error: null })
  try {
  await options.api.persona.keepRevision(input)
+ patch(await readPersonasAndMatrix)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async promoteVariant(input) {
+ patch({ error: null })
+ try {
+ await options.api.persona.promoteVariant(input)
+ patch(await readPersonasAndMatrix)
+ } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async discardVariants(personaId) {
+ patch({ error: null })
+ try {
+ await options.api.persona.discardVariants({ personaId })
  patch(await readPersonasAndMatrix)
  } catch (error) {
  patch({ error: errorMessage(error) })

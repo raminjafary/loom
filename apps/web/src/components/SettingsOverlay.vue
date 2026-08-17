@@ -11,6 +11,7 @@ import type {
  PersonaCapability,
  PersonaRevision,
  PromptTrial,
+ VariantSearch,
  PersonaDraft,
  PersonaGroup,
  Repository,
@@ -50,6 +51,19 @@ const props = defineProps<{
  personaRevisions: PersonaRevision[]
  /** What the runs say about each persona's live self-edit. */
  promptTrials: Record<string, PromptTrial>
+ /** The searching half — candidate prompts being measured, by persona id. */
+ variantSearches: Record<string, VariantSearch>
+ /**
+ * Settles a variant search: `variantId` names the
+ * candidate a human took, null means they took none.
+ *
+ * A callback prop rather than one more emit, and the reason is a real ceiling rather than
+ * taste: this overlay's emit map is already large enough that adding a single entry pushes
+ * the parent's inference over a limit, after which *every* handler on it silently degrades
+ * to `any` — the ones that were fine included. A prop costs nothing there. The actual fix
+ * is a smaller overlay, which is a change to this surface and not to this feature.
+ */
+ settleSearch: (input: { personaId: string; variantId: string | null }) => void
  capabilityAttachments: PersonaCapability[]
  lastPairing: { runnerId: string; name: string; rawToken: string } | null
  /** The expertise tab — fetched on demand, so never part of the session snapshot. */
@@ -79,7 +93,16 @@ const repositoryNames = computed( =>
  Object.fromEntries(props.repositories.map((repository) => [repository.id, repository.displayName])),
 )
 
-const emit = defineEmits<{
+/**
+ * The overlay's events, as a named type rather than inline in `defineEmits`.
+ *
+ * Not a style choice. This surface emits three dozen events, and inline the literal crosses
+ * the inference limit Vue's macro expansion works inside — past which *every* handler in the
+ * parent silently degrades to `any`, including the ones that were fine. Adding one event was
+ * enough to cross it. A named type keeps the map checkable; the real fix is a smaller
+ * overlay, which is a change to this surface rather than to this feature.
+ */
+type SettingsOverlayEmits = {
  close: []
  'select-expertise': [personaId: string]
  'select-map': [mapId: string]
@@ -165,7 +188,9 @@ const emit = defineEmits<{
  'delete-group': [personaGroupId: string]
  /** Opens the composition canvas. */
  compose: []
-}>
+}
+
+const emit = defineEmits<SettingsOverlayEmits>
 
 type Tab = 'infrastructure' | 'personas' | 'expertise' | 'colosseum' | 'capabilities'
 
@@ -302,6 +327,7 @@ onMounted( => scrim.value?.focus)
 :attachments="capabilityAttachments"
 :revisions="personaRevisions"
 :trials="promptTrials"
+:searches="variantSearches"
  @create-persona="(source) => emit('create-persona', source)"
  @update-persona="(input) => emit('update-persona', input)"
  @delete-persona="(personaId) => emit('delete-persona', personaId)"
@@ -311,6 +337,7 @@ onMounted( => scrim.value?.focus)
  @reset-persona="(personaId) => emit('reset-persona', personaId)"
  @revert-persona="(input) => emit('revert-persona', input)"
  @keep-revision="(input) => emit('keep-revision', input)"
+ @settle-search="settleSearch"
  />
  <PersonaGroupPanel
 :personas="personas"

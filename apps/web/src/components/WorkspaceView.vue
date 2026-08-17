@@ -102,6 +102,16 @@ const masteryView = ref<MasteryView | null>(null)
 const masteryLoading = ref(false)
 const masteryError = ref<string | null>(null)
 
+/**
+ * Settling a variant search: a candidate promoted, or
+ * none of them. One handler because it is one act, and two calls because they are two writes.
+ */
+const settleSearch = (input: { personaId: string; variantId: string | null }) => {
+ void (input.variantId === null
+ ? agent.discardVariants(input.personaId)
+: agent.promoteVariant({ personaId: input.personaId, variantId: input.variantId }))
+}
+
 const selectExpertisePersona = async (personaId: string) => {
  masteryPersonaId.value = personaId
  masteryView.value = null
@@ -1284,6 +1294,7 @@ onBeforeUnmount( => {
 :capability-attachments="agentSnapshot.capabilityAttachments"
 :persona-revisions="agentSnapshot.personaRevisions"
 :prompt-trials="agentSnapshot.promptTrials"
+:variant-searches="agentSnapshot.variantSearches"
 :last-pairing="agentSnapshot.lastPairing"
 :mastery-persona-id="masteryPersonaId"
 :mastery-maps="masteryMaps"
@@ -1348,6 +1359,7 @@ onBeforeUnmount( => {
  @reset-persona="(personaId) => agent.resetPersonaToBuiltin(personaId)"
  @revert-persona="(input) => agent.revertPersonaPrompt(input)"
  @keep-revision="(input) => agent.keepPersonaRevision(input)"
+:settle-search="settleSearch"
  @register="(input) => agent.registerCapability(input)"
  @remove="(capabilityId) => agent.removeCapability(capabilityId)"
  @attach="(input) => agent.attachCapability(input)"

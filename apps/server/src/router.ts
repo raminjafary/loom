@@ -83,6 +83,9 @@ import {
  markChannelRead,
  listPersonaRevisions,
  promptTrialFor,
+ listVariantSearches,
+ promoteVariant,
+ discardVariantSearch,
  keepPromptRevision,
  revertPersonaPrompt,
  resumeAllRuns,
@@ -111,6 +114,8 @@ import {
 } from '@loom/domain'
 import {
  asAgentPersonaId,
+ asPersonaVariantId,
+ parsePersonaMarkdown,
  asPersonaRevisionId,
  asAgentRunId,
  asSubjectMapId,
@@ -1038,6 +1043,68 @@ export const router = os.router({
  actor: context.principal.actor,
  personaId: asAgentPersonaId(input.personaId),
  revisionId: asPersonaRevisionId(input.revisionId),
+ })
+ return { ok: true as const }
+ }),
+),
+
+ variantSearches: os.persona.variantSearches.handler(({ context }) =>
+ guard(async => {
+ const searches = await listVariantSearches(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ })
+ /**
+ * Named field by field, arms and candidates both — an excess-property check does
+ * not fire on a spread, which is how four fields have gone missing across a port in
+ * this codebase.
+ *
+ * The candidates carry their *body* rather than the whole document: the frontmatter
+ * of a candidate is the persona's own, so putting it on the wire would invite a
+ * client to render configuration that is not what a promotion would write.
+ */
+ return searches.map((found) => ({
+ personaId: found.personaId as string,
+ setId: found.setId as string,
+ detail: found.effect.detail,
+ leader: found.effect.leader === null ? null: (found.effect.leader as string),
+ candidates: found.candidates.map((candidate) => ({
+ variantId: candidate.id as string,
+ body: parsePersonaMarkdown(candidate.markdownSource).systemPrompt,
+ rationale: candidate.rationale,
+ })),
+ arms: found.effect.arms.map((arm) => ({
+ variantId: arm.variantId === null ? null: (arm.variantId as string),
+ decided: arm.decided,
+ merged: arm.merged,
+ failed: arm.failed,
+ verificationFailed: arm.verificationFailed,
+ failingCheck: arm.failingCheck,
+ meanCostUsd: arm.meanCostUsd,
+ standing: arm.standing,
+ })),
+ }))
+ }),
+),
+
+ promoteVariant: os.persona.promoteVariant.handler(({ context, input }) =>
+ guard(async =>
+ toWirePersona(
+ await promoteVariant(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ personaId: asAgentPersonaId(input.personaId),
+ variantId: asPersonaVariantId(input.variantId),
+ }),
+),
+),
+),
+
+ discardVariants: os.persona.discardVariants.handler(({ context, input }) =>
+ guard(async => {
+ await discardVariantSearch(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ personaId: asAgentPersonaId(input.personaId),
  })
  return { ok: true as const }
  }),

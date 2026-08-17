@@ -874,6 +874,11 @@ describe('contract completeness', => {
  // The self-improvement loop — whether the edit was an improvement, and a human settling it.
  'trial',
  'keepRevision',
+ // The searching half — several candidates, and the two ways a human
+ // ends a search. `promoteVariant` is the only one that writes a prompt.
+ 'variantSearches',
+ 'promoteVariant',
+ 'discardVariants',
  ])
  expect(Object.keys(contract.personaGroup)).toEqual([
  'list',

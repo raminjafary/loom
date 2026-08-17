@@ -32,6 +32,7 @@ import {
  readAtlasLeads,
  proposeCrossSubjectRelation,
  revisePersonaPrompt,
+ proposeOwnVariants,
  revisePersonaTools,
  renderProposalOutcome,
  readContextLedger,
@@ -1067,6 +1068,38 @@ export const createRunnerGateway = (
  agentRunId: asAgentRunId(frame.runId),
  body: frame.body,
  rationale: frame.rationale,
+ })
+ send(from, {
+ type: 'persona_prompt_result',
+ requestId: frame.requestId,
+ ok: true,
+ outcome: result.ok ? result.outcome: result.reason,
+ })
+ } catch (error) {
+ send(from, {
+ type: 'persona_prompt_result',
+ requestId: frame.requestId,
+ ok: false,
+ error: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
+ /**
+ * A run proposing candidate prompts.
+ *
+ * Same channel and the same refusal discipline as tier 1, because it is the same
+ * authority: every candidate is a tier-1 edit that has not been made. "Another run
+ * already opened a search" arrives as an outcome rather than an error for exactly the
+ * reason continuity mode gives — it is a request a human could grant by settling that one.
+ */
+ case 'persona_variants_proposed': {
+ try {
+ const result = await proposeOwnVariants(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ proposals: frame.variants,
  })
  send(from, {
  type: 'persona_prompt_result',

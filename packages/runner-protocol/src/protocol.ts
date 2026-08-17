@@ -392,6 +392,25 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  rationale: z.string.max(600),
  }),
  /**
+ * A run proposing several candidate prompts instead of making one edit.
+ *
+ * No persona id, for the reason `persona_prompt_revised` carries none: the target is the
+ * persona the run *is*, resolved server-side from its own snapshot.
+ *
+ * The count and the lengths are transport sanity checks only. What decides whether a
+ * search may open at all — the envelope, the round trip on every candidate, the per-run
+ * cap, whether this persona is already being measured — is `proposeVariantSet`,
+ * server-side, where the stored markdown and the open sets are.
+ */
+ z.object({
+ type: z.literal('persona_variants_proposed'),
+ runId: z.string,
+ requestId: z.string,
+ variants: z
+.array(z.object({ body: z.string.max(40_000), rationale: z.string.max(600) }))
+.max(8),
+ }),
+ /**
  * A run changing its own tool list.
  *
  * A list rather than a document, which is the tier's safety property expressed on the

@@ -14,6 +14,8 @@ import {
  asMessageId,
  asPersonaGroupId,
  asPersonaRevisionId,
+ asPersonaVariantId,
+ asPersonaVariantSetId,
  asRepositoryId,
  asRunnerId,
  asThreadId,
@@ -29,6 +31,8 @@ import {
  type Actor,
  type AgentPersona,
  type PersonaRevision,
+ type PersonaVariant,
+ type PersonaVariantSet,
  type Envelope,
  type AgentRun,
  type AgentRunBranchDisposition,
@@ -668,6 +672,61 @@ export const toPersonaRevision = (row: PersonaRevisionRow): PersonaRevision => (
  replacedByRunId: row.replacedByRunId === null ? null: asAgentRunId(row.replacedByRunId),
  replacedByUserId: row.replacedByUserId === null ? null: asUserId(row.replacedByUserId),
  rationale: row.rationale,
+ createdAt: row.createdAt,
+})
+
+export interface PersonaVariantSetRow {
+ id: string
+ workspaceId: string
+ personaId: string
+ proposedByRunId: string | null
+ status: string
+ promotedVariantId: string | null
+ settledAt: Date | null
+ settledByUserId: string | null
+ createdAt: Date
+}
+
+/**
+ * One search over candidate prompts.
+ *
+ * `status` is narrowed rather than validated, the same way a revision's author kind is: the
+ * column is written only by this package, and anything unrecognized reads as `settled` —
+ * the state that claims no measurement is running, which is the safe direction to be wrong
+ * in. Reading a corrupt row as `open` would hold a persona's search slot forever.
+ */
+export const toPersonaVariantSet = (row: PersonaVariantSetRow): PersonaVariantSet => ({
+ id: asPersonaVariantSetId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ personaId: asAgentPersonaId(row.personaId),
+ proposedByRunId: row.proposedByRunId === null ? null: asAgentRunId(row.proposedByRunId),
+ status: row.status === 'open' ? 'open': 'settled',
+ promotedVariantId:
+ row.promotedVariantId === null ? null: asPersonaVariantId(row.promotedVariantId),
+ settledAt: row.settledAt,
+ settledByUserId: row.settledByUserId === null ? null: asUserId(row.settledByUserId),
+ createdAt: row.createdAt,
+})
+
+export interface PersonaVariantRow {
+ id: string
+ workspaceId: string
+ setId: string
+ personaId: string
+ markdownSource: string
+ rationale: string
+ position: number
+ createdAt: Date
+}
+
+export const toPersonaVariant = (row: PersonaVariantRow): PersonaVariant => ({
+ id: asPersonaVariantId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ setId: asPersonaVariantSetId(row.setId),
+ personaId: asAgentPersonaId(row.personaId),
+ markdownSource: row.markdownSource,
+ rationale: row.rationale,
+ position: row.position,
  createdAt: row.createdAt,
 })
 

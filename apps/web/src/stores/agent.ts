@@ -95,6 +95,10 @@ export const useAgentStore = defineStore('agent', => {
  /** Ends a trial by keeping the agent's edit. */
  keepPersonaRevision: (input: { personaId: string; revisionId: string }) =>
  session.keepPersonaRevision(input),
+ /** The searching half — the two ways a human ends a search. */
+ promoteVariant: (input: { personaId: string; variantId: string }) =>
+ session.promoteVariant(input),
+ discardVariants: (personaId: string) => session.discardVariants(personaId),
  unbindRepository: (input: { repositoryId: string; acknowledge?: boolean }) =>
  session.unbindRepository(input),
  removeRunner: (runnerId: string) => session.removeRunner(runnerId),

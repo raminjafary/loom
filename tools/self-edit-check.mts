@@ -34,7 +34,10 @@
  * 5. The history holds what was replaced, attributed to the run that replaced it.
  * 6. A human's revert puts the old prompt back, over real HTTP, and keeps the version it
  * undid.
- * 7. **A definition of done that really executed reaches the fitness.** The arm run's
+ * 7. **The searching half is offered and dealt out.** `propose_own_variants` reaches the
+ * model, the candidates stay off the persona row, and three consecutive starts are
+ * dispatched with three different system prompts.
+ * 8. **A definition of done that really executed reaches the fitness.** The arm run's
  * branch gets a commit and a check that really fails, and the trial counts it with
  * nobody having merged or discarded anything — the term that makes the fitness more
  * than a record of what a reviewer had time for.
@@ -56,7 +59,11 @@ import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
 import { advanceVerificationQueue } from '../packages/application/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
-import { REVISE_PROMPT_TOOL_NAME, REVISE_TOOLS_TOOL_NAME } from '../apps/runner/src/self-tool.js'
+import {
+ PROPOSE_VARIANTS_TOOL_NAME,
+ REVISE_PROMPT_TOOL_NAME,
+ REVISE_TOOLS_TOOL_NAME,
+} from '../apps/runner/src/self-tool.js'
 
 const execFileAsync = promisify(execFile)
 const REPO_ROOT = new URL('..', import.meta.url).pathname
@@ -490,6 +497,112 @@ const main = async => {
  check(
  (trial?.detail ?? '').includes('most often the build check'),
  'and the sentence a human reads says which check',
+)
+ }
+
+ /**
+ * ── 4c. The searching half, live ────────────────────
+ *
+ * The half no test can reach is the same one tiers 1 and 2 needed: **that the SDK offers
+ * the tool at all.** `propose_own_variants` is registered on the self server, gated by the
+ * envelope, and named in an exhaustive allowlist — three places a tool can exist while a
+ * model never sees it. Everything after the call is rows.
+ *
+ * A separate persona, because the one above is mid-trial and a search is refused while
+ * anything else is being measured — which is itself the rule under test in the suite.
+ *
+ * Two candidates minimum is the domain's floor, so the task says two and the check reads
+ * what actually landed rather than what was asked for.
+ */
+ const searcher = await client.persona.create({
+ markdownSource: ENVELOPED_PERSONA('self-searcher'),
+ })
+ const searchRun = await startAndWait('variant search', {
+ personaId: searcher.id,
+ task:
+ 'Read CONVENTIONS.md. You cannot tell which of two instructions would serve future ' +
+ 'runs better, so do not guess: call your propose_own_variants tool with exactly two ' +
+ 'complete candidate prompts that differ in what a future run would do about the ' +
+ 'convention you found. Say in one sentence why each is worth trying.',
+ })
+
+ const searches = await client.persona.variantSearches
+ const search = searches.find((entry: any) => entry.personaId === searcher.id)
+ check(
+ search !== undefined,
+ `the model called ${PROPOSE_VARIANTS_TOOL_NAME} (${searches.length} open search(es))`,
+)
+ check(
+ (search?.candidates.length ?? 0) >= 2,
+ `and it proposed ${search?.candidates.length ?? 0} candidates, none of them live`,
+)
+ /**
+ * The property that makes a search safe: nothing was written to the persona. A candidate
+ * that leaked into the row would be a tier-1 edit nobody asked for.
+ */
+ const searcherAfter = (await client.persona.list).find((p: any) => p.id === searcher.id)
+ check(
+ (searcherAfter?.markdownSource ?? '').includes(STARTING_PROMPT),
+ 'the persona still says exactly what a human wrote',
+)
+
+ if (search) {
+ /**
+ * The arms, dealt out for real. Three starts: the prompt in use, then each candidate —
+ * and the assertion is on the *system prompt the Runner was dispatched with*, which is
+ * the only place a substitution either happened or did not.
+ */
+ const armPrompts: string[] = []
+ for (let i = 0; i < 3; i += 1) {
+ const armRun = await client.agentRun.start({
+ threadId: channel.rootThread.id,
+ repositoryId: repo.id,
+ personaId: searcher.id,
+ task: 'Reply with the single word ready and stop.',
+ })
+ const started = await client.agentRun.get({ agentRunId: armRun.id })
+ armPrompts.push(String((started.persona as { systemPrompt: string }).systemPrompt))
+ await awaitRun(armRun.id)
+ }
+ check(
+ armPrompts[0]?.includes(STARTING_PROMPT) === true,
+ 'the first run of the search got the prompt the persona actually has',
+)
+ const candidateBodies = search.candidates.map((candidate: any) => candidate.body)
+ check(
+ armPrompts.slice(1).every((prompt) => candidateBodies.some((body: string) => prompt.includes(body))),
+ 'and the next two were dispatched with the candidates themselves',
+)
+ check(
+ new Set(armPrompts).size === 3,
+ `three arms meant three different system prompts (${new Set(armPrompts).size} distinct)`,
+)
+
+ // A tier-1 edit is refused mid-search: the control arm is the prompt it would rewrite.
+ const blocked = await startAndWait('tier 1 during a search', {
+ personaId: searcher.id,
+ task: editTask('LOOM-SHOULD-BE-REFUSED'),
+ })
+ void blocked
+ check(
+ (await client.persona.revisions({ personaId: searcher.id })).length === 0,
+ 'a tier-1 edit was refused while the search was open',
+)
+
+ // And a human promotes: the body lands on the persona, the search closes.
+ const promoted = await client.persona.promoteVariant({
+ personaId: searcher.id,
+ variantId: search.candidates[0].variantId,
+ })
+ check(
+ promoted.markdownSource.includes(search.candidates[0].body.slice(0, 40)),
+ 'a human promoted one candidate and the persona now says it',
+)
+ check(
+ (await client.persona.variantSearches).every(
+ (entry: any) => entry.personaId !== searcher.id,
+),
+ 'and the search is settled, so the persona can be measured again',
 )
  }
 

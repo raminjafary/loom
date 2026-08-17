@@ -1,7 +1,6 @@
 import {
- COST_TOLERANCE,
  MIN_DECIDED_RUNS_PER_ARM,
- SUCCESS_RATE_TOLERANCE,
+ compareTrialArms,
  describeVerificationFailures,
  verificationFailureRate,
  type VerificationTally,
@@ -165,109 +164,94 @@ export const summarizePromptEffect = (
  }
  }
 
- const outcomeGap = revised.successRate - previous.successRate
+ /**
+ * The comparison itself is `compareTrialArms` — one function for every trial in this
+ * platform (see it for why the order is the judgement). What stays here is the phrasing:
+ * "the agent's version" is not "runs that read this map", and a panel that said the wrong
+ * one would be a worse defect than a wrong threshold.
+ */
+ const { favours, term } = compareTrialArms(revised, previous)
+ const merged = `${asPercent(revised.successRate)} against ${asPercent(previous.successRate)} merged`
+ const perRun = `${asMoney(revised.meanCostUsd)} against ${asMoney(previous.meanCostUsd)} a run`
 
- if (outcomeGap > SUCCESS_RATE_TOLERANCE) {
- return {
+ if (term === 'outcomes') {
+ return favours === 'candidate'
+ ? {
  revised,
  previous,
  verdict: 'better',
  detail:
- `The agent's version got work merged ${asPercent(revised.successRate)} of the time ` +
- `against ${asPercent(previous.successRate)} for the prompt it replaced.${verification}`,
+ `The agent's version got work merged ${asPercent(revised.successRate)} of the ` +
+ `time against ${asPercent(previous.successRate)} for the prompt it replaced.` +
+ verification,
  }
- }
-
- if (outcomeGap < -SUCCESS_RATE_TOLERANCE) {
- return {
+: {
  revised,
  previous,
  verdict: 'worse',
  detail:
- `The agent's version got work merged ${asPercent(revised.successRate)} of the time ` +
- `against ${asPercent(previous.successRate)} for the prompt it replaced — it is ` +
- `making things worse. Restoring the old one is the cheap fix.${verification}`,
+ `The agent's version got work merged ${asPercent(revised.successRate)} of the ` +
+ `time against ${asPercent(previous.successRate)} for the prompt it replaced — it ` +
+ `is making things worse. Restoring the old one is the cheap fix.${verification}`,
  }
  }
 
  /**
- * Level on what a human decided, so the machine's check decides next.
+ * Level on what a human decided, so the machine's check decided it.
  *
  * This term is why the fitness is no longer only a report of what happened to a branch
- * after somebody looked at it. Principle 6 says "'looks done' is not a stop
- * condition", and a merge rate has the same weakness on a longer timescale: it measures
- * what a reviewer had time for. A repository's definition of done runs on every finished
- * run, needs nobody, and can say *this branch is not done* — the one half of the
- * judgement a machine is entitled to make.
+ * after somebody looked at it. Principle 6 says "'looks done' is not a stop condition",
+ * and a merge rate has the same weakness on a longer timescale: it measures what a
+ * reviewer had time for.
  *
- * Ordered behind the disposition and ahead of cost, and the order is the whole
- * judgement. A human merging is stronger evidence than a passing build; a failing build
- * is stronger evidence than a cheaper run. Without this term two prompts that merge
- * equally often would be separated by pennies while one of them was leaving branches
- * that do not compile.
- *
- * A merged branch that failed its checks stays a success here, because a human merged it
+ * A merged branch that failed its checks stays a success, because a human merged it
  * anyway and that was their call to make. It is counted in
  * `verificationFailed` all the same, so the sentence still says so.
  */
- const verificationGap = previous.verificationFailureRate - revised.verificationFailureRate
-
- if (verificationGap > SUCCESS_RATE_TOLERANCE) {
- return {
+ if (term === 'verification') {
+ return favours === 'candidate'
+ ? {
  revised,
  previous,
  verdict: 'better',
  detail:
- `Outcomes are level (${asPercent(revised.successRate)} against ` +
- `${asPercent(previous.successRate)} merged), and the agent's version leaves fewer ` +
- `branches failing this repository's definition of done.${verification}`,
+ `Outcomes are level (${merged}), and the agent's version leaves fewer branches ` +
+ `failing this repository's definition of done.${verification}`,
  }
- }
-
- if (verificationGap < -SUCCESS_RATE_TOLERANCE) {
- return {
+: {
  revised,
  previous,
  verdict: 'worse',
  detail:
- `Outcomes are level (${asPercent(revised.successRate)} against ` +
- `${asPercent(previous.successRate)} merged), but the agent's version leaves more ` +
- `branches failing this repository's definition of done. Restoring the old one is ` +
- `the cheap fix.${verification}`,
+ `Outcomes are level (${merged}), but the agent's version leaves more branches ` +
+ `failing this repository's definition of done. Restoring the old one is the ` +
+ `cheap fix.${verification}`,
  }
  }
 
  /**
- * Level on outcomes. The cost model makes model choice the cost swing and this is the smaller
- * cousin: a prompt every future run pays for in context is a standing charge, so a
- * version that produces the same results for materially less money has earned its place
- * and one that costs materially more has not.
+ * Cost, last. The cost model makes model choice the big swing and this is the smaller cousin: a
+ * prompt every future run pays for in context is a standing charge, so the same results
+ * for materially less money have earned their place and materially more have not.
  */
- const costGap =
- previous.meanCostUsd === 0 ? 0: (revised.meanCostUsd - previous.meanCostUsd) / previous.meanCostUsd
-
- if (costGap < -COST_TOLERANCE) {
- return {
+ if (term === 'cost') {
+ return favours === 'candidate'
+ ? {
  revised,
  previous,
  verdict: 'better',
  detail:
- `Outcomes are level (${asPercent(revised.successRate)} against ` +
- `${asPercent(previous.successRate)}), and the agent's version is cheaper per run — ` +
- `${asMoney(revised.meanCostUsd)} against ${asMoney(previous.meanCostUsd)}.`,
+ `Outcomes are level (${merged}), and the agent's version is cheaper per run — ` +
+ `${perRun}.${verification}`,
  }
- }
-
- if (costGap > COST_TOLERANCE) {
- return {
+: {
  revised,
  previous,
  verdict: 'worse',
  detail:
- `Outcomes are level (${asPercent(revised.successRate)} against ` +
- `${asPercent(previous.successRate)}), and the agent's version costs more per run — ` +
- `${asMoney(revised.meanCostUsd)} against ${asMoney(previous.meanCostUsd)}. A prompt ` +
- 'is charged to every future run, so that is a standing cost for no gain.',
+ `Outcomes are level (${merged}), and the agent's version costs more per run — ` +
+ `${perRun}. A prompt is charged to every future run, so that is a standing cost ` +
+ `for no gain.${verification}`,
  }
  }
 

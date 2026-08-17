@@ -1685,3 +1685,114 @@ export const promptTrialUse = pgTable(
  index('prompt_trial_revision_idx').on(t.workspaceId, t.revisionId),
  ],
 )
+
+/**
+ * One search over candidate prompts.
+ *
+ * A set exists so that "the search" is a thing that can be open, settled and serialized.
+ * The candidates alone could not carry that: closing a search means deciding about all of
+ * them at once, and a status per candidate would let a workspace half-settle one.
+ *
+ * **One open search per persona, by index rather than by discipline.** Two searches would
+ * split one workspace's runs across five or six arms, and five decided runs an arm — which
+ * Portable expertise already calls a compromise — would stop being reachable. The merge queue and the
+ * verification harness serialize the same way and for the same reason: a partial unique
+ * index holds under a race, and a sweep that believes it is alone does not.
+ */
+export const personaVariantSet = pgTable(
+ 'persona_variant_set',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ /**
+ * The run that proposed it. `set null` on delete, never cascade: the search is the
+ * record that an agent proposed changing what every future run of this persona is told,
+ * and that record outlives the run — the same reasoning `persona_revision` keeps.
+ */
+ proposedByRunId: uuid('proposed_by_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ /** 'open' | 'settled'. A settled search is history; an open one is being measured. */
+ status: text('status').notNull.default('open'),
+ /** Which candidate a human promoted, or null when they discarded the search. */
+ promotedVariantId: uuid('promoted_variant_id'),
+ settledAt: timestamp('settled_at', { withTimezone: true }),
+ settledByUserId: text('settled_by_user_id'),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ uniqueIndex('persona_variant_set_open_idx')
+.on(t.personaId)
+.where(sql`${t.status} = 'open'`),
+ index('persona_variant_set_workspace_idx').on(t.workspaceId, t.createdAt),
+ ],
+)
+
+/**
+ * One candidate prompt.
+ *
+ * `markdown_source` is a **complete persona document**, not a body, and that is what makes
+ * promotion a write rather than a re-derivation: the document was validated against the
+ * persona it belongs to when it was proposed — same envelope, same round trip, same rules
+ * as a tier-1 edit — so promoting it later cannot produce a configuration nobody checked.
+ *
+ * A losing candidate is archived, never deleted: "deleting memory is the one
+ * self-modification with no diff to review", and the archive is also what stops the loop
+ * re-proposing something this workspace already paid to reject.
+ */
+export const personaVariant = pgTable(
+ 'persona_variant',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ setId: uuid('set_id')
+.notNull
+.references( => personaVariantSet.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ markdownSource: text('markdown_source').notNull,
+ /** What the agent said this candidate is *for* — read first by whoever decides. */
+ rationale: text('rationale').notNull.default(''),
+ /** Order proposed, so the arms are listed the way the agent wrote them. */
+ position: doublePrecision('position').notNull.default(0),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [index('persona_variant_set_idx').on(t.workspaceId, t.setId)],
+)
+
+/**
+ * Which candidate a run was given — or none of them.
+ *
+ * `variant_id` null is the **incumbent**: the prompt the persona actually has, which is the
+ * control group and needs no candidate row to be run. Mirrors `prompt_trial_use` down to
+ * the unique index on the run, because a run is on one arm or it is not in the comparison.
+ */
+export const variantUse = pgTable(
+ 'variant_use',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ setId: uuid('set_id')
+.notNull
+.references( => personaVariantSet.id, { onDelete: 'cascade' }),
+ variantId: uuid('variant_id').references( => personaVariant.id, { onDelete: 'cascade' }),
+ agentRunId: uuid('agent_run_id')
+.notNull
+.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ uniqueIndex('variant_use_run_idx').on(t.agentRunId),
+ index('variant_use_set_idx').on(t.workspaceId, t.setId),
+ ],
+)

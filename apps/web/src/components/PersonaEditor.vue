@@ -7,6 +7,7 @@ import type {
  PersonaDraft,
  PersonaRevision,
  PromptTrial,
+ VariantSearch,
 } from '@loom/api-contract'
 import {
  EMPTY_PERSONA_FORM,
@@ -63,6 +64,11 @@ const props = defineProps<{
  * id. Absent means nothing is being measured.
  */
  trials?: Record<string, PromptTrial>
+ /**
+ * The variant search running over each persona,
+ * by persona id. Absent is the ordinary state.
+ */
+ searches?: Record<string, VariantSearch>
 }>
 
 const emit = defineEmits<{
@@ -90,6 +96,15 @@ const emit = defineEmits<{
  'revert-persona': [input: { personaId: string; revisionId: string }]
  /** Ends a trial by keeping the agent's edit. */
  'keep-revision': [input: { personaId: string; revisionId: string }]
+ /**
+ * Ends a variant search: `variantId` is the
+ * candidate a human took, and null means they took none.
+ *
+ * Promoting is the only gesture in the loop that writes a prompt. Everything else it does
+ * — proposing, dealing runs out, ranking — a run could already do inside its envelope;
+ * making a candidate what every future run is told is a person's call.
+ */
+ 'settle-search': [input: { personaId: string; variantId: string | null }]
 }>
 
 type Mode = 'closed' | 'create' | 'edit'
@@ -149,6 +164,29 @@ const trial = computed( =>
 const failingChecksShown = computed( =>
  (trial.value?.arms ?? []).some((arm) => arm.verificationFailed > 0),
 )
+
+/** The search on the persona being edited, if one is running. */
+const search = computed( =>
+ editingId.value === '' ? null: (props.searches?.[editingId.value] ?? null),
+)
+
+/**
+ * A candidate's body and reason, by id — an arm carries only ids and numbers.
+ *
+ * Null is the incumbent, and the caller labels it: the prompt in use is not a candidate,
+ * and a row that read "candidate: (none)" would hide the one arm a promotion displaces.
+ */
+const candidateOf = (variantId: string | null) =>
+ variantId === null
+ ? null
+: (search.value?.candidates.find((candidate) => candidate.variantId === variantId) ?? null)
+
+const STANDING_LABEL: Record<string, string> = {
+ undecided: 'not measured yet',
+ better: 'ahead of the prompt in use',
+ worse: 'behind the prompt in use',
+ 'no-better': 'no different',
+}
 
 const VERDICT_LABEL: Record<PromptTrial['verdict'], string> = {
  undecided: 'Still measuring',
@@ -874,6 +912,59 @@ const harnessSummary = (persona: AgentPersona): string => {
  </div>
  </section>
 
+ <!--
+ The search, above the history for the same
+ reason the trial is: it decides what a human does next, and the two buttons that
+ end it are here rather than under the older list.
+ -->
+ <section v-if="mode === 'edit' && search" class="trial search">
+ <h4>{{ search.leader ? 'A candidate is ahead': 'Trying several prompts' }}</h4>
+ <p class="detail">{{ search.detail }}</p>
+ <ul class="arms">
+ <li v-for="arm in search.arms":key="arm.variantId ?? 'incumbent'">
+ <strong>{{
+ arm.variantId === null ? 'the prompt in use': `candidate ${candidateOf(arm.variantId)?.rationale || ''}`
+ }}</strong>
+ <span>{{ arm.merged }} merged of {{ arm.decided }} finished</span>
+ <span v-if="arm.verificationFailed > 0" class="broke">
+ {{ arm.verificationFailed }} failed checks<template v-if="arm.failingCheck">
+ — mostly {{ arm.failingCheck }}</template
+ >
+ </span>
+ <span v-if="arm.decided > 0">${{ arm.meanCostUsd.toFixed(4) }} a run</span>
+ <span v-if="arm.variantId !== null" class="standing">{{
+ STANDING_LABEL[arm.standing]
+ }}</span>
+ <!--
+ The candidate's own text, because promoting one is agreeing to it. A panel
+ that showed only its score would be asking a human to approve a document
+ they had not read.
+ -->
+ <details v-if="arm.variantId !== null">
+ <summary>read it</summary>
+ <pre>{{ candidateOf(arm.variantId)?.body }}</pre>
+ </details>
+ <ConfirmButton
+ v-if="arm.variantId !== null"
+ variant="link"
+ label="Promote"
+ confirm-label="Make this the prompt"
+ @confirm="
+ emit('settle-search', { personaId: editingId, variantId: arm.variantId })
+ "
+ />
+ </li>
+ </ul>
+ <div class="trial-actions">
+ <ConfirmButton
+ variant="link"
+ label="Discard the search"
+ confirm-label="Keep the prompt it has"
+ @confirm="emit('settle-search', { personaId: editingId, variantId: null })"
+ />
+ </div>
+ </section>
+
  <section v-if="mode === 'edit' && history.length > 0" class="history">
  <h4>Earlier prompts</h4>
  <p class="hint">
@@ -945,6 +1036,21 @@ const harnessSummary = (persona: AgentPersona): string => {
 
 .trial.arms.broke {
  color: var(--danger, #f7768e);
+}
+
+.trial.search.arms li {
+ align-items: baseline;
+}
+
+.trial.search.standing {
+ opacity: 0.75;
+}
+
+.trial.search pre {
+ white-space: pre-wrap;
+ margin: 0.35rem 0 0;
+ font-size: 0.75rem;
+ opacity: 0.85;
 }
 
 .trial-actions {

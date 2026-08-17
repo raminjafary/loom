@@ -394,6 +394,19 @@ const main = async : Promise<void> => {
 )
  })
  },
+ proposeVariants: (edit) => {
+ const requestId = nextRequestId
+ emit({ t: 'variants_propose', requestId,...edit })
+ return new Promise((resolve) => {
+ pendingSelfEdits.set(requestId, (result) =>
+ resolve(
+ result.ok
+ ? { ok: true, outcome: result.outcome ?? '' }
+: { ok: false, error: result.error ?? 'the platform refused it' },
+),
+)
+ })
+ },
  })
 : null
 

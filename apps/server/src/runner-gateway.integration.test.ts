@@ -6731,6 +6731,213 @@ The prompt it started with.`
  socket.close
  })
 
+ /**
+ * The searching half, over the real protocol.
+ *
+ * The half only an integration test can show is the same one the prompt trial needed:
+ * that the arms are *real*. Three runs of one persona are dispatched with three different
+ * system prompts — the prompt it has, and two candidates no human has seen — and the
+ * persona row never moves. Everything downstream is arithmetic over rows, and arithmetic
+ * over rows that were never produced is the failure this catches.
+ */
+ it('deals runs out between the candidates and the prompt in use, and promotes on a human"s word', async => {
+ const { socket, runnerId } = await pairFakeRunner('variants')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'variants' })
+ const persona = await client.persona.create({
+ markdownSource: SELF_EDITING_PERSONA.replace('self-editor', 'self-editor-variants'),
+ })
+
+ const firstFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const proposeRun = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await firstFrame
+
+ const proposed = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'variants-1',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_variants_proposed',
+ runId: proposeRun.id,
+ requestId: 'variants-1',
+ variants: [
+ { body: 'CANDIDATE ALPHA. Read the tests first.', rationale: 'tests before code' },
+ { body: 'CANDIDATE BETA. Write the smallest diff.', rationale: 'small diffs land' },
+ ],
+ }),
+)
+ const proposedFrame = await proposed
+ expect(proposedFrame.ok).toBe(true)
+ expect(String(proposedFrame.outcome)).toContain('None of them is live')
+
+ // The persona still says what it said: a search holds every candidate back.
+ const untouched = (await client.persona.list).find((p) => p.id === persona.id)
+ expect(untouched?.markdownSource).toContain('The prompt it started with')
+ expect(untouched?.markdownSource).not.toContain('CANDIDATE')
+
+ const armPrompts: string[] = []
+ for (let i = 0; i < 3; i += 1) {
+ const frame = nextFrame(socket, (v) => v.type === 'start_run')
+ await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ armPrompts.push(String(((await frame).persona as { systemPrompt: string }).systemPrompt))
+ }
+
+ // The prompt in use goes first — nothing is live yet, so the honest first sample is
+ // what the workspace actually has — then each candidate once.
+ expect(armPrompts[0]).toContain('The prompt it started with')
+ expect(armPrompts[1]).toContain('CANDIDATE ALPHA')
+ expect(armPrompts[2]).toContain('CANDIDATE BETA')
+
+ const searchFor = async (personaId: string) =>
+ (await client.persona.variantSearches).find((entry) => entry.personaId === personaId) ??
+ null
+
+ const search = await searchFor(persona.id)
+ expect(search?.candidates.map((candidate) => candidate.rationale)).toEqual([
+ 'tests before code',
+ 'small diffs land',
+ ])
+ // Three arms, one of them the incumbent, and no leader on one run apiece.
+ expect(search?.arms).toHaveLength(3)
+ expect(search?.arms[0]?.variantId).toBeNull
+ expect(search?.leader).toBeNull
+ expect(search?.detail).toContain('Still measuring')
+
+ /**
+ * A tier-1 edit is refused while the search runs, because the control arm *is* the
+ * prompt it would rewrite — and refused as an outcome the model reads, never as an
+ * error, which is what continuity mode requires of a refusal.
+ */
+ const blocked = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'variants-blocked',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_prompt_revised',
+ runId: proposeRun.id,
+ requestId: 'variants-blocked',
+ body: 'Something a search cannot allow right now.',
+ rationale: 'mid-search',
+ }),
+)
+ const blockedFrame = await blocked
+ expect(blockedFrame.ok).toBe(true)
+ expect(String(blockedFrame.outcome)).toContain('in the middle of a variant search')
+ expect((await client.persona.revisions({ personaId: persona.id }))).toHaveLength(0)
+
+ // A human promotes one candidate: the body lands, the search closes, and the history
+ // records it as the human's act with the agent's reason inside it.
+ const promoted = await client.persona.promoteVariant({
+ personaId: persona.id,
+ variantId: search!.candidates[1]!.variantId,
+ })
+ expect(promoted.markdownSource).toContain('CANDIDATE BETA')
+ expect(await searchFor(persona.id)).toBeNull
+
+ const history = await client.persona.revisions({ personaId: persona.id })
+ expect(history).toHaveLength(1)
+ expect(history[0]?.replacedByKind).toBe('human')
+ expect(history[0]?.rationale).toContain('small diffs land')
+ // And the promoted prompt does not go on trial: it has just been measured.
+ expect(await client.persona.trial({ personaId: persona.id })).toBeNull
+
+ socket.close
+ })
+
+ /** The other way a search ends: nobody wins, and every candidate stays on the record. */
+ it('lets a human discard a search without taking any of it', async => {
+ const { socket, runnerId } = await pairFakeRunner('variants-discard')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'variants-discard' })
+ const persona = await client.persona.create({
+ markdownSource: SELF_EDITING_PERSONA.replace('self-editor', 'self-editor-discard'),
+ })
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await startFrame
+
+ const proposed = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'variants-2',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_variants_proposed',
+ runId: run.id,
+ requestId: 'variants-2',
+ variants: [
+ { body: 'CANDIDATE ONE.', rationale: 'one' },
+ { body: 'CANDIDATE TWO.', rationale: 'two' },
+ ],
+ }),
+)
+ await proposed
+
+ // A second search is refused while one is open — one persona is measured one way at a
+ // time, or the runs are split across more arms than a workspace fills.
+ const second = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'variants-3',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_variants_proposed',
+ runId: run.id,
+ requestId: 'variants-3',
+ variants: [
+ { body: 'CANDIDATE THREE.', rationale: 'three' },
+ { body: 'CANDIDATE FOUR.', rationale: 'four' },
+ ],
+ }),
+)
+ expect(String((await second).outcome)).toContain('already running')
+
+ await client.persona.discardVariants({ personaId: persona.id })
+ expect(
+ (await client.persona.variantSearches).some((entry) => entry.personaId === persona.id),
+).toBe(false)
+ // Nothing was written to the persona, and no revision was recorded: a discarded search
+ // is not an edit.
+ const after = (await client.persona.list).find((p) => p.id === persona.id)
+ expect(after?.markdownSource).toContain('The prompt it started with')
+ expect(await client.persona.revisions({ personaId: persona.id })).toHaveLength(0)
+
+ // And with the search settled, a search can open again.
+ const third = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'variants-4',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_variants_proposed',
+ runId: run.id,
+ requestId: 'variants-4',
+ variants: [
+ { body: 'CANDIDATE FIVE.', rationale: 'five' },
+ { body: 'CANDIDATE SIX.', rationale: 'six' },
+ ],
+ }),
+)
+ expect(String((await third).outcome)).toContain('None of them is live')
+
+ socket.close
+ })
+
  it('lets a human put the old prompt back', async => {
  const { socket, runnerId } = await pairFakeRunner('self-edit-revert')
  const repo = await bindViaFakeRunner(socket, runnerId)

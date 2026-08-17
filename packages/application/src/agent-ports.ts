@@ -46,6 +46,11 @@ import type {
  PersonaRevisionId,
  PromptArm,
  PromptArmTally,
+ PersonaVariant,
+ PersonaVariantSet,
+ PersonaVariantId,
+ PersonaVariantSetId,
+ VariantArmTally,
  PersonaSpec,
  Repository,
  RepositoryId,
@@ -786,6 +791,89 @@ export interface PersonaRepositoryPort {
  workspaceId: WorkspaceId,
  revisionId: PersonaRevisionId,
 ): Promise<PromptArmTally[]>
+}
+
+/**
+ * The searching half of the self-improvement loop — candidates, the
+ * arms they are measured on, and the human's settlement.
+ *
+ * Nothing here decides anything: the rules are `prompt-variants.ts`, the fitness is
+ * `summarizeVariantSearch`, and the two human acts are use cases. This is storage.
+ */
+export interface PersonaVariantRepositoryPort {
+ /**
+ * Opens a search with its candidates, in one transaction.
+ *
+ * Rejects — by unique index, not by check — when this persona already has an open one.
+ * Two searches on one persona would split a workspace's runs across more arms than it
+ * can fill, so the second proposer loses the race and is told so.
+ */
+ openSet(input: {
+ workspaceId: WorkspaceId
+ personaId: AgentPersonaId
+ proposedByRunId?: AgentRunId
+ candidates: readonly { markdownSource: string; rationale: string }[]
+ }): Promise<{ set: PersonaVariantSet; variants: PersonaVariant[] }>
+
+ /** The measurement in progress for this persona, if there is one. Read at every start. */
+ findOpenSet(
+ workspaceId: WorkspaceId,
+ personaId: AgentPersonaId,
+): Promise<{ set: PersonaVariantSet; variants: PersonaVariant[] } | null>
+
+ findSet(
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+): Promise<{ set: PersonaVariantSet; variants: PersonaVariant[] } | null>
+
+ /**
+ * Every open search in the workspace, with its candidates. Usually none.
+ *
+ * One query rather than one per persona: a client refreshing a settings panel must not
+ * pay a round trip per persona for a state almost none of them is ever in.
+ */
+ listOpenSets(
+ workspaceId: WorkspaceId,
+): Promise<{ set: PersonaVariantSet; variants: PersonaVariant[] }[]>
+
+ /** Which arm a run went on. `variantId` absent is the incumbent — the prompt in use. */
+ recordVariantUse(input: {
+ workspaceId: WorkspaceId
+ setId: PersonaVariantSetId
+ variantId?: PersonaVariantId | null
+ agentRunId: AgentRunId
+ }): Promise<void>
+
+ /** Assigned runs per arm, in flight included — what `nextVariantArm` balances. */
+ countVariantArms(
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+): Promise<{ variantId: PersonaVariantId | null; count: number }[]>
+
+ /**
+ * Outcomes per arm, joined from the runs and their verifications.
+ *
+ * Must use the same definition of "decided" as `tallyTrialOutcomes` and
+ * `tallyExpertiseOutcomes` — a disposition, a failed run, or a branch that failed its
+ * repository's definition of done. Three tallies with three definitions would make the
+ * three panels incomparable.
+ */
+ tallyVariantOutcomes(
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+): Promise<VariantArmTally[]>
+
+ /**
+ * Ends the search — a promotion names the winner, a discard names nobody.
+ *
+ * Returns null when the set was not open, which is how a double settle stays a no-op
+ * instead of recording the second click.
+ */
+ settleSet(
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+ input: { promotedVariantId?: PersonaVariantId | null; settledByUserId?: UserId | null },
+): Promise<PersonaVariantSet | null>
 }
 
 export interface PersonaGroupRepositoryPort {

@@ -20,6 +20,10 @@ export type CapabilityId = Brand<string, 'CapabilityId'>
 export type WorkerNoteId = Brand<string, 'WorkerNoteId'>
 export type SubjectMapId = Brand<string, 'SubjectMapId'>
 export type PersonaRevisionId = Brand<string, 'PersonaRevisionId'>
+/** One candidate prompt in a variant search. */
+export type PersonaVariantId = Brand<string, 'PersonaVariantId'>
+/** The search a set of candidates belongs to — the thing that is open or settled. */
+export type PersonaVariantSetId = Brand<string, 'PersonaVariantSetId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -39,3 +43,5 @@ export const asCapabilityId = (v: string): CapabilityId => v as CapabilityId
 export const asWorkerNoteId = (v: string): WorkerNoteId => v as WorkerNoteId
 export const asSubjectMapId = (v: string): SubjectMapId => v as SubjectMapId
 export const asPersonaRevisionId = (v: string): PersonaRevisionId => v as PersonaRevisionId
+export const asPersonaVariantId = (v: string): PersonaVariantId => v as PersonaVariantId
+export const asPersonaVariantSetId = (v: string): PersonaVariantSetId => v as PersonaVariantSetId

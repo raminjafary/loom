@@ -920,6 +920,41 @@ export const PromptTrialSchema = z.object({
 ),
 })
 
+/**
+ * A search over candidate prompts.
+ *
+ * `leader` is a recommendation and never an action: the loop ranks, and promoting is a
+ * human's act. Null while any arm is still short of evidence, which is the ordinary state
+ * for as long as it takes a workspace to run a persona twenty times.
+ */
+export const VariantSearchSchema = z.object({
+ personaId: z.string,
+ setId: z.string,
+ detail: z.string,
+ leader: z.string.nullable,
+ candidates: z.array(
+ z.object({
+ variantId: z.string,
+ /** The candidate's prompt body — what a run on this arm is actually told. */
+ body: z.string,
+ rationale: z.string,
+ }),
+),
+ arms: z.array(
+ z.object({
+ /** Null is the incumbent: the prompt this persona actually has. */
+ variantId: z.string.nullable,
+ decided: z.number.int,
+ merged: z.number.int,
+ failed: z.number.int,
+ verificationFailed: z.number.int,
+ failingCheck: z.string.nullable,
+ meanCostUsd: z.number,
+ standing: z.enum(['undecided', 'better', 'worse', 'no-better']),
+ }),
+),
+})
+
 export const AgentPersonaSchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -1294,6 +1329,7 @@ export type PersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type AgentPersona = z.infer<typeof AgentPersonaSchema>
 export type PersonaRevision = z.infer<typeof PersonaRevisionSchema>
 export type PromptTrial = z.infer<typeof PromptTrialSchema>
+export type VariantSearch = z.infer<typeof VariantSearchSchema>
 export type PersonaDraft = z.infer<typeof PersonaDraftSchema>
 export type PersonaGroup = z.infer<typeof PersonaGroupSchema>
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>

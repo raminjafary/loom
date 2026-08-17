@@ -8,6 +8,7 @@ import {
  AgentPersonaSchema,
  PersonaRevisionSchema,
  PromptTrialSchema,
+ VariantSearchSchema,
  AgentRunSchema,
  ApprovalRequestSchema,
  ChannelSchema,
@@ -813,6 +814,40 @@ export const contract = {
  */
  keepRevision: oc
 .input(z.object({ personaId: z.string, revisionId: z.string }))
+.output(z.object({ ok: z.literal(true) })),
+
+ /**
+ * Every variant search currently running in this workspace. Usually none.
+ *
+ * Workspace-wide rather than per persona, unlike `trial`: a trial can be looked up only
+ * for personas that have a revision, and there is no equally cheap filter for a search —
+ * so the per-persona shape would mean one request per persona on every refresh, for a
+ * state almost every persona is never in.
+ *
+ * Distinct from `trial` rather than folded into it because they are different questions
+ * about different artifacts: a trial asks whether an edit that is *already live* was an
+ * improvement, and a search asks which of several candidates — none of them live — is
+ * worth promoting.
+ */
+ variantSearches: oc.output(z.array(VariantSearchSchema)),
+
+ /**
+ * A human promotes one candidate, and the search ends.
+ *
+ * The body only, applied to the persona as it is now — a search takes days, and a tool
+ * list somebody changed in the meantime must survive it.
+ */
+ promoteVariant: oc
+.input(z.object({ personaId: z.string, variantId: z.string }))
+.output(AgentPersonaSchema),
+
+ /**
+ * A human ends the search without taking any of it. The candidates stay on the record:
+ * The self-improvement loop archives a loser rather than deleting it, which is also what stops the loop
+ * re-proposing something this workspace already paid to reject.
+ */
+ discardVariants: oc
+.input(z.object({ personaId: z.string }))
 .output(z.object({ ok: z.literal(true) })),
  },
 
