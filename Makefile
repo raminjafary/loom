@@ -70,7 +70,10 @@ test: ## The suite, against the test databases
 	pnpm db:test:prepare
 	pnpm test
 
-check: ## Everything CI would run if this repository had CI
+# Kept in step with .github/workflows/check.yml deliberately: that workflow runs these
+# same commands, so this target stays the way to reproduce a CI failure locally.
+check: ## Everything CI runs, locally
 	pnpm typecheck
 	pnpm lint
 	$(MAKE) test
+	npx vitest run tools/architecture.test.ts
