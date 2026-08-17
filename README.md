@@ -64,6 +64,20 @@ pnpm --filter @loom/ws-gateway dev # client realtime fan-out, on:3002
 pnpm --filter @loom/web dev # UI on:5173
 ```
 
+Or the whole stack at once, which is what the `Makefile` is for:
+
+```bash
+make up # containers + migrations, then every app under turbo
+make down # stops the processes and the containers
+make status # what is up, and what is holding each dev port
+```
+
+`make dev` frees the dev ports before starting, deliberately. A `pnpm dev` that outlived
+its terminal keeps serving pre-migration code, and a session was spent diagnosing a
+canvas that was not broken — the database had moved underneath a process nobody had
+restarted. `make kill` does that part alone, and also stops any Runner started by hand
+or by a driver in `tools/`, since a Runner holds no port and survives everything else.
+
 Sign up through the web UI (email/password via Better Auth) — a default workspace auto-provisions on first login.
 
 ### Notifications
