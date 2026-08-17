@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildVerifyArgs, mergeRunBranch } from './merge.js'
+import { mergeRunBranch } from './merge.js'
+import { buildVerifyArgs } from './verify.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -14,7 +15,7 @@ const execFileAsync = promisify(execFile)
  * on the current tip, that a conflict leaves the branch untouched, that a human's
  * uncommitted work is never moved — is a statement about what git actually did.
  *
- * Verification is left unconfigured throughout (`verifyCommand: null`), so these
+ * Verification is left unconfigured throughout (`checks: []`), so these
  * exercise the ordering and safety rules without needing a container. The decision
  * of *whether* verification may run is `planMergeVerification`, unit-tested in the
  * domain.
@@ -57,7 +58,7 @@ const merge = (clonePath: string, branchName: string) =>
  clonePath,
  branchName,
  defaultBranch: 'main',
- verifyCommand: null,
+ checks: [],
  })
 
 describe('mergeRunBranch', => {
@@ -73,7 +74,7 @@ describe('mergeRunBranch', => {
  expect(await git(source, ['log', '-1', '--pretty=%s'])).toBe('add feature')
  // Nothing verified this one, and the result says so rather than defaulting true.
  expect(result.verified).toBe(false)
- expect(result.note).toContain('no verification command')
+ expect(result.note).toContain('no verification checks')
  })
 
  /**
@@ -181,7 +182,7 @@ describe('mergeRunBranch', => {
  clonePath: clone,
  branchName: 'loom/run-h',
  defaultBranch: 'main',
- verifyCommand: 'test -f feature.txt',
+ checks: [{ name: 'tests', command: 'test -f feature.txt' }],
  })
  expect(result.ok).toBe(true)
  if (!result.ok) return
@@ -205,7 +206,7 @@ describe('mergeRunBranch', => {
  clonePath: clone,
  branchName: 'loom/run-i',
  defaultBranch: 'main',
- verifyCommand: 'echo "3 tests failed" && exit 1',
+ checks: [{ name: 'tests', command: 'echo "3 tests failed" && exit 1' }],
  })
  expect(result.ok).toBe(false)
  if (result.ok) return
@@ -244,7 +245,7 @@ describe('mergeRunBranch', => {
  clonePath: clone,
  branchName: 'loom/run-i2',
  defaultBranch: 'main',
- verifyCommand: noisy,
+ checks: [{ name: 'tests', command: noisy }],
  })
  expect(result.ok).toBe(false)
  if (result.ok) return
@@ -275,7 +276,7 @@ describe('mergeRunBranch', => {
  clonePath: clone,
  branchName: 'loom/run-j',
  defaultBranch: 'main',
- verifyCommand: 'echo whatever',
+ checks: [{ name: 'tests', command: 'echo whatever' }],
  })
  expect(result.ok).toBe(false)
  if (result.ok) return
@@ -327,7 +328,7 @@ describe('mergeRunBranch', => {
  defaultBranch: 'main',
  // What an offline `npm ci` needs: the cache env pointing somewhere real, with
  // the warm step's contents in it.
- verifyCommand: 'test -f "$(dirname "$npm_config_cache")/warmed.txt"',
+ checks: [{ name: 'tests', command: 'test -f "$(dirname "$npm_config_cache")/warmed.txt"' }],
  })
  expect(result.ok).toBe(true)
  if (!result.ok) return
@@ -349,7 +350,7 @@ describe('mergeRunBranch', => {
  clonePath: clone,
  branchName: 'loom/run-l',
  defaultBranch: 'main',
- verifyCommand: 'echo planted > "$(dirname "$npm_config_cache")/planted.txt"',
+ checks: [{ name: 'tests', command: 'echo planted > "$(dirname "$npm_config_cache")/planted.txt"' }],
  })
  expect(result.ok).toBe(true)
 

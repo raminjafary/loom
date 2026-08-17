@@ -1,5 +1,6 @@
 import {
  advanceMergeQueue,
+ advanceVerificationQueue,
  curateIdleWorkspaces,
  expireStaleApprovals,
  reapStuckRuns,
@@ -15,6 +16,7 @@ import {
  approvalRepository,
  capabilityRepository,
  mergeQueueRepository,
+ runVerificationRepository,
  auditAdapter,
  channelRepository,
  clearAllRunnerConnections,
@@ -104,6 +106,7 @@ export const buildApp = async (
  agentRunEvents: agentRunEventRepository(db),
  approvals: approvalRepository(db),
  mergeQueue: mergeQueueRepository(db),
+ runVerifications: runVerificationRepository(db),
  workerNotes: workerNoteRepository(db),
  subjectMaps: subjectMapRepository(db),
  colosseum: colosseumRepository(db),
@@ -175,6 +178,15 @@ export const buildApp = async (
  // Overlapping ticks are safe — see advanceMergeQueue — and running it
  // after the reapers means a run this sweep just failed is already
  // terminal when the queue looks at its entry.
+ /**
+ * The verification harness, before the merge queue and
+ * for the same reason the reapers run before both: a branch that just
+ * failed its repository's definition of done should already say so by the
+ * time a human is deciding whether to queue it.
+ */
+ await advanceVerificationQueue(deps, {
+ verificationStuckMs: config.MERGE_STUCK_TIMEOUT_MS,
+ })
  await advanceMergeQueue(deps, { mergeStuckMs: config.MERGE_STUCK_TIMEOUT_MS })
  /**
  * Curation, last and only while nothing is running.

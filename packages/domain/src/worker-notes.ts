@@ -44,6 +44,12 @@ export type PlatformNoteKind =
  | 'branch_ready'
  | 'run_finished'
  | 'merge_result'
+ /**
+ * What a repository's definition of done said about a sibling's branch. On the ledger because it is the one fact that stops the next worker
+ * building on a base that does not compile — the same argument the worker-notes design makes for
+ * a merge conflict, one step earlier.
+ */
+ | 'verification_result'
  | 'path_ownership'
  | 'summary'
 
@@ -60,6 +66,7 @@ export const PLATFORM_NOTE_KINDS: readonly PlatformNoteKind[] = [
  'branch_ready',
  'run_finished',
  'merge_result',
+ 'verification_result',
  'path_ownership',
  'summary',
 ]

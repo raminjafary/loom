@@ -104,51 +104,14 @@ export const selectNextMergeEntry = (
  return queued[0] ?? null
 }
 
-export type VerificationPlan =
- | { readonly kind: 'run'; readonly command: string; readonly sandboxed: boolean }
- | { readonly kind: 'skip'; readonly reason: string }
- | { readonly kind: 'refuse'; readonly reason: string }
-
 /**
- * Whether, and how, to run a repository's verification command against a rebased
- * branch — the "run tests" step.
- *
- * The non-obvious clause is `refuse`. The command is operator-configured, but the
- * *code it runs* is agent-authored: a test file, a `package.json` script, a
- * `Makefile` target on the branch being merged. Executing it on the Runner host is
- * therefore arbitrary agent code with the Runner's privileges — the precise exposure
- * The sandbox spec exists to remove, and worse here than in a run, because it happens *after* a
- * human approved a merge, which reads as the safe moment.
- *
- * So verification runs in the sandbox, and without one it needs the same explicit
- * acknowledgement an unsandboxed run needs. It is never silently downgraded to
- * host execution.
- *
- * A repository with no command configured merges *unverified* rather than not at
- * all: the queue's serialization and its conflict handling are worth having on their
- * own, and `MergeQueueEntry.verified` records that no tests vouched for this one.
+ * Verification moved out of this module and generalized. `planMergeVerification` took one command and returned one
+ * boolean; a definition of done is a named, ordered list, and it is the *same* list a
+ * finished run is verified against. See `verification.ts`, and `runMergeEntry` for the
+ * one distinction that survived: this queue asks whether the branch still passes after
+ * being rebased onto the target, which is a different question from whether the run
+ * that produced it was done.
  */
-export const planMergeVerification = (input: {
- readonly command: string | null
- readonly sandboxAvailable: boolean
- readonly unsandboxedAcknowledged: boolean
-}): VerificationPlan => {
- const command = input.command?.trim
- if (!command) {
- return { kind: 'skip', reason: 'no verification command is configured for this repository' }
- }
- if (input.sandboxAvailable) return { kind: 'run', command, sandboxed: true }
- if (input.unsandboxedAcknowledged) return { kind: 'run', command, sandboxed: false }
-
- return {
- kind: 'refuse',
- reason:
- 'Refusing to verify this merge. The verification command would execute code from the ' +
- "agent's own branch with this Runner's privileges, and no sandbox is available. Start " +
- 'the sandbox, clear the repository\'s verification command to merge unverified, or set ' +
- 'LOOM_ALLOW_UNSANDBOXED=i-understand-the-agent-gets-my-privileges.',
- }
-}
 
 /**
  * A blocker a reviewer raised against the branch being queued.

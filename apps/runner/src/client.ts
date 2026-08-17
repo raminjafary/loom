@@ -38,6 +38,7 @@ import {
  createPlannerTool,
 } from './planner-tool.js'
 import { mergeRunBranch } from './merge.js'
+import { verifyRunBranch } from './verify.js'
 import { initRepository, listDirectory } from './directory.js'
 import { checkPath, resolveWithinRoot } from './path-check.js'
 import { clearRunState, listRunStates, saveRunState, type RunState } from './run-state.js'
@@ -1753,7 +1754,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  clonePath: workspace.clonePath,
  branchName: workspace.branchName,
  defaultBranch: workspace.defaultBranch,
- verifyCommand: frame.verifyCommand,
+ checks: frame.checks,
  log,
  })
 .then((result) =>
@@ -1784,6 +1785,59 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  ok: false,
  reason: 'runner_error',
  detail: error instanceof Error ? error.message: String(error),
+ }),
+)
+ return
+ }
+
+ case 'verify_run': {
+ const workspace = runWorkspaces.get(frame.runId)
+ if (!workspace) {
+ /**
+ * `error`, not `skipped`. A run whose workspace this Runner no longer holds
+ * was not measured, and the two are only the same fact if you do not care
+ * which — the self-improvement loop scores on these rows, and a discarded clone reported as
+ * "nothing to verify" would enter the arithmetic as evidence.
+ */
+ send({
+ type: 'verification_result',
+ requestId: frame.requestId,
+ status: 'error',
+ reason: "this Runner no longer holds the run's workspace",
+ })
+ return
+ }
+ void verifyRunBranch({
+ clonePath: workspace.clonePath,
+ branchName: workspace.branchName,
+ defaultBranch: workspace.defaultBranch,
+ checks: frame.checks,
+ log,
+ })
+.then((outcome) =>
+ send(
+ outcome.status === 'ran'
+ ? {
+ type: 'verification_result',
+ requestId: frame.requestId,
+ status: 'ran',
+ commitSha: outcome.commitSha,
+ checks: outcome.checks,
+ }
+: {
+ type: 'verification_result',
+ requestId: frame.requestId,
+ status: outcome.status,
+ reason: outcome.reason,
+ },
+),
+)
+.catch((error: unknown) =>
+ send({
+ type: 'verification_result',
+ requestId: frame.requestId,
+ status: 'error',
+ reason: error instanceof Error ? error.message: String(error),
  }),
 )
  return

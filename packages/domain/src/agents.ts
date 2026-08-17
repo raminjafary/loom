@@ -2,6 +2,7 @@ import type { ApprovalMode } from './approval-modes.js'
 import type { CapabilitySpec } from './capabilities.js'
 import type { Envelope } from './envelope.js'
 import type { ResponseStyle } from './response-styles.js'
+import type { VerificationCheck } from './verification.js'
 import type {
  AgentPersonaId,
  AgentRunId,
@@ -45,10 +46,18 @@ export interface Repository {
  readonly absolutePath: string
  readonly defaultBranch: string
  /**
- * What the merge queue runs against a rebased branch before merging it. Null merges unverified — see `planMergeVerification`
- * for why this executes in the sandbox rather than on the Runner host.
+ * What the merge queue ran against a rebased branch before the harness existed
+ *. Superseded by `verificationChecks` and still
+ * read: `verificationChecksFor` treats it as a single check named `tests`, which is
+ * what keeps the harness from being a feature only new repositories have.
  */
  readonly verifyCommand: string | null
+ /**
+ * This repository's definition of done: named checks, in dependency order, stopped at the first failure. Empty
+ * falls back to `verifyCommand`; empty with no command is a repository with no
+ * definition of done, which is recorded as `skipped` and never as a pass.
+ */
+ readonly verificationChecks: VerificationCheck[]
  /**
  * What the platform runs to warm this repository's dependency cache.
  * Operator-authored, run with no agent in the loop — which is the whole reason a

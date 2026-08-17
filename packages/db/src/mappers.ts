@@ -60,6 +60,11 @@ import {
  type MapNode,
  type SubjectMap,
  type SubjectMapStatus,
+ type RunVerification,
+ type VerificationCheck,
+ type VerificationCheckResult,
+ type VerificationStatus,
+ asRunVerificationId,
 } from '@loom/domain'
 import type { PlanSubtaskRecord } from '@loom/application'
 
@@ -224,6 +229,7 @@ export interface RepositoryRow {
  absolutePath: string
  defaultBranch: string
  verifyCommand: string | null
+ verificationChecks?: VerificationCheck[] | null
  installCommand: string | null
  reconcilerEnabled?: boolean
  createdAt: Date
@@ -237,6 +243,9 @@ export const toRepository = (row: RepositoryRow): Repository => ({
  absolutePath: row.absolutePath,
  defaultBranch: row.defaultBranch,
  verifyCommand: row.verifyCommand,
+ // Empty for a row read before the column existed, which is exactly what it means:
+ // that repository's definition of done is whatever `verifyCommand` holds.
+ verificationChecks: row.verificationChecks ?? [],
  installCommand: row.installCommand,
  // Defaulted to on for a row read before the column existed, which is the behaviour
  // every repository had then and the one measurement argues for.
@@ -363,6 +372,53 @@ export const toMergeQueueEntry = (row: MergeQueueEntryRow): MergeQueueEntry => {
  mergedCommitSha: row.mergedCommitSha,
  verified: row.verified,
  enqueuedByUserId: row.enqueuedByUserId,
+ createdAt: row.createdAt,
+ startedAt: row.startedAt,
+ finishedAt: row.finishedAt,
+ }
+}
+
+export interface RunVerificationRow {
+ id: string
+ workspaceId: string
+ agentRunId: string
+ repositoryId: string
+ branchName: string
+ status: string
+ commitSha: string | null
+ checks: VerificationCheckResult[] | null
+ reason: string | null
+ createdAt: Date
+ startedAt: Date | null
+ finishedAt: Date | null
+}
+
+const VERIFICATION_STATUSES: readonly VerificationStatus[] = [
+ 'pending',
+ 'passed',
+ 'failed',
+ 'skipped',
+ 'refused',
+ 'error',
+]
+
+export const toRunVerification = (row: RunVerificationRow): RunVerification => {
+ const status = VERIFICATION_STATUSES.find((candidate) => candidate === row.status)
+ // Thrown rather than defaulted, unlike an approval mode: there is no narrowest
+ // verification status to fall back to. `passed` would certify unmeasured work and
+ // `failed` would condemn it, so an unreadable row is a bug to surface, not a verdict.
+ if (!status) throw new Error(`unknown run_verification.status: ${row.status}`)
+
+ return {
+ id: asRunVerificationId(row.id),
+ workspaceId: asWorkspaceId(row.workspaceId),
+ agentRunId: asAgentRunId(row.agentRunId),
+ repositoryId: asRepositoryId(row.repositoryId),
+ branchName: row.branchName,
+ status,
+ commitSha: row.commitSha,
+ checks: row.checks ?? [],
+ reason: row.reason,
  createdAt: row.createdAt,
  startedAt: row.startedAt,
  finishedAt: row.finishedAt,

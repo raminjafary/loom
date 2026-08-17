@@ -33,6 +33,11 @@ import type {
  MergeQueueEntryId,
  MergeQueueEntryStatus,
  NoteAuthorKind,
+ RunVerification,
+ RunVerificationId,
+ VerificationCheck,
+ VerificationCheckResult,
+ VerificationStatus,
  PersonaCapability,
  PersonaGroup,
  PersonaGroupId,
@@ -105,6 +110,16 @@ export interface RepositoryRepositoryPort {
  workspaceId: WorkspaceId,
  id: RepositoryId,
  verifyCommand: string | null,
+): Promise<Repository>
+ /**
+ * This repository's definition of done. Replaces the list
+ * wholesale rather than patching one check: the order is a dependency order, so an
+ * edit that could only append would make "run the build first" unreachable.
+ */
+ setVerificationChecks(
+ workspaceId: WorkspaceId,
+ id: RepositoryId,
+ checks: readonly VerificationCheck[],
 ): Promise<Repository>
  /** What warms this repository's dependency cache. */
  setInstallCommand(
@@ -181,6 +196,59 @@ export interface MergeQueueRepositoryPort {
  verified?: boolean
  },
 ): Promise<MergeQueueEntry | null>
+}
+
+/**
+ * The verification harness's persistence.
+ *
+ * Shaped like `MergeQueueRepositoryPort` on purpose, and the resemblance is the design
+ * rather than a copy: verification is a queue with the same two properties — a job that
+ * runs a test suite, and at most one of them per repository at a time — so it needs the
+ * same claim-or-lose-the-race primitive, backed by the same kind of unique partial index
+ * rather than by anything the sweep believes.
+ *
+ * `enqueue` is an upsert on the run, because the row is one per run: a re-verification
+ * is the same question asked again, not a second record whose reader has to work out
+ * which of two verdicts is current.
+ */
+export interface RunVerificationRepositoryPort {
+ enqueue(input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ repositoryId: RepositoryId
+ branchName: string
+ }): Promise<RunVerification>
+ findByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<RunVerification | null>
+ listByRuns(workspaceId: WorkspaceId, agentRunIds: readonly AgentRunId[]): Promise<RunVerification[]>
+ /**
+ * Every unstarted verification, workspace-agnostic — the same deliberate exception to
+ * this layer's per-workspace convention as `listAllOpen`, and for the same reason: it
+ * backs an internal sweep with no caller whose authz boundary it could cross.
+ */
+ listAllPending: Promise<RunVerification[]>
+ /**
+ * Marks one row as being worked on, or returns null.
+ *
+ * Null is the serialization working, not an error — exactly as it is for the merge
+ * queue. Two servers sweeping concurrently both see the same pending row; the unique
+ * partial index lets one start it and the other has nothing to do this tick.
+ */
+ claim(workspaceId: WorkspaceId, id: RunVerificationId): Promise<RunVerification | null>
+ /**
+ * Terminal transition. Returns null when the row is already terminal, and writes
+ * nothing: a Runner answering after the sweep abandoned its verification must not
+ * overwrite the record a human has already read.
+ */
+ finish(
+ workspaceId: WorkspaceId,
+ id: RunVerificationId,
+ patch: {
+ status: Exclude<VerificationStatus, 'pending'>
+ commitSha?: string | null
+ checks?: readonly VerificationCheckResult[]
+ reason?: string | null
+ },
+): Promise<RunVerification | null>
 }
 
 /**
@@ -1114,10 +1182,28 @@ export interface RunDispatchPort {
  mergeRun(input: {
  runnerId: RunnerId
  runId: AgentRunId
- verifyCommand: string | null
+ checks: readonly VerificationCheck[]
  }): Promise<
  | { ok: true; commitSha: string; verified: boolean; changedPaths: string[]; note?: string }
  | { ok: false; reason: MergeFailureReason; detail: string }
+ >
+ /**
+ * Runs a repository's definition of done against one finished run's own branch, in
+ * its own clone.
+ *
+ * Returns what each check did and never a verdict: `summarizeVerification` decides
+ * that, so a Runner cannot report a pass with a failing check in the list.
+ *
+ * Shares `mergeRun`'s long timeout for the same reason — this is a test suite, not a
+ * git command.
+ */
+ verifyRun(input: {
+ runnerId: RunnerId
+ runId: AgentRunId
+ checks: readonly VerificationCheck[]
+ }): Promise<
+ | { status: 'ran'; commitSha: string; checks: VerificationCheckResult[] }
+ | { status: 'skipped' | 'refused' | 'error'; reason: string }
  >
 }
 

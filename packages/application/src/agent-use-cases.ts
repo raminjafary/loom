@@ -114,6 +114,14 @@ import {
  type ThreadId,
  type WorkspaceId,
  parseHandoffPolicy,
+ describeVerification,
+ parseVerificationChecks,
+ summarizeVerification,
+ verificationChecksFor,
+ type RunVerification,
+ type VerificationCheck,
+ type VerificationCheckResult,
+ type VerificationStatus,
  type WorkspaceRunControl,
 } from '@loom/domain'
 import type {
@@ -132,6 +140,7 @@ import type {
  ListDirectoryResult,
  RunDispatchPort,
  RunnerRepositoryPort,
+ RunVerificationRepositoryPort,
  WorkspaceRunControlRepositoryPort,
 } from './agent-ports.js'
 import type { BlobStoragePort } from './ports.js'
@@ -164,6 +173,8 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
  readonly agentRunEvents: AgentRunEventRepositoryPort
  readonly approvals: ApprovalRepositoryPort
  readonly mergeQueue: MergeQueueRepositoryPort
+ /** The verification harness — what a repository's definition of done said. */
+ readonly runVerifications: RunVerificationRepositoryPort
  readonly capabilities: CapabilityRepositoryPort
  readonly personas: PersonaRepositoryPort
  readonly personaGroups: PersonaGroupRepositoryPort
@@ -5610,7 +5621,11 @@ const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<v
  result = await deps.dispatch.mergeRun({
  runnerId: run.runnerId,
  runId: run.id,
- verifyCommand: repository.verifyCommand,
+ // The repository's definition of done, the same one this branch was already
+ // verified against when its run finished. Asked again
+ // because the question is different: not "was the run done" but "does it still
+ // pass on top of everything that landed since".
+ checks: verificationChecksFor(repository),
  })
  } catch (error) {
  // A disconnected or unresponsive Runner is a failed *attempt*, not a lost
@@ -5771,6 +5786,237 @@ export const advanceMergeQueue = async (
  await runMergeEntry(deps, claimed)
  }),
 )
+}
+
+/**
+ * Queues a finished run's branch for its repository's definition of done.
+ *
+ * Called from the run's terminal transition and **never awaited into it**: a
+ * verification is a test suite, and a run whose completion waited on one would report
+ * finishing minutes after it finished. This only writes a row; the sweep runs it.
+ *
+ * Enqueued for a *failed* run too. A run that ended badly may still have committed
+ * work, and "the agent gave up and the tests pass" and "the agent gave up and the build
+ * is broken" are different things for the human who has to decide what to do with the
+ * branch. The Runner reports `skipped` when there is nothing committed, which is the
+ * ordinary case for a planner run and costs one git call.
+ *
+ * Best-effort throughout, for the reason the self-improvement loop gives about its own measurement: a
+ * harness that could fail a run would have taken authority over one, and it has none.
+ */
+const enqueueRunVerification = async (deps: AgentDeps, run: AgentRun): Promise<void> => {
+ if (!run.branchName || !run.clonePath) return
+ try {
+ const repository = await deps.repositories.findById(run.workspaceId, run.repositoryId)
+ // No definition of done is not a verdict, and a row saying `skipped` for every run
+ // in a workspace that configured nothing is noise on every surface that reads them.
+ if (!repository || verificationChecksFor(repository).length === 0) return
+ await deps.runVerifications.enqueue({
+ workspaceId: run.workspaceId,
+ agentRunId: run.id,
+ repositoryId: repository.id,
+ branchName: run.branchName,
+ })
+ } catch {
+ // Swallowed: the run is over and its branch is intact. A verification that could
+ // not be queued is a measurement nobody took, not a run that went wrong.
+ }
+}
+
+/**
+ * Runs one claimed verification and records what it found.
+ *
+ * Every exit finishes the row. A `pending` row left with `started_at` set would wedge
+ * its repository permanently — the unique partial index means nothing else can claim
+ * while it stands, exactly as a stranded `merging` entry wedges the merge queue.
+ */
+const runVerificationJob = async (
+ deps: AgentDeps,
+ record: RunVerification,
+): Promise<void> => {
+ const finish = async (
+ status: Exclude<VerificationStatus, 'pending'>,
+ patch: { commitSha?: string | null; checks?: readonly VerificationCheckResult[]; reason?: string | null },
+): Promise<RunVerification | null> =>
+ deps.runVerifications.finish(record.workspaceId, record.id, { status,...patch })
+
+ const run = await deps.agentRuns.findById(record.workspaceId, record.agentRunId)
+ if (!run) {
+ await finish('error', { reason: 'the run this verification belongs to no longer exists' })
+ return
+ }
+ const repository = await deps.repositories.findById(record.workspaceId, record.repositoryId)
+ if (!repository) {
+ await finish('error', { reason: 'the repository this verification belongs to no longer exists' })
+ return
+ }
+
+ let outcome: Awaited<ReturnType<RunDispatchPort['verifyRun']>>
+ try {
+ outcome = await deps.dispatch.verifyRun({
+ runnerId: run.runnerId,
+ runId: run.id,
+ // Resolved now rather than at enqueue time: an operator who fixed a broken check
+ // while this sat in the queue meant the fixed one.
+ checks: verificationChecksFor(repository),
+ })
+ } catch (error) {
+ await finish('error', { reason: error instanceof Error ? error.message: String(error) })
+ return
+ }
+
+ if (outcome.status !== 'ran') {
+ await finish(outcome.status, { reason: outcome.reason })
+ return
+ }
+
+ /**
+ * The verdict is computed here and never taken from the frame — a Runner reporting
+ * "passed" beside a failing check would be a version skew the server had no way to
+ * notice, and the whole value of the harness is that the verdict is the platform's.
+ */
+ const summary = summarizeVerification(outcome.checks)
+ const finished = await finish(summary.status, {
+ commitSha: outcome.commitSha,
+ checks: outcome.checks,
+ })
+ // Null means this row was already resolved — a re-enqueue, or an abandonment while
+ // the Runner was still working. It has had its say; saying it again from here would
+ // contradict the timestamps.
+ if (!finished) return
+
+ const line = describeVerification({
+ status: summary.status,
+ checks: outcome.checks,
+ reason: null,
+ })
+ await postRunSystemMessage(
+ deps,
+ run,
+ `${record.branchName} at ${outcome.commitSha.slice(0, 8)}: ${line}.`,
+)
+ /**
+ * On the ledger either way, and that is deliberate. A sibling needs "this branch's
+ * build is broken" before it starts work that will rebase onto it, and it equally
+ * needs "this one passed" — the whole argument is that the expensive thing
+ * is a worker rediscovering what another worker already knows.
+ */
+ await recordRunPlatformNote(deps, run, {
+ kind: 'verification_result',
+ title: `${record.branchName} ${summary.status === 'passed' ? 'passed': 'did not pass'} verification`,
+ body: summary.failed?.detail ? `${line}\n${truncateForNote(summary.failed.detail)}`: line,
+ })
+ // Only the failure notifies. A branch that passed changes nothing about what the
+ // human was already told when the run finished; a branch that failed contradicts it.
+ if (summary.status === 'failed') {
+ await notifyRun(deps, run, 'verification_failed', { detail: line })
+ }
+}
+
+/**
+ * The verification sweep, called from the same interval as the
+ * merge queue's and for the same reasons — it is a queue of test-suite-length jobs, so
+ * it needs a claim that can lose a race and a stuck check that can abandon one.
+ *
+ * **One verification per repository at a time.** Eight finished workers in a swarm
+ * would otherwise start eight test suites at once, on one machine, against one
+ * dependency cache, while a human waits for a merge that is behind all of them. The
+ * limit is the unique partial index; this only picks who goes next.
+ */
+export const advanceVerificationQueue = async (
+ deps: AgentDeps,
+ options: { verificationStuckMs: number },
+): Promise<void> => {
+ const pending = await deps.runVerifications.listAllPending
+
+ // A row left started by a server that died mid-verification would block its
+ // repository forever. Same shape of problem, and the same answer, as the merge
+ // queue's stuck check and the dead-run reaper.
+ const now = Date.now
+ for (const record of pending) {
+ if (!record.startedAt) continue
+ if (now - record.startedAt.getTime <= options.verificationStuckMs) continue
+ await deps.runVerifications.finish(record.workspaceId, record.id, {
+ status: 'error',
+ reason: `verification abandoned after ${Math.round(options.verificationStuckMs / 60_000)} min with no result`,
+ })
+ }
+
+ const byRepository = new Map<string, RunVerification[]>
+ for (const record of await deps.runVerifications.listAllPending) {
+ if (record.startedAt) continue
+ const bucket = byRepository.get(record.repositoryId)
+ if (bucket) bucket.push(record)
+ else byRepository.set(record.repositoryId, [record])
+ }
+
+ await Promise.all(
+ [...byRepository.values].map(async (records) => {
+ // Oldest first, matching the merge queue's FIFO: a run whose branch a human is
+ // already looking at should not wait behind one that just ended.
+ const next = [...records].sort((a, b) => a.createdAt.getTime - b.createdAt.getTime)[0]
+ if (!next) return
+ // Null means another sweep claimed it, or something else in this repository is
+ // already verifying — the serialization working, not an error.
+ const claimed = await deps.runVerifications.claim(next.workspaceId, next.id)
+ if (!claimed) return
+ await runVerificationJob(deps, claimed)
+ }),
+)
+}
+
+/**
+ * What a repository's definition of done said about these runs' branches — the read
+ * side, for the Inbox and the review drawer.
+ */
+export const listRunVerifications = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; agentRunIds: readonly AgentRunId[] },
+): Promise<RunVerification[]> =>
+ deps.runVerifications.listByRuns(input.workspaceId, input.agentRunIds)
+
+/**
+ * Sets a repository's definition of done.
+ *
+ * Human-only, the same reasoning as `setRepositoryVerifyCommand` and with more force:
+ * these commands run against agent-authored branches, and a run that could edit them
+ * could write its own definition of done — which is the gate the tiers 3 and 4 are
+ * sequenced behind. An agent weakening the check that judges it is the exact failure
+ * "a self-modifying agent without an automated definition-of-done is a random mutation
+ * generator" is about, arriving from the other direction.
+ */
+export const setRepositoryVerificationChecks = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ actor: Actor
+ repositoryId: RepositoryId
+ checks: readonly VerificationCheck[]
+ },
+): Promise<Repository> => {
+ if (!isHuman(input.actor)) {
+ throw new ForbiddenError("Only a human may change a repository's definition of done")
+ }
+ const repository = await deps.repositories.findById(input.workspaceId, input.repositoryId)
+ if (!repository) throw new NotFoundError('Repository')
+
+ const checks = parseVerificationChecks(input.checks)
+ const updated = await deps.repositories.setVerificationChecks(
+ input.workspaceId,
+ input.repositoryId,
+ checks,
+)
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: input.actor,
+ action: 'repository.verification_checks_set',
+ subjectType: 'repository',
+ subjectId: repository.id,
+ metadata: { checks: checks.map((check) => check.name) },
+ })
+
+ return updated
 }
 
 /**
@@ -6052,6 +6298,11 @@ export const recordAgentEvent = async (
  })
  await releaseDependents(deps, completed)
  await aggregateForParent(deps, completed)
+ /**
+ * Last, and never awaited *into* anything above it. This only writes a row; the sweep runs the checks, which
+ * is what keeps a run's completion from waiting on a test suite.
+ */
+ await enqueueRunVerification(deps, completed)
  } else if (input.event.kind === 'run_failed') {
  const failed = await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
  status: 'failed',
@@ -6086,6 +6337,9 @@ export const recordAgentEvent = async (
  })
  await releaseDependents(deps, failed)
  await aggregateForParent(deps, failed)
+ // A failed run may still have committed work, and "it gave up and the tests pass"
+ // is a different branch from "it gave up and the build is broken".
+ await enqueueRunVerification(deps, failed)
  }
 }
 

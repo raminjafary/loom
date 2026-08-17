@@ -3,7 +3,6 @@ import {
  describeMergeFailure,
  describeReviewBlockers,
  isMergeQueueEntryTerminal,
- planMergeVerification,
  selectNextMergeEntry,
  type MergeQueueEntry,
  type MergeQueueEntryStatus,
@@ -115,65 +114,6 @@ describe('isMergeQueueEntryTerminal', => {
  expect(isMergeQueueEntryTerminal('cancelled')).toBe(true)
  expect(isMergeQueueEntryTerminal('queued')).toBe(false)
  expect(isMergeQueueEntryTerminal('merging')).toBe(false)
- })
-})
-
-describe('planMergeVerification', => {
- it('runs the command in the sandbox when one is available', => {
- expect(
- planMergeVerification({
- command: 'pnpm -r test',
- sandboxAvailable: true,
- unsandboxedAcknowledged: false,
- }),
-).toEqual({ kind: 'run', command: 'pnpm -r test', sandboxed: true })
- })
-
- /**
- * The clause worth guarding by name. The command is operator-configured but the
- * code it executes is on the agent's branch, so running it on the host is agent
- * code with the Runner's privileges — and it happens after a human
- * approved the merge, which is exactly when nobody is looking for it.
- */
- it('refuses to verify on the host without an explicit acknowledgement', => {
- const plan = planMergeVerification({
- command: 'pnpm -r test',
- sandboxAvailable: false,
- unsandboxedAcknowledged: false,
- })
- expect(plan.kind).toBe('refuse')
- })
-
- it('verifies unsandboxed only when the operator acknowledged the exposure', => {
- expect(
- planMergeVerification({
- command: 'pnpm -r test',
- sandboxAvailable: false,
- unsandboxedAcknowledged: true,
- }),
-).toEqual({ kind: 'run', command: 'pnpm -r test', sandboxed: false })
- })
-
- // Merging unverified is allowed — the queue's ordering and conflict handling are
- // worth having alone — but the entry has to say so rather than claim a pass.
- it('skips when no command is configured, rather than refusing the merge', => {
- expect(
- planMergeVerification({
- command: null,
- sandboxAvailable: true,
- unsandboxedAcknowledged: false,
- }).kind,
-).toBe('skip')
- })
-
- it('treats a whitespace-only command as no command', => {
- expect(
- planMergeVerification({
- command: ' ',
- sandboxAvailable: false,
- unsandboxedAcknowledged: false,
- }).kind,
-).toBe('skip')
  })
 })
 

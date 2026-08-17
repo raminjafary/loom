@@ -90,6 +90,8 @@ import {
  setRepositoryInstallCommand,
  setRepositoryReconcilerEnabled,
  setRepositoryVerifyCommand,
+ setRepositoryVerificationChecks,
+ listRunVerifications,
  warmRepositoryCache,
  startAgentRun,
  steerSwarm,
@@ -466,6 +468,17 @@ export const router = os.router({
  actor: context.principal.actor,
  repositoryId: asRepositoryId(input.repositoryId),
  verifyCommand: input.verifyCommand,
+ }),
+),
+),
+
+ setVerificationChecks: os.repository.setVerificationChecks.handler(({ context, input }) =>
+ guard( =>
+ setRepositoryVerificationChecks(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ actor: context.principal.actor,
+ repositoryId: asRepositoryId(input.repositoryId),
+ checks: input.checks,
  }),
 ),
 ),
@@ -1280,6 +1293,18 @@ export const router = os.router({
 
  listNeedsAttention: os.agentRun.listNeedsAttention.handler(({ context }) =>
  guard( => listRunsNeedingAttention(context.deps, { workspaceId: context.principal.workspaceId })),
+),
+
+ listVerifications: os.agentRun.listVerifications.handler(({ context, input }) =>
+ guard(async => {
+ const records = await listRunVerifications(context.deps, {
+ workspaceId: context.principal.workspaceId,
+ agentRunIds: input.agentRunIds.map(asAgentRunId),
+ })
+ // `checks` is readonly in the domain and mutable on the wire — same as
+ // `runner.allowedRoots`.
+ return records.map((record) => ({...record, checks: [...record.checks] }))
+ }),
 ),
  },
 

@@ -9,6 +9,15 @@ import { z } from 'zod'
  */
 
 /**
+ * One step of a repository's definition of done. Named, because a verdict of "failed" is unactionable and "the build check
+ * failed" is not.
+ */
+export const VerificationCheckSchema = z.object({
+ name: z.string.min(1),
+ command: z.string.min(1),
+})
+
+/**
  * A registry capability, resolved and snapshotted onto the run.
  *
  * A skill carries its `content` rather than a path, because with
@@ -481,6 +490,37 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  error: z.string.optional,
  }),
  /**
+ * What a repository's definition of done did to one run's branch.
+ *
+ * The per-check results travel rather than a verdict, and the verdict is derived
+ * server-side by `summarizeVerification`. A frame that carried `passed` beside a
+ * failing check would be a version skew the server had no way to notice, and the
+ * whole value of the harness is that the verdict is the platform's rather than
+ * anybody's report of itself.
+ *
+ * `status` is only ever the outcomes the *Runner* can determine: it ran the checks,
+ * it refused for want of a sandbox, or there was nothing to verify. `pending`,
+ * `failed` and `passed` are the server's to write.
+ */
+ z.object({
+ type: z.literal('verification_result'),
+ requestId: z.string,
+ status: z.enum(['ran', 'skipped', 'refused', 'error']),
+ /** The commit that was verified, so a later branch move is detectable. */
+ commitSha: z.string.optional,
+ checks: z
+.array(
+ z.object({
+ name: z.string,
+ status: z.enum(['passed', 'failed', 'not_run']),
+ detail: z.string.nullable,
+ durationMs: z.number.nullable,
+ }),
+)
+.optional,
+ reason: z.string.optional,
+ }),
+ /**
  * Result of one serialized merge-queue entry: rebase, run
  * tests, fast-forward the repository's default branch.
  *
@@ -800,7 +840,27 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  type: z.literal('merge_run'),
  requestId: z.string,
  runId: z.string,
- verifyCommand: z.string.nullable,
+ /**
+ * The repository's definition of done, resolved by the server.
+ * The queue and a finished run are given the *same* list, which is what keeps the
+ * two from drifting into two definitions of done.
+ */
+ checks: VerificationCheckSchema.array,
+ }),
+ /**
+ * Run a repository's definition of done against one run's own branch, in its own
+ * clone.
+ *
+ * Deliberately not folded into `merge_run`. The queue's question is whether the
+ * branch still passes *after being rebased onto the target*; this one's is whether
+ * the run that produced it was done — principle #6's "'looks done' is not a stop
+ * condition" — and it is asked before any human has spent time reviewing.
+ */
+ z.object({
+ type: z.literal('verify_run'),
+ requestId: z.string,
+ runId: z.string,
+ checks: VerificationCheckSchema.array,
  }),
  /**
  * The server's verdict on a note a run wrote. `ok: false`

@@ -15,7 +15,12 @@ import {
  type AnyPgColumn,
 } from 'drizzle-orm/pg-core'
 import { user } from './auth-schema.js'
-import type { Envelope } from '@loom/domain'
+import type {
+ Envelope,
+ VerificationCheck,
+ VerificationCheckResult,
+ VerificationStatus,
+} from '@loom/domain'
 
 /**
  * Better Auth owns `user`, `session`, `account`, `verification`
@@ -164,6 +169,21 @@ export const repository = pgTable(
  // sandbox: the command is the operator's, but the code it runs is the
  // agent's.
  verifyCommand: text('verify_command'),
+ /**
+ * This repository's definition of done: a named, ordered list of checks, run in order and stopped at the first
+ * failure. One list, read by both callers — the merge queue against a rebased
+ * branch, and a finished run against its own.
+ *
+ * `verifyCommand` above is not migrated into it and is not dead: it is every
+ * pre-harness repository's whole definition of done, and `verificationChecksFor`
+ * reads it as a single check named `tests` when this column is empty. Rewriting it
+ * would be the platform editing an operator's configuration to say the same thing
+ * in a newer shape.
+ */
+ verificationChecks: jsonb('verification_checks')
+.$type<VerificationCheck[]>
+.notNull
+.default([]),
  // What the platform runs to warm this repository's dependency cache.
  // Operator-authored and run with no agent involved — that is what makes the warmed
  // cache safe to hand to runs, since nothing a model produced ever wrote to it.
@@ -358,6 +378,67 @@ export const mergeQueueEntry = pgTable(
  uniqueIndex('merge_queue_open_per_run_idx')
 .on(t.agentRunId)
 .where(sql`${t.status} in ('queued', 'merging')`),
+ ],
+)
+
+/**
+ * What a repository's definition of done said about one run's branch.
+ *
+ * **One row per run, not one per attempt.** A run's branch is fixed once the run ends,
+ * so re-verifying the same head can only produce the same answer plus a flake; the
+ * unique index says so, and re-verification after a human changed something is a claim
+ * about a different commit, which this row records by moving `commit_sha`.
+ *
+ * The per-check results live in `checks` rather than in a table of their own because
+ * they are never read apart from their verification — the query is always "what did
+ * this branch's definition of done do", and a check result outside that context names
+ * a command nobody can locate.
+ *
+ * `status` distinguishes `skipped` and `refused` from `failed` on purpose. A repository
+ * with no checks has no definition of done and a refusal is the platform declining to
+ * run agent code unsandboxed; neither says anything about the branch, and
+ * collapsing them into `failed` would make every unconfigured repository look like it
+ * was producing broken work.
+ */
+export const runVerification = pgTable(
+ 'run_verification',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ agentRunId: uuid('agent_run_id')
+.notNull
+.references( => agentRun.id, { onDelete: 'cascade' }),
+ repositoryId: uuid('repository_id')
+.notNull
+.references( => repository.id, { onDelete: 'cascade' }),
+ // Snapshotted, like the merge queue's branch name: the row still says what it was
+ // about after the run's own row changes underneath it.
+ branchName: text('branch_name').notNull,
+ status: text('status').$type<VerificationStatus>.notNull.default('pending'),
+ // The commit that was actually verified. Null until the Runner reports one — and a
+ // verdict attached to no commit is the same rumour mastery refuses in a map.
+ commitSha: text('commit_sha'),
+ checks: jsonb('checks').$type<VerificationCheckResult[]>.notNull.default([]),
+ // Why it did not run, when it did not. Recorded, never implied.
+ reason: text('reason'),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ startedAt: timestamp('started_at', { withTimezone: true }),
+ finishedAt: timestamp('finished_at', { withTimezone: true }),
+ },
+ (t) => [
+ uniqueIndex('run_verification_run_idx').on(t.agentRunId),
+ /**
+ * At most one verification in flight per repository — the merge queue's own
+ * serialization, for the same reason and enforced the same way. Verification is a
+ * test suite: eight finished workers would otherwise start eight of them at once on
+ * one machine, against one dependency cache, while a human waits for the merge.
+ */
+ uniqueIndex('run_verification_active_per_repo_idx')
+.on(t.repositoryId)
+.where(sql`${t.status} = 'pending' and ${t.startedAt} is not null`),
+ index('run_verification_workspace_idx').on(t.workspaceId, t.createdAt),
  ],
 )
 

@@ -61,6 +61,7 @@ import {
  asWorkspaceId,
  type AgentEvent,
  type MergeFailureReason,
+ type VerificationCheckResult,
  type RunnerId,
  type WorkspaceId,
 } from '@loom/domain'
@@ -128,6 +129,15 @@ interface PendingMerge {
  reject(error: Error): void
 }
 
+interface PendingVerification {
+ resolve(
+ result:
+ | { status: 'ran'; commitSha: string; checks: VerificationCheckResult[] }
+ | { status: 'skipped' | 'refused' | 'error'; reason: string },
+): void
+ reject(error: Error): void
+}
+
 /**
  * A merge runs a repository's whole test suite, so it gets a
  * budget measured in minutes rather than the seconds every other dispatch call
@@ -170,6 +180,7 @@ export const createRunnerGateway = (
  const pendingDiscards = new Map<string, PendingDiscard>
  const pendingPushes = new Map<string, PendingPush>
  const pendingMerges = new Map<string, PendingMerge>
+ const pendingVerifications = new Map<string, PendingVerification>
  const pendingWarms = new Map<string, PendingWarm>
 
  const send = (runnerId: RunnerId, frame: ServerFrame): void => {
@@ -442,7 +453,7 @@ export const createRunnerGateway = (
  })
  },
 
- async mergeRun({ runnerId, runId, verifyCommand }) {
+ async mergeRun({ runnerId, runId, checks }) {
  if (!connections.has(runnerId)) {
  return { ok: false, reason: 'runner_error', detail: 'Runner is not currently connected' }
  }
@@ -465,7 +476,34 @@ export const createRunnerGateway = (
  reject(e)
  },
  })
- send(runnerId, { type: 'merge_run', requestId, runId, verifyCommand })
+ send(runnerId, { type: 'merge_run', requestId, runId, checks: [...checks] })
+ })
+ },
+
+ async verifyRun({ runnerId, runId, checks }) {
+ if (!connections.has(runnerId)) {
+ return { status: 'error', reason: 'Runner is not currently connected' }
+ }
+ const requestId = randomUUID
+ return new Promise<
+ | { status: 'ran'; commitSha: string; checks: VerificationCheckResult[] }
+ | { status: 'skipped' | 'refused' | 'error'; reason: string }
+ >((resolve, reject) => {
+ const timer = setTimeout( => {
+ pendingVerifications.delete(requestId)
+ reject(new Error('Runner did not respond to verify_run in time'))
+ }, MERGE_TIMEOUT_MS)
+ pendingVerifications.set(requestId, {
+ resolve: (r) => {
+ clearTimeout(timer)
+ resolve(r)
+ },
+ reject: (e) => {
+ clearTimeout(timer)
+ reject(e)
+ },
+ })
+ send(runnerId, { type: 'verify_run', requestId, runId, checks: [...checks] })
  })
  },
  }
@@ -642,6 +680,30 @@ export const createRunnerGateway = (
  // something to say, and dropping the detail here made it unsayable.
  { ok: true,...(frame.detail ? { detail: frame.detail }: {}) }
 : { ok: false, detail: frame.detail ?? 'the warm step failed' },
+)
+ return
+ }
+
+ case 'verification_result': {
+ const pending = pendingVerifications.get(frame.requestId)
+ if (!pending) return
+ pendingVerifications.delete(frame.requestId)
+ if (frame.status !== 'ran') {
+ pending.resolve({
+ status: frame.status,
+ reason: frame.reason ?? 'the Runner gave no reason',
+ })
+ return
+ }
+ /**
+ * A `ran` frame with no commit is a Runner/server version skew, not a verdict.
+ * Reported as an error rather than guessed at: a verdict attached to no commit
+ * is the same rumour mastery refuses in a map, and here it would be a pass.
+ */
+ pending.resolve(
+ frame.commitSha
+ ? { status: 'ran', commitSha: frame.commitSha, checks: frame.checks ?? [] }
+: { status: 'error', reason: 'the Runner reported no verified commit' },
 )
  return
  }

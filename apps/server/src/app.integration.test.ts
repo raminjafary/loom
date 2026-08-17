@@ -849,6 +849,7 @@ describe('contract completeness', => {
  'setInstallCommand',
  'warmCache',
  'setVerifyCommand',
+ 'setVerificationChecks',
  'setReconcilerEnabled',
  'unbind',
  ])
@@ -895,6 +896,7 @@ describe('contract completeness', => {
  'steer',
  'listSettled',
  'listNeedsAttention',
+ 'listVerifications',
  ])
  expect(Object.keys(contract.runControl)).toEqual([
  'get',

@@ -47,6 +47,19 @@ export type NotificationKind =
  */
  | 'merge_succeeded'
  | 'merge_failed'
+ /**
+ * The verification harness's verdict, and only when it is bad.
+ *
+ * It shares `run:{id}` as its tag with `run_finished`, which is the point: that
+ * notification said the branch was ready to review, and this one says it is not.
+ * Coalescing replaces the earlier claim rather than stacking beside it.
+ *
+ * `run_finished` is deliberately *not* held back until verification completes. A run
+ * ending is a fact worth knowing when it happens, and a test suite takes minutes —
+ * waiting would make every notification late on exactly the repositories that
+ * configured a definition of done.
+ */
+ | 'verification_failed'
 
 /**
  * What a transport actually sends. `tag` is a coalescing key — a run that needs
@@ -127,6 +140,14 @@ export const buildNotification = (input: {
 ...base,
  title: `${input.branchName ?? input.personaName} merged`,
  body: input.detail ?? 'The branch is in the default branch.',
+ }
+ case 'verification_failed':
+ return {
+...base,
+ title: `${input.branchName ?? input.personaName} did not pass`,
+ // Names the check, never its output — the log tail is what the thread is for,
+ // the same line the merge queue's notification draws.
+ body: input.detail ?? "The repository's checks failed on this branch.",
  }
  case 'merge_failed':
  return {

@@ -15,6 +15,7 @@ import type {
  RunLiveActivity,
  NoteReadRepositoryPort,
  RunnerRepositoryPort,
+ RunVerificationRepositoryPort,
  SubjectMapRepositoryPort,
  WorkerNoteRepositoryPort,
  WorkspaceRunControlRepositoryPort,
@@ -57,6 +58,7 @@ import {
  toPlanSubtask,
  toRepository,
  toRunner,
+ toRunVerification,
  toWorkerNote,
  type AgentPersonaRow,
  type AgentRunRow,
@@ -70,6 +72,7 @@ import {
  type PlanSubtaskRow,
  type RepositoryRow,
  type RunnerRow,
+ type RunVerificationRow,
  type SubjectMapEdgeRow,
  type SubjectMapNodeRow,
  type SubjectMapRow,
@@ -84,6 +87,7 @@ import {
  capability,
  channel,
  mergeQueueEntry,
+ runVerification,
  personaCapability,
  notificationTarget,
  personaGroup,
@@ -182,6 +186,16 @@ export const repositoryRepository = (db: Database): RepositoryRepositoryPort => 
 .from(repository)
 .where(and(eq(repository.workspaceId, workspaceId), eq(repository.runnerId, runnerId)))
  return row?.value ?? 0
+ },
+
+ async setVerificationChecks(workspaceId, id, checks) {
+ const [row] = await db
+.update(repository)
+.set({ verificationChecks: [...checks] })
+.where(and(eq(repository.workspaceId, workspaceId), eq(repository.id, id)))
+.returning
+ if (!row) throw new NotFoundError('Repository')
+ return toRepository(row as RepositoryRow)
  },
 
  async setVerifyCommand(workspaceId, id, verifyCommand) {
@@ -322,6 +336,138 @@ export const mergeQueueRepository = (db: Database): MergeQueueRepositoryPort => 
 )
 .returning
  return row ? toMergeQueueEntry(row as MergeQueueEntryRow): null
+ },
+})
+
+/**
+ * The verification harness's rows.
+ *
+ * The same two-guard claim the merge queue uses, for the same reason — see `claim`
+ * below, and `mergeQueueRepository.claim` for the argument in full.
+ */
+export const runVerificationRepository = (db: Database): RunVerificationRepositoryPort => ({
+ /**
+ * Upsert on the run, not an insert.
+ *
+ * A second enqueue for the same run is the same question asked again — a human
+ * re-verifying after fixing something, or a sweep re-reading a run whose first
+ * attempt errored. Resetting the row to `pending` is what makes that a re-run rather
+ * than a second record whose reader has to work out which verdict is current, and the
+ * previous checks are cleared with it: leaving them would show a passing check list
+ * above a status that no longer refers to it.
+ */
+ async enqueue(input) {
+ const [row] = await db
+.insert(runVerification)
+.values({
+ workspaceId: input.workspaceId,
+ agentRunId: input.agentRunId,
+ repositoryId: input.repositoryId,
+ branchName: input.branchName,
+ status: 'pending',
+ })
+.onConflictDoUpdate({
+ target: runVerification.agentRunId,
+ set: {
+ repositoryId: input.repositoryId,
+ branchName: input.branchName,
+ status: 'pending',
+ checks: [],
+ reason: null,
+ commitSha: null,
+ startedAt: null,
+ finishedAt: null,
+ },
+ })
+.returning
+ if (!row) throw new Error('run_verification insert returned no row')
+ return toRunVerification(row as RunVerificationRow)
+ },
+
+ async findByRun(workspaceId, agentRunId) {
+ const [row] = await db
+.select
+.from(runVerification)
+.where(
+ and(
+ eq(runVerification.workspaceId, workspaceId),
+ eq(runVerification.agentRunId, agentRunId),
+),
+)
+.limit(1)
+ return row ? toRunVerification(row as RunVerificationRow): null
+ },
+
+ async listByRuns(workspaceId, agentRunIds) {
+ if (agentRunIds.length === 0) return []
+ const rows = await db
+.select
+.from(runVerification)
+.where(
+ and(
+ eq(runVerification.workspaceId, workspaceId),
+ inArray(runVerification.agentRunId, [...agentRunIds]),
+),
+)
+ return rows.map((row) => toRunVerification(row as RunVerificationRow))
+ },
+
+ async listAllPending {
+ const rows = await db
+.select
+.from(runVerification)
+.where(eq(runVerification.status, 'pending'))
+.orderBy(runVerification.createdAt)
+ return rows.map((row) => toRunVerification(row as RunVerificationRow))
+ },
+
+ /**
+ * Two guards, both needed. The `started_at is null` predicate stops a second claim of
+ * the *same* row; the unique partial index on (repository_id) stops a concurrent
+ * claim of a *different* row in the same repository — which no predicate on this row
+ * could see. The index raises, and a raise means "something else is verifying here",
+ * not a failure to report upward.
+ */
+ async claim(workspaceId, id) {
+ try {
+ const [row] = await db
+.update(runVerification)
+.set({ startedAt: new Date })
+.where(
+ and(
+ eq(runVerification.workspaceId, workspaceId),
+ eq(runVerification.id, id),
+ eq(runVerification.status, 'pending'),
+ isNull(runVerification.startedAt),
+),
+)
+.returning
+ return row ? toRunVerification(row as RunVerificationRow): null
+ } catch {
+ return null
+ }
+ },
+
+ async finish(workspaceId, id, patch) {
+ const [row] = await db
+.update(runVerification)
+.set({
+ status: patch.status,
+ finishedAt: new Date,
+...(patch.commitSha === undefined ? {}: { commitSha: patch.commitSha }),
+...(patch.checks === undefined ? {}: { checks: [...patch.checks] }),
+...(patch.reason === undefined ? {}: { reason: patch.reason }),
+ })
+.where(
+ and(
+ eq(runVerification.workspaceId, workspaceId),
+ eq(runVerification.id, id),
+ // First resolution wins — see the port's note on late Runner answers.
+ eq(runVerification.status, 'pending'),
+),
+)
+.returning
+ return row ? toRunVerification(row as RunVerificationRow): null
  },
 })
 

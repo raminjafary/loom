@@ -23,6 +23,8 @@ import {
  PersonaDraftSchema,
  PersonaGroupSchema,
  RepositorySchema,
+ RunVerificationSchema,
+ VerificationCheckSchema,
  RunControlSchema,
  RunnerSchema,
  CostSummarySchema,
@@ -264,6 +266,23 @@ export const contract = {
  z.object({
  repositoryId: z.string,
  verifyCommand: z.string.max(2_000).nullable,
+ }),
+)
+.output(RepositorySchema),
+
+ /**
+ * This repository's definition of done. Replaces the list wholesale: the order is a dependency order, and an
+ * edit that could only append would make "run the build first" unreachable.
+ *
+ * Human-only in the use case, with more force than the other repository settings —
+ * a run that could edit its own definition of done is the failure the roadmap sequences
+ * The tiers 3 and 4 behind, arriving from the other direction.
+ */
+ setVerificationChecks: oc
+.input(
+ z.object({
+ repositoryId: z.string,
+ checks: z.array(VerificationCheckSchema).max(8),
  }),
 )
 .output(RepositorySchema),
@@ -1057,6 +1076,19 @@ export const contract = {
 .output(z.array(AgentRunSchema)),
 
  listNeedsAttention: oc.output(z.array(AgentRunSchema)),
+
+ /**
+ * What each of these runs' branches did against its repository's definition of done
+ *.
+ *
+ * Batched by run id rather than folded onto `AgentRunSchema`: the Inbox reads a
+ * lane's worth of runs at once, and a verification arrives minutes after the run it
+ * belongs to, so a field on the run would be a field the run's own poll keeps
+ * refetching as null. Runs with no verification simply do not appear.
+ */
+ listVerifications: oc
+.input(z.object({ agentRunIds: z.array(z.string).min(1).max(200) }))
+.output(z.array(RunVerificationSchema)),
  },
 
  /**

@@ -1,8 +1,14 @@
-import { planMergeVerification, type MergeFailureReason } from '@loom/domain'
-import { execFile, spawn } from 'node:child_process'
+import {
+ describeVerification,
+ planVerification,
+ summarizeVerification,
+ type MergeFailureReason,
+ type VerificationCheck,
+} from '@loom/domain'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { DEP_CACHE_DIR, depCacheEnv, depCacheFromEnv, prepareDepCache } from './dep-cache.js'
-import { sandboxConfigFromEnv, sandboxEnabled, unsandboxedAcknowledged, type SandboxConfig } from './sandbox.js'
+import { sandboxEnabled, unsandboxedAcknowledged } from './sandbox.js'
+import { runVerification, tail } from './verify.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -37,8 +43,6 @@ export type MergeOutcome =
  }
  | { readonly ok: false; readonly reason: MergeFailureReason; readonly detail: string }
 
-const VERIFY_TIMEOUT_MS = Number(process.env.LOOM_MERGE_VERIFY_TIMEOUT_MS ?? 600_000)
-
 /**
  * Every host-side git call in this file goes through here.
  *
@@ -66,156 +70,18 @@ const errorText = (error: unknown): string => {
  return String(error)
 }
 
-/**
- * Last few lines only — a thread message is not the place for a full test log.
- *
- * Stack frames are dropped *before* the window is taken, and that is the whole point
- * rather than tidiness. A failing `node --test` prints the assertion message, then the
- * frames, then a dump of the error object — so the last twelve lines are frames and
- * field names, and the one sentence saying what failed sits just above the cut. Live,
- * that turned the queue catching a wrong reconcile into a thread message that opened
- * `at TestContext.<anonymous>` and never said why. Every runner puts its frames in this
- * shape and none of them carry information a human reading a merge failure needs.
- */
-const tail = (text: string, lines = 12): string =>
- text
-.trim
-.split('\n')
-.filter((line) => !/^\s+at\s/.test(line))
-.slice(-lines)
-.join('\n')
-.slice(0, 4_000)
-
-/**
- * The container a verification command runs in.
- *
- * Tighter than a run gets: `--network none` outright, because verification needs no
- * model API and therefore no egress proxy — the one reason the sandbox settles for
- * an internal network instead.
- *
- * **The dependency cache is what makes that isolation affordable**. With
- * no network and nothing but a `git clone` in the container, a verification command
- * could only ever run what was already committed — which rules out every project whose
- * test suite needs an install step, which is most of them. Measured, that made
- * `verifyCommand` unusable on real repositories and quietly reduced the safety net to
- * "merged unverified and said so". Mounting the warmed cache leaves the network closed
- * and lets an offline install succeed, so the operator's command can be
- * `npm ci --offline && npm test` rather than nothing.
- *
- * In the default `copy` mode this mount is a per-verification clone of the warmed cache,
- * discarded afterwards — so code from the agent's branch cannot write anything a later
- * run or verification will read. That matters more here than for a run: the command is
- * the operator's, but everything it executes came off the branch under review.
- *
- * `--entrypoint` is overridden because the image's entrypoint is the agent host.
- */
-export const buildVerifyArgs = (
- config: SandboxConfig,
- clonePath: string,
- command: string,
- depCachePath: string | null,
-): string[] => [
- 'run',
- '--rm',
- '--network',
- 'none',
- '--cap-drop=ALL',
- '--security-opt=no-new-privileges',
- '--user',
- '1000:1000',
- '--read-only',
- '--tmpfs',
- '/tmp:rw,noexec,nosuid,size=1g',
- '-v',
- `${clonePath}:/work:rw`,
-...(depCachePath ? ['-v', `${depCachePath}:${DEP_CACHE_DIR}:rw`]: []),
- '-w',
- '/work',
- '--memory',
- config.memory,
- '--memory-swap',
- config.memory,
- '--cpus',
- config.cpus,
- '--pids-limit',
- config.pidsLimit,
-...(depCachePath
- ? Object.entries(depCacheEnv).flatMap(([key, value]) => ['-e', `${key}=${value}`])
-: []),
- '--entrypoint',
- 'sh',
- config.image,
- '-c',
- command,
-]
-
-const verifyInSandbox = async (
- config: SandboxConfig,
- clonePath: string,
- command: string,
- depCachePath: string | null,
-): Promise<{ ok: boolean; output: string }> =>
- runToCompletion(config.runtime, buildVerifyArgs(config, clonePath, command, depCachePath), undefined)
-
-/**
- * The unsandboxed path, behind the acknowledgement the roadmap requires.
- *
- * The cache is a host directory here rather than a mount, so the package managers are
- * pointed at where it actually is. Still a per-verification copy in `copy` mode — the
- * isolation is a property of the copy, not of the container.
- */
-const verifyOnHost = async (
- clonePath: string,
- command: string,
- depCachePath: string | null,
-): Promise<{ ok: boolean; output: string }> =>
- runToCompletion('sh', ['-c', command], clonePath, depCachePath ? depCacheEnv(depCachePath): undefined)
-
-const runToCompletion = (
- file: string,
- args: readonly string[],
- cwd: string | undefined,
- env?: Record<string, string>,
-): Promise<{ ok: boolean; output: string }> =>
- new Promise((resolve) => {
- const child = spawn(file, [...args], {
-...(cwd === undefined ? {}: { cwd }),
-...(env === undefined ? {}: { env: {...process.env,...env } }),
- stdio: ['ignore', 'pipe', 'pipe'],
- })
- let output = ''
- const capture = (chunk: Buffer) => {
- // Bounded: a runaway test suite must not be able to exhaust the Runner's
- // memory through its log, and only the tail is ever reported anyway.
- if (output.length < 1_000_000) output += chunk.toString
- }
- child.stdout.on('data', capture)
- child.stderr.on('data', capture)
-
- const timer = setTimeout( => {
- child.kill('SIGKILL')
- resolve({
- ok: false,
- output: `${output}\nVerification exceeded its ${Math.round(VERIFY_TIMEOUT_MS / 60_000)} minute timeout.`,
- })
- }, VERIFY_TIMEOUT_MS)
-
- child.once('error', (error) => {
- clearTimeout(timer)
- resolve({ ok: false, output: `${output}\n${error.message}` })
- })
- child.once('close', (code) => {
- clearTimeout(timer)
- resolve({ ok: code === 0, output })
- })
- })
-
 export interface MergeRunBranchInput {
  readonly sourcePath: string
  readonly clonePath: string
  readonly branchName: string
  readonly defaultBranch: string
- readonly verifyCommand: string | null
+ /**
+ * The repository's definition of done, resolved by the server
+ * from the repository's checks or its legacy single command. The queue runs the same
+ * list a finished run is verified against — this call just asks it of a *rebased*
+ * branch, which is the different question the queue exists to ask.
+ */
+ readonly checks: readonly VerificationCheck[]
  readonly log?: (message: string) => void
 }
 
@@ -223,8 +89,8 @@ export const mergeRunBranch = async (input: MergeRunBranchInput): Promise<MergeO
  const log = input.log ?? ( => {})
  const { sourcePath, clonePath, branchName, defaultBranch } = input
 
- const plan = planMergeVerification({
- command: input.verifyCommand,
+ const plan = planVerification({
+ checks: input.checks,
  sandboxAvailable: sandboxEnabled,
  unsandboxedAcknowledged: unsandboxedAcknowledged,
  })
@@ -308,29 +174,28 @@ export const mergeRunBranch = async (input: MergeRunBranchInput): Promise<MergeO
  let verified = false
  let note: string | undefined
  if (plan.kind === 'run') {
- log(`verifying ${branchName} at ${rebasedSha.slice(0, 8)}: ${plan.command}`)
  /**
- * Prepared per verification and released whatever happens, exactly as a run's is.
  * The label is the branch rather than a run id because that is what this function
- * is given, and it is what an operator finding a leftover directory would search
- * for — sanitised because a branch name has slashes in it and this becomes a path.
+ * is given, and it is what an operator finding a leftover dependency-cache copy
+ * would search for.
  */
- const cacheConfig = depCacheFromEnv
- const mount = cacheConfig
- ? await prepareDepCache(cacheConfig, `verify-${branchName.replace(/[^a-zA-Z0-9]+/g, '-')}`)
-: null
- let result: { ok: boolean; output: string }
- try {
- result = plan.sandboxed
- ? await verifyInSandbox(sandboxConfigFromEnv, clonePath, plan.command, mount?.path ?? null)
-: await verifyOnHost(clonePath, plan.command, mount?.path ?? null)
- } finally {
- // A leaked copy is a whole dependency tree on disk per merge; in `shared` mode
- // this is a no-op by design.
- await mount?.release.catch( => {})
+ const results = await runVerification({
+ clonePath,
+ plan,
+ label: `${branchName}@${rebasedSha.slice(0, 8)}`,
+ log,
+ })
+ const summary = summarizeVerification(results)
+ if (summary.status === 'failed') {
+ // The check's name leads, then its output. A merge failure that said only
+ // "verification failed" made a human open a log to learn which of three
+ // commands it was.
+ const named = describeVerification({ status: 'failed', checks: results, reason: null })
+ return {
+ ok: false,
+ reason: 'verification_failed',
+ detail: `${named}\n${summary.failed?.detail ?? ''}`.trim,
  }
- if (!result.ok) {
- return { ok: false, reason: 'verification_failed', detail: tail(result.output) }
  }
  verified = true
 

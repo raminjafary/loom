@@ -157,6 +157,47 @@ export const RunnerSchema = z.object({
  createdAt: z.date,
 })
 
+/**
+ * One step of a repository's definition of done. Named, because
+ * "verification failed" sends a human to open a log and "the build check failed" sends
+ * them to the build.
+ */
+export const VerificationCheckSchema = z.object({
+ name: z.string.min(1).max(40),
+ command: z.string.min(1).max(2_000),
+})
+
+/**
+ * What a repository's definition of done said about one run's branch.
+ *
+ * `skipped` and `refused` are on the wire as themselves rather than folded into
+ * `failed`: neither says anything about the branch — one is a repository with no
+ * definition of done, the other the platform declining to run agent code unsandboxed —
+ * and a client that could not tell them apart would show broken work where there is
+ * none.
+ */
+export const RunVerificationSchema = z.object({
+ id: z.string,
+ workspaceId: z.string,
+ agentRunId: z.string,
+ repositoryId: z.string,
+ branchName: z.string,
+ status: z.enum(['pending', 'passed', 'failed', 'skipped', 'refused', 'error']),
+ commitSha: z.string.nullable,
+ checks: z.array(
+ z.object({
+ name: z.string,
+ status: z.enum(['passed', 'failed', 'not_run']),
+ detail: z.string.nullable,
+ durationMs: z.number.nullable,
+ }),
+),
+ reason: z.string.nullable,
+ createdAt: z.date,
+ startedAt: z.date.nullable,
+ finishedAt: z.date.nullable,
+})
+
 export const RepositorySchema = z.object({
  id: z.string,
  workspaceId: z.string,
@@ -164,8 +205,18 @@ export const RepositorySchema = z.object({
  displayName: z.string,
  absolutePath: z.string,
  defaultBranch: z.string,
- /** What the merge queue runs before merging; null merges unverified. */
+ /**
+ * What the merge queue ran before the harness existed.
+ * Superseded by `verificationChecks` and still read: an empty list falls back to this
+ * as a single check named `tests`.
+ */
  verifyCommand: z.string.nullable,
+ /**
+ * This repository's definition of done: named checks, in dependency order, stopped at the first failure. Run
+ * against a finished run's own branch and again against a rebased one in the merge
+ * queue — the same list both times.
+ */
+ verificationChecks: z.array(VerificationCheckSchema),
  /**
  * What warms this repository's dependency cache.
  *
@@ -267,6 +318,7 @@ export const WorkerNoteSchema = z.object({
  'branch_ready',
  'run_finished',
  'merge_result',
+ 'verification_result',
  'path_ownership',
  'summary',
  'finding',

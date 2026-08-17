@@ -2485,9 +2485,10 @@ describe('runner-gateway: serialized merge queue', => {
  commitSha: 'abc1234567890',
  verified: true,
  })
- // The repository's command reaches the Runner, rather than the Runner reading
- // its own idea of how this repository is tested.
- expect(asked.verifyCommand).toBe('true')
+ // The repository's definition of done reaches the Runner, rather than the Runner
+ // reading its own idea of how this repository is tested — and a pre-harness
+ // `verifyCommand` arrives as the check named `tests`.
+ expect(asked.checks).toEqual([{ name: 'tests', command: 'true' }])
  await swept
 
  const [merged] = await client.mergeQueue.list
