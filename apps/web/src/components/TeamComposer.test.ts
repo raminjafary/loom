@@ -94,6 +94,7 @@ const repository = (
  verifyCommand?: string | null
  installCommand?: string | null
  reconcilerEnabled?: boolean
+ verificationChecks?: { name: string; command: string }[]
  } = {},
 ) =>
  ({
@@ -104,6 +105,7 @@ const repository = (
  absolutePath: `/src/${displayName}`,
  defaultBranch: 'main',
  verifyCommand: overrides.verifyCommand ?? null,
+ verificationChecks: overrides.verificationChecks ?? [],
  installCommand: overrides.installCommand ?? null,
  reconcilerEnabled: overrides.reconcilerEnabled ?? true,
  createdAt: new Date(0),

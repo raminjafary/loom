@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import type { AgentRun, ApprovalRequest, MergeQueueEntry } from '@loom/api-contract'
+import type { AgentRun, ApprovalRequest, MergeQueueEntry, RunVerification } from '@loom/api-contract'
 import {
  attentionReason,
  buildInboxBoard,
  describeAge,
  shortBranchName,
 } from '@loom/client-core'
+import { describeVerification } from '@loom/domain'
 import { computed, onMounted, ref, watch } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import DiffView from './DiffView.vue'
@@ -20,6 +21,12 @@ const props = defineProps<{
  * answerable only by opening runs one at a time.
  */
  settled: AgentRun[]
+ /**
+ * What each branch did against its repository's definition of done. On the card rather than in a lane of its own: a branch that failed its checks is
+ * still one a human decides about, and the next action is unchanged — what changed is
+ * what they will find when they open it.
+ */
+ verifications: RunVerification[]
  mergeQueue: MergeQueueEntry[]
  selectedRun: AgentRun | null
  approvals: ApprovalRequest[]
@@ -89,6 +96,7 @@ const lanes = computed( =>
  needsAttention: props.runs,
  settled: props.settled,
  mergeQueue: props.mergeQueue,
+ verifications: props.verifications,
  }),
 )
 
@@ -173,6 +181,25 @@ const onKeydown = (event: KeyboardEvent) => {
  <span class="age">{{ describeAge(finishedAt(card.run)) }}</span>
  </div>
  <span class="reason">{{ card.summary }}</span>
+ <!--
+ Named, never a bare tick or cross: "the build check failed" sends a human
+ to the build, and "verification failed" sends them to open a log. `pending`
+ is shown too, because a blank where a verdict is coming reads as a pass.
+ -->
+ <span
+ v-if="card.verification"
+ class="verdict"
+:class="card.verification.status"
+:title="card.verification.reason ?? undefined"
+ >
+ {{
+ describeVerification({
+ status: card.verification.status,
+ checks: card.verification.checks,
+ reason: card.verification.reason,
+ })
+ }}
+ </span>
  <div class="line meta">
  <span v-if="card.run.branchName" class="branch":title="card.run.branchName">{{
  shortBranchName(card.run.branchName)
@@ -361,6 +388,24 @@ const onKeydown = (event: KeyboardEvent) => {
  flex-direction: column;
  gap: 0.3rem;
  overflow-y: auto;
+}
+
+/*
+ The verdict reads as information on every card and as a warning on exactly one — a
+ failed definition of done is the only one that contradicts what the lane already said.
+*/
+.verdict {
+ margin-top: 0.15rem;
+ font-size: 0.7rem;
+ color: var(--text-faint);
+}
+
+.verdict.failed {
+ color: var(--danger, #c66);
+}
+
+.verdict.passed {
+ color: var(--text-muted);
 }
 
 .lane-empty {

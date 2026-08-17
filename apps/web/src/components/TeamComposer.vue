@@ -1358,6 +1358,23 @@ const onKeydown = (event: KeyboardEvent) => {
  what happens at a merge rather than with the control.
  -->
  <template v-if="chosenRepository">
+ <!--
+ A definition of done outranks the single command, so
+ where one exists this shows it and sends the operator to the one control
+ that owns it. Offering an editor here would offer a save the server
+ refuses — and the rule for this canvas is that it may not draw what the
+ runtime does not read.
+ -->
+ <template v-if="chosenRepository.verificationChecks.length > 0">
+ <p class="fine">
+ Done when
+ <code>{{ chosenRepository.verificationChecks.map((check) => check.name).join(' → ') }}</code>
+ pass — against a finished run's branch, and again against the rebased one
+ before it merges.
+ </p>
+ <p class="fine">Edit the checks in Settings → Repositories.</p>
+ </template>
+ <template v-else>
  <p v-if="chosenRepository.verifyCommand === null" class="fine warn">
  Nothing is run before a merge, so branches land <strong>unverified</strong>.
  </p>
@@ -1382,6 +1399,7 @@ const onKeydown = (event: KeyboardEvent) => {
  <button v-else type="button" class="link" @click="startEditingVerify">
  {{ chosenRepository.verifyCommand === null ? 'Set a verify command': 'Change it' }}
  </button>
+ </template>
  <!--
  Verification runs with `--network none`, so on any repository whose tests
  need an install step the command can only succeed against a warmed cache

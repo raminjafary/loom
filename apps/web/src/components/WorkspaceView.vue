@@ -1087,6 +1087,7 @@ onBeforeUnmount( => {
  class="inbox-region"
 :runs="agentSnapshot.needsAttention"
 :settled="agentSnapshot.settledRuns"
+:verifications="agentSnapshot.runVerifications"
 :merge-queue="agentSnapshot.mergeQueue"
 :selected-run="agentSnapshot.inspectedRun"
 :approvals="agentSnapshot.inspectedApprovals"
@@ -1333,7 +1334,9 @@ onBeforeUnmount( => {
  @bind="(input) => agent.bindRepository(input)"
  @create-repository="(input) => agent.createRepository(input)"
  @list="(input, done) => agent.listDirectory(input).then(done)"
- @set-verify-command="(repositoryId, command) => agent.setVerifyCommand(repositoryId, command)"
+ @set-verification-checks="
+ (repositoryId, checks) => agent.setVerificationChecks(repositoryId, checks)
+ "
  @set-reconciler-enabled="
  (repositoryId, enabled) => agent.setReconcilerEnabled(repositoryId, enabled)
  "

@@ -42,6 +42,7 @@ const repository = (id: string, displayName: string) =>
  absolutePath: `/src/${displayName}`,
  defaultBranch: 'main',
  verifyCommand: null,
+ verificationChecks: [],
  installCommand: null,
  createdAt: new Date(0),
  }) as unknown as Repository

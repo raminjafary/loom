@@ -135,6 +135,8 @@ export const useAgentStore = defineStore('agent', => {
  writeNote: (input: Parameters<typeof session.writeNote>[0]) => session.writeNote(input),
  setVerifyCommand: (repositoryId: string, verifyCommand: string | null) =>
  session.setVerifyCommand(repositoryId, verifyCommand),
+ setVerificationChecks: (repositoryId: string, checks: { name: string; command: string }[]) =>
+ session.setVerificationChecks(repositoryId, checks),
  setReconcilerEnabled: (repositoryId: string, enabled: boolean) =>
  session.setReconcilerEnabled(repositoryId, enabled),
  setInstallCommand: (repositoryId: string, installCommand: string | null) =>

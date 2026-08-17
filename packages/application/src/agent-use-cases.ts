@@ -4999,6 +4999,20 @@ export const setRepositoryVerifyCommand = async (
  const repository = await deps.repositories.findById(input.workspaceId, input.repositoryId)
  if (!repository) throw new NotFoundError('Repository')
 
+ /**
+ * Refused rather than silently outranked. `verificationChecksFor`
+ * prefers the list, so writing a command underneath one would be a setting that saves,
+ * displays, and does nothing — the shape of bug this repository has shipped three
+ * times. A repository has one definition of done, and the list is where it lives once
+ * anybody has written one.
+ */
+ if (repository.verificationChecks.length > 0) {
+ throw new ValidationError(
+ 'This repository has a definition of done. Edit its verification checks instead — ' +
+ 'a verification command underneath them would never run.',
+)
+ }
+
  const normalized = input.verifyCommand?.trim
  const updated = await deps.repositories.setVerifyCommand(
  input.workspaceId,
@@ -6001,11 +6015,24 @@ export const setRepositoryVerificationChecks = async (
  if (!repository) throw new NotFoundError('Repository')
 
  const checks = parseVerificationChecks(input.checks)
- const updated = await deps.repositories.setVerificationChecks(
+ let updated = await deps.repositories.setVerificationChecks(
  input.workspaceId,
  input.repositoryId,
  checks,
 )
+ /**
+ * Retires the pre-harness command, and only here — where a human has explicitly said
+ * what this repository's definition of done is. That is the difference from a
+ * migration rewriting it: the fallback exists for repositories nobody has touched
+ * since the harness shipped, and the moment somebody does, one list is the answer and
+ * a second one underneath it is a trap.
+ *
+ * Reassigned rather than fired and forgotten: a caller handed the row from before the
+ * clear would render a command this call just removed.
+ */
+ if (updated.verifyCommand !== null) {
+ updated = await deps.repositories.setVerifyCommand(input.workspaceId, input.repositoryId, null)
+ }
 
  await deps.audit.record({
  workspaceId: input.workspaceId,

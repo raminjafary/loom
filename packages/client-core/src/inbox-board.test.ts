@@ -1,4 +1,4 @@
-import type { AgentRun, MergeQueueEntry } from '@loom/api-contract'
+import type { AgentRun, MergeQueueEntry, RunVerification } from '@loom/api-contract'
 import { describe, expect, it } from 'vitest'
 import { buildInboxBoard, waitingCount, type InboxLaneId } from './inbox-board.js'
 
@@ -31,16 +31,33 @@ const entry = (overrides: Partial<MergeQueueEntry>): MergeQueueEntry =>
 ...overrides,
  }) as MergeQueueEntry
 
+const verification = (overrides: Partial<RunVerification>): RunVerification =>
+ ({
+ id: 'v1',
+ agentRunId: 'r1',
+ branchName: 'loom/run-1a2b3c4d',
+ status: 'passed',
+ commitSha: 'abc1234',
+ checks: [],
+ reason: null,
+...overrides,
+ }) as RunVerification
+
 const board = (input: {
  needsAttention?: AgentRun[]
  settled?: AgentRun[]
  mergeQueue?: MergeQueueEntry[]
+ verifications?: RunVerification[]
 }) =>
  buildInboxBoard({
  needsAttention: input.needsAttention ?? [],
  settled: input.settled ?? [],
  mergeQueue: input.mergeQueue ?? [],
+...(input.verifications ? { verifications: input.verifications }: {}),
  })
+
+const cardFor = (lanes: ReturnType<typeof board>, runId: string) =>
+ lanes.flatMap((lane) => lane.cards).find((card) => card.run.id === runId)
 
 const laneOf = (lanes: ReturnType<typeof board>, runId: string): InboxLaneId | null =>
  lanes.find((lane) => lane.cards.some((card) => card.run.id === runId))?.id ?? null
@@ -182,5 +199,44 @@ describe('waitingCount', => {
  })
  expect(waitingCount(lanes)).toBe(1)
  expect(needsAttention.length).toBe(2)
+ })
+})
+
+/**
+ * The verification harness on the board.
+ *
+ * The decision under test is that a verdict does **not** move a card. A lane is what a
+ * human does next; a branch that failed its checks still needs the same decision, and
+ * putting it in "Stopped early" would say something false about the run.
+ */
+describe('buildInboxBoard with verifications', => {
+ it('carries the verdict onto the card without changing its lane', => {
+ const failing = board({
+ needsAttention: [run({ id: 'r1' })],
+ verifications: [verification({ agentRunId: 'r1', status: 'failed' })],
+ })
+ const passing = board({
+ needsAttention: [run({ id: 'r1' })],
+ verifications: [verification({ agentRunId: 'r1', status: 'passed' })],
+ })
+ expect(laneOf(failing, 'r1')).toBe('review')
+ expect(laneOf(passing, 'r1')).toBe(laneOf(failing, 'r1'))
+ expect(cardFor(failing, 'r1')?.verification?.status).toBe('failed')
+ })
+
+ // A board built before the verifications arrive is still a correct board — the panel
+ // fetches them in a second round trip that is allowed to fail.
+ it('leaves the field null when nothing verified a run', => {
+ const lanes = board({ needsAttention: [run({ id: 'r1' })] })
+ expect(cardFor(lanes, 'r1')?.verification).toBeNull
+ })
+
+ it('does not attach one run\'s verdict to another run\'s card', => {
+ const lanes = board({
+ needsAttention: [run({ id: 'r1' }), run({ id: 'r2', branchName: 'loom/run-2' })],
+ verifications: [verification({ agentRunId: 'r2', status: 'failed' })],
+ })
+ expect(cardFor(lanes, 'r1')?.verification).toBeNull
+ expect(cardFor(lanes, 'r2')?.verification?.status).toBe('failed')
  })
 })

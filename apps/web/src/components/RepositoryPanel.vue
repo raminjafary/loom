@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DirectoryListing, Repository, Runner } from '@loom/api-contract'
+import type { DirectoryListing, Repository, Runner, VerificationCheck } from '@loom/api-contract'
 import { ref } from 'vue'
 import ConfirmButton from './ConfirmButton.vue'
 import DirectoryPicker from './DirectoryPicker.vue'
@@ -13,7 +13,11 @@ const emit = defineEmits<{
  bind: [input: { runnerId: string; path: string; displayName: string }]
  create: [input: { runnerId: string; parentPath: string; name: string; displayName: string }]
  list: [input: { runnerId: string; path: string }, done: (listing: DirectoryListing) => void]
- 'set-verify-command': [repositoryId: string, verifyCommand: string | null]
+ /**
+ * This repository's definition of done. Whole list, never one check: the order is a dependency order, and a
+ * control that could only append would make "run the build first" unreachable.
+ */
+ 'set-verification-checks': [repositoryId: string, checks: VerificationCheck[]]
  /**
  * Whether a reconciler may attempt a conflicted branch here. Here as well as on the team canvas, because a repository no team has
  * claimed would otherwise have no surface at all now that it is no longer an env var.
@@ -51,22 +55,62 @@ const path = ref('')
 const displayName = ref('')
 
 /**
- * What the merge queue runs before merging into this repository. Editing is per row, and an empty value clears it — a repository with no
- * command merges *unverified*, which the queue's entries then say outright rather
- * than reporting as a pass.
+ * This repository's definition of done,
+ * which is what the single verification command became.
+ *
+ * One control rather than two, and the pre-harness `verifyCommand` is *seeded into* it
+ * rather than edited beside it. Two controls over one definition of done is how an
+ * operator ends up with a carefully ordered list that a stale single command silently
+ * outranks — and the server refuses that combination for the same reason.
  */
-const editing = ref<string | null>(null)
-const draft = ref('')
+const editingChecks = ref<string | null>(null)
+const checkDraft = ref<VerificationCheck[]>([])
 
-const startEditing = (repo: Repository) => {
- editing.value = repo.id
- draft.value = repo.verifyCommand ?? ''
+const summariseChecks = (repo: Repository): string => {
+ if (repo.verificationChecks.length > 0) {
+ return `done when: ${repo.verificationChecks.map((check) => check.name).join(' → ')}`
+ }
+ return repo.verifyCommand
+ ? 'done when: tests (from the verification command)'
+: 'no definition of done — nothing checks a finished run'
 }
 
-const saveVerifyCommand = (repositoryId: string) => {
- const value = draft.value.trim
- emit('set-verify-command', repositoryId, value.length > 0 ? value: null)
- editing.value = null
+const startEditingChecks = (repo: Repository) => {
+ editingChecks.value = repo.id
+ // Seeded from the legacy command when there is no list, so the first edit starts
+ // from what this repository already does rather than from nothing.
+ checkDraft.value =
+ repo.verificationChecks.length > 0
+ ? repo.verificationChecks.map((check) => ({...check }))
+: repo.verifyCommand
+ ? [{ name: 'tests', command: repo.verifyCommand }]
+: [{ name: 'build', command: '' }]
+}
+
+const addCheck = => {
+ if (checkDraft.value.length >= 8) return
+ checkDraft.value.push({ name: '', command: '' })
+}
+
+const removeCheck = (index: number) => {
+ checkDraft.value.splice(index, 1)
+}
+
+const moveCheck = (index: number, delta: number) => {
+ const target = index + delta
+ const moved = checkDraft.value[index]
+ const displaced = checkDraft.value[target]
+ if (!moved || !displaced) return
+ checkDraft.value[index] = displaced
+ checkDraft.value[target] = moved
+}
+
+const saveChecks = (repositoryId: string) => {
+ const checks = checkDraft.value
+.map((check) => ({ name: check.name.trim, command: check.command.trim }))
+.filter((check) => check.name.length > 0 && check.command.length > 0)
+ emit('set-verification-checks', repositoryId, checks)
+ editingChecks.value = null
 }
 
 /**
@@ -117,13 +161,36 @@ const submit = => {
  <li v-for="repo in props.repositories":key="repo.id" class="item">
  <span class="name">{{ repo.displayName }}</span>
  <span class="meta":title="repo.absolutePath">{{ repo.absolutePath }}</span>
- <form v-if="editing === repo.id" class="verify-form" @submit.prevent="saveVerifyCommand(repo.id)">
- <input v-model="draft" placeholder="pnpm -r test" aria-label="Verification command" />
+ <form v-if="editingChecks === repo.id" class="checks-form" @submit.prevent="saveChecks(repo.id)">
+ <div v-for="(check, index) in checkDraft":key="index" class="check-row">
+ <input v-model="check.name" placeholder="build" aria-label="Check name" class="check-name" />
+ <input v-model="check.command" placeholder="pnpm build" aria-label="Check command" />
+ <!--
+ Order is a dependency order, so it has to be editable in place — a list
+ that could only be appended to would make "run the build first" reachable
+ only by retyping every check.
+ -->
+ <button type="button" class="link":disabled="index === 0" @click="moveCheck(index, -1)">↑</button>
+ <button
+ type="button"
+ class="link"
+:disabled="index === checkDraft.length - 1"
+ @click="moveCheck(index, 1)"
+ >
+ ↓
+ </button>
+ <button type="button" class="link" @click="removeCheck(index)">×</button>
+ </div>
+ <div class="check-actions">
+ <button type="button" class="link":disabled="checkDraft.length >= 8" @click="addCheck">
+ Add check
+ </button>
  <button type="submit">Save</button>
- <button type="button" class="link" @click="editing = null">Cancel</button>
+ <button type="button" class="link" @click="editingChecks = null">Cancel</button>
+ </div>
  </form>
- <button v-else type="button" class="link verify" @click="startEditing(repo)">
- {{ repo.verifyCommand ? `verify: ${repo.verifyCommand}`: 'merges unverified — set a command' }}
+ <button v-else type="button" class="link verify" @click="startEditingChecks(repo)">
+ {{ summariseChecks(repo) }}
  </button>
 
  <form
@@ -247,6 +314,34 @@ const submit = => {
 .verify-form input {
  flex: 1;
  min-width: 0;
+}
+
+.checks-form {
+ display: flex;
+ flex-direction: column;
+ gap: 0.25rem;
+ margin-top: 0.2rem;
+}
+
+.check-row {
+ display: flex;
+ gap: 0.25rem;
+ align-items: center;
+}
+
+.check-row input {
+ flex: 1;
+ min-width: 0;
+}
+
+.check-row input.check-name {
+ flex: 0 0 6rem;
+}
+
+.check-actions {
+ display: flex;
+ gap: 0.4rem;
+ align-items: center;
 }
 
 button.link {

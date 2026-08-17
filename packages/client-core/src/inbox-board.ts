@@ -1,4 +1,4 @@
-import type { AgentRun, MergeQueueEntry } from '@loom/api-contract'
+import type { AgentRun, MergeQueueEntry, RunVerification } from '@loom/api-contract'
 import { attentionReason } from './attention.js'
 
 /**
@@ -30,6 +30,15 @@ export interface InboxCard {
  readonly summary: string
  /** The queue entry holding this run's branch, when one does. */
  readonly queueEntry: MergeQueueEntry | null
+ /**
+ * What this branch did against its repository's definition of done, or null where nothing verified it.
+ *
+ * It deliberately does **not** move the card to another lane. A lane is what a human
+ * does next, and the next action on a branch that failed its checks is the same one —
+ * decide what to do with what the run left. What changed is what they will find when
+ * they open it, which is a thing to *say* on the card rather than a different column.
+ */
+ readonly verification: RunVerification | null
 }
 
 export interface InboxLane {
@@ -132,7 +141,12 @@ export const buildInboxBoard = (input: {
  needsAttention: readonly AgentRun[]
  settled: readonly AgentRun[]
  mergeQueue: readonly MergeQueueEntry[]
+ /** Optional: a board built before the verifications arrive is still a correct board. */
+ verifications?: readonly RunVerification[]
 }): InboxLane[] => {
+ const verificationByRun = new Map<string, RunVerification>
+ for (const record of input.verifications ?? []) verificationByRun.set(record.agentRunId, record)
+
  const entryByRun = new Map<string, MergeQueueEntry>
  for (const entry of input.mergeQueue) {
  const existing = entryByRun.get(entry.agentRunId)
@@ -152,7 +166,12 @@ export const buildInboxBoard = (input: {
 
  const queueEntry = entryByRun.get(run.id) ?? null
  const lane = laneFor(run, queueEntry)
- byLane.get(lane)?.push({ run, summary: summaryFor(run, lane, queueEntry), queueEntry })
+ byLane.get(lane)?.push({
+ run,
+ summary: summaryFor(run, lane, queueEntry),
+ queueEntry,
+ verification: verificationByRun.get(run.id) ?? null,
+ })
  }
 
  return LANE_ORDER.map((id) => ({

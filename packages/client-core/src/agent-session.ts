@@ -16,6 +16,7 @@ import type {
  PersonaRevision,
  PromptTrial,
  MergeQueueEntry,
+ RunVerification,
  NotificationConfig,
  DelegationEdge,
  DelegationPreview,
@@ -166,6 +167,15 @@ export interface AgentSnapshot {
  * approval SLA, and newest-first here, because it is a record.
  */
  readonly settledRuns: AgentRun[]
+ /**
+ * What each of those runs' branches did against its repository's definition of done
+ *.
+ *
+ * Fetched beside them rather than folded onto the run, because a verification lands
+ * minutes after the run it belongs to: a field on `AgentRun` would be one the run's
+ * own poll kept re-reading as null until it was not.
+ */
+ readonly runVerifications: RunVerification[]
  // The run being reviewed from the Inbox — independent of `activeRun`,
  // since a human can review a past run's approval/diff without it being
  // the one currently executing.
@@ -599,6 +609,13 @@ export interface AgentSession {
  /** What the merge queue runs before merging into this repository; null merges unverified. */
  setVerifyCommand(repositoryId: string, verifyCommand: string | null): Promise<void>
  /**
+ * This repository's definition of done. The whole list, because the order is a dependency order.
+ */
+ setVerificationChecks(
+ repositoryId: string,
+ checks: { name: string; command: string }[],
+): Promise<void>
+ /**
  * Whether a reconciler may attempt a conflicted branch in this repository. The operator-wide `LOOM_RECONCILER_ENABLED` still wins when it is
  * off — this is the policy, not an override of the switch.
  */
@@ -696,6 +713,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  diff: null,
  needsAttention: [],
  settledRuns: [],
+ runVerifications: [],
  inspectedRun: null,
  inspectedApprovals: [],
  runControl: null,
@@ -771,7 +789,20 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  options.api.agentRun.listSettled({}),
  options.api.mergeQueue.list,
  ])
- patch({ needsAttention, settledRuns, mergeQueue })
+ /**
+ * Second round trip, deliberately: it takes the run ids the first one returned.
+ * Its failure is swallowed and the board renders without the verdicts — an Inbox
+ * that could not be shown because a verification lookup failed would be the
+ * feature taking the surface down with it.
+ */
+ const agentRunIds = [...new Set([...needsAttention,...settledRuns].map((run) => run.id))]
+ const runVerifications =
+ agentRunIds.length === 0
+ ? []
+: await options.api.agentRun
+.listVerifications({ agentRunIds: agentRunIds.slice(0, 200) })
+.catch( => [])
+ patch({ needsAttention, settledRuns, mergeQueue, runVerifications })
  patchFetchError('inbox', null)
  rememberPersonaNames(fromRuns([...needsAttention,...settledRuns]))
  } catch (error) {
@@ -1773,6 +1804,19 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
  await options.api.repository.setVerifyCommand({ repositoryId, verifyCommand })
  patch({ repositories: await options.api.repository.list })
  } catch (error) {
+ patch({ error: errorMessage(error) })
+ }
+ },
+
+ async setVerificationChecks(repositoryId, checks) {
+ patch({ error: null })
+ try {
+ await options.api.repository.setVerificationChecks({ repositoryId, checks })
+ patch({ repositories: await options.api.repository.list })
+ } catch (error) {
+ // Surfaced rather than swallowed: the server refuses a duplicate name and an
+ // empty command, and a definition of done that silently did not save is the
+ // worst of the three outcomes.
  patch({ error: errorMessage(error) })
  }
  },

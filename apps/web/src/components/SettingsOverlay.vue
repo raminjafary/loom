@@ -16,6 +16,7 @@ import type {
  Repository,
  RunControl,
  Runner,
+ VerificationCheck,
 } from '@loom/api-contract'
 import { DEFAULT_HANDOFF_CAP_PER_TREE, DEFAULT_HANDOFF_THRESHOLD } from '@loom/domain'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -123,7 +124,7 @@ const emit = defineEmits<{
  input: { runnerId: string; parentPath: string; name: string; displayName: string },
  ]
  list: [input: { runnerId: string; path: string }, done: (listing: DirectoryListing) => void]
- 'set-verify-command': [repositoryId: string, command: string | null]
+ 'set-verification-checks': [repositoryId: string, checks: VerificationCheck[]]
  'set-reconciler-enabled': [repositoryId: string, enabled: boolean]
  'set-install-command': [repositoryId: string, command: string | null]
  'warm-cache': [
@@ -250,7 +251,7 @@ onMounted( => scrim.value?.focus)
  @bind="(input) => emit('bind', input)"
  @create="(input) => emit('create-repository', input)"
  @list="(input, done) => emit('list', input, done)"
- @set-verify-command="(id, command) => emit('set-verify-command', id, command)"
+ @set-verification-checks="(id, checks) => emit('set-verification-checks', id, checks)"
  @set-reconciler-enabled="
  (id, enabled) => emit('set-reconciler-enabled', id, enabled)
  "
