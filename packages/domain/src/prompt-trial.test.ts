@@ -23,6 +23,8 @@ const tally = (arm: PromptArm, over: Partial<PromptArmTally> = {}): PromptArmTal
  discarded: 0,
  failed: 0,
  costUsdTotal: MIN_DECIDED_RUNS_PER_ARM * 0.1,
+ verificationFailed: 0,
+ failingCheck: null,
 ...over,
 })
 
@@ -81,6 +83,65 @@ describe('summarizePromptEffect', => {
  tally('previous', { merged: 1, failed: 4, costUsdTotal: 0.05 }),
  ])
  expect(effect.verdict).toBe('better')
+ })
+
+ /**
+ * The term the verification harness added, and the reason it sits where it sits: two
+ * prompts whose work gets merged equally often are not equal when one of them keeps
+ * leaving branches that fail the repository's definition of done. Before this, the
+ * comparison fell through to cost and a difference of pennies decided it.
+ */
+ it('lets the definition of done decide when outcomes are level', => {
+ const effect = summarizePromptEffect([
+ tally('revised', { merged: 2, discarded: 3, verificationFailed: 4, failingCheck: 'build' }),
+ tally('previous', { merged: 2, discarded: 3 }),
+ ])
+ expect(effect.verdict).toBe('worse')
+ expect(effect.detail).toContain('definition of done')
+ // Names the check, because "failed" is not a next action and "the build failed" is.
+ expect(effect.detail).toContain('most often the build check')
+ })
+
+ it('calls it better when the agent"s version leaves fewer branches broken', => {
+ const effect = summarizePromptEffect([
+ tally('revised', { merged: 2, discarded: 3 }),
+ tally('previous', { merged: 2, discarded: 3, verificationFailed: 4, failingCheck: 'tests' }),
+ ])
+ expect(effect.verdict).toBe('better')
+ expect(effect.detail).toContain('most often the tests check')
+ })
+
+ /**
+ * A human merging outranks the machine's check, in the one direction that matters: they
+ * merged it knowing, and the security model makes that their call. The failure is still reported.
+ */
+ it('keeps a merged branch a success even when its checks failed', => {
+ const effect = summarizePromptEffect([
+ tally('revised', { merged: 5, verificationFailed: 5, failingCheck: 'tests' }),
+ tally('previous', { merged: 1, discarded: 4 }),
+ ])
+ expect(effect.verdict).toBe('better')
+ expect(effect.detail).toContain("5 of the agent's version's 5")
+ })
+
+ /**
+ * The clause is the earliest hard evidence a trial has — it lands hours after a run,
+ * where a merge waits on a person — so it is said before there is a verdict.
+ */
+ it('reports failing checks while the verdict is still undecided', => {
+ const effect = summarizePromptEffect([
+ tally('revised', { decided: 2, merged: 0, verificationFailed: 2, failingCheck: 'build' }),
+ tally('previous', { decided: 1, merged: 1 }),
+ ])
+ expect(effect.verdict).toBe('undecided')
+ expect(effect.detail).toContain("2 of the agent's version's 2")
+ expect(effect.detail).toContain("none of the one it replaced's 1")
+ })
+
+ /** Zero against zero is arithmetic nobody asked for, so it is not printed. */
+ it('says nothing about verification when nothing failed', => {
+ const effect = summarizePromptEffect([tally('revised'), tally('previous')])
+ expect(effect.detail).not.toContain('definition of done')
  })
 
  it('lets cost decide only when outcomes are level', => {

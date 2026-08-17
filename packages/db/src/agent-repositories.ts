@@ -114,6 +114,43 @@ import {
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'] as const
 
+/**
+ * What both trials count as a run that has an outcome.
+ *
+ * Written once and used by `tallyTrialOutcomes` and `tallyExpertiseOutcomes`, because the
+ * two are one query written twice: two definitions of "decided" would drift, and the arm
+ * counts of the prompt trial and the map trial would stop being comparable numbers.
+ *
+ * Three ways a run is decided, and the third is the one verification harness added:
+ *
+ * 1. **A disposition.** Somebody merged, pushed or discarded the branch — the judgement.
+ * 2. **The run failed.** An outcome, and the arm wears it.
+ * 3. **The branch failed its repository's definition of done.** No human required. A
+ * branch that does not build is decided whether or not anyone has looked at it, and
+ * waiting for a reviewer to say so would mean the measurement only ever describes runs
+ * a human had time for. Only `failed` counts: `skipped`, `refused` and `error` are
+ * facts about the operator's setup or the Runner, not about the branch (see
+ * `VerificationStatus`), and a *pass* is not an outcome on its own — passing the checks
+ * is the floor, and only a human merging says the work was wanted.
+ */
+const decidedRun = sql`(${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed' or ${runVerification.status} = 'failed')`
+
+/**
+ * The check that failed most often on this arm.
+ *
+ * `jsonb_path_query_first` pulls the first `failed` entry out of the verification's
+ * results — the first is the only one, since the harness short-circuits at the first
+ * failure — and `mode` picks the name that came up most. Extracted here rather than
+ * counted in TypeScript so the aggregate stays one round trip per trial.
+ */
+const modalFailingCheck = sql<
+ string | null
+>`mode within group (order by jsonb_path_query_first(${runVerification.checks}, '$[*] ? (@.status == "failed")') ->> 'name') filter (where ${runVerification.status} = 'failed')`
+
+const verificationFailedCount = sql<
+ number
+>`count(*) filter (where ${runVerification.status} = 'failed')::int`
+
 export const runnerRepository = (db: Database): RunnerRepositoryPort => ({
  async findById(workspaceId, id) {
  const [row] = await db
@@ -1576,19 +1613,28 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  return { revised: of('revised'), previous: of('previous') }
  },
 
- /** Mirrors `tallyExpertiseOutcomes` exactly — same join, same definition of "decided". */
+ /**
+ * Mirrors `tallyExpertiseOutcomes` exactly — same joins, same `decidedRun`.
+ *
+ * The verification is a left join: a run whose repository has no definition of done, or
+ * whose verification has not finished, is a row with a null status, which `decidedRun`
+ * reads as "not decided by the harness" and leaves to the disposition.
+ */
  async tallyTrialOutcomes(workspaceId, revisionId) {
  const rows = await db
 .select({
  arm: promptTrialUse.arm,
- decided: sql<number>`count(*) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed')::int`,
+ decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
  merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
  discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
  failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
- costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed'), 0)::double precision`,
+ verificationFailed: verificationFailedCount,
+ failingCheck: modalFailingCheck,
+ costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${decidedRun}), 0)::double precision`,
  })
 .from(promptTrialUse)
 .innerJoin(agentRun, eq(agentRun.id, promptTrialUse.agentRunId))
+.leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
 .where(
  and(
  eq(promptTrialUse.workspaceId, workspaceId),
@@ -1605,6 +1651,8 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
  merged: row.merged,
  discarded: row.discarded,
  failed: row.failed,
+ verificationFailed: row.verificationFailed,
+ failingCheck: row.failingCheck,
  costUsdTotal: row.costUsdTotal,
  }))
  },
@@ -2373,23 +2421,26 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  * is set long after the run started — a copy would be a second write that can be
  * missed, which is how a measurement ends up describing runs nobody decided about.
  *
- * `decided` counts only runs a human (or the merge queue) has ruled on, plus runs
- * that failed outright: a run still in flight is not evidence either way, and
- * counting it as an unmerged one would make every arm look worse the busier the
- * workspace is.
+ * `decided` is `decidedRun`, shared with the prompt trial: a run a human ruled on, a
+ * run that failed outright, or a branch that failed its repository's definition of
+ * done. A run still in flight is not evidence either way, and counting it as an
+ * unmerged one would make every arm look worse the busier the workspace is.
  */
  const rows = await db
 .select({
  mapId: expertiseUse.mapId,
  arm: expertiseUse.arm,
- decided: sql<number>`count(*) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed')::int`,
+ decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
  merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
  discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
  failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
- costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed'), 0)::double precision`,
+ verificationFailed: verificationFailedCount,
+ failingCheck: modalFailingCheck,
+ costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${decidedRun}), 0)::double precision`,
  })
 .from(expertiseUse)
 .innerJoin(agentRun, eq(agentRun.id, expertiseUse.agentRunId))
+.leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
 .where(
  and(
  eq(expertiseUse.workspaceId, workspaceId),
@@ -2409,6 +2460,8 @@ export const subjectMapRepository = (db: Database): SubjectMapRepositoryPort => 
  merged: row.merged,
  discarded: row.discarded,
  failed: row.failed,
+ verificationFailed: row.verificationFailed,
+ failingCheck: row.failingCheck,
  costUsdTotal: row.costUsdTotal,
  },
  ]

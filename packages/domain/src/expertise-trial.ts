@@ -58,7 +58,36 @@ export type RetrievalOverride = 'on' | 'off' | null
  * Portable expertise names exactly this — "every run has a disposition, a cost, and a persona
  * snapshot" — and the disposition is the only one of the three that is a judgement.
  */
-export interface ExpertiseArmTally {
+/**
+ * What a repository's definition of done said about an arm's branches.
+ *
+ * Shared by both trials because it is the same fact about a run either way, and because
+ * the two tallies are one query written twice: a second definition of "a branch that did
+ * not pass" would drift, and the first time they disagreed nobody would know which one
+ * the platform meant.
+ *
+ * **Only `failed` is counted, and only failure.** `skipped`, `refused` and `error` say
+ * something about the operator's setup or the Runner, not about the branch — folding them
+ * in would make every unconfigured repository look like it produced broken work. And a
+ * verification *pass* is not counted as a success anywhere: passing the checks is the
+ * floor, not the goal, and only a human merging says the work was wanted. The asymmetry
+ * is the honest one — the harness can prove a branch is not done and cannot prove it was
+ * worth having.
+ */
+export interface VerificationTally {
+ /** Runs on this arm whose branch failed its repository's definition of done. */
+ readonly verificationFailed: number
+ /**
+ * The check that failed most often on this arm, or null when none did.
+ *
+ * The harness names its checks because "failed" is unactionable, and this is where the
+ * name earns its keep in a measurement: "the new prompt breaks the build" and "the new
+ * prompt has flaky tests" are the same number and different decisions.
+ */
+ readonly failingCheck: string | null
+}
+
+export interface ExpertiseArmTally extends VerificationTally {
  readonly arm: ExpertiseArm
  /** Runs on this arm that have reached a disposition. Undecided runs are not counted. */
  readonly decided: number
@@ -73,6 +102,7 @@ export interface ExpertiseArmSummary extends ExpertiseArmTally {
  /** Merged (or pushed, or kept) over decided. Zero when nothing has been decided. */
  readonly successRate: number
  readonly meanCostUsd: number
+ readonly verificationFailureRate: number
 }
 
 export type ExpertiseVerdict =
@@ -130,13 +160,49 @@ const EMPTY_TALLY = (arm: ExpertiseArm): ExpertiseArmTally => ({
  discarded: 0,
  failed: 0,
  costUsdTotal: 0,
+ verificationFailed: 0,
+ failingCheck: null,
 })
 
 const summarizeArm = (tally: ExpertiseArmTally): ExpertiseArmSummary => ({
 ...tally,
  successRate: tally.decided === 0 ? 0: tally.merged / tally.decided,
  meanCostUsd: tally.decided === 0 ? 0: tally.costUsdTotal / tally.decided,
+ verificationFailureRate: verificationFailureRate(tally),
 })
+
+/**
+ * How often this arm's branches failed their repository's definition of done.
+ *
+ * Over `decided` rather than over the arm's whole run count, so it is on the same
+ * denominator as `successRate` and the two can be read against each other. A run still in
+ * flight has no verdict yet and counting it would make every arm look better the busier
+ * the workspace is — the mirror of the bias `decided` exists to avoid.
+ */
+export const verificationFailureRate = (tally: {
+ readonly decided: number
+ readonly verificationFailed: number
+}): number => (tally.decided === 0 ? 0: tally.verificationFailed / tally.decided)
+
+/**
+ * One clause a human reads, naming the check rather than only the count.
+ *
+ * Empty string when nothing failed on either side, so a caller can append it
+ * unconditionally and a trial in a healthy workspace says nothing about verification at
+ * all. A zero reported next to a zero is arithmetic nobody asked for.
+ */
+export const describeVerificationFailures = (
+ candidate: { label: string } & VerificationTally & { decided: number },
+ control: { label: string } & VerificationTally & { decided: number },
+): string => {
+ if (candidate.verificationFailed === 0 && control.verificationFailed === 0) return ''
+ const side = (arm: { label: string } & VerificationTally & { decided: number }) =>
+ arm.verificationFailed === 0
+ ? `none of ${arm.label}'s ${arm.decided}`
+: `${arm.verificationFailed} of ${arm.label}'s ${arm.decided}` +
+ (arm.failingCheck ? ` (most often the ${arm.failingCheck} check)`: '')
+ return ` Branches that failed their repository's definition of done: ${side(candidate)}, ${side(control)}.`
+}
 
 /**
  * Which arm the next run against this map goes on.
@@ -170,7 +236,13 @@ export const summarizeExpertiseEffect = (
  detail:
  `Still measuring: ${retrieved.decided} decided run(s) that read this map against ` +
  `${withheld.decided} that were deliberately not given it. Each side needs ` +
- `${MIN_DECIDED_RUNS_PER_ARM} before the comparison says anything.`,
+ `${MIN_DECIDED_RUNS_PER_ARM} before the comparison says anything.` +
+ // Said early on purpose: a failing check is the first hard evidence a trial has,
+ // and it arrives long before anyone has merged five branches a side.
+ describeVerificationFailures(
+ { label: 'runs that read it',...retrieved },
+ { label: 'runs denied it',...withheld },
+),
  }
  }
 
@@ -197,6 +269,45 @@ export const summarizeExpertiseEffect = (
  `Runs that read this map merged ${asPercent(retrieved.successRate)} of the time ` +
  `against ${asPercent(withheld.successRate)} without it — it is making things worse, ` +
  'not better.',
+ }
+ }
+
+ /**
+ * Level on what a human said, so the machine's check decides next — the * definition of done, ahead of cost and behind the disposition.
+ *
+ * The order is the judgement, again. A human merging is the strongest evidence there
+ * is, so it goes first; a branch that fails the build is the strongest evidence
+ * *available without waiting for one*, so it goes second; money goes last. Skipping
+ * this term would let two arms that merge equally often be separated by pennies while
+ * one of them was leaving branches that do not compile.
+ */
+ const verificationGap = withheld.verificationFailureRate - retrieved.verificationFailureRate
+ const verification = describeVerificationFailures(
+ { label: 'runs that read it',...retrieved },
+ { label: 'runs denied it',...withheld },
+)
+
+ if (verificationGap > SUCCESS_RATE_TOLERANCE) {
+ return {
+ retrieved,
+ withheld,
+ verdict: 'helps',
+ detail:
+ `Outcomes are level (${asPercent(retrieved.successRate)} against ` +
+ `${asPercent(withheld.successRate)}), and runs that read this map leave fewer ` +
+ `branches failing their checks.${verification}`,
+ }
+ }
+
+ if (verificationGap < -SUCCESS_RATE_TOLERANCE) {
+ return {
+ retrieved,
+ withheld,
+ verdict: 'no-better',
+ detail:
+ `Outcomes are level (${asPercent(retrieved.successRate)} against ` +
+ `${asPercent(withheld.successRate)}), and runs that read this map leave *more* ` +
+ `branches failing their checks.${verification}`,
  }
  }
 
@@ -229,7 +340,7 @@ export const summarizeExpertiseEffect = (
  `Outcomes are level (${asPercent(retrieved.successRate)} against ` +
  `${asPercent(withheld.successRate)}) and so is the cost (${money(retrieved.meanCostUsd)} ` +
  `against ${money(withheld.meanCostUsd)}). An expertise that cannot be shown to help ` +
- 'is context spent for nothing, so it stays off until something changes.',
+ `is context spent for nothing, so it stays off until something changes.${verification}`,
  }
 }
 

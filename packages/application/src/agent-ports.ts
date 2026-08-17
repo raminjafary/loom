@@ -773,7 +773,15 @@ export interface PersonaRepositoryPort {
  workspaceId: WorkspaceId,
  revisionId: PersonaRevisionId,
 ): Promise<{ revised: number; previous: number }>
- /** Outcomes per arm, joined from the runs — never copied onto the use row. */
+ /**
+ * Outcomes per arm, joined from the runs and their verifications — never copied onto the
+ * use row.
+ *
+ * "Decided" is a disposition, a failed run, **or a branch that failed its repository's
+ * definition of done**. The last one is what makes this a fitness rather
+ * than a record of what reviewers had time for, and it must match
+ * `tallyExpertiseOutcomes` exactly: the two are one query written twice.
+ */
  tallyTrialOutcomes(
  workspaceId: WorkspaceId,
  revisionId: PersonaRevisionId,
@@ -1445,11 +1453,15 @@ export interface SubjectMapRepositoryPort {
 ): Promise<{ retrieved: number; withheld: number }>
 
  /**
- * Each arm's outcomes, joined against the runs at read time.
+ * Each arm's outcomes, joined against the runs and their verifications at read time.
  *
  * One query for many maps, because the list surfaces need the effective retrieval state
  * per map and a query per map would make opening a persona's expertise list cost a
  * round trip per subject.
+ *
+ * "Decided" includes a branch that failed its repository's definition of done, which is the same definition `tallyTrialOutcomes` uses. Keeping them identical is
+ * deliberate: the map trial and the prompt trial share their thresholds, so their arm
+ * counts have to mean the same thing.
  */
  tallyExpertiseOutcomes(
  workspaceId: WorkspaceId,

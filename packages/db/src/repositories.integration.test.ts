@@ -14,6 +14,7 @@ import {
  asUserId,
  asWorkspaceId,
  userActor,
+ type VerificationStatus,
  type WorkspaceId,
 } from '@loom/domain'
 import { sql } from 'drizzle-orm'
@@ -23,6 +24,7 @@ import {
  agentRunRepository,
  atlasRepository,
  personaGroupRepository,
+ personaRepository,
  subjectMapRepository,
 } from './agent-repositories.js'
 import {
@@ -37,7 +39,10 @@ import {
  auditEvent,
  channel,
  message,
+ personaRevision,
+ promptTrialUse,
  repository,
+ runVerification,
  runner,
  subjectMapNode,
  thread,
@@ -531,6 +536,231 @@ describe('agent run cost rollup', => {
  expect(rollup.totals).toEqual({ runCount: 0, totalUsd: 0 })
  expect(rollup.byModel).toEqual([])
  expect(rollup.topRuns).toEqual([])
+ })
+})
+
+/**
+ * The prompt trial's fitness, against real Postgres.
+ *
+ * Here rather than in the application layer because the whole change is one aggregate:
+ * whether a left-joined verification really widens "decided", whether a `skipped` row
+ * really does not, and whether `mode within group` over `jsonb_path_query_first` really
+ * names the check that failed most. None of that is answerable against a fake — a fake
+ * would return whatever this file's author believed the SQL did.
+ */
+describe('prompt trial outcomes', => {
+ const personas = personaRepository(db)
+
+ let seq = 0
+
+ const scaffold = async (workspaceId: WorkspaceId) => {
+ seq += 1
+ const [ch] = await db
+.insert(channel)
+.values({ workspaceId, name: `trial-${seq}`, isPrivate: false })
+.returning({ id: channel.id })
+ const [th] = await db
+.insert(thread)
+.values({ workspaceId, channelId: ch!.id, isRoot: true })
+.returning({ id: thread.id })
+ const [rn] = await db
+.insert(runner)
+.values({ workspaceId, name: `runner-trial-${seq}`, pairingTokenHash: `hash-trial-${seq}` })
+.returning({ id: runner.id })
+ const [repo] = await db
+.insert(repository)
+.values({
+ workspaceId,
+ runnerId: rn!.id,
+ displayName: 'repo',
+ absolutePath: `/tmp/trial-${seq}`,
+ defaultBranch: 'main',
+ })
+.returning({ id: repository.id })
+ const [persona] = await db
+.insert(agentPersona)
+.values({
+ workspaceId,
+ name: `worker-${seq}`,
+ description: 'd',
+ markdownSource: 'live',
+ model: 'claude-haiku-4-5',
+ })
+.returning({ id: agentPersona.id })
+ const [revision] = await db
+.insert(personaRevision)
+.values({
+ workspaceId,
+ personaId: persona!.id,
+ markdownSource: 'superseded',
+ replacedByKind: 'agent_run',
+ })
+.returning({ id: personaRevision.id })
+ return {
+ threadId: th!.id,
+ runnerId: rn!.id,
+ repositoryId: repo!.id,
+ personaId: persona!.id,
+ revisionId: revision!.id,
+ }
+ }
+
+ type Scaffolding = Awaited<ReturnType<typeof scaffold>>
+
+ /** One run on one arm, with whatever the harness and the human said about its branch. */
+ const addTrialRun = async (
+ workspaceId: WorkspaceId,
+ s: Scaffolding,
+ input: {
+ arm: 'revised' | 'previous'
+ status?: 'completed' | 'failed'
+ disposition?: 'merged' | 'discarded' | null
+ costUsd?: number
+ verification?: { status: VerificationStatus; failing?: string }
+ },
+) => {
+ const [run] = await db
+.insert(agentRun)
+.values({
+ workspaceId,
+ threadId: s.threadId,
+ repositoryId: s.repositoryId,
+ runnerId: s.runnerId,
+ persona: { name: 'worker', model: 'claude-haiku-4-5', systemPrompt: 'x', tools: [], approvalMode: 'ask' as const },
+ status: input.status ?? 'completed',
+ branchName: 'loom/x',
+ branchDisposition: input.disposition ?? null,
+ totalCostUsd: input.costUsd ?? 0.1,
+ })
+.returning({ id: agentRun.id })
+ await db.insert(promptTrialUse).values({
+ workspaceId,
+ personaId: s.personaId,
+ revisionId: s.revisionId,
+ agentRunId: run!.id,
+ arm: input.arm,
+ })
+ if (input.verification) {
+ await db.insert(runVerification).values({
+ workspaceId,
+ agentRunId: run!.id,
+ repositoryId: s.repositoryId,
+ branchName: 'loom/x',
+ status: input.verification.status,
+ // Shaped like the harness's own output: the failing check, then the ones it never
+ // reached. `not_run` is a recorded status rather than an omission, which is what
+ // makes "the build failed and the tests were never run" readable at all.
+ checks: input.verification.failing
+ ? [
+ { name: input.verification.failing, status: 'failed', detail: 'boom', durationMs: 12 },
+ { name: 'smoke', status: 'not_run', detail: null, durationMs: null },
+ ]
+: [{ name: 'tests', status: 'passed', detail: null, durationMs: 30 }],
+ })
+ }
+ return run!.id
+ }
+
+ const armed = (tallies: Awaited<ReturnType<typeof personas.tallyTrialOutcomes>>, arm: string) =>
+ tallies.find((tally) => tally.arm === arm)
+
+ /**
+ * The point of the whole change: a branch nobody has looked at, which failed the
+ * repository's definition of done, is evidence. Before the harness the only decided run
+ * was one a human had ruled on, so the fitness measured what reviewers had time for.
+ */
+ it('counts a failed definition of done as a decided run, with no human involved', async => {
+ const s = await scaffold(WS)
+ await addTrialRun(WS, s, { arm: 'revised', verification: { status: 'failed', failing: 'build' } })
+ await addTrialRun(WS, s, { arm: 'revised', verification: { status: 'failed', failing: 'build' } })
+ await addTrialRun(WS, s, { arm: 'revised', verification: { status: 'failed', failing: 'tests' } })
+ await addTrialRun(WS, s, { arm: 'previous', disposition: 'merged', verification: { status: 'passed' } })
+
+ const tallies = await personas.tallyTrialOutcomes(WS, s.revisionId as never)
+ expect(armed(tallies, 'revised')).toMatchObject({
+ decided: 3,
+ merged: 0,
+ verificationFailed: 3,
+ // Two builds against one test failure — the name a human needs, not just a count.
+ failingCheck: 'build',
+ })
+ expect(armed(tallies, 'previous')).toMatchObject({
+ decided: 1,
+ merged: 1,
+ verificationFailed: 0,
+ failingCheck: null,
+ })
+ })
+
+ /**
+ * `skipped` and `refused` are facts about the operator's setup, and `pending` is a
+ * verdict that has not arrived. Folding any of them into `failed` would make every
+ * unconfigured repository look like it was producing broken work.
+ */
+ it('leaves a skipped, refused or pending verification out of the evidence', async => {
+ const s = await scaffold(WS)
+ await addTrialRun(WS, s, { arm: 'revised', verification: { status: 'skipped' } })
+ await addTrialRun(WS, s, { arm: 'revised', verification: { status: 'refused' } })
+ await addTrialRun(WS, s, { arm: 'revised', verification: { status: 'pending' } })
+ await addTrialRun(WS, s, { arm: 'revised', verification: { status: 'error' } })
+
+ const tallies = await personas.tallyTrialOutcomes(WS, s.revisionId as never)
+ expect(armed(tallies, 'revised')).toMatchObject({
+ decided: 0,
+ verificationFailed: 0,
+ failingCheck: null,
+ })
+ })
+
+ /**
+ * A run is decided once, however many ways it qualifies — the filter is an OR, so a
+ * failed run whose branch also failed its checks must not be counted twice, and its cost
+ * must not be summed twice either.
+ */
+ it('counts a run once when the human, the run and the harness all agree', async => {
+ const s = await scaffold(WS)
+ await addTrialRun(WS, s, {
+ arm: 'revised',
+ status: 'failed',
+ disposition: 'discarded',
+ costUsd: 0.5,
+ verification: { status: 'failed', failing: 'build' },
+ })
+
+ const tallies = await personas.tallyTrialOutcomes(WS, s.revisionId as never)
+ expect(armed(tallies, 'revised')).toMatchObject({
+ decided: 1,
+ discarded: 1,
+ failed: 1,
+ verificationFailed: 1,
+ costUsdTotal: 0.5,
+ })
+ })
+
+ /** A run with no verification row at all — the ordinary case in a repository with no checks. */
+ it('reads a run with no verification as the disposition alone', async => {
+ const s = await scaffold(WS)
+ await addTrialRun(WS, s, { arm: 'revised', disposition: 'merged' })
+ await addTrialRun(WS, s, { arm: 'revised' })
+
+ const tallies = await personas.tallyTrialOutcomes(WS, s.revisionId as never)
+ expect(armed(tallies, 'revised')).toMatchObject({
+ decided: 1,
+ merged: 1,
+ verificationFailed: 0,
+ failingCheck: null,
+ })
+ })
+
+ it('never reads another workspace"s runs into an arm', async => {
+ const mine = await scaffold(WS)
+ const theirs = await scaffold(OTHER_WS)
+ await addTrialRun(OTHER_WS, theirs, {
+ arm: 'revised',
+ verification: { status: 'failed', failing: 'build' },
+ })
+
+ expect(await personas.tallyTrialOutcomes(WS, mine.revisionId as never)).toEqual([])
  })
 })
 

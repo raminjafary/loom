@@ -1,4 +1,4 @@
-import type { AgentPersona, PersonaDraft, PersonaRevision } from '@loom/api-contract'
+import type { AgentPersona, PersonaDraft, PersonaRevision, PromptTrial } from '@loom/api-contract'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PersonaEditor from './PersonaEditor.vue'
@@ -287,5 +287,71 @@ describe('self-edit history', => {
  const wrapper = editor
  await wrapper.get('.row-actions.link').trigger('click')
  expect(wrapper.find('.history').exists).toBe(false)
+ })
+})
+
+/**
+ * The trial panel, and specifically the definition of done inside it.
+ *
+ * Asserted on the mounted component because the field crosses a prop chain and a template,
+ * and this repository has shipped six defects in surfaces whose unit tests and typecheck
+ * were both clean. A number the server computes and the page never renders is the shape of
+ * all six.
+ */
+describe('the prompt trial panel', => {
+ const trial = (over: Partial<PromptTrial['arms'][number]> = {}): PromptTrial => ({
+ revisionId: 'r1',
+ verdict: 'undecided',
+ detail: 'Still measuring: 2 finished run(s) on the new prompt against 1.',
+ arms: [
+ {
+ arm: 'revised',
+ decided: 2,
+ merged: 0,
+ failed: 0,
+ verificationFailed: 2,
+ failingCheck: 'build',
+ meanCostUsd: 0.1,
+...over,
+ },
+ {
+ arm: 'previous',
+ decided: 1,
+ merged: 1,
+ failed: 0,
+ verificationFailed: 0,
+ failingCheck: null,
+ meanCostUsd: 0.1,
+ },
+ ],
+ })
+
+ const opened = async (promptTrial: PromptTrial) => {
+ const wrapper = mount(PersonaEditor, {
+ props: {
+ personas: [persona],
+ capabilities: [],
+ attachments: [],
+ revisions: [revision],
+ trials: { p1: promptTrial },
+ },
+ })
+ await wrapper.get('.row-actions.link').trigger('click')
+ return wrapper
+ }
+
+ it('names the check that failed most on the arm that produced it', async => {
+ const wrapper = await opened(trial)
+ const arms = wrapper.findAll('.trial.arms li').map((li) => li.text)
+ expect(arms[0]).toContain('2 failed checks')
+ expect(arms[0]).toContain('mostly build')
+ // Zero on the other side is printed, not omitted: a blank where a number belongs
+ // reads as a pass, which is the same argument `not_run` is a recorded status for.
+ expect(arms[1]).toContain('0 failed checks')
+ })
+
+ it('says nothing about checks when neither arm has failed one', async => {
+ const wrapper = await opened(trial({ verificationFailed: 0, failingCheck: null }))
+ expect(wrapper.get('.trial').text).not.toContain('failed checks')
  })
 })

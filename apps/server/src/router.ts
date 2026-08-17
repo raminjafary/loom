@@ -1023,6 +1023,8 @@ export const router = os.router({
  decided: arm.decided,
  merged: arm.merged,
  failed: arm.failed,
+ verificationFailed: arm.verificationFailed,
+ failingCheck: arm.failingCheck,
  meanCostUsd: arm.meanCostUsd,
  })),
  }

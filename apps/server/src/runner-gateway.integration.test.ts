@@ -6626,6 +6626,111 @@ The prompt it started with.`
  socket.close
  })
 
+ /**
+ * The definition of done feeding the fitness, over the real protocol.
+ *
+ * The half only this test can show is that the two halves *meet*: the harness writes a
+ * verdict from a Runner frame, the tally left-joins it, and the arms cross a zod output
+ * schema that drops anything it was not told about. Nobody merges or discards anything
+ * here — that is the point. Before this term, an arm whose every branch failed the build
+ * was indistinguishable from an arm nobody had reviewed yet.
+ */
+ it('counts a failing check against the arm that produced it, with nobody reviewing', async => {
+ const { socket, runnerId } = await pairFakeRunner('trial-verify')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ await client.repository.setVerificationChecks({
+ repositoryId: repo.id,
+ checks: [
+ { name: 'build', command: 'pnpm build' },
+ { name: 'tests', command: 'pnpm test' },
+ ],
+ })
+ const created = await client.channel.create({ name: 'trial-verify' })
+ const persona = await client.persona.create({
+ markdownSource: SELF_EDITING_PERSONA.replace('self-editor', 'self-editor-verify'),
+ })
+
+ const editStart = nextFrame(socket, (v) => v.type === 'start_run')
+ const editRun = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await editStart
+ const edited = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'edit-verify',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_prompt_revised',
+ runId: editRun.id,
+ requestId: 'edit-verify',
+ body: 'THE AGENT VERSION.',
+ rationale: 'Worth measuring.',
+ }),
+)
+ await edited
+
+ // A tie goes to the revision, so this run is the revised arm.
+ const armStart = nextFrame(socket, (v) => v.type === 'start_run')
+ const armRun = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await armStart
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: armRun.id,
+ clonePath: '/tmp/loom-trial-verify',
+ branchName: 'loom/trial-verify',
+ }),
+)
+ socket.send(
+ JSON.stringify({
+ type: 'agent_event',
+ runId: armRun.id,
+ seq: 1,
+ event: { kind: 'run_completed', totalCostUsd: 0.02, result: 'done' },
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ const current = await client.agentRun.get({ agentRunId: armRun.id })
+ if (current.status === 'completed' && current.branchName) break
+ await new Promise((resolve) => setTimeout(resolve, 25))
+ }
+
+ const swept = advanceVerificationQueue(app.deps, { verificationStuckMs: 1_800_000 })
+ const asked = await nextFrame(socket, (v) => v.type === 'verify_run', 10_000)
+ socket.send(
+ JSON.stringify({
+ type: 'verification_result',
+ requestId: asked.requestId,
+ status: 'ran',
+ commitSha: 'abc1234567890',
+ checks: [
+ { name: 'build', status: 'failed', detail: 'error TS2345', durationMs: 10 },
+ { name: 'tests', status: 'not_run', detail: null, durationMs: null },
+ ],
+ }),
+)
+ await swept
+
+ const trial = await client.persona.trial({ personaId: persona.id })
+ const revised = trial?.arms.find((arm) => arm.arm === 'revised')
+ expect(revised?.verificationFailed).toBe(1)
+ // The name, not just the count — "failed" is not a next action and "the build" is.
+ expect(revised?.failingCheck).toBe('build')
+ // Decided, with no disposition anywhere: the whole reason the term exists.
+ expect(revised?.decided).toBe(1)
+ expect(revised?.merged).toBe(0)
+ expect(trial?.detail).toContain('most often the build check')
+
+ socket.close
+ })
+
  it('lets a human put the old prompt back', async => {
  const { socket, runnerId } = await pairFakeRunner('self-edit-revert')
  const repo = await bindViaFakeRunner(socket, runnerId)

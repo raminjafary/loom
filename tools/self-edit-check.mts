@@ -13,7 +13,7 @@
  * everywhere except the list the model sees is a feature that passes every test and does
  * nothing, and a run told to use it invents a substitute instead.
  *
- * Six things only a live run can settle:
+ * Seven things only a live run can settle:
  *
  * 1. The SDK offers `revise_own_prompt` to a persona whose envelope permits it.
  * 2. It offers it to **nobody else** — absence of an envelope is a refusal, and the
@@ -28,6 +28,10 @@
  * 5. The history holds what was replaced, attributed to the run that replaced it.
  * 6. A human's revert puts the old prompt back, over real HTTP, and keeps the version it
  * undid.
+ * 7. **A definition of done that really executed reaches the fitness.** The arm run's
+ * branch gets a commit and a check that really fails, and the trial counts it with
+ * nobody having merged or discarded anything — the term that makes the fitness more
+ * than a record of what a reviewer had time for.
  *
  * It **asserts** rather than prints. A printed value cannot fail, and two handoffs here
  * mis-recorded a missing field as a model's choice because a driver printed where it
@@ -44,6 +48,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
+import { advanceVerificationQueue } from '../packages/application/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
 import { REVISE_PROMPT_TOOL_NAME, REVISE_TOOLS_TOOL_NAME } from '../apps/runner/src/self-tool.js'
 
@@ -312,6 +317,17 @@ const main = async => {
  'the control persona still says what a human wrote',
 )
 
+ /**
+ * The fitness needs the repository to have a definition of done *before* the next
+ * run finishes — the enqueue happens on the terminal transition, and a repository with
+ * no checks records nothing at all. Deliberately a failing check: what is under test is
+ * that a failure with no human anywhere near it reaches the measurement.
+ */
+ await client.repository.setVerificationChecks({
+ repositoryId: repo.id,
+ checks: [{ name: 'build', command: 'echo "error TS2345: not built" >&2; exit 1' }],
+ })
+
  // ── 3. The payoff: the next run is told the new prompt ──────────────────────
  //
  // The task deliberately does **not** contain the marker's random half, so an echo of
@@ -417,6 +433,59 @@ const main = async => {
  retoolRevisions[0]?.replacedByRunId === retoolRun.id,
  'the tool change is attributed to the run that made it',
 )
+
+ /**
+ * ── 4b. The fitness scores the definition of done ──
+ *
+ * The arm run above is the revision's own (a tie goes to the revision). Its branch is
+ * given a commit — standing in for what an agent would have left, the same substitution
+ * `verification-check.mts` makes — and the failing check runs against it for real.
+ *
+ * Nobody merges or discards anything here, and that is the whole assertion: before this
+ * term the arm would have been `decided: 0` and the trial would have been measuring a
+ * reviewer's queue. The check *name* is asserted too, because a count with no name is
+ * not a next action.
+ */
+ const armRun = await client.agentRun.get({ agentRunId: quoteRun.id })
+ if (!armRun.clonePath || !armRun.branchName) {
+ check(false, 'the arm run has a clone and a branch to verify')
+ } else {
+ await writeFile(join(armRun.clonePath, 'left-behind.txt'), 'work\n')
+ await execFileAsync('git', ['-C', armRun.clonePath, 'add', '-A'])
+ await execFileAsync('git', [
+ '-C', armRun.clonePath,
+ '-c', 'user.email=agent@loom.invalid', '-c', 'user.name=agent',
+ 'commit', '-qm', 'the work the arm run left',
+ ])
+ await advanceVerificationQueue(app.deps, { verificationStuckMs: 1_800_000 })
+
+ const verification = (
+ await client.agentRun.listVerifications({ agentRunIds: [armRun.id] })
+)[0]
+ check(
+ verification?.status === 'failed',
+ `the definition of done really ran and really failed (${verification?.status ?? 'no record'})`,
+)
+
+ const trial = await client.persona.trial({ personaId: enveloped.id })
+ const revised = trial?.arms.find((arm: any) => arm.arm === 'revised')
+ check(
+ revised?.verificationFailed === 1,
+ `the failing branch counts against the arm that produced it (${revised?.verificationFailed ?? 'no arm'})`,
+)
+ check(
+ revised?.failingCheck === 'build',
+ `and the fitness names the check, not just the count (${revised?.failingCheck ?? 'none'})`,
+)
+ check(
+ revised?.decided === 1 && revised?.merged === 0,
+ `a run nobody reviewed is decided evidence (decided ${revised?.decided}, merged ${revised?.merged})`,
+)
+ check(
+ (trial?.detail ?? '').includes('most often the build check'),
+ 'and the sentence a human reads says which check',
+)
+ }
 
  // ── 5. The human's undo ─────────────────────────────────────────────────────
  const restored = await client.persona.revert({

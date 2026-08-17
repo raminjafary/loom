@@ -676,6 +676,21 @@ describe('invalidateMapsForMerge — the merge queue keeps a map honest', => {
  * a human's answer beats the measurement.
  */
 describe('the expertise trial', => {
+ const armTally = (
+ arm: 'retrieved' | 'withheld',
+ over: Partial<ExpertiseArmTally>,
+): ExpertiseArmTally => ({
+ arm,
+ decided: 5,
+ merged: 0,
+ discarded: 0,
+ failed: 0,
+ costUsdTotal: 1,
+ verificationFailed: 0,
+ failingCheck: null,
+...over,
+ })
+
  const readyMap = async => {
  const map = await openMap(deps, {
  workspaceId,
@@ -761,8 +776,8 @@ describe('the expertise trial', => {
  const map = await readyMap
  maps.tallies = {
  [map.id]: [
- { arm: 'retrieved', decided: 5, merged: 5, discarded: 0, failed: 0, costUsdTotal: 1 },
- { arm: 'withheld', decided: 5, merged: 1, discarded: 4, failed: 0, costUsdTotal: 1 },
+ armTally('retrieved', { merged: 5 }),
+ armTally('withheld', { merged: 1, discarded: 4 }),
  ],
  }
 
@@ -780,8 +795,8 @@ describe('the expertise trial', => {
  const map = await readyMap
  maps.tallies = {
  [map.id]: [
- { arm: 'retrieved', decided: 5, merged: 1, discarded: 4, failed: 0, costUsdTotal: 1 },
- { arm: 'withheld', decided: 5, merged: 5, discarded: 0, failed: 0, costUsdTotal: 1 },
+ armTally('retrieved', { merged: 1, discarded: 4 }),
+ armTally('withheld', { merged: 5 }),
  ],
  }
 
@@ -793,8 +808,8 @@ describe('the expertise trial', => {
  const map = await readyMap
  maps.tallies = {
  [map.id]: [
- { arm: 'retrieved', decided: 5, merged: 1, discarded: 4, failed: 0, costUsdTotal: 1 },
- { arm: 'withheld', decided: 5, merged: 5, discarded: 0, failed: 0, costUsdTotal: 1 },
+ armTally('retrieved', { merged: 1, discarded: 4 }),
+ armTally('withheld', { merged: 5 }),
  ],
  }
 
@@ -813,8 +828,8 @@ describe('the expertise trial', => {
  const map = await readyMap
  maps.tallies = {
  [map.id]: [
- { arm: 'retrieved', decided: 5, merged: 4, discarded: 1, failed: 0, costUsdTotal: 1 },
- { arm: 'withheld', decided: 5, merged: 1, discarded: 4, failed: 0, costUsdTotal: 1 },
+ armTally('retrieved', { merged: 4, discarded: 1 }),
+ armTally('withheld', { merged: 1, discarded: 4 }),
  ],
  }
 

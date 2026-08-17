@@ -139,6 +139,17 @@ const trial = computed( =>
  editingId.value === '' ? null: (props.trials?.[editingId.value] ?? null),
 )
 
+/**
+ * Whether to show the verification column at all.
+ *
+ * Hidden when neither arm has a failing check — in a repository with no definition of
+ * done that is every trial, and a permanent "0 failed checks" against "0 failed checks"
+ * would read as a measurement where there is none.
+ */
+const failingChecksShown = computed( =>
+ (trial.value?.arms ?? []).some((arm) => arm.verificationFailed > 0),
+)
+
 const VERDICT_LABEL: Record<PromptTrial['verdict'], string> = {
  undecided: 'Still measuring',
  better: 'The agent\'s version is doing better',
@@ -830,6 +841,17 @@ const harnessSummary = (persona: AgentPersona): string => {
  <li v-for="arm in trial.arms":key="arm.arm">
  <strong>{{ arm.arm === 'revised' ? "the agent's version": 'the one it replaced' }}</strong>
  <span>{{ arm.merged }} merged of {{ arm.decided }} finished</span>
+ <!--
+ The repository's definition of done, per arm. Shown even
+ at zero on an arm whose sibling has failures, so "0 failed" is a fact a human
+ reads rather than a gap they interpret — the same reason `not_run` is a
+ recorded check status rather than an omitted one.
+ -->
+ <span v-if="failingChecksShown":class="{ broke: arm.verificationFailed > 0 }">
+ {{ arm.verificationFailed }} failed checks<template v-if="arm.failingCheck">
+ — mostly {{ arm.failingCheck }}</template
+ >
+ </span>
  <span v-if="arm.decided > 0">${{ arm.meanCostUsd.toFixed(4) }} a run</span>
  </li>
  </ul>
@@ -919,6 +941,10 @@ const harnessSummary = (persona: AgentPersona): string => {
  display: flex;
  gap: 0.6rem;
  flex-wrap: wrap;
+}
+
+.trial.arms.broke {
+ color: var(--danger, #f7768e);
 }
 
 .trial-actions {

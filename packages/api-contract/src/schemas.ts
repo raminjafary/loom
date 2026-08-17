@@ -908,6 +908,13 @@ export const PromptTrialSchema = z.object({
  decided: z.number.int,
  merged: z.number.int,
  failed: z.number.int,
+ /**
+ * Branches on this arm that failed their repository's definition of done. Carried per arm rather than left inside `detail`, because a human deciding
+ * whether to keep an edit reads the numbers and the sentence is for the summary.
+ */
+ verificationFailed: z.number.int,
+ /** The check that failed most often on this arm. Null when none did. */
+ failingCheck: z.string.nullable,
  meanCostUsd: z.number,
  }),
 ),

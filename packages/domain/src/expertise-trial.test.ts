@@ -19,6 +19,8 @@ const tally = (overrides: Partial<ExpertiseArmTally> & { arm: 'retrieved' | 'wit
  discarded: 0,
  failed: 0,
  costUsdTotal: 0,
+ verificationFailed: 0,
+ failingCheck: null,
 ...overrides,
 })
 
@@ -94,6 +96,42 @@ describe('summarizeExpertiseEffect', => {
  ])
  expect(effect.verdict).toBe('helps')
  expect(effect.detail).toContain('rediscovery it replaced')
+ })
+
+ /**
+ * The verification harness, ahead of cost and behind the disposition. Same map, same
+ * merge rate, same spend — and the runs that read it left four branches failing the
+ * repository's definition of done. Before this term, that came out `no-better` on cost
+ * and the reason went unsaid.
+ */
+ it('weighs the definition of done between the disposition and the money', => {
+ const worse = summarizeExpertiseEffect([
+ tally({
+ arm: 'retrieved',
+ decided: 5,
+ merged: 3,
+ costUsdTotal: 1.0,
+ verificationFailed: 4,
+ failingCheck: 'build',
+ }),
+ tally({ arm: 'withheld', decided: 5, merged: 3, costUsdTotal: 1.0 }),
+ ])
+ expect(worse.verdict).toBe('no-better')
+ expect(worse.detail).toContain('most often the build check')
+
+ const better = summarizeExpertiseEffect([
+ tally({ arm: 'retrieved', decided: 5, merged: 3, costUsdTotal: 1.0 }),
+ tally({
+ arm: 'withheld',
+ decided: 5,
+ merged: 3,
+ costUsdTotal: 1.0,
+ verificationFailed: 4,
+ failingCheck: 'tests',
+ }),
+ ])
+ expect(better.verdict).toBe('helps')
+ expect(better.detail).toContain('fewer')
  })
 
  /** A difference inside the tolerance is noise on a five-run sample, not a finding. */
