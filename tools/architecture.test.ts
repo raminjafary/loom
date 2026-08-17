@@ -29,15 +29,42 @@ const collectTs = (dir: string): string[] => {
  return out
 }
 
-const importedModules = (source: string): string[] => {
+/**
+ * The specifiers a file imports.
+ *
+ * **Anchored at the start of a line, deliberately.** Unanchored, the side-effect-import
+ * pattern matches the word "import" inside any string: `label: 'dynamic import', provenance:
+ * 'ambiguous'` in `subject-map.test.ts` read as importing `, provenance: `, and this test had
+ * been failing on it — so the boundary guard was reporting a violation that did not exist and
+ * could no longer tell anyone about one that did. A check that always fails guards nothing,
+ * which is the same failure as a check that always passes and harder to notice.
+ *
+ * `export … from` is included because a re-export is an import with the dependency intact:
+ * `index.ts` files here are almost entirely re-exports, and a package's public surface is
+ * exactly where a vendor type would cross a port boundary.
+ */
+export const importedModules = (source: string): string[] => {
  const specifiers: string[] = []
+ /**
+ * Comments are stripped first, and the clause between `import` and `from` may hold only
+ * what an import clause holds — identifiers, braces, commas, `*`, whitespace.
+ *
+ * Both restrictions are there because of a specific way this test lied. `[^'"]*?` spans
+ * newlines, so `export interface Port {` matched an unrelated `from "…"` inside a doc
+ * comment 200 lines further down (`ports.ts` — *"configured but you haven't subscribed"*),
+ * and the guard reported `packages/application/src/ports.ts imports configured but you
+ * haven`. A clause that cannot contain a colon or a bracket cannot reach across a
+ * declaration, and a comment that no longer exists cannot supply the `from`.
+ */
+ const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
  const patterns = [
- /import\s[^'"]*?from\s*['"]([^'"]+)['"]/g,
- /import\s*['"]([^'"]+)['"]/g,
+ /^\s*import\s+[\w${}*,\s]*?from\s*['"]([^'"]+)['"]/gm,
+ /^\s*import\s*['"]([^'"]+)['"]/gm,
+ /^\s*export\s+[\w${}*,\s]*?from\s*['"]([^'"]+)['"]/gm,
  /require\(\s*['"]([^'"]+)['"]\s*\)/g,
  ]
  for (const pattern of patterns) {
- for (const match of source.matchAll(pattern)) {
+ for (const match of code.matchAll(pattern)) {
  const specifier = match[1]
  if (specifier !== undefined) specifiers.push(specifier)
  }
@@ -67,6 +94,44 @@ const isRelative = (specifier: string): boolean => specifier.startsWith('.')
 const isNodeBuiltin = (specifier: string): boolean => specifier.startsWith('node:')
 
 describe('architectural boundaries', => {
+ /**
+ * The extractor, tested, because the rest of this file is only as good as it is — and it
+ * spent an unknown number of sessions reporting a violation nobody had written.
+ */
+ describe('importedModules', => {
+ it('finds every form a dependency actually arrives in', => {
+ expect(
+ importedModules(
+ [
+ "import { a } from 'drizzle-orm'",
+ "import 'fastify'",
+ "import type { B } from './local.js'",
+ 'import {',
+ ' c,',
+ "} from '@loom/domain'",
+ "export * from './index.js'",
+ "export { d } from 'vue'",
+ "const e = require('ioredis')",
+ ].join('\n'),
+),
+).toEqual([
+ 'drizzle-orm',
+ './local.js',
+ '@loom/domain',
+ 'fastify',
+ './index.js',
+ 'vue',
+ 'ioredis',
+ ])
+ })
+
+ it('does not read the word "import" inside a string as one', => {
+ expect(
+ importedModules(" { label: 'dynamic import', provenance: 'ambiguous' },"),
+).toEqual([])
+ })
+ })
+
  it('domain has zero dependencies — no infrastructure, no sibling packages', => {
  const violations: string[] = []
  for (const file of collectTs(join(ROOT, 'packages/domain/src'))) {
