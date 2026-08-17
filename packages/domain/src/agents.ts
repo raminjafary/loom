@@ -254,6 +254,17 @@ export interface PersonaVariantSet {
  readonly promotedVariantId: PersonaVariantId | null
  readonly settledAt: Date | null
  readonly settledByUserId: UserId | null
+ /**
+ * The surrogate verifier's session and verdict — a second opinion,
+ * recorded beside the measurement and entering nothing.
+ *
+ * `verifierDecidedAt` is what says a verdict exists. `verifierPickedVariantId` null means
+ * the prompt already in use *when there is a verdict*, and means nothing before there is.
+ */
+ readonly verifierRunId: AgentRunId | null
+ readonly verifierPickedVariantId: PersonaVariantId | null
+ readonly verifierReason: string | null
+ readonly verifierDecidedAt: Date | null
  readonly createdAt: Date
 }
 
@@ -495,7 +506,20 @@ export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed' | 'merge
  * plan — and because a silent identity swap mid-task is exactly what mastery says must be
  * visible.
  */
-export type AgentRunRelation = 'delegation' | 'review' | 'reconcile' | 'steer' | 'handoff'
+/**
+ * How a child run attaches to its parent.
+ *
+ * `verify` is the surrogate verifier: platform-started over a variant search, and
+ * distinct for the reason the data model gives about a reconciler — a run the parent did not ask for and
+ * does not shape must not masquerade as delegation.
+ */
+export type AgentRunRelation =
+ | 'delegation'
+ | 'review'
+ | 'reconcile'
+ | 'steer'
+ | 'handoff'
+ | 'verify'
 
 export interface AgentRun {
  readonly id: AgentRunId

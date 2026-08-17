@@ -940,6 +940,23 @@ export const VariantSearchSchema = z.object({
  rationale: z.string,
  }),
 ),
+ /**
+ * The surrogate verifier: an independent session, shown the options unlabelled and
+ * denied the generator's context, which picked one.
+ *
+ * Null until it has. **It counts for nothing in the measurement** — the self-improvement loop is explicit
+ * that fitness is run disposition and never a model's assessment — and it is on the wire
+ * anyway because it arrives long before five decided runs an arm, which is the whole period
+ * during which a human has nothing else to read.
+ */
+ verifier: z
+.object({
+ /** Null means it would keep the prompt already in use. */
+ pickedVariantId: z.string.nullable,
+ reason: z.string,
+ detail: z.string,
+ })
+.nullable,
  arms: z.array(
  z.object({
  /** Null is the incumbent: the prompt this persona actually has. */
@@ -1189,6 +1206,12 @@ export const AgentRunRelationSchema = z.enum([
  'reconcile',
  'steer',
  'handoff',
+ /**
+ * The surrogate verifier. On the wire for `handoff`'s reason: a run appearing in a
+ * tree that nobody in that tree asked for has to be legible as what it is, or a human
+ * reads a stranger's session as one of their planner's workers.
+ */
+ 'verify',
 ])
 
 export const AgentRunSchema = z.object({

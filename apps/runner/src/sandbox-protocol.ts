@@ -51,6 +51,17 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
  directive: z.string.optional,
  })
 .optional,
+ /**
+ * Present when this run is the surrogate verifier: the option letters, which are
+ * what bounds the verdict tool's argument.
+ *
+ * Declared here as well as on the wire for the reason `mastery.directive`'s comment
+ * gives — the sandbox boundary is the third place a field of this shape has been
+ * dropped, and a container that strips it runs a verifier with no way to answer.
+ */
+ verifyVariants: z
+.object({ optionKeys: z.array(z.string.max(2)).min(2).max(5) })
+.optional,
  /** The tree's ledger, rendered and fenced server-side. */
  contextLedger: z.string.optional,
  /** Where the run's clone is mounted inside the container, not the host path. */
@@ -281,6 +292,19 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
  variants: z
 .array(z.object({ body: z.string.max(40_000), rationale: z.string.max(600) }))
 .max(8),
+ }),
+ /**
+ * The verifier's verdict on a variant search, answered on the host.
+ *
+ * In both paths for the reason the variants channel is: a self-tool offered outside the
+ * container and not inside it is a feature that works until an operator turns the sandbox
+ * on.
+ */
+ z.object({
+ t: z.literal('variant_verdict'),
+ requestId: z.string,
+ choice: z.string.max(2),
+ reason: z.string.max(2_000),
  }),
  /** The agent asking a human a question, answered by `question_result`. */
  z.object({ t: z.literal('question_request'), requestId: z.string, question: z.string }),

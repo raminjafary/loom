@@ -411,6 +411,21 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
 .max(8),
  }),
  /**
+ * A surrogate verifier's verdict on a variant search.
+ *
+ * A letter, never a prompt: the verifier picks among options the server blinded, so this
+ * frame cannot express "keep this text I wrote" — which is what stops a verifier from
+ * being a generator with a second vote. The server maps the letter back by recomputing the
+ * same deterministic blinding.
+ */
+ z.object({
+ type: z.literal('variant_verdict_submitted'),
+ runId: z.string,
+ requestId: z.string,
+ choice: z.string.max(2),
+ reason: z.string.max(2_000),
+ }),
+ /**
  * A run changing its own tool list.
  *
  * A list rather than a document, which is the tier's safety property expressed on the
@@ -725,6 +740,21 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  */
  reconcile: z
 .object({ parentRunId: z.string, branchName: z.string })
+.optional,
+ /**
+ * Start this run as the **surrogate verifier** over a variant search.
+ *
+ * Carries only the option letters, because that is all the Runner needs to bound the
+ * tool's argument — the options themselves ride in `task`, already blinded and rendered
+ * by the server. The *withholding* is the whole mitigation here (no rationales, no
+ * authorship, no indication which prompt is live), and a second formatter on the Runner
+ * would be a second place to leak one, exactly as `contextLedger` argues.
+ *
+ * No set id: the server resolves the search from the run it started, so nothing this
+ * frame or its answer says about which search this is would be believed.
+ */
+ verifyVariants: z
+.object({ optionKeys: z.array(z.string.max(2)).min(2).max(5) })
 .optional,
  /**
  * Start this run as a **reviewer** of another run's branch.

@@ -51,6 +51,7 @@ import {
 } from './mastery-progress.js'
 import { createAtlasTool } from './atlas-tool.js'
 import { createSelfTool } from './self-tool.js'
+import { createVerdictTool } from './verdict-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
@@ -521,6 +522,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  /** What it was asked to look for, rendered server-side. */
  directive?: string | undefined
  }
+ /**
+ * Present when this run is the surrogate verifier: the letters it may answer with.
+ * Its presence is what gives the agent `submit_variant_verdict` at all.
+ */
+ verifyVariants?: { optionKeys: string[] }
  }): Promise<void> => {
  // Async, and awaited by whoever produces events (the SDK loop in-process, the
  // container's stdout reader when sandboxed) — that await is the backpressure.
@@ -768,6 +774,36 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  const mapTool = input.mastery !== undefined ? createMapTool({ recordMap: onMapWrite }): null
 
  /**
+ * The verdict channel, present only when the platform started this run as a
+ * surrogate verifier — the same gating `mapTool` has, and the same reason.
+ */
+ const onVerdict = (verdict: {
+ choice: string
+ reason: string
+ }): Promise<{ ok: true; outcome: string } | { ok: false; error: string }> => {
+ const requestId = nextNoteRequestId
+ send({ type: 'variant_verdict_submitted', runId: input.runId, requestId,...verdict })
+ return new Promise((resolve) => {
+ const timer = setTimeout( => {
+ pendingSelfEdits.delete(requestId)
+ resolve({ ok: false, error: 'the platform did not answer in time — nothing recorded' })
+ }, NOTE_TIMEOUT_MS)
+ pendingSelfEdits.set(requestId, (result) => {
+ clearTimeout(timer)
+ resolve(
+ result.ok
+ ? { ok: true, outcome: result.outcome ?? '' }
+: { ok: false, error: result.error ?? 'the platform refused it' },
+)
+ })
+ })
+ }
+ const verdictTool =
+ input.verifyVariants !== undefined
+ ? createVerdictTool(input.verifyVariants.optionKeys, { submit: onVerdict })
+: null
+
+ /**
  * The handover. Offered to every run, unlike `record_map` — see `handoff-tool.ts`
  * for why the blast radius makes that the right trade.
  */
@@ -955,6 +991,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  atlasTool,
  handoffTool,
 ...(mapTool ? { mapTool }: {}),
+...(verdictTool ? { verdictTool }: {}),
 ...(selfTool ? { selfTool }: {}),
  questionTool: questionTool.server,
 ...(input.task === undefined ? {}: { task: input.task }),
@@ -1033,6 +1070,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 ...(input.contextLedger === undefined ? {}: { contextLedger: input.contextLedger }),
 ...(input.mapContext === undefined ? {}: { mapContext: input.mapContext }),
 ...(input.mastery === undefined ? {}: { mastery: input.mastery }),
+...(input.verifyVariants === undefined ? {}: { verifyVariants: input.verifyVariants }),
  clonePath: input.clonePath,
  homePath: input.homePath,
  egressToken,
@@ -1054,6 +1092,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  onSelfEdit,
  onToolsEdit,
  onProposeVariants,
+...(verdictTool ? { onVerdict }: {}),
 ...(mapTool
  ? {
  onMapWrite: (fragment: Record<string, unknown>) =>
@@ -1369,6 +1408,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  ? {}
 : { mastery: {...frame.mastery, revision: headSha } }),
 ...(frame.steering ? { steering: true }: {}),
+...(frame.verifyVariants === undefined
+ ? {}
+: { verifyVariants: { optionKeys: [...frame.verifyVariants.optionKeys] } }),
  clonePath,
  homePath,
  abort,

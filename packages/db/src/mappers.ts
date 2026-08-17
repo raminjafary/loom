@@ -528,6 +528,7 @@ const AGENT_RUN_RELATIONS: readonly AgentRunRelation[] = [
  'review',
  'reconcile',
  'steer',
+ 'verify',
  'handoff',
 ]
 
@@ -684,6 +685,10 @@ export interface PersonaVariantSetRow {
  promotedVariantId: string | null
  settledAt: Date | null
  settledByUserId: string | null
+ verifierRunId?: string | null
+ verifierPickedVariantId?: string | null
+ verifierReason?: string | null
+ verifierDecidedAt?: Date | null
  createdAt: Date
 }
 
@@ -705,6 +710,12 @@ export const toPersonaVariantSet = (row: PersonaVariantSetRow): PersonaVariantSe
  row.promotedVariantId === null ? null: asPersonaVariantId(row.promotedVariantId),
  settledAt: row.settledAt,
  settledByUserId: row.settledByUserId === null ? null: asUserId(row.settledByUserId),
+ verifierRunId: row.verifierRunId ? asAgentRunId(row.verifierRunId): null,
+ verifierPickedVariantId: row.verifierPickedVariantId
+ ? asPersonaVariantId(row.verifierPickedVariantId)
+: null,
+ verifierReason: row.verifierReason ?? null,
+ verifierDecidedAt: row.verifierDecidedAt ?? null,
  createdAt: row.createdAt,
 })
 

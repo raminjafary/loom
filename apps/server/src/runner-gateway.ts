@@ -33,6 +33,7 @@ import {
  proposeCrossSubjectRelation,
  revisePersonaPrompt,
  proposeOwnVariants,
+ recordVariantVerdict,
  revisePersonaTools,
  renderProposalOutcome,
  readContextLedger,
@@ -282,6 +283,7 @@ export const createRunnerGateway = (
  reconcile,
  review,
  steering,
+ verifyVariants,
  }) {
  send(runnerId, {
  type: 'start_run',
@@ -320,6 +322,9 @@ export const createRunnerGateway = (
 ...(reconcile === undefined ? {}: { reconcile }),
 ...(review === undefined ? {}: { review }),
 ...(steering ? { steering: true }: {}),
+...(verifyVariants === undefined
+ ? {}
+: { verifyVariants: { optionKeys: [...verifyVariants.optionKeys] } }),
  })
  },
 
@@ -1068,6 +1073,39 @@ export const createRunnerGateway = (
  agentRunId: asAgentRunId(frame.runId),
  body: frame.body,
  rationale: frame.rationale,
+ })
+ send(from, {
+ type: 'persona_prompt_result',
+ requestId: frame.requestId,
+ ok: true,
+ outcome: result.ok ? result.outcome: result.reason,
+ })
+ } catch (error) {
+ send(from, {
+ type: 'persona_prompt_result',
+ requestId: frame.requestId,
+ ok: false,
+ error: error instanceof Error ? error.message: String(error),
+ })
+ }
+ return
+ }
+
+ /**
+ * A surrogate verifier's verdict.
+ *
+ * Which search it belongs to is resolved from the run — the platform recorded that when
+ * it started the session — so this frame carries a letter and nothing a model could aim
+ * somewhere else. A refusal comes back as an outcome, on the same discipline as tier 1:
+ * "that is not one of the options" is something the model can act on.
+ */
+ case 'variant_verdict_submitted': {
+ try {
+ const result = await recordVariantVerdict(deps, {
+ workspaceId,
+ agentRunId: asAgentRunId(frame.runId),
+ choice: frame.choice,
+ reason: frame.reason,
  })
  send(from, {
  type: 'persona_prompt_result',

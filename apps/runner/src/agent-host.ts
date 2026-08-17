@@ -8,6 +8,7 @@ import { createAtlasTool } from './atlas-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSelfTool } from './self-tool.js'
+import { createVerdictTool } from './verdict-tool.js'
 import {
  PLANNER_TOOL_NAME,
  PLAN_DELTA_TOOL_NAME,
@@ -410,6 +411,28 @@ const main = async : Promise<void> => {
  })
 : null
 
+ /**
+ * The verdict channel inside the container, present only when the host said this is
+ * a verifier — the same gating `mapTool` has three lines up.
+ */
+ const verdictTool = command.verifyVariants
+ ? createVerdictTool(command.verifyVariants.optionKeys, {
+ submit: (verdict) => {
+ const requestId = nextRequestId
+ emit({ t: 'variant_verdict', requestId,...verdict })
+ return new Promise((resolve) => {
+ pendingSelfEdits.set(requestId, (result) =>
+ resolve(
+ result.ok
+ ? { ok: true, outcome: result.outcome ?? '' }
+: { ok: false, error: result.error ?? 'the platform refused it' },
+),
+)
+ })
+ },
+ })
+: null
+
  const questionTool = createQuestionTool({
  askHuman: (question) => {
  const requestId = nextRequestId
@@ -428,6 +451,7 @@ const main = async : Promise<void> => {
  notesTool,
  atlasTool,
 ...(mapTool ? { mapTool }: {}),
+...(verdictTool ? { verdictTool }: {}),
  handoffTool,
 ...(selfTool ? { selfTool }: {}),
 ...(command.mapContext === undefined ? {}: { mapContext: command.mapContext }),

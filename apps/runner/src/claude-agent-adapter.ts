@@ -14,6 +14,7 @@ import { MAP_SERVER_NAME, MAP_TOOL_NAMES } from './map-tool.js'
 import { HANDOFF_SERVER_NAME, HANDOFF_TOOL_NAMES } from './handoff-tool.js'
 import { ATLAS_SERVER_NAME, ATLAS_TOOL_NAMES } from './atlas-tool.js'
 import { SELF_SERVER_NAME, SELF_TOOL_NAMES } from './self-tool.js'
+import { SUBMIT_VERDICT_TOOL_NAME, VERDICT_SERVER_NAME } from './verdict-tool.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
 import { PLANNER_SERVER_NAME } from './planner-tool.js'
@@ -213,6 +214,12 @@ export interface RunAgentOptions {
  /** The `record_map`, offered only on a mastery run. */
  readonly mapTool?: McpSdkServerConfigWithInstance
  /**
+ * The verdict channel, present only on a run the platform started as a surrogate
+ * verifier — the same shape as `mapTool`, and for the same reason: a tool every run held
+ * would let any agent file a verdict on a search it was never shown.
+ */
+ readonly verdictTool?: McpSdkServerConfigWithInstance
+ /**
  * The handover channel, offered to every run.
  *
  * Unlike `mapTool`, which is a mastery run's alone: a map is persona-level state every
@@ -323,6 +330,7 @@ export const buildQueryOptions = (
  | 'atlasTool'
  | 'questionTool'
  | 'mapTool'
+ | 'verdictTool'
  | 'handoffTool'
  | 'selfTool'
  >,
@@ -338,6 +346,7 @@ export const buildQueryOptions = (
  if (options.notesTool) mcpServers[NOTES_SERVER_NAME] = options.notesTool
  if (options.atlasTool) mcpServers[ATLAS_SERVER_NAME] = options.atlasTool
  if (options.mapTool) mcpServers[MAP_SERVER_NAME] = options.mapTool
+ if (options.verdictTool) mcpServers[VERDICT_SERVER_NAME] = options.verdictTool
  if (options.handoffTool) mcpServers[HANDOFF_SERVER_NAME] = options.handoffTool
  if (options.selfTool) mcpServers[SELF_SERVER_NAME] = options.selfTool
  if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
@@ -373,6 +382,7 @@ export const buildQueryOptions = (
 ...(options.notesTool ? NOTES_TOOL_NAMES: []),
 ...(options.atlasTool ? ATLAS_TOOL_NAMES: []),
 ...(options.mapTool ? MAP_TOOL_NAMES: []),
+...(options.verdictTool ? [SUBMIT_VERDICT_TOOL_NAME]: []),
 ...(options.handoffTool ? HANDOFF_TOOL_NAMES: []),
 ...(options.selfTool ? SELF_TOOL_NAMES: []),
 ...(options.questionTool ? [ASK_HUMAN_TOOL_NAME]: []),

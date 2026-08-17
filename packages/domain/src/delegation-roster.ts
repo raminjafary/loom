@@ -37,7 +37,16 @@ import type { PersonaSpec } from './agents.js'
  * sets. A hand-authored persona named `reconciler` is caught by the same list, which is the
  * conservative direction.
  */
-export const PLATFORM_STARTED_PERSONAS: readonly string[] = ['reconciler']
+export const PLATFORM_STARTED_PERSONAS: readonly string[] = [
+ 'reconciler',
+ /**
+ * The surrogate verifier, for the same reason and with the same failure mode: the
+ * platform starts it when a variant search opens, and its whole context is a blinded set of
+ * options a planner has no way to supply. A subtask assigned to it is a subtask that opens
+ * a repository, finds nothing to judge, and reports after the plan is paid for.
+ */
+ 'variant-verifier',
+]
 
 export const isPlatformStartedPersona = (name: string): boolean =>
  PLATFORM_STARTED_PERSONAS.includes(name)

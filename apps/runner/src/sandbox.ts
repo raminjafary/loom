@@ -131,6 +131,11 @@ export interface SandboxOptions {
  readonly onProposeVariants?: (edit: {
  variants: { body: string; rationale: string }[]
  }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
+ /** The verifier submitting its verdict, answered on the host. */
+ readonly onVerdict?: (verdict: {
+ choice: string
+ reason: string
+ }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
  /**
  * The agent asking a human a question and blocking on the answer.
  * Resolves with `answer: null` when nobody answered — the run must continue either
@@ -166,6 +171,8 @@ export interface SandboxOptions {
  subjectRef: string
  revision: string
  }
+ /** Present when this run is the surrogate verifier — the option letters it may pick. */
+ readonly verifyVariants?: { optionKeys: string[] }
  readonly onSessionId?: (sessionId: string) => void
  /** How full the model's context window is, sampled inside the container. */
  readonly onContextUsage?: (usage: { totalTokens: number; maxTokens: number }) => void
@@ -567,6 +574,7 @@ export const runAgentInSandbox = async (
 ...(options.contextLedger === undefined ? {}: { contextLedger: options.contextLedger }),
 ...(options.mapContext === undefined ? {}: { mapContext: options.mapContext }),
 ...(options.mastery === undefined ? {}: { mastery: options.mastery }),
+...(options.verifyVariants === undefined ? {}: { verifyVariants: options.verifyVariants }),
  cwd: WORK_DIR,
 ...(options.resumeSessionId === undefined ? {}: { resumeSessionId: options.resumeSessionId }),
 ...(options.steering ? { steering: true }: {}),
@@ -781,6 +789,20 @@ export const runAgentInSandbox = async (
  tools: frame.tools,
  rationale: frame.rationale,
  })) ?? { ok: false, error: 'this run has no self-edit channel' }
+ send({
+ t: 'self_edit_result',
+ requestId: frame.requestId,
+ ok: result.ok,
+...(result.ok ? { outcome: result.outcome }: { error: result.error }),
+ })
+ })
+ return
+ case 'variant_verdict':
+ void (async => {
+ const result = (await options.onVerdict?.({
+ choice: frame.choice,
+ reason: frame.reason,
+ })) ?? { ok: false, error: 'this run has no verdict channel' }
  send({
  t: 'self_edit_result',
  requestId: frame.requestId,

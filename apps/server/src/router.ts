@@ -1072,6 +1072,17 @@ export const router = os.router({
  body: parsePersonaMarkdown(candidate.markdownSource).systemPrompt,
  rationale: candidate.rationale,
  })),
+ verifier:
+ found.verifier === null
+ ? null
+: {
+ pickedVariantId:
+ found.verifier.pickedVariantId === null
+ ? null
+: (found.verifier.pickedVariantId as string),
+ reason: found.verifier.reason,
+ detail: found.verifier.detail,
+ },
  arms: found.effect.arms.map((arm) => ({
  variantId: arm.variantId === null ? null: (arm.variantId as string),
  decided: arm.decided,

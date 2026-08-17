@@ -863,6 +863,35 @@ export interface PersonaVariantRepositoryPort {
  setId: PersonaVariantSetId,
 ): Promise<VariantArmTally[]>
 
+ /** Notes which session the verifier is running as, so its verdict can be resolved. */
+ recordVerifierRun(
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+ runId: AgentRunId,
+): Promise<void>
+
+ /**
+ * The search a verifier session belongs to, resolved from the run rather than from
+ * anything the run said — plus the incumbent prompt it was shown, which is what makes the
+ * blinding reproducible when the verdict comes back.
+ */
+ findSetByVerifierRun(
+ workspaceId: WorkspaceId,
+ runId: AgentRunId,
+): Promise<{
+ set: PersonaVariantSet
+ variants: PersonaVariant[]
+ /** The persona's markdown as it is *now* — see `recordVariantVerdict` for why. */
+ incumbentBody: string
+ } | null>
+
+ /** The verdict, recorded beside the measurement and entering nothing. */
+ recordVerifierVerdict(
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+ input: { pickedVariantId: PersonaVariantId | null; reason: string },
+): Promise<void>
+
  /**
  * Ends the search — a promotion names the winner, a discard names nobody.
  *
@@ -1198,6 +1227,15 @@ export interface RunDispatchPort {
  * `submit_plan_delta` instead of `submit_plan`.
  */
  steering?: boolean
+ /**
+ * Start this run as the **surrogate verifier**: the letters it may answer with,
+ * whose presence is what gives the run `submit_variant_verdict`.
+ *
+ * Declared here for the reason `mastery.directive`'s comment gives at length — this port
+ * is exactly where a field of this shape was dropped once already, silently, because a
+ * spread against a port that never declared it compiles.
+ */
+ verifyVariants?: { optionKeys: string[] }
  }): Promise<void>
  /**
  * Aborts a run mid-flight. Fire-and-forget and

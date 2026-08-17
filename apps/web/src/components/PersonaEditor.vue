@@ -955,6 +955,16 @@ const harnessSummary = (persona: AgentPersona): string => {
  />
  </li>
  </ul>
+ <!--
+ The second opinion, and the label is load-bearing: a verdict shown next to a
+ measurement will be read as part of it unless the page says otherwise, and the self-improvement loop
+ is explicit that fitness is run disposition and never a model's assessment.
+ -->
+ <div v-if="search.verifier" class="verdict">
+ <strong>A second opinion, counted in nothing:</strong>
+ <span>{{ search.verifier.detail }}</span>
+ <blockquote>{{ search.verifier.reason }}</blockquote>
+ </div>
  <div class="trial-actions">
  <ConfirmButton
  variant="link"
@@ -1044,6 +1054,20 @@ const harnessSummary = (persona: AgentPersona): string => {
 
 .trial.search.standing {
  opacity: 0.75;
+}
+
+.trial.search.verdict {
+ margin: 0 0 0.5rem;
+ padding: 0.4rem 0.6rem;
+ border-left: 2px solid var(--line, #2a2a2a);
+ font-size: 0.8rem;
+ display: grid;
+ gap: 0.2rem;
+}
+
+.trial.search.verdict blockquote {
+ margin: 0;
+ opacity: 0.8;
 }
 
 .trial.search pre {

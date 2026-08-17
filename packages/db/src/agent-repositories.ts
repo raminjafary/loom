@@ -1878,6 +1878,57 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
  }))
  },
 
+ async recordVerifierRun(workspaceId, setId, runId) {
+ await db
+.update(personaVariantSet)
+.set({ verifierRunId: runId })
+.where(
+ and(eq(personaVariantSet.workspaceId, workspaceId), eq(personaVariantSet.id, setId)),
+)
+ },
+
+ /**
+ * The set a verifier session belongs to, by its run.
+ *
+ * The persona's *current* markdown comes back with it because the verdict has to be mapped
+ * through the same blinding it was shown, and the incumbent option is the live prompt. A
+ * human who edited that prompt mid-search changed what the verifier was comparing against,
+ * which is their right — the mapping stays honest either way, since the letters are
+ * assigned from ids rather than from text.
+ */
+ async findSetByVerifierRun(workspaceId, runId) {
+ const [row] = await db
+.select({ set: personaVariantSet, markdownSource: agentPersona.markdownSource })
+.from(personaVariantSet)
+.innerJoin(agentPersona, eq(agentPersona.id, personaVariantSet.personaId))
+.where(
+ and(
+ eq(personaVariantSet.workspaceId, workspaceId),
+ eq(personaVariantSet.verifierRunId, runId),
+),
+)
+.limit(1)
+ if (!row) return null
+ return {
+ set: toPersonaVariantSet(row.set as PersonaVariantSetRow),
+ variants: await listVariantsOf(db, workspaceId, row.set.id),
+ incumbentBody: row.markdownSource,
+ }
+ },
+
+ async recordVerifierVerdict(workspaceId, setId, input) {
+ await db
+.update(personaVariantSet)
+.set({
+ verifierPickedVariantId: input.pickedVariantId ?? null,
+ verifierReason: input.reason,
+ verifierDecidedAt: new Date,
+ })
+.where(
+ and(eq(personaVariantSet.workspaceId, workspaceId), eq(personaVariantSet.id, setId)),
+)
+ },
+
  async recordVariantUse(input) {
  await db
 .insert(variantUse)

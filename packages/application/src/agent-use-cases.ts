@@ -57,8 +57,12 @@ import {
  revisePromptBody,
  reviseToolList,
  nextPromptArm,
+ blindVariantOptions,
+ describeVerifierVerdict,
  nextVariantArm,
  proposeVariantSet,
+ renderVerifierTask,
+ resolveVerifierChoice,
  summarizeVariantSearch,
  summarizePromptEffect,
  type PromptArm,
@@ -1098,6 +1102,20 @@ export const proposeOwnVariants = async (
  },
  })
 
+ /**
+ * The verifier, started now rather than by a sweep. Its value is that it
+ * arrives *before* five decided runs an arm, so a search whose verdict waited on a sweep
+ * would be a search whose second opinion landed after the evidence it was meant to precede.
+ */
+ await startVariantVerifier(deps, {
+ workspaceId: input.workspaceId,
+ proposingRun: run,
+ persona,
+ setId: opened.set.id,
+ incumbentBody: persona.markdownSource,
+ candidates: opened.variants,
+ })
+
  return {
  ok: true,
  outcome:
@@ -1105,6 +1123,167 @@ export const proposeOwnVariants = async (
  'them is live: the next runs of this persona alternate between them and the prompt it ' +
  'has now, and a human promotes whichever the outcomes favour — or discards all of ' +
  'them. **Your own run is unchanged.** Carry on with your task.',
+ }
+}
+
+const VERIFIER_PERSONA_NAME = 'variant-verifier'
+
+/**
+ * Starts the surrogate verifier over a search that has just opened.
+ *
+ * **Best-effort throughout, and it can never fail the tool call that opened the search.**
+ * The loop takes no authority; a verdict is a second opinion, so a workspace at its
+ * concurrency limit, or one whose operator deleted the verifier persona, gets a search with
+ * no verdict rather than a refused search.
+ *
+ * A child of the proposing run with `relation: 'verify'`, which buys two things. The * argument about the reconciler applies: a run the parent did not ask for must not
+ * masquerade as delegation, and the tree is where a human watching this work will look for
+ * it. And the child's ledger and map are *withheld* in `startAgentRun` — the one place
+ * "denied the generator's context" is actually enforced.
+ */
+const startVariantVerifier = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ proposingRun: AgentRun
+ persona: AgentPersona
+ setId: PersonaVariantSetId
+ incumbentBody: string
+ candidates: readonly { id: PersonaVariantId; markdownSource: string }[]
+ },
+): Promise<void> => {
+ try {
+ const personas = await deps.personas.listByWorkspace(input.workspaceId)
+ const verifier = personas.find((entry) => entry.name === VERIFIER_PERSONA_NAME)
+ if (!verifier) {
+ /**
+ * Said out loud rather than returned silently, for the reason the reconciler's
+ * absence is: the persona is looked up by name, and a feature that no-ops because
+ * somebody renamed a row is one nobody can debug from the outside.
+ */
+ await postRunSystemMessage(
+ deps,
+ input.proposingRun,
+ `A verifier would have read these candidates blind, but no persona named ` +
+ `"${VERIFIER_PERSONA_NAME}" exists in this workspace. The search still measures ` +
+ 'itself on outcomes.',
+)
+ return
+ }
+
+ const options = blindVariantOptions({
+ setId: input.setId,
+ incumbentBody: parsePersonaMarkdown(input.persona.markdownSource).systemPrompt,
+ candidates: input.candidates.map((candidate) => ({
+ id: candidate.id,
+ body: parsePersonaMarkdown(candidate.markdownSource).systemPrompt,
+ })),
+ })
+
+ const run = await startAgentRun(deps, {
+ workspaceId: input.workspaceId,
+ // As itself: `startAgentRun` only lets a run spawn children of itself, which is also
+ // what ties the tree together for a human reading it.
+ actor: agentRunActor(input.proposingRun.id),
+ threadId: input.proposingRun.threadId,
+ repositoryId: input.proposingRun.repositoryId,
+ personaId: verifier.id,
+ parentRunId: input.proposingRun.id,
+ relation: 'verify',
+ verifyVariants: { optionKeys: options.map((option) => option.key) },
+ task: renderVerifierTask({
+ personaDescription: input.persona.description,
+ options,
+ }),
+ })
+ await deps.personaVariants.recordVerifierRun(input.workspaceId, input.setId, run.id)
+ } catch {
+ /**
+ * Swallowed. The search is open and measurable; a verifier that could not start is a
+ * missing second opinion, not a broken search — and the tool call that opened it has
+ * already been answered.
+ */
+ }
+}
+
+/**
+ * A surrogate verifier's verdict, relayed from the Runner.
+ *
+ * **The search is resolved from the run, never from the frame.** The Runner sends a letter
+ * and nothing else; which search it belongs to is what the platform recorded when it started
+ * the session. An id in a tool call is model output, and the whole value of a blinded verdict
+ * is that the model could not choose what it was judging.
+ *
+ * Recorded and never counted. The self-improvement loop: "fitness is run disposition, never the model's own
+ * assessment" — so this lands beside the measurement, is shown to a human beside it, and
+ * enters no arm, no rate and no ranking.
+ */
+export const recordVariantVerdict = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ agentRunId: AgentRunId
+ choice: string
+ reason: string
+ },
+): Promise<{ ok: true; outcome: string } | { ok: false; reason: string }> => {
+ const found = await deps.personaVariants.findSetByVerifierRun(
+ input.workspaceId,
+ input.agentRunId,
+)
+ if (!found) {
+ return {
+ ok: false,
+ reason:
+ 'This run is not the verifier of any open search, so there is nothing to record a ' +
+ 'verdict against. Nothing was stored.',
+ }
+ }
+ if (found.set.status !== 'open') {
+ return {
+ ok: false,
+ reason:
+ 'That search has already been settled by a human — they promoted a candidate or ' +
+ 'discarded all of them while you were reading. Your verdict is no longer needed.',
+ }
+ }
+
+ const options = blindVariantOptions({
+ setId: found.set.id,
+ incumbentBody: found.incumbentBody,
+ candidates: found.variants.map((variant) => ({
+ id: variant.id,
+ body: parsePersonaMarkdown(variant.markdownSource).systemPrompt,
+ })),
+ })
+ const resolved = resolveVerifierChoice(options, input.choice)
+ if (!resolved.ok) return { ok: false, reason: resolved.reason }
+
+ await deps.personaVariants.recordVerifierVerdict(input.workspaceId, found.set.id, {
+ pickedVariantId: resolved.variantId,
+ reason: input.reason,
+ })
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: agentRunActor(input.agentRunId),
+ action: 'persona.variant_verdict',
+ subjectType: 'agent_persona',
+ subjectId: found.set.personaId,
+ metadata: {
+ setId: found.set.id,
+ pickedVariantId: resolved.variantId,
+ // The letter as well as what it resolved to: a blinding that ever changed shape would
+ // otherwise leave a verdict nobody could re-read.
+ choice: input.choice,
+ },
+ })
+
+ return {
+ ok: true,
+ outcome:
+ 'Recorded. Your verdict is shown to a human beside what the runs measured, and it is ' +
+ 'deliberately not counted in that measurement — outcomes decide the fitness, a person ' +
+ 'decides the prompt. Nothing further is needed from you.',
  }
 }
 
@@ -1154,19 +1333,45 @@ export const listVariantSearches = async (
  setId: PersonaVariantSetId
  candidates: PersonaVariant[]
  effect: VariantSearchEffect
+ /** The second opinion, or null until the verifier has one. */
+ verifier: {
+ pickedVariantId: PersonaVariantId | null
+ reason: string
+ detail: string
+ } | null
  }[]
 > => {
  const open = await deps.personaVariants.listOpenSets(input.workspaceId)
  return Promise.all(
- open.map(async (entry) => ({
+ open.map(async (entry) => {
+ const effect = summarizeVariantSearch(
+ await deps.personaVariants.tallyVariantOutcomes(input.workspaceId, entry.set.id),
+ entry.variants.map((variant) => variant.id),
+)
+ return {
  personaId: entry.set.personaId,
  setId: entry.set.id,
  candidates: entry.variants,
- effect: summarizeVariantSearch(
- await deps.personaVariants.tallyVariantOutcomes(input.workspaceId, entry.set.id),
- entry.variants.map((variant) => variant.id),
-),
- })),
+ effect,
+ /**
+ * `verifierDecidedAt` is what says a verdict exists — `verifierPickedVariantId` is
+ * null both before one and when the verifier chose the prompt in use, and reading
+ * those as the same fact would show a verdict nobody gave.
+ */
+ verifier:
+ entry.set.verifierDecidedAt === null
+ ? null
+: {
+ pickedVariantId: entry.set.verifierPickedVariantId,
+ reason: entry.set.verifierReason ?? '',
+ detail: describeVerifierVerdict({
+ pickedVariantId: entry.set.verifierPickedVariantId,
+ leader: effect.leader,
+ measured: effect.leader !== null,
+ }),
+ },
+ }
+ }),
 )
 }
 
@@ -2592,6 +2797,13 @@ export const startAgentRun = async (
  */
  ownedPaths?: readonly string[]
  /**
+ * Start this run as the **surrogate verifier** over a variant search: the option
+ * letters it may answer with, which is what gives it `submit_variant_verdict` at all.
+ *
+ * The options themselves are in `task`, already blinded — see `renderVerifierTask`.
+ */
+ verifyVariants?: { optionKeys: string[] }
+ /**
  * Start this run as a reconciler over `parentRunId`'s conflicted branch
  *. Only `reconcileConflict` sets this, and it always pairs
  * with `relation: 'reconcile'` — the data model is explicit that a reconciler must not
@@ -2669,7 +2881,12 @@ export const startAgentRun = async (
  * have had in the original plan. Counting it as a hop would make a swarm
  * un-steerable at exactly the depth where steering is worth most.
  */
- if (parent && input.relation !== 'reconcile' && input.relation !== 'steer') {
+ if (
+ parent &&
+ input.relation !== 'reconcile' &&
+ input.relation !== 'steer' &&
+ input.relation !== 'verify'
+) {
  const depth = await resolveDelegationDepth(deps, parent)
  if (depth + 1 > deps.limits.maxDelegationDepth) {
  throw new ValidationError(
@@ -2986,7 +3203,16 @@ export const startAgentRun = async (
  * budget cap on its persona. What is deliberately *not* relaxed is delegation — a
  * Planner's children stay fully attenuated, which is the case the data model is actually about.
  */
- if (parent && input.relation !== 'reconcile') {
+ /**
+ * `verify` is exempt for the reason `reconcile` is, and the argument transfers line for
+ * line: the platform starts it when a search opens, the persona is
+ * looked up in the registry by a fixed name, the task text is platform-authored and
+ * blinded, and the parent contributes nothing but the ids. There is no escalation for
+ * attenuation to prevent — and applying it anyway would make a search unverifiable for
+ * exactly the personas most likely to run one, since a narrow Haiku worker's snapshot
+ * cannot grant the read-only Opus session that judges its prompts.
+ */
+ if (parent && input.relation !== 'reconcile' && input.relation !== 'verify') {
  const verdict = attenuateChildPersona(parent.persona, personaSpec)
  if (!verdict.ok) throw new ValidationError(verdict.reason)
  }
@@ -3057,6 +3283,18 @@ export const startAgentRun = async (
  * the work.
  */
  let contextLedger = ''
+ /**
+ * **Withheld from a surrogate verifier**: "an independent session... is
+ * denied the generator's context".
+ *
+ * This is the line that makes that literal. A verifier is a child of the run that proposed
+ * the candidates, so it would otherwise open with that tree's ledger — every note the
+ * generator wrote, including whatever it said while writing the prompts it is now being
+ * asked to judge blind. The own reason: "a verifier that inherits the generator's
+ * context agrees with it", and agreement manufactured that way looks exactly like a
+ * finding.
+ */
+ if (input.verifyVariants === undefined) {
  try {
  contextLedger = await buildContextLedger(deps, {
  workspaceId: input.workspaceId,
@@ -3065,6 +3303,7 @@ export const startAgentRun = async (
  })
  } catch {
  // Deliberately swallowed — see above.
+ }
  }
 
  /**
@@ -3108,7 +3347,13 @@ export const startAgentRun = async (
  * to a query that has nothing to do with the work.
  */
  let mapContext = ''
- try {
+ /**
+ * Withheld from a verifier too, and for a second reason on top of the ledger's: the map is
+ * the *judged persona's* accumulated view of this subject, and handing it to a session
+ * asked which of that persona's prompts is better would be showing it the incumbent's
+ * notes on the exam.
+ */
+ if (input.verifyVariants === undefined) try {
  mapContext = await buildMapContext(deps, {
  workspaceId: input.workspaceId,
  personaId: persona.id,
@@ -3140,6 +3385,7 @@ export const startAgentRun = async (
  // was never told is a Planner offered the plan tool — which answers a steering
  // message by starting a whole second fan-out.
 ...(input.relation === 'steer' ? { steering: true }: {}),
+...(input.verifyVariants ? { verifyVariants: input.verifyVariants }: {}),
  })
  } catch (error) {
  const errorMessage = error instanceof Error ? error.message: String(error)

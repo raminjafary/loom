@@ -377,6 +377,7 @@ describe('the variant search panel', => {
  setId: 's1',
  detail: 'One candidate is ahead.',
  leader: 'v2',
+ verifier: null,
  candidates: [
  { variantId: 'v1', body: 'READ THE TESTS FIRST.', rationale: 'tests before code' },
  { variantId: 'v2', body: 'WRITE THE SMALLEST DIFF.', rationale: 'small diffs land' },
@@ -464,6 +465,33 @@ describe('the variant search panel', => {
 .find((button) => button.text.includes('Keep the prompt it has'))!
 .trigger('click')
  expect(wrapper.emitted('settle-search')?.[1]).toEqual([{ personaId: 'p1', variantId: null }])
+ })
+
+ /**
+ * The verdict, and the words that keep it honest. The self-improvement loop gives the measurement the last
+ * word on fitness, so a panel that showed a model's opinion without saying it counts for
+ * nothing would be manufacturing evidence out of a second opinion.
+ */
+ it('shows the verifier"s verdict and says it counts for nothing', async => {
+ const wrapper = await openedSearch(
+ search({
+ verifier: {
+ pickedVariantId: 'v1',
+ reason: 'A run following B would miss the integration suite under packages/db.',
+ detail: 'The verifier disagrees with the runs.',
+ },
+ }),
+)
+ const verdict = wrapper.get('.trial.search.verdict')
+ expect(verdict.text).toContain('counted in nothing')
+ expect(verdict.text).toContain('The verifier disagrees with the runs.')
+ // Its reason, verbatim — an assertion a human can check is the point of the session.
+ expect(verdict.text).toContain('packages/db')
+ })
+
+ it('shows no verdict block before the verifier has one', async => {
+ const wrapper = await openedSearch(search)
+ expect(wrapper.find('.trial.search.verdict').exists).toBe(false)
  })
 
  it('offers no panel for a persona nothing is being searched over', async => {

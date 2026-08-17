@@ -57,7 +57,10 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
-import { advanceVerificationQueue } from '../packages/application/src/index.js'
+import {
+ advanceVerificationQueue,
+ seedBuiltinPersonas,
+} from '../packages/application/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
 import {
  PROPOSE_VARIANTS_TOOL_NAME,
@@ -225,6 +228,13 @@ const main = async => {
  displayName: 'money',
  })
  const channel = await client.channel.create({ name: 'self-edit' })
+
+ /**
+ * The built-ins, because the verifier is one and it is looked up by name. Absent, a
+ * search still opens and measures itself — which is the right behaviour and not what this
+ * driver is here to check.
+ */
+ await seedBuiltinPersonas(app.deps, { workspaceId: ws.id })
 
  const enveloped = await client.persona.create({ markdownSource: ENVELOPED_PERSONA('self-editor') })
  const plain = await client.persona.create({ markdownSource: PLAIN_PERSONA('no-envelope') })
@@ -523,7 +533,9 @@ const main = async => {
  'Read CONVENTIONS.md. You cannot tell which of two instructions would serve future ' +
  'runs better, so do not guess: call your propose_own_variants tool with exactly two ' +
  'complete candidate prompts that differ in what a future run would do about the ' +
- 'convention you found. Say in one sentence why each is worth trying.',
+ 'convention you found. For the first candidate, begin your reason with the exact token ' +
+ 'ALPHA-RATIONALE and for the second with BETA-RATIONALE, then say in one sentence why ' +
+ 'each is worth trying.',
  })
 
  const searches = await client.persona.variantSearches
@@ -577,6 +589,59 @@ const main = async => {
  new Set(armPrompts).size === 3,
  `three arms meant three different system prompts (${new Set(armPrompts).size} distinct)`,
 )
+
+ /**
+ * The surrogate verifier, live — the half no test reaches is the same one every
+ * other tool here needed: that the SDK offers `submit_variant_verdict` at all, and that
+ * a blinded task is enough for a real model to answer with a letter rather than prose.
+ *
+ * Waited on rather than polled once: this is an Opus session reading a repository, and it
+ * runs while the arms above are being dealt out.
+ */
+ const verifierChild = (await client.agentRun.listChildren({ agentRunId: searchRun.id })).find(
+ (child: any) => child.relation === 'verify',
+)
+ check(
+ verifierChild !== undefined,
+ `the platform started a verifier session (${verifierChild?.persona.name ?? 'none'})`,
+)
+ check(
+ verifierChild?.persona.name === 'variant-verifier' &&
+ !verifierChild.persona.tools.includes('Edit'),
+ 'and it is a different, read-only persona rather than the one being judged',
+)
+
+ let verdict: any = null
+ for (let i = 0; i < 90; i += 1) {
+ const current = (await client.persona.variantSearches).find(
+ (entry: any) => entry.personaId === searcher.id,
+)
+ if (current?.verifier) {
+ verdict = current.verifier
+ break
+ }
+ await new Promise((r) => setTimeout(r, 2000))
+ }
+ check(verdict !== null, 'the verifier filed a verdict on the search')
+ if (verdict) {
+ check(
+ typeof verdict.reason === 'string' && verdict.reason.length > 20,
+ `and gave a reason (${JSON.stringify(String(verdict.reason).slice(0, 70))})`,
+)
+ /**
+ * The blinding, end to end. The candidates' rationales are what a second model with the
+ * same weights finds most persuasive, so a verdict that quotes one is a verdict that was
+ * never blind — and the whole argument for a verifier rests on it being blind.
+ */
+ check(
+ !String(verdict.reason).includes('ALPHA-') && !String(verdict.reason).includes('BETA-'),
+ 'and never saw the rationales the generator wrote',
+)
+ check(
+ String(verdict.detail).includes('counts for nothing'),
+ 'and the platform says plainly that it counts for nothing in the measurement',
+)
+ }
 
  // A tier-1 edit is refused mid-search: the control arm is the prompt it would rewrite.
  const blocked = await startAndWait('tier 1 during a search', {

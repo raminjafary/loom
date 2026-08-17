@@ -1721,6 +1721,24 @@ export const personaVariantSet = pgTable(
  status: text('status').notNull.default('open'),
  /** Which candidate a human promoted, or null when they discarded the search. */
  promotedVariantId: uuid('promoted_variant_id'),
+ /**
+ * The surrogate verifier's session and what it concluded.
+ *
+ * On the set rather than in a table of its own: there is exactly one verdict per search,
+ * it is never read apart from the search, and it is not evidence — the self-improvement loop is explicit
+ * that fitness is run disposition and never a model's assessment, so this is recorded
+ * beside the measurement and enters nothing.
+ *
+ * `verifier_decided_at` is what says a verdict exists; `verifier_picked_variant_id` is
+ * null both before a verdict and when the verifier chose the prompt already in use, and
+ * those two states are not the same fact.
+ */
+ verifierRunId: uuid('verifier_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ verifierPickedVariantId: uuid('verifier_picked_variant_id'),
+ verifierReason: text('verifier_reason'),
+ verifierDecidedAt: timestamp('verifier_decided_at', { withTimezone: true }),
  settledAt: timestamp('settled_at', { withTimezone: true }),
  settledByUserId: text('settled_by_user_id'),
  createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,

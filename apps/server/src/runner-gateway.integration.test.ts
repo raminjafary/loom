@@ -6854,6 +6854,144 @@ The prompt it started with.`
  socket.close
  })
 
+ /**
+ * The surrogate verifier, over the real protocol.
+ *
+ * Three claims, and every one of them is about what the verifier is *not* given. It is a
+ * different persona, in a different session; the options reach it blinded, with no
+ * rationale and no marker on the live one; and the tree's ledger — which the generator
+ * wrote into — is withheld. The reason for all three: "a verifier that inherits the
+ * generator's context agrees with it", and agreement produced that way is indistinguishable
+ * from a finding.
+ */
+ it('starts a blinded verifier in its own session, and records a letter as a verdict', async => {
+ /**
+ * The verifier is looked up by name, so it has to exist — and its absence is a state
+ * worth asserting rather than avoiding: a workspace whose operator never seeded or has
+ * since renamed it gets a search that measures itself on outcomes and says so, never a
+ * refused search.
+ */
+ await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+ expect((await client.persona.list).some((p) => p.name === 'variant-verifier')).toBe(true)
+
+ const { socket, runnerId } = await pairFakeRunner('variants-verifier')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const created = await client.channel.create({ name: 'variants-verifier' })
+ const persona = await client.persona.create({
+ markdownSource: SELF_EDITING_PERSONA.replace('self-editor', 'self-editor-verified'),
+ })
+
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const proposeRun = await client.agentRun.start({
+ threadId: created.rootThread.id,
+ repositoryId: repo.id,
+ personaId: persona.id,
+ })
+ await startFrame
+
+ /**
+ * A note from the proposing run, so "the ledger is withheld" is a claim with something
+ * behind it. Without this the assertion would pass against an empty ledger and prove
+ * nothing.
+ */
+ await client.workerNote.write({
+ agentRunId: proposeRun.id,
+ kind: 'decision',
+ title: 'LEDGER-LEAK-CANARY',
+ body: 'The generator wrote this while proposing.',
+ })
+
+ const verifierStart = nextFrame(
+ socket,
+ (v) => v.type === 'start_run' && v.verifyVariants !== undefined,
+ 10_000,
+)
+ const proposed = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'variants-v1',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'persona_variants_proposed',
+ runId: proposeRun.id,
+ requestId: 'variants-v1',
+ variants: [
+ { body: 'CANDIDATE ALPHA.', rationale: 'ALPHA-RATIONALE-CANARY' },
+ { body: 'CANDIDATE BETA.', rationale: 'BETA-RATIONALE-CANARY' },
+ ],
+ }),
+)
+ await proposed
+
+ const verifierFrame = await verifierStart
+ const task = String(verifierFrame.task)
+ const verifierPersona = verifierFrame.persona as { name: string; tools: string[] }
+
+ // A different persona, and a read-only one: a verifier that could write a prompt would
+ // be a generator with a second vote.
+ expect(verifierPersona.name).toBe('variant-verifier')
+ expect(verifierPersona.tools).not.toContain('Edit')
+ expect(verifierPersona.tools).not.toContain('Write')
+
+ // Every option's text, and none of the three things the self-improvement loop withholds.
+ expect(task).toContain('CANDIDATE ALPHA.')
+ expect(task).toContain('CANDIDATE BETA.')
+ expect(task).toContain('The prompt it started with')
+ expect(task).not.toContain('RATIONALE-CANARY')
+ expect(task).toContain('You are not told which is which')
+ // And the generator's ledger, which is the leak a shared tree would produce.
+ expect(String(verifierFrame.contextLedger ?? '')).not.toContain('LEDGER-LEAK-CANARY')
+ expect(task).not.toContain('LEDGER-LEAK-CANARY')
+
+ // The tool is bounded by the letters that were offered, so a verdict cannot name an
+ // option nobody showed it.
+ const optionKeys = (verifierFrame.verifyVariants as { optionKeys: string[] }).optionKeys
+ expect(optionKeys).toHaveLength(3)
+
+ const verdicted = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'verdict-1',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'variant_verdict_submitted',
+ runId: verifierFrame.runId,
+ requestId: 'verdict-1',
+ choice: optionKeys[0],
+ reason: 'A run following the others would skip the integration suite.',
+ }),
+)
+ expect(String((await verdicted).outcome)).toContain('deliberately not counted')
+
+ const search = (await client.persona.variantSearches).find(
+ (entry) => entry.personaId === persona.id,
+)
+ expect(search?.verifier?.reason).toContain('skip the integration suite')
+ expect(search?.verifier?.detail).toContain('counts for nothing')
+
+ /**
+ * And a verdict from a run that is not the verifier is refused. The frame carries no set
+ * id precisely so this cannot be aimed: which search a session belongs to is what the
+ * platform recorded when it started it.
+ */
+ const wrong = nextFrame(
+ socket,
+ (v) => v.type === 'persona_prompt_result' && v.requestId === 'verdict-2',
+)
+ socket.send(
+ JSON.stringify({
+ type: 'variant_verdict_submitted',
+ runId: proposeRun.id,
+ requestId: 'verdict-2',
+ choice: 'A',
+ reason: 'I should not be able to do this.',
+ }),
+)
+ expect(String((await wrong).outcome)).toContain('not the verifier of any open search')
+
+ socket.close
+ })
+
  /** The other way a search ends: nobody wins, and every candidate stays on the record. */
  it('lets a human discard a search without taking any of it', async => {
  const { socket, runnerId } = await pairFakeRunner('variants-discard')
