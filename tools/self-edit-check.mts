@@ -5,6 +5,12 @@
  * docker compose up -d
  * LOOM_USE_HOST_CLAUDE_AUTH=1 npx tsx tools/self-edit-check.mts
  *
+ * Sandboxed, which needs the Runner to hold the egress control secret — without it every
+ * run is *refused* rather than sandboxed, and the refusal reads like a broken feature:
+ *
+ * set -a;../.env; set +a
+ * LOOM_USE_HOST_CLAUDE_AUTH=1 LOOM_SANDBOX_ENABLED=1 npx tsx tools/self-edit-check.mts
+ *
  * The suite drives this with a fake Runner: it sends a `persona_prompt_revised` frame and
  * checks what the server does with it. That proves the server's half — the envelope is
  * consulted, the frontmatter survives, the revision is recorded — and it cannot prove the
@@ -488,12 +494,21 @@ const main = async => {
  }
 
  // ── 5. The human's undo ─────────────────────────────────────────────────────
+ //
+ // Guarded on there being something to undo. A driver that throws instead of reporting
+ // prints a stack trace where the summary should be, and one pass of this file did
+ // exactly that — a `TypeError` on an empty revision list, with the twenty-odd checks
+ // that had already run never summarized. An unmet precondition is a failed check.
+ if (revisions.length === 0) {
+ check(false, 'there is a revision for a human to undo')
+ } else {
  const restored = await client.persona.revert({
  personaId: enveloped.id,
  revisionId: revisions[0].id,
  })
  check(
- restored.markdownSource.includes(STARTING_PROMPT) && !restored.markdownSource.includes(MARKER),
+ restored.markdownSource.includes(STARTING_PROMPT) &&
+ !restored.markdownSource.includes(MARKER),
  'a human put the original prompt back',
 )
  const history = await client.persona.revisions({ personaId: enveloped.id })
@@ -505,6 +520,7 @@ const main = async => {
  history[0]?.replacedByKind === 'human',
  'and the revert is recorded as a human"s act, not an agent"s',
 )
+ }
 
  const failed = results.filter((r) => !r.ok)
  console.log(`\n${results.length - failed.length}/${results.length} checks passed`)

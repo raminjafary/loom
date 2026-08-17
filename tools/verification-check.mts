@@ -5,6 +5,8 @@
  *
  * docker compose up -d
  * LOOM_USE_HOST_CLAUDE_AUTH=1 npx tsx tools/verification-check.mts
+ * set -a;../.env; set +a # sandboxed mode needs the egress control secret, or every
+ * # run is refused rather than sandboxed
  * LOOM_USE_HOST_CLAUDE_AUTH=1 LOOM_SANDBOX_ENABLED=1 npx tsx tools/verification-check.mts
  *
  * Why this exists alongside the tests. `runner-gateway.integration.test.ts` drives the
