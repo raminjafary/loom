@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve as resolvePath } from 'node:path'
 import { promisify } from 'node:util'
+import { LOOM_COMMITTER_FLAGS } from './git-identity.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -202,10 +203,7 @@ export const initRepository = async (
  await execFileAsync('git', [
  '-C',
  target,
- '-c',
- 'user.name=Loom',
- '-c',
- 'user.email=loom@loom.invalid',
+...LOOM_COMMITTER_FLAGS,
  'commit',
  '--quiet',
  '-m',

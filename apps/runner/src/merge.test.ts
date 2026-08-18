@@ -97,6 +97,37 @@ describe('mergeRunBranch', => {
  expect(await git(source, ['log', '--pretty=%s'])).toBe('add b\nadd a\nbase')
  })
 
+ /**
+ * A host with no git identity is not a broken host — a CI runner and a freshly
+ * provisioned machine both look like this, because git can only auto-detect an
+ * address when the hostname has a domain. Until the committer was pinned, the
+ * rebase above failed on exactly those machines and the queue reported it as a
+ * merge failure, which names the symptom and not the cause.
+ */
+ it('rebases on a host that has no git identity to auto-detect', async => {
+ const identityless = join(root, 'no-identity-gitconfig')
+ await writeFile(identityless, '[user]\n\tuseConfigOnly = true\n')
+ const previous = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_SYSTEM }
+ process.env.GIT_CONFIG_GLOBAL = identityless
+ process.env.GIT_CONFIG_SYSTEM = '/dev/null'
+
+ try {
+ const first = await makeRunClone('loom/run-c')
+ const second = await makeRunClone('loom/run-d')
+ await commitFile(first, 'c.txt', 'c\n', 'add c')
+ await commitFile(second, 'd.txt', 'd\n', 'add d')
+
+ expect((await merge(first, 'loom/run-c')).ok).toBe(true)
+ expect((await merge(second, 'loom/run-d')).ok).toBe(true)
+ expect(await git(source, ['log', '--pretty=%s'])).toBe('add d\nadd c\nbase')
+ } finally {
+ if (previous.global === undefined) delete process.env.GIT_CONFIG_GLOBAL
+ else process.env.GIT_CONFIG_GLOBAL = previous.global
+ if (previous.system === undefined) delete process.env.GIT_CONFIG_SYSTEM
+ else process.env.GIT_CONFIG_SYSTEM = previous.system
+ }
+ })
+
  it('reports a conflict with the conflicting paths, and leaves the branch as its run produced it', async => {
  const first = await makeRunClone('loom/run-c')
  const second = await makeRunClone('loom/run-d')

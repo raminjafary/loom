@@ -4,6 +4,7 @@ import { chmod, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { LOOM_COMMITTER_FLAGS } from './git-identity.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -137,7 +138,7 @@ export const prepareReconcileWorkspace = async (
 
  let conflictedPaths: string[] = []
  try {
- await execFileAsync('git', ['-C', clonePath, 'rebase', tip.trim])
+ await execFileAsync('git', ['-C', clonePath,...LOOM_COMMITTER_FLAGS, 'rebase', tip.trim])
  } catch {
  const { stdout } = await execFileAsync('git', [
  '-C', clonePath, 'diff', '--name-only', '--diff-filter=U',
@@ -165,7 +166,7 @@ export const finishReconcile = async (
  const git = async (args: string[]): Promise<string> => {
  const { stdout } = await execFileAsync(
  'git',
- ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',...args],
+ ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',...LOOM_COMMITTER_FLAGS,...args],
  { maxBuffer: 32 * 1024 * 1024 },
 )
  return stdout.trim
@@ -214,7 +215,7 @@ export const finishReconcile = async (
  }
  await execFileAsync(
  'git',
- ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.editor=true', 'rebase', '--continue'],
+ ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.editor=true',...LOOM_COMMITTER_FLAGS, 'rebase', '--continue'],
  { env: {...process.env, GIT_EDITOR: 'true' } },
 )
  } catch (error) {

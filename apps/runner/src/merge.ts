@@ -7,6 +7,7 @@ import {
 } from '@loom/domain'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { LOOM_COMMITTER_FLAGS } from './git-identity.js'
 import { sandboxEnabled, unsandboxedAcknowledged } from './sandbox.js'
 import { runVerification, tail } from './verify.js'
 
@@ -56,7 +57,7 @@ export type MergeOutcome =
 const git = async (cwd: string, args: readonly string[]): Promise<string> => {
  const { stdout } = await execFileAsync(
  'git',
- ['-C', cwd, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',...args],
+ ['-C', cwd, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',...LOOM_COMMITTER_FLAGS,...args],
  { maxBuffer: 32 * 1024 * 1024 },
 )
  return stdout.trim

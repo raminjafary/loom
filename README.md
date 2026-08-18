@@ -3,7 +3,7 @@
 [![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
-![tests](https://img.shields.io/badge/tests-1%2C662-brightgreen)
+![tests](https://img.shields.io/badge/tests-1%2C663-brightgreen)
 
 **Run many AI coding agents at once on your own hardware. Each gets its own git clone and
 container sandbox. You stay in the loop only where it matters: approving a risky command,
@@ -253,7 +253,7 @@ Full limitations, each with the work that closes it: [the open-items list](./).
 
 ```bash
 make check # what CI runs: typecheck, lint, the suite, the boundary test
-pnpm test # 1,662 tests across 96 files
+pnpm test # 1,663 tests across 96 files
 pnpm db:test:prepare # four test databases — re-run after any db:generate
 ```
 
