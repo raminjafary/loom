@@ -1,4 +1,4 @@
-import { DEFAULT_ALLOWED_EGRESS_HOSTS } from '@loom/domain'
+import { DEFAULT_ALLOWED_EGRESS_HOSTS, describeEgressRefusal, type EgressDecision } from '@loom/domain'
 import { z } from 'zod'
 import { createControlServer } from './control.js'
 import { createLeaseRegistry, type UsageRecord } from './leases.js'
@@ -37,6 +37,34 @@ const log = (message: string) => process.stdout.write(`[egress] ${message}\n`)
 const usageQueue: UsageRecord[] = []
 const leases = createLeaseRegistry({ onUsage: (record) => usageQueue.push(record) })
 
+/**
+ * Egress decisions awaiting a drain, and the one thing this queue needs that
+ * the usage queue does not: a bound.
+ *
+ * Usage records arrive at the rate a run spends money. Decisions arrive at the rate a process
+ * opens sockets, which for a retry loop against a refused host is as fast as the kernel
+ * allows — so an undrained queue is a memory leak with an attacker-adjacent trigger. Oldest
+ * dropped rather than newest refused, because the recent decisions are the ones an operator is
+ * looking at, and the count of what was dropped is logged rather than swallowed: a bounded
+ * record that reads as complete is the failure the "no silent caps" names.
+ */
+const MAX_QUEUED_EGRESS_DECISIONS = 1_000
+let droppedEgressDecisions = 0
+const egressDecisionQueue: EgressDecision[] = []
+const queueEgressDecision = (decision: EgressDecision) => {
+ egressDecisionQueue.push(decision)
+ if (egressDecisionQueue.length > MAX_QUEUED_EGRESS_DECISIONS) {
+ egressDecisionQueue.splice(0, egressDecisionQueue.length - MAX_QUEUED_EGRESS_DECISIONS)
+ droppedEgressDecisions += 1
+ // Every 100th, so a hot loop reports itself without becoming the log's whole content.
+ if (droppedEgressDecisions % 100 === 1) {
+ log(
+ `egress decision queue full at ${MAX_QUEUED_EGRESS_DECISIONS}; dropped ${droppedEgressDecisions} oldest so far — is a Runner draining?`,
+)
+ }
+ }
+}
+
 const allowedHosts = env.EGRESS_ALLOWED_HOSTS
  ? env.EGRESS_ALLOWED_HOSTS.split(',').map((host) => host.trim).filter(Boolean)
 : DEFAULT_ALLOWED_EGRESS_HOSTS
@@ -59,6 +87,16 @@ const dataPlane = createEgressProxy({
  // a Runner. The exhaustion shows up in the drained usage records, which the
  // Runner acts on.
  onBudgetExhausted: (runId) => log(`budget exhausted for run ${runId}`),
+ /**
+ * Queued for the Runner, and a refusal is also logged in the operator-facing wording
+ *. Two audiences: the queue reaches the audit log through the server, and
+ * the line reaches whoever is watching this process now — which until this existed was the
+ * only place a refused host appeared at all.
+ */
+ onEgressDecision: (decision) => {
+ queueEgressDecision(decision)
+ if (!decision.allowed) log(`run ${decision.runId}: ${describeEgressRefusal(decision)}`)
+ },
  log,
 })
 
@@ -66,6 +104,7 @@ const controlPlane = createControlServer({
  leases,
  controlSecret: env.LOOM_EGRESS_CONTROL_SECRET,
  usageQueue,
+ egressDecisionQueue,
  setOauthToken: (token) => {
  const changed = upstream.oauthToken !== token
  upstream.oauthToken = token

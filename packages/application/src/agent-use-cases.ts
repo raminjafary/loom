@@ -55,6 +55,7 @@ import {
  parsePlanDelta,
  parsePersonaMarkdown,
  parsedPromptBody,
+ truncateEgressHost,
  revisePromptBody,
  reviseToolList,
  type SupersededPrompt,
@@ -5150,6 +5151,74 @@ export const recordRunCost = async (
  deps: AgentDeps,
  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; spentUsd: number },
 ): Promise<void> => deps.agentRuns.recordCost(input.workspaceId, input.agentRunId, input.spentUsd)
+
+/**
+ * Records what the egress boundary decided.
+ *
+ * **The audit log rather than a table of its own**, and that is the whole design decision
+ * here. Phase 0 made an append-only audit log non-negotiable from day one, an egress
+ * decision is exactly an audited event — an actor, a subject, a verdict, a time — and a new
+ * table would need its own retention policy, its own query surface and its own UI before it
+ * told anybody anything. This reaches an operator today.
+ *
+ * Three things it does deliberately:
+ *
+ * - **Refusals only, by default.** An allowed decision is the steady state: every `npm
+ * install` is dozens of them, and an audit log where 99.9% of entries are "a package
+ * registry was reached, as configured" is one nobody reads. What the egress record says is missing is the
+ * record of what a run was *refused*, and that is what is kept. `includeAllowed` exists for
+ * a driver that needs to assert the allowed path was seen at all.
+ * - **The host is data.** It came off a CONNECT line written by a sandboxed process, so it is truncated at the domain's bound and stored as metadata, never
+ * interpolated into an action name.
+ * - **A run that no longer exists is skipped rather than throwing.** Decisions arrive after
+ * the fact and drain-on-read means they can outlive their run — a reaped run's refused host
+ * must not fail a batch that also holds live runs' decisions.
+ */
+export const recordEgressDecisions = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ decisions: readonly {
+ /** Branded by the gateway, like every other id arriving on a frame. */
+ agentRunId: AgentRunId
+ host: string
+ port: number
+ allowed: boolean
+ reason: string
+ }[]
+ includeAllowed?: boolean
+ },
+): Promise<{ recorded: number; skipped: number }> => {
+ let recorded = 0
+ let skipped = 0
+
+ for (const decision of input.decisions) {
+ if (decision.allowed && input.includeAllowed !== true) continue
+
+ const agentRunId = decision.agentRunId
+ const run = await deps.agentRuns.findById(input.workspaceId, agentRunId)
+ if (!run) {
+ skipped += 1
+ continue
+ }
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: agentRunActor(agentRunId),
+ action: decision.allowed ? 'egress.allowed': 'egress.refused',
+ subjectType: 'agent_run',
+ subjectId: agentRunId,
+ metadata: {
+ host: truncateEgressHost(decision.host),
+ port: decision.port,
+...(decision.allowed ? {}: { reason: decision.reason.slice(0, 500) }),
+ },
+ })
+ recorded += 1
+ }
+
+ return { recorded, skipped }
+}
 
 /**
  * Reconciles a Runner's in-flight runs when it (re)connects.

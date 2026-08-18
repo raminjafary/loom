@@ -23,6 +23,7 @@ import {
  preparedTreeFromEnv,
 } from './prepared-tree.js'
 import {
+ drainEgressDecisions,
  drainUsage,
  egressConfigFromEnv,
  leaseEgressToken,
@@ -233,6 +234,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  */
  const preparedTree = preparedTreeFromEnv(sandbox.depCache)
  const USAGE_POLL_MS = Number(process.env.LOOM_USAGE_POLL_MS ?? 5_000)
+ /** Matches `egress_report`'s schema cap, so a drain is chunked rather than refused. */
+ const EGRESS_REPORT_BATCH = 200
  // Bounded above the server's own warm timeout so the Runner is not the one that
  // gives up first and leaves a container running.
  const WARM_TIMEOUT_MS = Number(process.env.LOOM_WARM_TIMEOUT_MS ?? 1_500_000)
@@ -391,9 +394,38 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }, Number(process.env.LOOM_UPSTREAM_AUTH_REFRESH_MS ?? 300_000))
 : null
 
+ /**
+ * Forwards recorded egress decisions to the server.
+ *
+ * On the usage poll's timer rather than one of its own: both drain the same control plane,
+ * and a second interval would double the polling of a process whose whole point is to be a
+ * quiet boundary.
+ *
+ * **Chunked to the frame's limit.** A run retrying against a refused host produces decisions
+ * as fast as it can open sockets, and the proxy's queue holds a thousand — one frame per
+ * drain would be a frame the server's schema rejects, which would silently drop the batch
+ * that mattered most.
+ */
+ const pumpEgressDecisions = async : Promise<void> => {
+ if (!egress) return
+ const decisions = await drainEgressDecisions(egress)
+ for (let index = 0; index < decisions.length; index += EGRESS_REPORT_BATCH) {
+ const batch = decisions.slice(index, index + EGRESS_REPORT_BATCH)
+ if (batch.length > 0) send({ type: 'egress_report', decisions: batch })
+ }
+ }
+
  const usageTimer = egress
  ? setInterval( => {
  void pumpUsage.catch((error) => log(`usage poll failed: ${error instanceof Error ? error.message: String(error)}`))
+ /**
+ * Best-effort in a way spend is not: losing a decision costs an audit entry, losing a
+ * usage record costs money that really was spent. The two are drained together and
+ * failed separately on purpose.
+ */
+ void pumpEgressDecisions.catch((error) =>
+ log(`egress decision poll failed: ${error instanceof Error ? error.message: String(error)}`),
+)
  }, USAGE_POLL_MS)
 : null
 

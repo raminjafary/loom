@@ -1,4 +1,10 @@
-import { classifyEgress, parseUsage, type TokenUsage } from '@loom/domain'
+import {
+ classifyEgress,
+ parseUsage,
+ truncateEgressHost,
+ type EgressDecision,
+ type TokenUsage,
+} from '@loom/domain'
 import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { connect as netConnect } from 'node:net'
@@ -53,6 +59,19 @@ export interface ProxyOptions {
  */
  readonly onBudgetExhausted?: (runId: string) => void
  readonly log?: (message: string) => void
+ /**
+ * Every CONNECT decision, allowed or refused.
+ *
+ * Called rather than written, so this file keeps owning the socket and nothing else. The
+ * queue it feeds is drained by the Runner over the control plane and forwarded on the
+ * socket the server already trusts — deliberately the same path metered spend takes, since
+ * the alternative is the proxy growing a second authenticated surface.
+ *
+ * Only CONNECT: that is where the allowlist decides. A model-endpoint refusal is an
+ * authentication or budget event and is already visible as an API failure to the run
+ * itself, where a refused host is visible to nobody.
+ */
+ readonly onEgressDecision?: (decision: EgressDecision) => void
 }
 
 /**
@@ -129,6 +148,25 @@ const STRIPPED_REQUEST_HEADERS = new Set([
  * forward to that host — that would make this an open proxy. It only means "this
  * request was addressed to me", and the path is then matched as usual.
  */
+/**
+ * A CONNECT authority split for the record, never for the decision.
+ *
+ * `classifyEgress` remains the only thing that decides, and it refuses a malformed target
+ * itself. This exists because a refused verdict carries a sentence rather than a host, and
+ * The record has to say what was asked for — including when what was asked for was
+ * nonsense. Port 0 stands for "no port anyone could parse", which is never allowed, so it
+ * cannot round-trip into an allowed decision.
+ */
+const splitAuthority = (authority: string): { host: string; port: number } => {
+ const lastColon = authority.lastIndexOf(':')
+ if (lastColon <= 0) return { host: authority, port: 0 }
+ const port = Number(authority.slice(lastColon + 1))
+ return {
+ host: authority.slice(0, lastColon).toLowerCase,
+ port: Number.isInteger(port) && port > 0 ? port: 0,
+ }
+}
+
 const normalizePath = (target: string): string => {
  if (!/^https?:\/\//i.test(target)) return target
  try {
@@ -337,10 +375,27 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
  * Unioned, never substituted: a lease can only *add*, so no run can talk its way out
  * of the base allowlist, and a lease with no grant behaves exactly as before.
  */
- const verdict = classifyEgress(request.url ?? '', [
-...options.allowedHosts,
-...lease.egressHosts,
- ])
+ const authority = request.url ?? ''
+ const verdict = classifyEgress(authority, [...options.allowedHosts,...lease.egressHosts])
+
+ /**
+ * Recorded before the socket is answered either way.
+ *
+ * `splitAuthority` rather than the verdict's own fields, because a refused verdict carries
+ * no host — it carries a sentence — and "what did this run ask for" is the whole question
+ * the record exists to answer. A malformed authority is kept as it arrived (bounded), since
+ * a run asking for something that is not a host is exactly the kind of thing to preserve.
+ */
+ const asked = splitAuthority(authority)
+ options.onEgressDecision?.({
+ runId: lease.runId,
+ host: truncateEgressHost(asked.host),
+ port: asked.port,
+ allowed: verdict.allowed,
+ reason: verdict.allowed ? '': verdict.reason,
+ at: new Date,
+ })
+
  if (!verdict.allowed) {
  refuse('403 Forbidden', verdict.reason)
  return

@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
+import type { EgressDecision } from '@loom/domain'
 import type { LeaseRegistry, UsageRecord } from './leases.js'
 
 /**
@@ -59,6 +60,14 @@ export const createControlServer = (options: {
  controlSecret: string
  /** Drained by the Runner so metered spend reaches the server over the socket it already trusts. */
  usageQueue: UsageRecord[]
+ /**
+ * Egress decisions, drained the same way and for the same reason.
+ *
+ * Bounded by the caller, not here: this queue grows while nobody drains it, and a Runner
+ * that has been disconnected for an hour must not be able to turn a refused-host loop into
+ * this process's memory problem. See `main.ts`.
+ */
+ egressDecisionQueue: EgressDecision[]
  setOauthToken: (token: string | null) => void
 }): Server =>
  createServer((request, response) => {
@@ -128,6 +137,19 @@ export const createControlServer = (options: {
  if (request.method === 'GET' && url === '/_control/usage') {
  const drained = options.usageQueue.splice(0, options.usageQueue.length)
  json(response, 200, { records: drained })
+ return
+ }
+
+ /**
+ * Egress decisions, drain-on-read like usage above.
+ *
+ * Same shape deliberately: one polling loop in the Runner, one authenticated path to
+ * the server, and one rule about what a drained record means — that it has been handed
+ * over exactly once, so whoever took it owns forwarding it.
+ */
+ if (request.method === 'GET' && url === '/_control/egress-decisions') {
+ const drained = options.egressDecisionQueue.splice(0, options.egressDecisionQueue.length)
+ json(response, 200, { decisions: drained })
  return
  }
 

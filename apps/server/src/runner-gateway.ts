@@ -43,6 +43,7 @@ import {
  recordMapFragment,
  recordMasteryCheckpoint,
  resolveMapRevision,
+ recordEgressDecisions,
  recordRunCost,
  recordRawTranscriptChunk,
  recordReconcileResult,
@@ -1248,6 +1249,27 @@ export const createRunnerGateway = (
  workspaceId,
  agentRunId: asAgentRunId(frame.runId),
  spentUsd: frame.spentUsd,
+ })
+ return
+
+ /**
+ * What the egress boundary decided, into the audit log.
+ *
+ * The workspace comes from the *connection* rather than from the frame, exactly as
+ * every other frame's does: a Runner is paired to a workspace, and taking a workspace
+ * id from a relayed record would let one Runner write audit entries into another
+ * workspace's log.
+ */
+ case 'egress_report':
+ await recordEgressDecisions(deps, {
+ workspaceId,
+ decisions: frame.decisions.map((decision) => ({
+ agentRunId: asAgentRunId(decision.runId),
+ host: decision.host,
+ port: decision.port,
+ allowed: decision.allowed,
+ reason: decision.reason,
+ })),
  })
  return
  }

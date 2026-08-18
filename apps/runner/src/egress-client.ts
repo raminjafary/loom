@@ -90,6 +90,38 @@ export const drainUsage = async (config: EgressClientConfig): Promise<UsageRecor
 }
 
 /**
+ * One recorded CONNECT decision, as it arrives over the control plane.
+ *
+ * `at` is a string here and a `Date` in the domain: it crossed JSON. Converted where it is
+ * used rather than parsed on arrival, since what this Runner does with a decision is forward
+ * it — and a Date that survives one hop only to be re-serialized is work nobody asked for.
+ */
+export interface EgressDecisionRecord {
+ readonly runId: string
+ readonly host: string
+ readonly port: number
+ readonly allowed: boolean
+ readonly reason: string
+ readonly at: string
+}
+
+/**
+ * Drains recorded egress decisions.
+ *
+ * Drain-on-read like `drainUsage`, with the same obligation: what comes back has been handed
+ * over once, so losing it loses the record. Unlike usage, losing one costs an audit entry
+ * rather than money — which is why this is best-effort at the call site and spend is not.
+ */
+export const drainEgressDecisions = async (
+ config: EgressClientConfig,
+): Promise<EgressDecisionRecord[]> => {
+ const result = (await control(config, '/_control/egress-decisions', { method: 'GET' })) as {
+ decisions?: unknown
+ }
+ return Array.isArray(result.decisions) ? (result.decisions as EgressDecisionRecord[]): []
+}
+
+/**
  * Hands the proxy the operator's current upstream OAuth token. Called on
  * start and on an interval, because Claude Code rotates the token every few hours and the
  * proxy has no way to notice on its own.

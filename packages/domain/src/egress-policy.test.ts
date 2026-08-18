@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_ALLOWED_EGRESS_HOSTS, classifyEgress, parseEgressHost } from './egress-policy.js'
+import {
+ DEFAULT_ALLOWED_EGRESS_HOSTS,
+ MAX_EGRESS_HOST_CHARS,
+ classifyEgress,
+ describeEgressRefusal,
+ parseEgressHost,
+ truncateEgressHost,
+ type EgressDecision,
+} from './egress-policy.js'
 
 const allow = DEFAULT_ALLOWED_EGRESS_HOSTS
 
@@ -98,6 +106,50 @@ describe('classifyEgress — a lease may add hosts, never remove them', => {
  // The base list still applies — a grant adds, it does not replace.
  expect(classifyEgress('registry.npmjs.org:443', [...base, 'api.search.example']).allowed).toBe(
  true,
+)
+ })
+})
+
+describe('a recorded decision', => {
+ const decision = (over: Partial<EgressDecision> = {}): EgressDecision => ({
+ runId: 'run-1',
+ host: 'exfil.example',
+ port: 443,
+ allowed: false,
+ reason: 'egress to exfil.example is not on the allowlist',
+ at: new Date('2026-08-18T00:00:00Z'),
+...over,
+ })
+
+ /**
+ * The host comes off a CONNECT line a sandboxed process wrote, and the record is written to
+ * an audit log and rendered in a UI. A 40KB "host" is the cheapest way to make either of
+ * those somebody's afternoon.
+ */
+ it('bounds a host at the longest a DNS name can be, and keeps the fact that it was too long', => {
+ const absurd = 'a'.repeat(MAX_EGRESS_HOST_CHARS + 500)
+ const kept = truncateEgressHost(absurd)
+ expect(kept.length).toBe(MAX_EGRESS_HOST_CHARS + 1)
+ expect(kept.endsWith('…')).toBe(true)
+ expect(truncateEgressHost('registry.npmjs.org')).toBe('registry.npmjs.org')
+ })
+
+ /**
+ * the egress record's complaint about today's behaviour is that a refusal reaches stdout and teaches
+ * nobody, so the line has to say what to do — and say it about the *capability*, since the
+ * deployment allowlist is shared by every agent.
+ */
+ it('tells an operator where a grant belongs, not merely that something was denied', => {
+ const line = describeEgressRefusal(decision)
+ expect(line).toContain('"exfil.example"')
+ expect(line).toContain('port 443')
+ expect(line).toContain('capability')
+ expect(line).not.toContain('undefined')
+ })
+
+ it('quotes the host so a reader sees its edges', => {
+ expect(describeEgressRefusal(decision({ host: 'trailing.example ' }))).toContain(
+ '"trailing.example "',
 )
  })
 })

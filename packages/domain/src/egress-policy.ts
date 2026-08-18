@@ -108,3 +108,52 @@ export const classifyEgress = (
 
  return { allowed: true, host, port }
 }
+
+/**
+ * One recorded egress decision.
+ *
+ * the egress record's first increment, and the only one available without decrypting a tunnel: the CONNECT
+ * authority is in the clear, so *who asked for what and what happened* is knowable even
+ * though the traffic is not. Until now a refusal reached a Runner's stdout and nowhere else,
+ * which left nobody able to answer "what did this run try to reach" after the fact — an audit
+ * gap, and the reason an allowlist gets widened by guesswork.
+ *
+ * **`host` is untrusted text.** It comes from a CONNECT line a sandboxed process wrote, so
+ * everything downstream treats it as data and `truncateEgressHost` bounds
+ * it: a decision record is written to an audit log and rendered in a UI, and a 40KB host is
+ * the cheapest way to make either of those a problem.
+ */
+export interface EgressDecision {
+ readonly runId: string
+ readonly host: string
+ readonly port: number
+ readonly allowed: boolean
+ /** Why it was refused. Empty for an allowed decision — there is no reason to record. */
+ readonly reason: string
+ readonly at: Date
+}
+
+/**
+ * The longest host a decision record keeps.
+ *
+ * 253 is the maximum length of a DNS name, so anything longer was never a host and its only
+ * possible purpose is to be stored. Truncated rather than dropped: the fact that a run asked
+ * for something malformed is exactly the kind of thing this record exists to preserve.
+ */
+export const MAX_EGRESS_HOST_CHARS = 253
+
+export const truncateEgressHost = (host: string): string =>
+ host.length <= MAX_EGRESS_HOST_CHARS ? host: `${host.slice(0, MAX_EGRESS_HOST_CHARS)}…`
+
+/**
+ * A refused decision as an operator-facing line.
+ *
+ * The wording is deliberately about *what to do*: a refusal that only says "denied" produces
+ * an allowlist edited by guesswork, and the egress record's whole complaint about today's behaviour is that
+ * nothing records what asked. The host is quoted because it is model-adjacent text and a
+ * reader should see its edges.
+ */
+export const describeEgressRefusal = (decision: EgressDecision): string =>
+ `Refused: "${truncateEgressHost(decision.host)}" on port ${decision.port}. ${decision.reason}. ` +
+ 'If this run should reach that host, grant it on the capability the persona holds — ' +
+ 'the deployment allowlist is not the place for one agent\'s dependency.'

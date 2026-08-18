@@ -660,6 +660,37 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
  capUsd: z.number.nonnegative.nullable,
  exhausted: z.boolean,
  }),
+ /**
+ * Recorded egress decisions, relayed from the proxy.
+ *
+ * Same route and the same reason as `cost_report`: the proxy holds no server session, and
+ * giving it one would be a third authenticated surface for a process whose whole job is to
+ * be the boundary.
+ *
+ * **Batched, and bounded here as well as at the source.** The proxy caps its queue; this
+ * caps one frame. A run retrying against a refused host generates decisions as fast as it
+ * can open sockets, and a frame is parsed into memory before anything decides it is too
+ * large — so the limit belongs in the schema rather than in the handler.
+ *
+ * `host` is untrusted text: it came off a CONNECT line a sandboxed process wrote. Length is
+ * bounded at what a DNS name can be, and everything downstream treats it as data.
+ */
+ z.object({
+ type: z.literal('egress_report'),
+ decisions: z
+.array(
+ z.object({
+ runId: z.string,
+ host: z.string.min(1).max(254),
+ port: z.number.int.nonnegative,
+ allowed: z.boolean,
+ reason: z.string.max(500),
+ at: z.string,
+ }),
+)
+.min(1)
+.max(200),
+ }),
 ])
 
 // Server -> Runner

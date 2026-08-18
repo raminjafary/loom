@@ -1,4 +1,4 @@
-import { DEFAULT_ALLOWED_EGRESS_HOSTS } from '@loom/domain'
+import { DEFAULT_ALLOWED_EGRESS_HOSTS, type EgressDecision } from '@loom/domain'
 import { createServer, type Server } from 'node:http'
 import { connect as netConnect } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -20,6 +20,7 @@ let proxy: Server
 let proxyUrl: string
 let usage: UsageRecord[]
 let exhausted: string[]
+let decisions: EgressDecision[] = []
 let leases: ReturnType<typeof createLeaseRegistry>
 /** What the stub provider saw, so tests can assert on the injected credential. */
 let lastUpstreamHeaders: Record<string, string | string[] | undefined> = {}
@@ -55,6 +56,7 @@ beforeAll(async => {
  anthropicBaseUrl: upstreamUrl,
  allowedHosts: DEFAULT_ALLOWED_EGRESS_HOSTS,
  onBudgetExhausted: (runId) => exhausted.push(runId),
+ onEgressDecision: (decision) => decisions.push(decision),
  })
  proxyUrl = `http://127.0.0.1:${await listen(proxy)}`
 })
@@ -188,6 +190,55 @@ describe('egress proxy: CONNECT allowlist', => {
  // Plaintext is refused even for an allowlisted host.
  expect(await connectStatus('registry.npmjs.org:80', lease.token)).toContain('403')
  leases.revoke('run-connect')
+ })
+
+ /**
+ * The record. Until this existed a refused host reached a Runner's stdout
+ * and nowhere else, so nobody could answer "what did this run try to reach" afterwards.
+ */
+ describe('recorded decisions', => {
+ it('records what a run asked for, with the run attached and the reason kept', async => {
+ const lease = leases.issue({ runId: 'run-recorded', budgetCapUsd: null })
+ decisions.length = 0
+ await connectStatus('exfil.example:443', lease.token)
+ leases.revoke('run-recorded')
+
+ expect(decisions).toHaveLength(1)
+ const decision = decisions[0]
+ expect(decision?.runId).toBe('run-recorded')
+ expect(decision?.host).toBe('exfil.example')
+ expect(decision?.port).toBe(443)
+ expect(decision?.allowed).toBe(false)
+ expect(decision?.reason).toContain('not on the allowlist')
+ })
+
+ /**
+ * A refused verdict carries a sentence rather than a host, so the record is built from the
+ * authority the run wrote — including when what it wrote was not a host at all. Port 0
+ * stands for "nothing anyone could parse", and is never an allowed port.
+ */
+ it('keeps a malformed target as asked, rather than dropping the attempt', async => {
+ const lease = leases.issue({ runId: 'run-malformed', budgetCapUsd: null })
+ decisions.length = 0
+ await connectStatus('not-a-target:not-a-port', lease.token)
+ leases.revoke('run-malformed')
+
+ expect(decisions).toHaveLength(1)
+ expect(decisions[0]?.host).toBe('not-a-target')
+ expect(decisions[0]?.port).toBe(0)
+ expect(decisions[0]?.allowed).toBe(false)
+ })
+
+ /**
+ * No lease, no record: the allowlist has not been consulted and there is no run to
+ * attribute it to. An unauthenticated CONNECT is already logged as a refusal by the
+ * proxy — recording it as a *run's* decision would invent an actor.
+ */
+ it('records nothing for a caller with no lease', async => {
+ decisions.length = 0
+ await connectStatus('registry.npmjs.org:443', null)
+ expect(decisions).toHaveLength(0)
+ })
  })
 })
 
