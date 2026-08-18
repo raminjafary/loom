@@ -9,3 +9,11 @@ coverage/
 personas/
 graphify-out/
 .loom-blobs/
+
+# Session notes and review artifacts — kept on disk, deliberately not versioned.
+# Purged from history on 2026-08-18; a backup bundle of the pre-rewrite repository
+# is at ../loom-pre-rewrite-2026-08-18.bundle.
+HANDOFF.md
+handoffs/
+plans/
+.claude/plan_reviews/
