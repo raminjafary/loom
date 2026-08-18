@@ -1,5 +1,10 @@
 # Loom — a self-hosted workspace for swarms of AI coding agents
 
+[![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
+![tests](https://img.shields.io/badge/tests-1%2C662-brightgreen)
+
 **Run many AI coding agents at once on your own hardware. Each gets its own git clone and
 container sandbox. You stay in the loop only where it matters: approving a risky command,
 answering a blocked run, and deciding what merges.**
@@ -338,5 +343,4 @@ next to the section it affects, and the code cites it.
 
 ## License
 
-Not yet chosen. **Until a `LICENSE` file exists, this code is "all rights reserved" by default**
-and nobody may legally reuse it — worth fixing before announcing it anywhere.
+[MIT](./LICENSE) — use it, fork it, ship it.

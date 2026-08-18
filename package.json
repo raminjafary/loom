@@ -1,6 +1,28 @@
 {
   "name": "loom",
   "private": true,
+  "license": "MIT",
+  "description": "A self-hosted workspace for swarms of AI coding agents — clone-per-run isolation, container sandboxes, human-in-the-loop approval, and a merge queue.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raminjafary/loom.git"
+  },
+  "homepage": "https://github.com/raminjafary/loom#readme",
+  "bugs": {
+    "url": "https://github.com/raminjafary/loom/issues"
+  },
+  "keywords": [
+    "ai-agents",
+    "coding-agent",
+    "multi-agent",
+    "agent-orchestration",
+    "claude",
+    "llm",
+    "self-hosted",
+    "sandbox",
+    "developer-tools",
+    "typescript"
+  ],
   "type": "module",
   "packageManager": "pnpm@11.17.0",
   "engines": {
