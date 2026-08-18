@@ -83,6 +83,7 @@ nine cents.
 | ✅ | **Repository-owned definition of done** | Named, ordered checks, run in the sandbox against a rebased branch and against every finished run's own. The verdict is the platform's |
 | 💸 | **Metered spend, enforced caps** | Cost is read from the provider's responses at the proxy, not self-reported, with pre-flight estimate, per-turn check and a hard kill |
 | 🧠 | **Measured persona memory** | Subject maps, an atlas across projects, and retrieval as a trial with a deliberately-denied baseline arm |
+| ⚔️ | **The Colosseum** | Two agents that learned different things put questions to each other in a bounded, recorded session — settled by a check the repository can answer, never by agreement |
 | ♻️ | **Self-editing inside a ceiling** | An envelope bounds what a persona may become; edits go on trial against what they replaced, judged by outcomes rather than by a model's opinion |
 | 🖼️ | **Two canvases** | Design a team on a canvas that will not draw an edge the runtime would refuse, and watch a live graph of what each run is doing now |
 | ⚡ | **Warm dependency trees** | Optional: runs open with `node_modules` already in place instead of spending a model turn installing |
@@ -118,6 +119,63 @@ proposes candidate prompts that never go live, the platform deals runs out betwe
 the fitness is a human's disposition, then the repository's definition of done, then cost —
 never a model's self-report. A **blinded verifier** in its own session reads the candidates with
 the rationales, the incumbency and the generator's notes withheld. It ranks; a person promotes.
+
+### Expertise, and the Colosseum
+
+Two settings tabs hold the part of the system that is about what an agent *knows* rather
+than what it does.
+
+**Expertise — a map an agent built, and claims it can be held to.** Assigning a persona to
+a repository can start a *mastery run*: a deliberately cheap, long-running job whose
+deliverable is not a diff but a graph — modules, entry points, data flows, conventions, the
+places past merges went wrong — as nodes and typed edges the platform can traverse, so a
+worker does not spend a turn rediscovering them. Every claim carries how it was arrived at,
+and the panel draws the difference: a solid edge was **parsed from the source**, a dashed
+one was **concluded by an agent** and says *check before relying on it*. A map is pinned to
+the commit it was built at, so the merge queue can retire it when the repository moves past
+it. And retrieval is a **trial** — some runs are deliberately denied the map and recorded
+as the baseline — which is why a map nothing has finished with yet reads *on trial ·
+nothing says whether it helps* instead of claiming a benefit nobody measured.
+
+![The Expertise panel: a booking-demo map marked on trial, six live claims at a pinned commit, and a graph whose dashed edges mark what an agent concluded rather than parsed](docs/screenshots/expertise.png)
+
+**The Colosseum — where agents put questions to each other, and nothing is settled by
+vote.** Two agents that mastered different parts of a system know different things, and the
+edge between their subjects is exactly what neither can see alone. A session is the venue
+for that exchange, with the four properties that keep it auditable: a fixed roster, a spend
+ceiling, a transcript, and a verdict. Four things happen there — a worker consults an
+expert, two experts contend over the same subsystem, several agents crunch one subsystem
+into a reconciled map, or a successor is warmed up by its predecessor before a handoff.
+
+What shapes the rest is that **agreement is not evidence**. Deliberation converges on
+agreement even where the agreement contradicts the evidence; correct claims present in
+round one get dropped as rounds proceed; and both effects are worst exactly where a
+workspace would convene a session — two personas sharing one model, one prompt lineage and
+one decoding prior, whose errors therefore correlate. So:
+
+- **The arbiter is the repository.** A question its tests, its history or its actual
+ imports can answer is answered by running that check. A claim that can cite no such check
+ is left unsettled rather than talked into a verdict.
+- **Disagreement is preserved, not resolved.** Both claims kept, both scores lowered — a
+ *successful* outcome, because a venue that must produce agreement will produce agreement.
+- **Every claim's holder is recorded before anyone speaks**, and an opening claim is
+ refused once a session has started. That refusal *is* the measurement: a claim entered
+ mid-session cannot afterwards be told apart from one the conversation produced.
+- **A roster is refused when everyone brings the same knowledge on the same model** — and
+ when nobody brings anything at all. The panel says so in as many words: *one model, so
+ their mistakes correlate*, and *swe · brings no map*.
+- **Everything said in a session is a model's output**, so it stays untrusted input to
+ whoever hears it, permanently and however many sessions the speaker has won. A reply is
+ data with a citation, never an instruction, and no track record converts into trust.
+- **Nothing a session says is written into a map by the session.** There is no function
+ anywhere that does it. Promotion is a human act, and so, today, is convening.
+
+Reaching the turn cap **abandons** a session rather than concluding it — a conversation
+that was cut off has not reached a verdict — and a session that dropped more claims than it
+settled is marked as having lost ground, because otherwise it would look productive for
+having produced fewer open questions.
+
+![The Colosseum panel: a convened session on booking-demo asking whether refundFor double-converts minor units, with one claim settled against a check and none left standing](docs/screenshots/colosseum.png)
 
 ---
 
