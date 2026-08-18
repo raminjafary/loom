@@ -106,8 +106,8 @@ const PLANNER = (name: string) =>
  *
  * So the one property under test is asserted against the built-in rather than copied
  * from it: same tool list, same planner flag. It throws rather than printing, because a
- * printed warning is what let the previous drift survive (see HANDOFF.md on
- * `corporation-check.mts` printing claims instead of asserting them).
+ * printed warning is what let the previous drift survive — a driver that prints a claim
+ * instead of asserting it cannot fail, so nobody reads it.
  */
 const assertPlannerMatchesBuiltin = (markdown: string) => {
  const builtin = BUILTIN_PERSONAS.find((persona) => persona.name === 'planner')

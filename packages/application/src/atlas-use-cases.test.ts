@@ -350,7 +350,7 @@ describe('findAtlasLeads', => {
  actor: userActor(asUserId('u1')),
  edgeId: proposal.edge.id,
  decision: 'promoted',
- decidedByName: 'Ramin',
+ decidedByName: 'Ada',
  })
 
  const answer = await findAtlasLeads(world.deps, {
@@ -359,7 +359,7 @@ describe('findAtlasLeads', => {
  topic: 'refund policy',
  })
  expect(answer).toContain('a **human has confirmed**')
- expect(answer).toContain('Ramin')
+ expect(answer).toContain('Ada')
  // Above the leads, not among them — the two blocks say different things.
  expect(answer.indexOf('confirmed')).toBeLessThan(answer.indexOf('leads, not facts'))
  })
@@ -384,7 +384,7 @@ describe('findAtlasLeads', => {
  actor: userActor(asUserId('u1')),
  edgeId: proposal.edge.id,
  decision: 'promoted',
- decidedByName: 'Ramin',
+ decidedByName: 'Ada',
  })
 
  const answer = await findAtlasLeads(world.deps, {
@@ -418,7 +418,7 @@ describe('findAtlasLeads', => {
  actor: userActor(asUserId('u1')),
  edgeId: proposal.edge.id,
  decision: 'promoted',
- decidedByName: 'Ramin',
+ decidedByName: 'Ada',
  })
  world.edges = world.edges.map((edge) => ({...edge, from: {...edge.from, live: false } }))
 
@@ -783,7 +783,7 @@ describe('decideAtlasProposal', => {
  edgeId: edge.id,
  decision: 'rejected',
  note: 'Hotel refunds are regulatory; flight fees are commercial.',
- decidedByName: 'Ramin',
+ decidedByName: 'Ada',
  })
  expect(decided.status).toBe('rejected')
  // The reason a plausible relation is wrong is written down nowhere else.
@@ -798,7 +798,7 @@ describe('decideAtlasProposal', => {
  actor: userActor(asUserId('u1')),
  edgeId: edge.id,
  decision: 'promoted',
- decidedByName: 'Ramin',
+ decidedByName: 'Ada',
  })
  await expect(
  decideAtlasProposal(world.deps, {

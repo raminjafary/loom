@@ -1161,7 +1161,7 @@ describe('atlas repository', => {
 .insert(user)
 .values({
  id: userId,
- name: 'Ramin',
+ name: 'Ada',
  email: `${userId}@example.com`,
  emailVerified: true,
  })
@@ -1172,11 +1172,11 @@ describe('atlas repository', => {
  edgeId: edge.id,
  status: 'promoted',
  decidedByUserId: row!.id as never,
- decidedByName: 'Ramin',
+ decidedByName: 'Ada',
  note: '',
  })
  expect(promoted?.status).toBe('promoted')
- expect(promoted?.decidedByName).toBe('Ramin')
+ expect(promoted?.decidedByName).toBe('Ada')
 
  // First decision wins — a second would rewrite whose name is on it.
  expect(
@@ -1185,7 +1185,7 @@ describe('atlas repository', => {
  edgeId: edge.id,
  status: 'rejected',
  decidedByUserId: row!.id as never,
- decidedByName: 'Ramin',
+ decidedByName: 'Ada',
  note: 'changed my mind',
  }),
 ).toBeNull

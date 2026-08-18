@@ -8,7 +8,7 @@
 # which cascades to nearly every domain table, so a server integration test holding
 # a run open loses it underneath itself.
 #
-# That was a known flake — recorded in HANDOFF.md, seen "under load and never
+# That was a known flake, seen "under load and never
 # chased", and it passed often enough per-package to stay ignorable. It stopped
 # being ignorable when a change that merely made the planner tests slower turned it
 # from occasional into every run: a suite that always fails is not a gate, and a

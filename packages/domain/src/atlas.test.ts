@@ -277,7 +277,7 @@ describe('renderConfirmedRelations', => {
  toLabel: 'Refund policy',
  toSubjectRef: 'hotel-api',
  rationale: 'Both compute a partial charge.',
- confirmedBy: 'Ramin',
+ confirmedBy: 'Ada',
  confirmedAt: new Date('2026-08-03T00:00:00Z'),
 ...over,
  })
@@ -291,7 +291,7 @@ describe('renderConfirmedRelations', => {
  const text = renderConfirmedRelations([relation])
  expect(text).toContain(CONFIRMED_OPEN)
  expect(text).toContain(CONFIRMED_CLOSE)
- expect(text).toContain('Ramin')
+ expect(text).toContain('Ada')
  expect(text.indexOf('human has confirmed')).toBeLessThan(text.indexOf(CONFIRMED_OPEN))
  })
 
@@ -329,7 +329,7 @@ describe('renderAtlasLeads with confirmed relations', => {
  toLabel: 'Refund policy',
  toSubjectRef: 'hotel-api',
  rationale: 'Both compute a partial charge.',
- confirmedBy: 'Ramin',
+ confirmedBy: 'Ada',
  confirmedAt: new Date('2026-08-03T00:00:00Z'),
  },
  ],
@@ -354,7 +354,7 @@ describe('renderAtlasLeads with confirmed relations', => {
  toLabel: 'Refund policy',
  toSubjectRef: 'hotel-api',
  rationale: 'One rounds up, the other rounds down.',
- confirmedBy: 'Ramin',
+ confirmedBy: 'Ada',
  confirmedAt: new Date('2026-08-03T00:00:00Z'),
  },
  ],

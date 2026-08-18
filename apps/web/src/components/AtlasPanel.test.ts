@@ -110,13 +110,13 @@ describe('AtlasPanel', => {
  proposals: [
  edge({
  status: 'rejected',
- decidedByName: 'Ramin',
+ decidedByName: 'Ada',
  decisionNote: 'Hotel refunds are regulatory; flight fees are commercial.',
  }),
  ],
  },
  })
- expect(wrapper.text).toContain('rejected by Ramin')
+ expect(wrapper.text).toContain('rejected by Ada')
  expect(wrapper.text).toContain('regulatory')
  })
 
@@ -124,7 +124,7 @@ describe('AtlasPanel', => {
  const wrapper = mount(AtlasPanel, {
  props: {
  proposals: [
- edge({ id: 'decided', status: 'promoted', decidedByName: 'Ramin' }),
+ edge({ id: 'decided', status: 'promoted', decidedByName: 'Ada' }),
  edge({ id: 'waiting', status: 'contended' }),
  ],
  },

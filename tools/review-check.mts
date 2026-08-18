@@ -24,7 +24,7 @@
  * model raises a blocker is its own judgement, so the assertion is that the merge queue
  * agrees with whatever it decided — refused when a reviewer blocked, accepted when none
  * did. A driver that only printed the outcome would pass either way, which is the
- * failure mode HANDOFF.md records twice.
+ * failure mode this repository has recorded twice.
  *
  * `LOOM_USE_HOST_CLAUDE_AUTH=1` is not optional in practice: without it the SDK uses
  * whatever key `.env` holds, and a placeholder produces runs that fail before the model
