@@ -41,9 +41,28 @@ Built in TypeScript on Node 22, Postgres, Valkey, Fastify, oRPC, Vue 3 and the C
 — with every layer behind a port, so the execution backend, the store, the transport and the UI
 framework are each replaceable.
 
-**Contents** · [Features](#features) · [Quickstart](#quickstart) · [How it works](#how-it-works)
-· [Security model](#security-model) · [Development](#development) · [Configuration](#configuration)
-· [Roadmap](#roadmap) · [Contributing](#contributing)
+**Contents** · [Screenshots](#screenshots) · [Features](#features) · [Quickstart](#quickstart)
+· [How it works](#how-it-works) · [Security model](#security-model) · [Development](#development)
+· [Configuration](#configuration) · [Roadmap](#roadmap) · [Contributing](#contributing)
+
+---
+
+## Screenshots
+
+**A run in its thread.** Each tool call, its result and the completion render as messages you can
+read in order. This one was asked to add a row to this file's own Requirements table, and it cost
+nine cents.
+
+![A run's thread: Bash, Read and Edit tool calls, an approval, and a completion line reading "Run completed ($0.0881)"](docs/screenshots/thread.jpg)
+
+| | |
+|---|---|
+| ![An approval card showing the raw Edit payload — file_path, old_string, new_string — above Approve and Deny buttons](docs/screenshots/approval-card.jpg) | ![A diff view of branch loom/run-31b4e85a, one file, +1 −0, with Keep, Discard, Queue for merge and Push buttons](docs/screenshots/diff-review.jpg) |
+| **Approval on the exact argv.** The card renders the tool call's real payload — this file, this old string, this new string — never a model's description of what it is about to do. Approval is bound to a hash of that exact call, so mutated arguments have to ask again. | **Nothing merges without a decision.** A finished run's branch, diffed against what it was cloned from: keep it, discard it, queue it behind the other branches, or push it and open a PR. |
+| ![The Inbox, in five columns: needs you, ready to review, stopped early, in the merge queue, landed](docs/screenshots/inbox.jpg) | ![A team canvas with a planner at the root, four workers below it, and a reconciler, joined by labelled edges](docs/screenshots/team-canvas.jpg) |
+| **An inbox, not a firehose.** The retention surface is what needs *you*: a gate waiting, a branch ready, a run that stopped early. Not a stream of everything every agent did. | **A canvas that will not draw an edge the runtime would refuse.** Who is on the team, who may hand work down to whom, who reviews whom — and which runs are allowed to proceed unattended. |
+| ![The persona editor: name, model, description, tool checkboxes, approval mode, budget cap, and a self-modification envelope](docs/screenshots/persona-editor.jpg) | ![The cost panel: $4.8965 across 40 runs, broken down by model, by persona and by channel](docs/screenshots/cost.png) |
+| **A persona is a document, not a checkbox.** A model, a tool list, an approval mode, a spend cap — and an envelope bounding what the persona may rewrite about itself. | **Spend measured at the network boundary.** Cost is read from the provider's own responses at the egress proxy, not taken from a model's self-report, and it is what the caps are enforced against. |
 
 ---
 
