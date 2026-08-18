@@ -1,17 +1,40 @@
-# Loom
+# Loom — a self-hosted workspace for swarms of AI coding agents
 
-A workspace where humans and coding agents work together: a chat-shaped UI over a swarm of
-real agent runs, each in its own git clone and container sandbox, with a human in the loop at
-the points that matter and nowhere else.
+**Run many AI coding agents at once on your own hardware. Each gets its own git clone and
+container sandbox. You stay in the loop only where it matters: approving a risky command,
+answering a blocked run, and deciding what merges.**
 
-Loom is self-hosted, has no cloud dependency beyond a model API, and is built so the pieces
-are replaceable — the execution backend, the store, the transport and the UI framework each
-sit behind a port.
+One agent in a terminal is a solved problem. **Ten of them is not.** Who reviews ten branches?
+What stops two agents editing the same file? Where does shared context live so the fifth agent
+knows what the second learned? What is a person actually asked to decide — and what did the
+whole thing cost?
 
-**Why this rather than a terminal agent:** one agent in a terminal is already solved. What is
-not solved is *ten* of them: who reviews the branches, what stops two of them editing the same
-file, where the shared context lives, what a person is asked to decide, and what a run costs.
-That is what this is.
+Loom is an answer to those five questions, built as a **multi-agent orchestration platform** for
+real software work rather than a demo:
+
+- 🧵 **A planner that decomposes** a goal into a DAG of subtasks, with sub-planners for their own
+ areas and workers that share a notes ledger
+- 📦 **Clone-per-run isolation** and a **container sandbox** that holds no credentials, so an
+ agent's blast radius is its own working copy
+- 🛡️ **Human-in-the-loop approval** on a card showing the **exact argv**, never a model's summary
+ of what it is about to do — prompt injection is the threat model, not an edge case
+- 🚦 **A serialized merge queue** with a reconciler agent that resolves additive conflicts and
+ refuses real ones, so sibling branches converge instead of racing
+- ✅ **A definition of done that belongs to the repository** — named, ordered checks run in the
+ sandbox, with the verdict derived server-side so an agent cannot certify its own work
+- 💸 **Authoritative cost metering and enforced budget caps**, measured at the network boundary
+ rather than taken from a model's self-report
+- 🧠 **Persona memory and self-improving prompts that are measured, not assumed** — an agent may
+ rewrite its own instructions inside a ceiling a human sets, and the platform runs both versions
+ to find out whether the edit actually helped
+
+**Self-hosted and private by design.** Your code never leaves your machine except as model API
+calls, and those go through a proxy you run. No SaaS, no telemetry, no cloud dependency beyond
+the model itself.
+
+Built in TypeScript on Node 22, Postgres, Valkey, Fastify, oRPC, Vue 3 and the Claude Agent SDK
+— with every layer behind a port, so the execution backend, the store, the transport and the UI
+framework are each replaceable.
 
 ---
 
@@ -27,7 +50,8 @@ areas, workers share a notes ledger, sibling branches converge through a seriali
 with a reconciler agent that resolves additive conflicts and refuses real ones, and a human can
 steer a running swarm — or answer a question a run is blocked on — without stopping it.
 
-Three things worth naming, because they are unusual:
+Three of the claims above compress badly, so here they are in full — they are also the parts
+that do not exist elsewhere:
 
 **A definition of done that belongs to the repository, not to a command.** A repo declares
 named, ordered checks. The merge queue runs them against a rebased branch; every finished run
