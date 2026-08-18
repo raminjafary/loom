@@ -19,14 +19,17 @@ allowBuilds:
 # MCP transports this codebase never imports (the capability registry uses `createSdkMcpServer`, in-process).
 # The runner suite, an SDK import and a live sandboxed agent run all pass on 2.x.
 #
-# One advisory is deliberately left standing: **esbuild 0.18** (moderate, dev-server
-# request forgery), pinned by `@esbuild-kit/*` inside drizzle-kit's migration CLI.
-# drizzle-kit is already at its latest published version and still depends on it, so
-# there is no upgrade path — and it is a devDependency that never runs in production or
-# in a sandbox. Forcing esbuild forward would break the migration tooling to fix a
-# vulnerability in a dev server this repository does not run. Revisit if drizzle-kit
-# ever drops `@esbuild-kit`.
+# **esbuild 0.18 is now cleared too, and the note that said it could not be was wrong.**
+# It used to read "drizzle-kit is already at its latest published version and still
+# depends on it, so there is no upgrade path" — but the dependency is narrower than that:
+# drizzle-kit 0.31.10 already requires `esbuild ^0.25.4` directly, and 0.18.20 arrives
+# only under the *deprecated* `@esbuild-kit/core-utils`, which drizzle-kit still pulls in
+# through `@esbuild-kit/esm-loader`. So the override is scoped to that one edge rather
+# than forcing the whole tree, and the claim it replaces ("forcing esbuild forward would
+# break the migration tooling") was reasoned rather than measured. Measured now:
+# `drizzle-kit generate` and `drizzle-kit migrate` both run, against four databases.
 overrides:
+ "@esbuild-kit/core-utils>esbuild": ^0.25.12
  brace-expansion@^1: ^1.1.18
  brace-expansion@^5: ^5.0.9
  fast-uri@^3: ^3.1.5
