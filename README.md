@@ -36,22 +36,44 @@ Built in TypeScript on Node 22, Postgres, Valkey, Fastify, oRPC, Vue 3 and the C
 — with every layer behind a port, so the execution backend, the store, the transport and the UI
 framework are each replaceable.
 
+**Contents** · [Features](#features) · [Quickstart](#quickstart) · [How it works](#how-it-works)
+· [Security model](#security-model) · [Development](#development) · [Configuration](#configuration)
+· [Roadmap](#roadmap) · [Contributing](#contributing)
+
 ---
 
-## What works today
+## Features
 
-A single agent, end to end: pair a Runner, bind a git repo, write a persona, `@mention` it,
-watch it work in a thread, get a push notification when it needs you, approve or deny a risky
-tool from a card showing the exact argv, then review and keep, discard, push or queue the
-branch.
+| | Feature | What it means in practice |
+|---|---|---|
+| 💬 | **Chat-shaped workspace** | Channels and threads. `@mention` a persona to start a run; its tool calls, results and completion render as messages you can read in order |
+| 📥 | **An inbox, not a firehose** | The retention surface is "what needs *you*" — a gate waiting, a finished branch, a failed or reaped run — not a stream of everything every agent did |
+| 🔔 | **Push notifications** | A run that needs you reaches you without the app open; clicking opens the Inbox on that run |
+| 🧵 | **Planner → DAG → workers** | A goal becomes at most eight subtasks with claimed paths, sub-planners decompose their own areas, and `dependsOn` sequences what must not run in parallel |
+| 🗒️ | **Shared notes ledger** | Siblings write findings other siblings read, so the fifth worker knows what the second learned — bounded per tree, and agent prose is fenced as untrusted data |
+| 🎛️ | **Mid-flight steering** | Re-plan a running swarm without stopping it, or answer a question a blocked run asked |
+| 📦 | **Clone-per-run isolation** | Every run works in its own git clone on a branch of its own. The bound repository's working tree is never touched |
+| 🔒 | **Container sandbox, no credentials** | `--network=none`, dropped capabilities, non-root, read-only rootfs, only the run's clone mounted. The run holds an opaque lease, never a key |
+| 🛡️ | **Approval on exact argv** | The card shows the real command from the tool-call payload, hash-bound so mutated arguments need re-approval — never a model's description of itself |
+| 🚦 | **Serialized merge queue** | Rebase, verify, fast-forward, one branch per repository at a time, with a reconciler agent for additive conflicts and a refusal for real ones |
+| ✅ | **Repository-owned definition of done** | Named, ordered checks, run in the sandbox against a rebased branch and against every finished run's own. The verdict is the platform's |
+| 💸 | **Metered spend, enforced caps** | Cost is read from the provider's responses at the proxy, not self-reported, with pre-flight estimate, per-turn check and a hard kill |
+| 🧠 | **Measured persona memory** | Subject maps, an atlas across projects, and retrieval as a trial with a deliberately-denied baseline arm |
+| ♻️ | **Self-editing inside a ceiling** | An envelope bounds what a persona may become; edits go on trial against what they replaced, judged by outcomes rather than by a model's opinion |
+| 🖼️ | **Two canvases** | Design a team on a canvas that will not draw an edge the runtime would refuse, and watch a live graph of what each run is doing now |
+| ⚡ | **Warm dependency trees** | Optional: runs open with `node_modules` already in place instead of spending a model turn installing |
 
-A swarm: a Planner decomposes a goal into a DAG of subtasks, sub-planners decompose their own
-areas, workers share a notes ledger, sibling branches converge through a serialized merge queue
-with a reconciler agent that resolves additive conflicts and refuses real ones, and a human can
-steer a running swarm — or answer a question a run is blocked on — without stopping it.
+### The walkthrough
 
-Three of the claims above compress badly, so here they are in full — they are also the parts
-that do not exist elsewhere:
+**One agent, end to end.** Pair a Runner, bind a git repo, write a persona, `@mention` it, watch
+it work in a thread, get notified when it needs you, approve or deny a risky tool from a card
+showing the exact argv, then review and keep, discard, push or queue the branch.
+
+**A swarm.** A Planner decomposes a goal into a DAG of subtasks, sub-planners decompose their own
+areas, workers share a notes ledger, sibling branches converge through the merge queue, and you
+can steer the whole thing — or answer a question one run is blocked on — without stopping it.
+
+### Three ideas that do not exist elsewhere
 
 **A definition of done that belongs to the repository, not to a command.** A repo declares
 named, ordered checks. The merge queue runs them against a rebased branch; every finished run
@@ -72,14 +94,6 @@ proposes candidate prompts that never go live, the platform deals runs out betwe
 the fitness is a human's disposition, then the repository's definition of done, then cost —
 never a model's self-report. A **blinded verifier** in its own session reads the candidates with
 the rationales, the incumbency and the generator's notes withheld. It ranks; a person promotes.
-
-### Not built
-
-Other execution backends (Codex, vLLM, Cursor), microVM isolation, SeaweedFS blob storage,
-validated compaction, self-modification tiers 3–4 (Loom's own source and its dependencies) and
-their rollback drill, distilled cross-run experience, and a real browser in CI. The
-[known gaps](#known-gaps) section is kept honest about what is missing rather than about what
-is there.
 
 ---
 
@@ -167,7 +181,7 @@ changes on the target branch, and a target that moved mid-merge.
 
 ---
 
-## Architecture
+## How it works
 
 ```
 packages/
@@ -215,15 +229,22 @@ web page is reading attacker-controllable instructions. The load-bearing control
 | **The clone gets no vote** | The SDK runs with `settingSources: []`, so a `.claude/settings.json` committed to a repository cannot grant permissions nobody was asked for. A repo's `CLAUDE.md` is not auto-injected either — the persona is the instruction source. |
 | **A planner cannot act** | Read-only tools, enforced at persona-authoring time. Its only effect on the world is a decomposition the server validates itself. |
 
-Two limits stated plainly rather than buried. **The model API call is itself an unblockable
-exfiltration channel**, which is why the real control is "secrets never enter the sandbox" and
-not "the sandbox cannot talk out". And **unsandboxed runs get the Runner's own privileges** —
-one `Bash` call reaches the login keychain — so that mode needs a separate, deliberately
-awkward acknowledgement.
+Three limits stated plainly rather than buried:
+
+- **The model API call is itself an unblockable exfiltration channel.** That is why the real
+ control is "secrets never enter the sandbox" rather than "the sandbox cannot talk out".
+- **Unsandboxed runs get the Runner's own privileges** — one `Bash` call reaches the login
+ keychain — so that mode needs a separate, deliberately awkward acknowledgement.
+- **Concurrent sandboxes share one network, and the egress proxy's control plane is on it.**
+ Publishing that port to host loopback is not the same as unreachability, so the control secret
+ is a real boundary and is validated as one: at least 32 characters, and example values refused
+ at boot. Splitting the control plane out is the fix.
+
+Full limitations, each with the work that closes it: [the open-items list](./).
 
 ---
 
-## Verifying
+## Development
 
 ```bash
 make check # what CI runs: typecheck, lint, the suite, the boundary test
@@ -286,33 +307,36 @@ reads are exactly what they would have been.
 
 ---
 
-## Known gaps
+## Roadmap
 
-Kept honest about what is *not* here.
+Loom is built in phases, and the phase boundaries are architectural rather than cosmetic —
+each one exists because the next depends on it. What is shipped, what is next, and the reasoning
+behind every decision live in the design notes; is a reference key.
 
-- **No RBAC, no rate limiting, no CSP.**
-- **`Bash` gates by name, not by effect.** Write paths are scoped against the run's own clone
- (real, enforced, verified live), but no reliable static argv classifier exists for arbitrary
- shell. This is the honest limit short of a full sandbox rewrite.
-- **Container isolation only** — no microVM boundary. Concurrent sandboxes also share one
- network and can reach each other by container name, and the egress proxy's **control plane is
- on that network too** — a shared secret is what stands in front of lease issuance, not
- unreachability. Splitting the control plane out is the fix; until then that secret is
- validated as a boundary (≥32 chars, example values refused at boot).
-- **A merge, a diff, a push and a verification all need the Runner that ran the branch to still
- hold its clone.** A Runner restart after the run finished fails them with a clear reason
- rather than losing the entry.
-- **Self-modification tiers 3 and 4 are off**, and stay off until the rollback drill exists: a
- scripted exercise that promotes a knowingly-broken self-modification and recovers without the
- modified code participating.
-- **The self-improvement loop has never reached a measured verdict from real traffic.** Five
- decided runs an arm across three arms is fifteen dispositioned runs on one persona; the arms,
- the arithmetic and the verifier are each verified, the whole loop closing is not.
-- **No same-tool-call-N-times stuck detection.** Heartbeat and no-progress reaping are real.
-- **No browser in CI**, which is where every UI defect this project has shipped was actually
- found — by a human looking at a browser, never by the suite.
+**Next:**
+
+| | |
+|---|---|
+| **A held-out screen for the improvement loop** | The loop is built but slow to converge — a verdict currently costs fifteen to twenty real runs on one persona. Screening candidates against replayed past runs makes it affordable |
+| **Model routing** | A definition-of-done failure retries once at a higher tier, then a `(task class, model)` table read from runs already happening. The largest single cost lever in the system |
+| **The rollback drill** | The one thing standing between self-modification tiers 3–4 and being switched on (Phase 3b) |
+| **Other execution backends** | Codex, vLLM and Cursor adapters — the port is enforced today, but nothing else has been driven through it (Phase 3) |
+| **microVM isolation** | Containers alone are insufficient; Kata or microsandbox is the boundary (Phase 3) |
+| **A real browser in CI** | Deliberately the trailing item. Every UI defect this project has shipped was found by a human looking at a browser, and none by the test suite (Phase 3c) |
+
+**Every current limitation** — what it is, why it stands, and the section that closes it — is
+tabulated in **[the open-items list](./)**, including three found by audit rather than by use.
+Nothing is omitted there to make this page read better.
+
+## Contributing
+
+The dependency rule (`packages/domain` depends on nothing; outer layers depend on inner, never
+the reverse) is enforced by `eslint.config.js` and `tools/architecture.test.ts`, so a violation
+is a build failure rather than a review comment. Run `make check` before opening a pull request —
+it is exactly what CI runs. If a change needs a reason recorded, that reason belongs in
+next to the section it affects, and the code cites it.
 
 ## License
 
 Not yet chosen. **Until a `LICENSE` file exists, this code is "all rights reserved" by default**
-and nobody may legally reuse it, which is worth fixing before announcing it anywhere.
+and nobody may legally reuse it — worth fixing before announcing it anywhere.
