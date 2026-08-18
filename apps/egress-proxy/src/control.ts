@@ -7,8 +7,15 @@ import type { LeaseRegistry, UsageRecord } from './leases.js'
 /**
  * The control plane. Deliberately a *second* listener rather
  * than more routes on the data plane: the data plane is reachable from inside
- * the sandbox, and lease issuance must not be. Bound to loopback and published
- * only to the host, so a run cannot reach this port even knowing the secret.
+ * the sandbox, and lease issuance must not be.
+ *
+ * **It is nevertheless reachable from the sandbox network — see the control-plane exposure.** This header
+ * used to claim "a run cannot reach this port even knowing the secret", on the strength of
+ * compose publishing it as `127.0.0.1:8081:8081`. That restricts the host mapping only; the
+ * proxy is also on the internal sandbox network, where this port answers. So the secret below
+ * is a real boundary rather than a second lock on a door nobody can find, and every endpoint
+ * here should be read that way: with the secret, a sandbox can issue a lease for any run id,
+ * revoke a sibling's, and drain the queues the Runner has not read yet.
  *
  * Only the Runner calls it — the host-side, trusted component that already holds
  * the authority to start and stop runs.

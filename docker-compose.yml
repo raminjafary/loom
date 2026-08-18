@@ -47,9 +47,9 @@ services:
  # API key can stand in for the OAuth token — see the credential broker section.
  LOOM_EGRESS_TRACE_HEADERS: ${LOOM_EGRESS_TRACE_HEADERS:-0}
  ports:
- # Control plane on loopback only. A sandbox reaches the data plane by
- # container name over loom-sandbox and has no route to this port at all;
- # binding it to 127.0.0.1 keeps it off the host's network too.
+ # Published to the host's loopback only, which is not the same as unreachable:
+ # this container is also on loom-sandbox, so a sandbox CAN reach 8081 by
+ # container name. The control secret is the boundary — the control-plane exposure.
  - "127.0.0.1:8081:8081"
  networks:
  loom-sandbox:

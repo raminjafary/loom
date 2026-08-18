@@ -271,7 +271,10 @@ Kept honest about what is *not* here.
  (real, enforced, verified live), but no reliable static argv classifier exists for arbitrary
  shell. This is the honest limit short of a full sandbox rewrite.
 - **Container isolation only** — no microVM boundary. Concurrent sandboxes also share one
- network, behind the credential-injecting proxy.
+ network and can reach each other by container name, and the egress proxy's **control plane is
+ on that network too** — a shared secret is what stands in front of lease issuance, not
+ unreachability. Splitting the control plane out is the fix; until then that secret is
+ validated as a boundary (≥32 chars, example values refused at boot).
 - **A merge, a diff, a push and a verification all need the Runner that ran the branch to still
  hold its clone.** A Runner restart after the run finished fails them with a clear reason
  rather than losing the entry.

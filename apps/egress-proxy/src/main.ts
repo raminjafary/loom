@@ -17,11 +17,43 @@ import { createEgressProxy } from './proxy.js'
 const EnvSchema = z.object({
  EGRESS_DATA_PORT: z.coerce.number.int.default(8080),
  EGRESS_CONTROL_PORT: z.coerce.number.int.default(8081),
- // Bound separately: the data plane must be reachable from the sandbox network,
- // the control plane must not be reachable from anywhere but the host.
  EGRESS_DATA_HOST: z.string.default('0.0.0.0'),
+ /**
+ * **The control plane is reachable from the sandbox network. See the control-plane exposure.**
+ *
+ * This used to be commented "must not be reachable from anywhere but the host", and compose
+ * publishes the port as `127.0.0.1:8081:8081`, which reads like it settles the matter. It
+ * does not: publishing restricts the *host* mapping, and this container also sits on the
+ * internal `loom-sandbox` network, so `http://loom-egress:8081/_control/…` answers from
+ * inside a sandbox. Verified by running a container on that network — 401, not a refused
+ * connection.
+ *
+ * It cannot simply be bound to `127.0.0.1` either: that is the *container's* loopback, and
+ * Docker's published mapping connects to the container's network interface, so loopback
+ * would take the control plane away from the Runner as well. Fixing it properly means
+ * splitting the two planes into separate containers or moving control onto a Unix socket —
+ * the control-plane exposure records both. Until then the shared secret below is the only barrier, which is why it
+ * is validated as one.
+ */
  EGRESS_CONTROL_HOST: z.string.default('0.0.0.0'),
- LOOM_EGRESS_CONTROL_SECRET: z.string.min(16, 'control secret must be at least 16 characters'),
+ /**
+ * At least 32 characters, and never the value shipped in `.env.example`.
+ *
+ * The bar is higher than it looks because of the paragraph above: this secret is what stands
+ * between a sandboxed agent and the ability to issue itself a lease with arbitrary egress
+ * hosts and an arbitrary budget, revoke a sibling run's lease, or drain the usage and
+ * egress-decision queues before the Runner reads them. A copied example value is not a
+ * secret at all, and `${VAR:?}` in compose only checks that it is *set*.
+ */
+ LOOM_EGRESS_CONTROL_SECRET: z
+.string
+.min(32, 'LOOM_EGRESS_CONTROL_SECRET must be at least 32 characters')
+.refine((secret) => !/change-me|changeme|your-secret|placeholder|example/i.test(secret), {
+ message:
+ 'LOOM_EGRESS_CONTROL_SECRET still looks like the example value. It is the only thing ' +
+ 'standing in front of lease issuance from inside a sandbox — ' +
+ 'generate one with `openssl rand -base64 32`.',
+ }),
  // Optional now: the preferred credential is an OAuth token pushed by the Runner at
  // runtime (see control.ts). An API key remains supported as a fallback.
  ANTHROPIC_API_KEY: z.string.optional,
