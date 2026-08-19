@@ -1,5 +1,6 @@
 import type { Contract } from '@loom/api-contract'
 import { createDatabase, truncateAll } from '@loom/db'
+import { parseSubscriptionToken } from '@loom/domain'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
 import type { ContractRouterClient } from '@orpc/contract'
@@ -67,6 +68,48 @@ const clientAs = (cookie: string): ContractRouterClient<Contract> =>
  createORPCClient(new RPCLink({ url: `${baseUrl}/rpc`, headers: => ({ cookie }) }))
 
 describe('Better Auth over HTTP', => {
+ /**
+ * Gateway authentication — the realtime gateway's credential, minted over a real session.
+ *
+ * `realtime.e2e.test.ts` drives the whole socket but through `devAuth`, which trusts a header.
+ * The question only this file can answer is whether the *production* AuthPort is what decides
+ * which workspace a subscription token authorises — because a token minted from anything a
+ * caller supplies is the forgery identity-bound approval exists to close, and this endpoint's entire output is
+ * authority.
+ */
+ it('refuses to mint a subscription token without a session', async => {
+ const anonymous = createORPCClient<ContractRouterClient<Contract>>(
+ new RPCLink({ url: `${baseUrl}/rpc` }),
+)
+ await expect(anonymous.session.subscriptionToken).rejects.toThrow
+ })
+
+ it('mints a token for the workspace the session resolves to, never one supplied by the caller', async => {
+ const cookie = await signUp(`realtime-${Date.now}@example.test`)
+ const client = clientAs(cookie)
+ const me = await client.session.me
+ const granted = await client.session.subscriptionToken
+
+ const parsed = parseSubscriptionToken(granted.token)
+ expect(parsed).not.toBeNull
+ expect(parsed?.claims.workspaceId).toBe(me.workspaceId)
+ expect(granted.expiresAt.getTime).toBeGreaterThan(Date.now)
+ })
+
+ it('mints a fresh token each time, which is what a reconnect depends on', async => {
+ // A cached token subscribes at startup and silently fails to resubscribe once it expires —
+ // the failure where the connection indicator stays green and nothing arrives.
+ const cookie = await signUp(`refresh-${Date.now}@example.test`)
+ const client = clientAs(cookie)
+ const first = await client.session.subscriptionToken
+ const second = await client.session.subscriptionToken
+ expect(parseSubscriptionToken(first.token)?.claims.workspaceId).toBe(
+ parseSubscriptionToken(second.token)?.claims.workspaceId,
+)
+ // Same workspace, and an expiry that has moved: the mint is not a stored value.
+ expect(second.expiresAt.getTime).toBeGreaterThanOrEqual(first.expiresAt.getTime)
+ })
+
  it('rejects an unauthenticated call to /rpc', async => {
  const anonymous = createORPCClient<ContractRouterClient<Contract>>(
  new RPCLink({ url: `${baseUrl}/rpc` }),
