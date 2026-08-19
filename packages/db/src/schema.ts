@@ -1801,6 +1801,188 @@ export const personaVariant = pgTable(
 )
 
 /**
+ * A held-out set, versioned.
+ *
+ * One row per assembly. **Immutable, and the version is the whole point**: the generating side says a
+ * screen whose tasks changed between two candidates has measured two different things and
+ * will report it as a comparison, so a set is never edited — a newer history produces a new
+ * version, and every score records which version it was taken against.
+ *
+ * The counts are stored rather than recomputed because they are a claim about a history that
+ * has since moved on: "8 items out of 49 decided runs considered, 33 of them arms of an
+ * earlier measurement" is only checkable if it was written down when it was true. The * "no silent truncation" is exactly this — a bounded thing that reads as complete is worse
+ * than one that reports its bound.
+ */
+export const replaySet = pgTable(
+ 'replay_set',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ personaId: uuid('persona_id')
+.notNull
+.references( => agentPersona.id, { onDelete: 'cascade' }),
+ /** Per persona, from 1. A screen's score is meaningless without it. */
+ version: integer('version').notNull,
+ /** Decided runs offered to the assembly, and how many were usable before the cap. */
+ considered: integer('considered').notNull,
+ eligible: integer('eligible').notNull,
+ /** `describeReplaySet`'s sentence, stamped at assembly for the reason above. */
+ detail: text('detail').notNull,
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ uniqueIndex('replay_set_version_idx').on(t.personaId, t.version),
+ index('replay_set_workspace_idx').on(t.workspaceId, t.createdAt),
+ ],
+)
+
+/**
+ * One replayable task: `(repository @ commit, task, observed outcome)`.
+ *
+ * The commit is **snapshotted from the source run**, not resolved when the screen runs, which
+ * is the reason `agent_run.base_commit_sha` exists: replaying at whatever the repository's
+ * head happens to be means two candidates screened a day apart were screened on different
+ * problems, and a control that drifts is not a control.
+ *
+ * `observed_outcome` is carried and **never scored against**. A replay cannot reproduce the
+ * human who merged; the screen scores the definition of done, which it can actually run. What
+ * the outcome buys is a reader seeing what kind of tasks the set is made of.
+ *
+ * `source_run_id` is `set null` on delete: the item stands on its own once written, and the
+ * point of pinning the commit and the text was to stop depending on a row that can move.
+ */
+export const replayItem = pgTable(
+ 'replay_item',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ replaySetId: uuid('replay_set_id')
+.notNull
+.references( => replaySet.id, { onDelete: 'cascade' }),
+ /** The set's order, newest decided run first. Deterministic — see `assembleReplaySet`. */
+ position: integer('position').notNull,
+ sourceRunId: uuid('source_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ repositoryId: uuid('repository_id')
+.notNull
+.references( => repository.id, { onDelete: 'cascade' }),
+ commitSha: text('commit_sha').notNull,
+ task: text('task').notNull,
+ observedOutcome: text('observed_outcome').notNull,
+ },
+ (t) => [uniqueIndex('replay_item_position_idx').on(t.replaySetId, t.position)],
+)
+
+/**
+ * One arm's screening: a candidate, or the prompt in use.
+ *
+ * `variant_id` null is the **incumbent**, and it is not optional — a candidate is compared
+ * against the control screened on the same items and never against a threshold, because a
+ * threshold would be a claim about how hard this workspace's tasks are.
+ *
+ * `decision` is null on the incumbent row *always*: the control is not gated, it is what the
+ * gate compares to. On a candidate it is null until every screening run has reported, then
+ * `admitted` or `rejected` — `screenGate` has two answers and no third, since a screen with a
+ * third answer would be deciding something the self-improvement loop reserves for the arms.
+ *
+ * `reason` is load-bearing rather than cosmetic: a rejected candidate is archived with it, and
+ * The piece 3 hands that buffer to a proposer. "Rejected" is not something to generate
+ * from; "passed 2 of 6 where the prompt in use passed 5" is.
+ */
+export const variantScreen = pgTable(
+ 'variant_screen',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ setId: uuid('set_id')
+.notNull
+.references( => personaVariantSet.id, { onDelete: 'cascade' }),
+ replaySetId: uuid('replay_set_id')
+.notNull
+.references( => replaySet.id, { onDelete: 'cascade' }),
+ variantId: uuid('variant_id').references( => personaVariant.id, { onDelete: 'cascade' }),
+ decision: text('decision'),
+ reason: text('reason'),
+ decidedAt: timestamp('decided_at', { withTimezone: true }),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ },
+ (t) => [
+ /**
+ * One screening per arm per search. A second row for the same arm would be a second score
+ * of the same prompt on the same items, and the gate would read whichever the query
+ * happened to return — the merge queue's and the harness's pattern, enforced the same way.
+ *
+ * **Two indexes, because the incumbent's `variant_id` is null and Postgres treats nulls in
+ * a unique index as distinct from each other.** A single `unique (set_id, variant_id)`
+ * would have constrained every candidate and left the control — the one arm the gate
+ * compares everything against — free to exist twice.
+ */
+ uniqueIndex('variant_screen_arm_idx')
+.on(t.setId, t.variantId)
+.where(sql`${t.variantId} is not null`),
+ uniqueIndex('variant_screen_incumbent_idx')
+.on(t.setId)
+.where(sql`${t.variantId} is null`),
+ index('variant_screen_workspace_idx').on(t.workspaceId, t.createdAt),
+ ],
+)
+
+/**
+ * What one item said about one arm.
+ *
+ * `outcome` is `pending` until the screening run's branch has been through the repository's
+ * definition of done, then the own vocabulary: `passed`, `failed`, or `not-scored`.
+ * `not-scored` is deliberately not `failed` — the reason, that `skipped` and `refused` say
+ * something about the operator's setup rather than about the branch, and folding them in would
+ * make every unconfigured repository look like it produced broken work.
+ */
+export const variantScreenRun = pgTable(
+ 'variant_screen_run',
+ {
+ id: uuid('id').primaryKey.defaultRandom,
+ workspaceId: uuid('workspace_id')
+.notNull
+.references( => workspace.id, { onDelete: 'cascade' }),
+ screenId: uuid('screen_id')
+.notNull
+.references( => variantScreen.id, { onDelete: 'cascade' }),
+ replayItemId: uuid('replay_item_id')
+.notNull
+.references( => replayItem.id, { onDelete: 'cascade' }),
+ /**
+ * Claimed *before* the run is started, and released if the start fails.
+ *
+ * The two-step exists because a run has to exist before its id can be written here, and
+ * claiming afterwards would mean two sweeps could both start a run against one item — the
+ * second overwriting the first's outcome. A row claimed by a server that then died is
+ * swept into `not-scored` by the stuck check rather than left to block its screen forever,
+ * which is the merge queue's stranded-`merging` problem and the same answer.
+ */
+ claimedAt: timestamp('claimed_at', { withTimezone: true }),
+ /** Null until the run is started; `set null` if it is later deleted. */
+ agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
+ onDelete: 'set null',
+ }),
+ outcome: text('outcome').notNull.default('pending'),
+ /** Why it was not scored, when it was not. Recorded, never implied — the habit. */
+ reason: text('reason'),
+ createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
+ finishedAt: timestamp('finished_at', { withTimezone: true }),
+ },
+ (t) => [
+ uniqueIndex('variant_screen_run_item_idx').on(t.screenId, t.replayItemId),
+ index('variant_screen_run_workspace_idx').on(t.workspaceId, t.createdAt),
+ ],
+)
+
+/**
  * Which candidate a run was given — or none of them.
  *
  * `variant_id` null is the **incumbent**: the prompt the persona actually has, which is the

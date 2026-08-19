@@ -716,6 +716,22 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
  /** What a human asked for via `@mention`; absent for the sidebar picker. */
  task: z.string.optional,
  /**
+ * Open the clone at **this** commit rather than at the source repository's HEAD
+ *.
+ *
+ * A held-out item is `(repository @ commit, task, observed outcome)`, so a screening run
+ * has to face the tree the original run faced; replaying at whatever HEAD has become
+ * means two candidates screened a day apart were screened on different problems, and a
+ * control that drifts is not a control.
+ *
+ * A workspace preparation detail rather than a run *kind*, which is why it sits here and
+ * not inside a `screen: {...}` object beside `mastery` and `reconcile`. **A sha the clone
+ * does not contain fails the run**, because `git checkout -b <branch> <sha>` fails — the
+ * silent alternative, falling back to HEAD, would produce a screening verdict about a
+ * commit nobody asked for, which is the one outcome this field exists to prevent.
+ */
+ baseCommitSha: z.string.optional,
+ /**
  * The tree's worker-notes ledger, already rendered and
  * already fenced by the server. Absent for the first run in a tree.
  *

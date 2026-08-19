@@ -3,6 +3,7 @@ import type { CapabilitySpec } from './capabilities.js'
 import type { Envelope } from './envelope.js'
 import type { ResponseStyle } from './response-styles.js'
 import type { VerificationCheck } from './verification.js'
+import type { ReplayCheckOutcome, ReplayOutcome, ScreenDecision } from './replay-set.js'
 import type {
  AgentPersonaId,
  AgentRunId,
@@ -11,10 +12,13 @@ import type {
  PersonaRevisionId,
  PersonaVariantId,
  PersonaVariantSetId,
+ ReplayItemId,
+ ReplaySetId,
  RepositoryId,
  RunnerId,
  ThreadId,
  UserId,
+ VariantScreenId,
  WorkspaceId,
 } from './ids.js'
 
@@ -288,6 +292,69 @@ export interface PersonaVariant {
 }
 
 /**
+ * A versioned held-out set.
+ *
+ * The counts and the sentence are stamped at assembly rather than recomputed, because they are
+ * a claim about a run history that has since moved on. The "no silent truncation" only
+ * means anything if what was left out was written down when it was true.
+ */
+export interface ReplaySetRecord {
+ readonly id: ReplaySetId
+ readonly workspaceId: WorkspaceId
+ readonly personaId: AgentPersonaId
+ readonly version: number
+ readonly considered: number
+ readonly eligible: number
+ readonly detail: string
+ readonly createdAt: Date
+}
+
+export interface ReplayItemRecord {
+ readonly id: ReplayItemId
+ readonly replaySetId: ReplaySetId
+ readonly position: number
+ readonly sourceRunId: AgentRunId | null
+ readonly repositoryId: RepositoryId
+ readonly commitSha: string
+ readonly task: string
+ readonly observedOutcome: ReplayOutcome
+}
+
+/**
+ * One arm's screening. `variantId` null is the incumbent — the control,
+ * which is screened and never gated.
+ *
+ * `decision` is null until every screening run of this arm has reported, and always null on
+ * the incumbent: the control is what the gate compares to, not something it decides about.
+ */
+export interface VariantScreenRecord {
+ readonly id: VariantScreenId
+ readonly workspaceId: WorkspaceId
+ readonly setId: PersonaVariantSetId
+ readonly replaySetId: ReplaySetId
+ readonly variantId: PersonaVariantId | null
+ readonly decision: ScreenDecision | null
+ readonly reason: string | null
+ readonly decidedAt: Date | null
+ readonly createdAt: Date
+}
+
+/** `pending` until the branch has been through the definition of done; then the vocabulary. */
+export type ScreenRunOutcome = 'pending' | ReplayCheckOutcome
+
+export interface VariantScreenRunRecord {
+ readonly id: string
+ readonly screenId: VariantScreenId
+ readonly replayItemId: ReplayItemId
+ /** Claimed before the run exists, released if the start fails. See the table's comment. */
+ readonly claimedAt: Date | null
+ readonly agentRunId: AgentRunId | null
+ readonly outcome: ScreenRunOutcome
+ readonly reason: string | null
+ readonly finishedAt: Date | null
+}
+
+/**
  * Organizational grouping of personas. Grouping personas doesn't start anything and does
  * not bind to a channel or a Planner.
  */
@@ -520,6 +587,14 @@ export type AgentRunRelation =
  | 'steer'
  | 'handoff'
  | 'verify'
+ /**
+ * One held-out item, screened against one arm.
+ *
+ * Its own relation rather than `delegation`, for the reason and the one `verify` already
+ * cites: a run the parent did not ask for must not masquerade as delegation, and the tree
+ * is where a human watching a search will look for what it is spending.
+ */
+ | 'screen'
 
 export interface AgentRun {
  readonly id: AgentRunId

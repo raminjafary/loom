@@ -278,6 +278,7 @@ export const createRunnerGateway = (
  defaultBranch,
  repositoryId,
  task,
+ baseCommitSha,
  contextLedger,
  mapContext,
  mastery,
@@ -294,6 +295,10 @@ export const createRunnerGateway = (
  defaultBranch,
 ...(repositoryId === undefined ? {}: { repositoryId }),
 ...(task === undefined ? {}: { task }),
+ // Destructured above and forwarded here, which the comment below is about:
+ // The pinned commit is exactly the kind of field that would be lost in
+ // silence, and losing it means a screening run at the wrong commit.
+...(baseCommitSha === undefined ? {}: { baseCommitSha }),
 ...(contextLedger === undefined ? {}: { contextLedger }),
  // A field added to the port and not destructured here is dropped in silence —
  // there is no type error for an argument you decline to read. That is exactly

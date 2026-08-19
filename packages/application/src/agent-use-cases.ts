@@ -62,7 +62,13 @@ import {
  nextPromptArm,
  blindVariantOptions,
  describeVerifierVerdict,
+ MIN_REPLAY_ITEMS,
+ assembleReplaySet,
+ describeReplaySet,
  nextVariantArm,
+ screenGate,
+ screenOutcomeFor,
+ tallyScreenScore,
  proposeVariantSet,
  renderVerifierTask,
  resolveVerifierChoice,
@@ -111,6 +117,8 @@ import {
  type PersonaRevision,
  type PersonaRevisionId,
  type PersonaVariant,
+ type ReplayCheckOutcome,
+ type VariantScreenRunRecord,
  type PersonaVariantId,
  type PersonaVariantSet,
  type PersonaVariantSetId,
@@ -151,6 +159,7 @@ import type {
  AtlasRepositoryPort,
  PersonaRepositoryPort,
  PersonaVariantRepositoryPort,
+ ScreenRepositoryPort,
  PlanSubtaskRecord,
  PlanSubtaskRepositoryPort,
  RepositoryRepositoryPort,
@@ -196,6 +205,7 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
  readonly personas: PersonaRepositoryPort
  /** The searching half — candidate prompts and the search they belong to. */
  readonly personaVariants: PersonaVariantRepositoryPort
+ readonly screens: ScreenRepositoryPort
  readonly personaGroups: PersonaGroupRepositoryPort
  readonly runControl: WorkspaceRunControlRepositoryPort
  /** The venue — a session is not a run and not a map, so it has its own port. */
@@ -1146,6 +1156,19 @@ export const proposeOwnVariants = async (
  candidates: opened.variants,
  })
 
+ /**
+ * And the screen, opened now for the same reason the verifier is started now: it gates
+ * an arm's *entry*, so a screen assembled by a later sweep would be one whose verdict landed
+ * after the runs it was meant to save.
+ */
+ await openScreenForSearch(deps, {
+ workspaceId: input.workspaceId,
+ proposingRun: run,
+ persona,
+ setId: opened.set.id,
+ variantIds: opened.variants.map((variant) => variant.id),
+ })
+
  return {
  ok: true,
  outcome:
@@ -1153,6 +1176,115 @@ export const proposeOwnVariants = async (
  'them is live: the next runs of this persona alternate between them and the prompt it ' +
  'has now, and a human promotes whichever the outcomes favour — or discards all of ' +
  'them. **Your own run is unchanged.** Carry on with your task.',
+ }
+}
+
+/**
+ * How much run history one assembly will look at.
+ *
+ * A bound rather than "everything", because `assembleReplaySet` reports `considered` and a
+ * count of what it saw is only honest if the caller says how much it was shown. Generous
+ * against `MAX_REPLAY_ITEMS`: most of what it reads is ineligible — arms of earlier
+ * measurements, runs with no task — so a small window would find nothing on a persona that
+ * has been searched before.
+ */
+const REPLAY_HISTORY_WINDOW = 200
+
+/**
+ * Opens the held-out screen over a search that has just been proposed.
+ *
+ * **Best-effort, and it can never fail the tool call that opened the search** — `startVariantVerifier`'s
+ * discipline, for the same reason: the loop takes no authority, so a workspace whose
+ * history cannot be read gets a search with no screen rather than a refused search. The
+ * fallback is the arms, which is what measured a search before this existed.
+ *
+ * A persona with too few held-out items gets **no screen rows at all**, and that absence is
+ * load-bearing: `admittedVariantIds` returns null for it, and null means "deal every candidate
+ * as before" rather than "none admitted". Writing screens that could never decide would stop
+ * such a search from ever measuring anything.
+ */
+const openScreenForSearch = async (
+ deps: AgentDeps,
+ input: {
+ workspaceId: WorkspaceId
+ proposingRun: AgentRun
+ persona: AgentPersona
+ setId: PersonaVariantSetId
+ variantIds: readonly PersonaVariantId[]
+ },
+): Promise<void> => {
+ try {
+ const history = await deps.screens.listDecidedRunsForPersona(
+ input.workspaceId,
+ input.persona.name,
+ REPLAY_HISTORY_WINDOW,
+)
+ const draft = assembleReplaySet(history)
+ const detail = describeReplaySet(draft)
+
+ if (draft.items.length < MIN_REPLAY_ITEMS) {
+ /**
+ * Said out loud rather than skipped in silence, for the reason the verifier's absent
+ * persona is said out loud: a feature that no-ops because a workspace has no history is
+ * one nobody can debug from the outside, and "not screened" is a fact about this search
+ * that belongs beside it.
+ */
+ await postRunSystemMessage(
+ deps,
+ input.proposingRun,
+ `These candidates were **not** screened against held-out work: ${detail} A screen ` +
+ `needs ${MIN_REPLAY_ITEMS}. The arms measure them instead, which is what happened ` +
+ 'before there was a screen.',
+)
+ return
+ }
+
+ const { set, items } = await deps.screens.openReplaySet({
+ workspaceId: input.workspaceId,
+ personaId: input.persona.id,
+ draft,
+ detail,
+ })
+ await deps.screens.openScreens({
+ workspaceId: input.workspaceId,
+ setId: input.setId,
+ replaySetId: set.id,
+ variantIds: input.variantIds,
+ itemIds: items.map((item) => item.id),
+ })
+
+ await deps.audit.record({
+ workspaceId: input.workspaceId,
+ actor: agentRunActor(input.proposingRun.id),
+ action: 'persona.screen_opened',
+ subjectType: 'agent_persona',
+ subjectId: input.persona.id,
+ metadata: {
+ setId: input.setId,
+ replaySetId: set.id,
+ replaySetVersion: set.version,
+ items: items.length,
+ // The counts as well as the sentence: an audit row a reader can check is one that
+ // holds the numbers rather than the prose about them.
+ considered: draft.considered,
+ eligible: draft.eligible,
+ },
+ })
+
+ await postRunSystemMessage(
+ deps,
+ input.proposingRun,
+ `Screening ${input.variantIds.length} candidates and the prompt in use against held-out ` +
+ `set v${set.version}: ${detail} A candidate that does worse than the prompt in use is ` +
+ 'not given an arm, so no live run is spent on it. The screen decides whether a ' +
+ 'candidate is measured and never whether it is promoted.',
+)
+ } catch {
+ /**
+ * Swallowed. The search is open and measurable on its arms; a screen that could not be
+ * opened is a saved cost nobody saved, not a broken search — and the tool call that
+ * opened it has already been answered.
+ */
  }
 }
 
@@ -1233,6 +1365,295 @@ const startVariantVerifier = async (
  * missing second opinion, not a broken search — and the tool call that opened it has
  * already been answered.
  */
+ }
+}
+
+/**
+ * One tick of the held-out screen: start what has not been tried, score what has
+ * finished, and decide the arms whose items have all reported.
+ *
+ * Swept rather than driven by a run's completion, for the verification harness's reason: a
+ * screen is thirty-two agent runs against a workspace that allows six at a time, so what
+ * governs its progress is capacity rather than any one event. The sweep is idempotent — every
+ * write is predicated on the state it expects to find — because two ticks overlapping is the
+ * ordinary case and not an error.
+ *
+ * **It can never fail a search.** Every failure path here ends in `not-scored`, which the gate
+ * reads as "no opinion" and admits. That direction is deliberate: the screen's only authority
+ * is to refuse a measurement, and what it falls back to is the real fitness.
+ */
+export const advanceScreenQueue = async (
+ deps: AgentDeps,
+ options: {
+ /**
+ * How long a screening run may stay claimed or unfinished before its item is written off
+ * as `not-scored`.
+ *
+ * Without it a screen with one wedged run never decides, `admittedVariantIds` keeps
+ * returning an empty list, and the search deals nothing but the incumbent forever — the
+ * merge queue's stranded-`merging` problem, in the one place where the symptom is silence
+ * rather than an error.
+ */
+ screenStuckMs: number
+ /**
+ * How many screening runs one tick may start, across all searches.
+ *
+ * A bound on this sweep specifically, on top of the workspace concurrency limit that
+ * `startAgentRun` already enforces: a search opening thirty-two items would otherwise
+ * spend its whole tick colliding with that limit and losing the claims it took.
+ */
+ maxStartsPerTick: number
+ },
+): Promise<void> => {
+ const open = await deps.screens.listSetsWithOpenScreens
+ let budget = options.maxStartsPerTick
+ for (const entry of open) {
+ if (budget <= 0) break
+ budget -= await advanceScreensForSet(deps, entry.workspaceId, entry.setId, {
+ screenStuckMs: options.screenStuckMs,
+ maxStarts: budget,
+ })
+ }
+}
+
+/**
+ * Returns how many starts it **attempted**, so the sweep's per-tick budget is shared across
+ * searches.
+ *
+ * Attempts and not successes, deliberately: a tick in which every start fails — a workspace at
+ * its concurrency limit, which is the ordinary case for a search of thirty-two items — would
+ * otherwise claim and release every row it could see, and do it again on the next tick. The
+ * churn is invisible and the budget exists to stop it.
+ */
+const advanceScreensForSet = async (
+ deps: AgentDeps,
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+ options: { screenStuckMs: number; maxStarts: number },
+): Promise<number> => {
+ const found = await deps.personaVariants.findSet(workspaceId, setId)
+ if (!found) return 0
+ const screens = await deps.screens.screensForSet(workspaceId, setId)
+ if (screens.length === 0) return 0
+
+ const items = await deps.screens.listReplayItems(
+ workspaceId,
+ screens[0]!.screen.replaySetId,
+)
+ const itemById = new Map(items.map((item) => [item.id as string, item]))
+ const persona = await deps.personas.findById(workspaceId, found.set.personaId)
+
+ /**
+ * The run that proposed the search is the parent every screening run hangs off, and its
+ * thread is where they are visible. Without it there is nothing to hang them on — the run
+ * was deleted — so the screen is written off rather than left pending.
+ */
+ const proposingRun = found.set.proposedByRunId
+ ? await deps.agentRuns.findById(workspaceId, found.set.proposedByRunId)
+: null
+
+ const now = Date.now
+ let attempted = 0
+
+ for (const { screen, runs } of screens) {
+ for (const screenRun of runs) {
+ if (screenRun.outcome !== 'pending') continue
+
+ // 1. Score what has finished.
+ if (screenRun.agentRunId) {
+ const outcome = await resolveScreenRunOutcome(deps, workspaceId, screenRun.agentRunId)
+ if (outcome) {
+ await deps.screens.recordScreenRunOutcome(workspaceId, screenRun.id, outcome)
+ continue
+ }
+ }
+
+ // 2. Write off what has been claimed too long, or what can never start.
+ const claimedAt = screenRun.claimedAt?.getTime
+ const tooOld = claimedAt !== undefined && now - claimedAt > options.screenStuckMs
+ if (tooOld || persona === null || proposingRun === null) {
+ await deps.screens.recordScreenRunOutcome(workspaceId, screenRun.id, {
+ outcome: 'not-scored',
+ reason: tooOld
+ ? `the screening run did not finish within ${Math.round(options.screenStuckMs / 60_000)} min`
+: persona === null
+ ? 'the persona being searched no longer exists'
+: 'the run that proposed this search no longer exists',
+ })
+ continue
+ }
+ if (screenRun.agentRunId || screenRun.claimedAt) continue
+
+ // 3. Start what has not been tried.
+ if (attempted >= options.maxStarts) continue
+ const item = itemById.get(screenRun.replayItemId as string)
+ if (!item) continue
+ const armPrompt = screenArmPrompt(found, persona, screen.variantId)
+ if (armPrompt === null) continue
+
+ if (!(await deps.screens.claimScreenRun(workspaceId, screenRun.id))) continue
+ attempted += 1
+ try {
+ const run = await startAgentRun(deps, {
+ workspaceId,
+ // As the proposing run: `startAgentRun` only lets a run spawn children of itself,
+ // which is also what ties these into the tree a human is watching.
+ actor: agentRunActor(proposingRun.id),
+ threadId: proposingRun.threadId,
+ repositoryId: item.repositoryId,
+ personaId: persona.id,
+ parentRunId: proposingRun.id,
+ relation: 'screen',
+ task: item.task,
+ screen: { commitSha: item.commitSha, systemPrompt: armPrompt },
+ })
+ await deps.screens.attachScreenRun(workspaceId, screenRun.id, run.id)
+ } catch {
+ /**
+ * Released rather than scored. The ordinary cause is the workspace concurrency limit,
+ * and "we have not tried yet" is not a verdict about a prompt — the next tick picks it
+ * up. A cause that is not transient is caught by the stuck check above instead.
+ */
+ await deps.screens.releaseScreenRun(workspaceId, screenRun.id)
+ }
+ }
+ }
+
+ await decideScreens(deps, workspaceId, setId, items.length)
+ return attempted
+}
+
+/**
+ * The prompt one arm is being screened on. Null when a candidate row has vanished.
+ *
+ * The incumbent's prompt is read from the persona **as it is now**, which means a human who
+ * edits it mid-screen changes what the control is — their right, and the same candour
+ * `findSetByVerifierRun` already applies to the verifier's incumbent option. The alternative,
+ * snapshotting it, would screen against a prompt the workspace no longer has.
+ */
+const screenArmPrompt = (
+ found: { variants: readonly PersonaVariant[] },
+ persona: AgentPersona,
+ variantId: PersonaVariantId | null,
+): string | null => {
+ if (variantId === null) return parsePersonaMarkdown(persona.markdownSource).systemPrompt
+ const variant = found.variants.find((entry) => entry.id === variantId)
+ return variant ? parsePersonaMarkdown(variant.markdownSource).systemPrompt: null
+}
+
+/**
+ * What one finished screening run said, or null while it is still going.
+ *
+ * A run is only read once it is terminal *and* its verification is, because the harness
+ * derives the verdict server-side after the fact — reading a `pending` verification would score
+ * every item as unscored the moment its run ended.
+ */
+const resolveScreenRunOutcome = async (
+ deps: AgentDeps,
+ workspaceId: WorkspaceId,
+ agentRunId: AgentRunId,
+): Promise<{ outcome: ReplayCheckOutcome; reason: string | null } | null> => {
+ const run = await deps.agentRuns.findById(workspaceId, agentRunId)
+ if (!run) {
+ return { outcome: 'not-scored', reason: 'the screening run is gone' }
+ }
+ if (run.status !== 'completed' && run.status !== 'failed' && run.status !== 'cancelled') {
+ return null
+ }
+ const [verification] = await deps.runVerifications.listByRuns(workspaceId, [agentRunId])
+ if (verification && verification.status === 'pending') return null
+ return screenOutcomeFor({
+ runStatus: run.status,
+ verificationStatus:
+ verification && verification.status !== 'pending' ? verification.status: null,
+ })
+}
+
+/**
+ * Decides every candidate arm whose items have all reported, and settles a search in which no
+ * candidate survived.
+ *
+ * **The control is decided first, in the sense that nothing else can be decided without it.** A
+ * candidate compared against an unfinished incumbent would be compared against a partial
+ * control, and `screenGate` would read the missing items as an unscored baseline — admitting
+ * everything, early, for the wrong reason.
+ */
+const decideScreens = async (
+ deps: AgentDeps,
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+ itemCount: number,
+): Promise<void> => {
+ const screens = await deps.screens.screensForSet(workspaceId, setId)
+ const complete = (runs: readonly VariantScreenRunRecord[]) =>
+ runs.length > 0 && runs.every((run) => run.outcome !== 'pending')
+ const tallyOf = (runs: readonly VariantScreenRunRecord[]) =>
+ tallyScreenScore({
+ variantId: null,
+ outcomes: runs
+.filter((run) => run.outcome !== 'pending')
+.map((run) => run.outcome as ReplayCheckOutcome),
+ })
+
+ const incumbent = screens.find((entry) => entry.screen.variantId === null)
+ if (!incumbent || !complete(incumbent.runs)) return
+ const incumbentTally = tallyOf(incumbent.runs)
+
+ const candidates = screens.filter((entry) => entry.screen.variantId !== null)
+ for (const candidate of candidates) {
+ if (candidate.screen.decision !== null) continue
+ if (!complete(candidate.runs)) continue
+ const verdict = screenGate({
+ itemCount,
+ candidate: tallyOf(candidate.runs),
+ incumbent: incumbentTally,
+ })
+ await deps.screens.decideScreen(workspaceId, candidate.screen.id, verdict)
+ await deps.audit.record({
+ workspaceId,
+ actor: systemActor,
+ action: 'persona.screen_decided',
+ subjectType: 'agent_persona',
+ subjectId: incumbent.screen.replaySetId,
+ metadata: {
+ setId,
+ variantId: candidate.screen.variantId,
+ decision: verdict.decision,
+ reason: verdict.reason,
+ },
+ })
+ }
+
+ /**
+ * A search in which the screen rejected everything holds the persona's one measurement slot
+ * with nothing in it. Settling it is **not** the platform deciding a prompt: nothing was ever
+ * live, nothing was measured on real traffic, and there is no candidate left to promote —
+ * it is releasing a slot that has no arms. The rule that a person settles a search
+ * still holds for every search that has one.
+ */
+ const decided = await deps.screens.screensForSet(workspaceId, setId)
+ const candidateScreens = decided.filter((entry) => entry.screen.variantId !== null)
+ if (candidateScreens.length === 0) return
+ if (candidateScreens.some((entry) => entry.screen.decision === null)) return
+ if (candidateScreens.some((entry) => entry.screen.decision === 'admitted')) return
+
+ const settled = await deps.personaVariants.settleSet(workspaceId, setId, {
+ promotedVariantId: null,
+ })
+ if (!settled) return
+ const found = await deps.personaVariants.findSet(workspaceId, setId)
+ const proposingRun = found?.set.proposedByRunId
+ ? await deps.agentRuns.findById(workspaceId, found.set.proposedByRunId)
+: null
+ if (proposingRun) {
+ await postRunSystemMessage(
+ deps,
+ proposingRun,
+ 'The held-out screen rejected every candidate in this search, so none of them was given ' +
+ 'an arm and no live run was spent on any of them. The search is closed and the ' +
+ 'candidates are archived with the reason they were rejected — which is what stops the ' +
+ 'next proposal re-deriving them.',
+)
  }
 }
 
@@ -2762,11 +3183,27 @@ const assignVariantSearch = async (
  const open = await deps.personaVariants.findOpenSet(input.workspaceId, input.personaId)
  if (!open || open.variants.length === 0) return null
 
+ /**
+ * The screen, and this is the one place it has any effect: it gates an arm's
+ * **entry**, so a candidate it has not admitted is simply not among the arms this run can
+ * be dealt.
+ *
+ * **Null means there is no screen**, which is not "none admitted": a search opened before
+ * the screen existed, or one over a persona with too few held-out items, deals every
+ * candidate exactly as it did before. Collapsing those two cases would silently stop such
+ * a search from ever measuring anything — and a search that only ever runs the incumbent
+ * looks, from every surface, like a search that is simply slow.
+ *
+ * While a screen is still deciding, the arms are the incumbent alone. That is not a stall:
+ * the incumbent is the live prompt, so those runs are ordinary work that also fills the
+ * control arm the candidates will be compared against.
+ */
+ const admitted = await deps.screens.admittedVariantIds(input.workspaceId, open.set.id)
+ const armIds =
+ admitted === null ? open.variants.map((variant) => variant.id): admitted
+
  const used = await deps.personaVariants.countVariantArms(input.workspaceId, open.set.id)
- const variantId = nextVariantArm(
- used,
- open.variants.map((variant) => variant.id),
-)
+ const variantId = nextVariantArm(used, armIds)
  if (variantId === null) return { setId: open.set.id, variantId: null }
 
  const chosen = open.variants.find((variant) => variant.id === variantId)
@@ -2864,6 +3301,20 @@ export const startAgentRun = async (
  subjectRef: string
  directive?: MasteryDirective
  }
+ /**
+ * Start this run as a **screening run** over one held-out item.
+ *
+ * Two things at once, and they belong together because neither is any use alone: the
+ * clone opens at `commitSha` so the run faces the tree the original run faced, and
+ * `systemPrompt` is the arm being screened — a candidate's, or the persona's own when
+ * this is the control.
+ *
+ * **A screening run is never itself dealt an arm.** It is not live traffic: its whole
+ * purpose is to decide whether a candidate should *get* live traffic, and letting the
+ * search assign it a prompt would substitute a second prompt over the one being
+ * screened and count the result as a sample.
+ */
+ screen?: { commitSha: string; systemPrompt: string }
  },
 ): Promise<AgentRun> => {
  const parent = input.parentRunId
@@ -3026,7 +3477,7 @@ export const startAgentRun = async (
  * And which candidate, when a search is open instead. Mutually exclusive with the trial above by construction: one persona is measured
  * one way at a time, or the runs are split across more arms than a workspace can fill.
  */
- const search = trial ? null: await assignVariantSearch(deps, {
+ const search = trial || input.screen ? null: await assignVariantSearch(deps, {
  workspaceId: input.workspaceId,
  personaId: input.personaId,
  })
@@ -3034,6 +3485,9 @@ export const startAgentRun = async (
  const baseSpec: PersonaSpec = {
  name: persona.name,
  systemPrompt: applyResponseStyle(
+ // The screen first: a screening run is measuring exactly this prompt, so
+ // nothing else may substitute over it.
+ input.screen?.systemPrompt ??
  trial?.systemPrompt ??
  search?.systemPrompt ??
  parsePersonaMarkdown(persona.markdownSource).systemPrompt,
@@ -3417,6 +3871,7 @@ export const startAgentRun = async (
  // message by starting a whole second fan-out.
 ...(input.relation === 'steer' ? { steering: true }: {}),
 ...(input.verifyVariants ? { verifyVariants: input.verifyVariants }: {}),
+...(input.screen ? { baseCommitSha: input.screen.commitSha }: {}),
  })
  } catch (error) {
  const errorMessage = error instanceof Error ? error.message: String(error)

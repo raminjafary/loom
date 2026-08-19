@@ -1212,6 +1212,12 @@ export const AgentRunRelationSchema = z.enum([
  * reads a stranger's session as one of their planner's workers.
  */
  'verify',
+ /**
+ * The screening run — one held-out item against one arm. On the wire for the same
+ * reason `verify` is, and with a sharper edge: a search opens dozens of these at once, and
+ * a human seeing them in the tree without a name for what they are reads a runaway swarm.
+ */
+ 'screen',
 ])
 
 export const AgentRunSchema = z.object({

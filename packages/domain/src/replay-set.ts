@@ -251,6 +251,41 @@ export type ReplayCheckOutcome =
  */
  | 'not-scored'
 
+/**
+ * What one finished screening run said about one item.
+ *
+ * The mapping is the own vocabulary and adds nothing to it: `passed` and `failed` are the
+ * definition of done's answers, and every other state is `not-scored`. `skipped` and
+ * `refused` say something about the operator's setup rather than about the branch — the * exact reason for keeping them out of `failed` — and `error` says something about the
+ * Runner.
+ *
+ * **A run that committed nothing is `not-scored`, and that is a conservatism worth naming.**
+ * A prompt so bad the agent produced no diff arguably deserves to fail its screen, but the
+ * platform cannot tell that apart from a repository with no definition of done or a Runner
+ * that refused to execute unsandboxed. Scoring it as a failure would let an operator's
+ * configuration read as a verdict about a prompt, so the screen abstains — which errs
+ * towards admitting a candidate, the direction a gate that can only refuse should err in.
+ */
+export const screenOutcomeFor = (input: {
+ /** The screening run's terminal status. Anything but `completed` scores nothing. */
+ readonly runStatus: 'completed' | 'failed' | 'cancelled'
+ /** The definition-of-done verdict on the run's branch, or null when there was none. */
+ readonly verificationStatus: 'passed' | 'failed' | 'skipped' | 'refused' | 'error' | null
+}): { readonly outcome: ReplayCheckOutcome; readonly reason: string | null } => {
+ if (input.runStatus !== 'completed') {
+ return { outcome: 'not-scored', reason: `the screening run ${input.runStatus}` }
+ }
+ if (input.verificationStatus === 'passed') return { outcome: 'passed', reason: null }
+ if (input.verificationStatus === 'failed') return { outcome: 'failed', reason: null }
+ return {
+ outcome: 'not-scored',
+ reason:
+ input.verificationStatus === null
+ ? 'no definition of done ran against this branch'
+: `the definition of done was ${input.verificationStatus}`,
+ }
+}
+
 export interface ScreenScore {
  /** Null is the incumbent — the prompt the persona actually has, which is the control. */
  readonly variantId: string | null

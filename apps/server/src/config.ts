@@ -84,6 +84,27 @@ const EnvSchema = z.object({
  // concurrent swarm runs.
  BLOB_STORAGE_ROOT: z.string.default('.loom-blobs'),
  MERGE_STUCK_TIMEOUT_MS: z.coerce.number.int.positive.default(1_800_000),
+ /**
+ * How long one of the screening runs may stay claimed or unfinished before its item is
+ * written off as `not-scored`.
+ *
+ * Much longer than the merge queue's equivalent because the unit is different: a merge runs a
+ * test suite, and this is a whole agent run — one of up to thirty-two, queued behind
+ * `MAX_CONCURRENT_RUNS_PER_WORKSPACE`. Six hours is deliberately generous; the failure this
+ * guards is a screen that never decides, which shows up as a search that silently only ever
+ * runs its incumbent.
+ */
+ SCREEN_STUCK_TIMEOUT_MS: z.coerce.number.int.positive.default(21_600_000),
+ /**
+ * How many screening runs one sweep tick may start, across every open search.
+ *
+ * On top of the workspace concurrency limit, not instead of it. A search opening eight items
+ * across four arms would otherwise spend its whole tick claiming rows it cannot start,
+ * releasing them, and doing it again 30 seconds later. Two per tick fills a workspace of six
+ * within a couple of minutes without ever being the reason a human's run is queued behind
+ * something the platform started for itself.
+ */
+ SCREEN_MAX_STARTS_PER_TICK: z.coerce.number.int.positive.default(2),
 })
 
 export type Config = z.infer<typeof EnvSchema>

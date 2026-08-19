@@ -24,6 +24,12 @@ export type PersonaRevisionId = Brand<string, 'PersonaRevisionId'>
 export type PersonaVariantId = Brand<string, 'PersonaVariantId'>
 /** The search a set of candidates belongs to — the thing that is open or settled. */
 export type PersonaVariantSetId = Brand<string, 'PersonaVariantSetId'>
+/** A versioned held-out set. */
+export type ReplaySetId = Brand<string, 'ReplaySetId'>
+/** One replayable `(repository @ commit, task, observed outcome)` in a held-out set. */
+export type ReplayItemId = Brand<string, 'ReplayItemId'>
+/** One arm's screening against a held-out set — a candidate, or the prompt in use. */
+export type VariantScreenId = Brand<string, 'VariantScreenId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -45,3 +51,6 @@ export const asSubjectMapId = (v: string): SubjectMapId => v as SubjectMapId
 export const asPersonaRevisionId = (v: string): PersonaRevisionId => v as PersonaRevisionId
 export const asPersonaVariantId = (v: string): PersonaVariantId => v as PersonaVariantId
 export const asPersonaVariantSetId = (v: string): PersonaVariantSetId => v as PersonaVariantSetId
+export const asReplaySetId = (v: string): ReplaySetId => v as ReplaySetId
+export const asReplayItemId = (v: string): ReplayItemId => v as ReplayItemId
+export const asVariantScreenId = (v: string): VariantScreenId => v as VariantScreenId

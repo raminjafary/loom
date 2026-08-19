@@ -256,3 +256,55 @@ describe('prepareReviewWorkspace', => {
  expect(original).not.toContain('scribbled')
  })
 })
+
+/**
+ * The generating side — the held-out screen. A screening run has to open on the tree the
+ * original run faced, so the clone is pinned at a commit rather than taken at HEAD.
+ */
+describe('prepareRunWorkspace, pinned at a commit', => {
+ const buildHistory = async => {
+ const source = await mkdtemp(join(tmpdir, 'pin-src-'))
+ await execFileAsync('git', ['init', '--quiet', '-b', 'main', source])
+ await writeFile(join(source, 'state.md'), 'first\n')
+ await git(source, ['add', '-A'])
+ await git(source, ['commit', '-qm', 'first'])
+ const first = (await git(source, ['rev-parse', 'HEAD'])).stdout.trim
+
+ await writeFile(join(source, 'state.md'), 'second\n')
+ await git(source, ['add', '-A'])
+ await git(source, ['commit', '-qm', 'second'])
+ const head = (await git(source, ['rev-parse', 'HEAD'])).stdout.trim
+ return { source, first, head }
+ }
+
+ it('opens the branch at the named commit, not at the source HEAD', async => {
+ const { source, first } = await buildHistory
+ const { clonePath } = await prepareRunWorkspace(source, 'pinned-1', first)
+
+ expect((await git(clonePath, ['rev-parse', 'HEAD'])).stdout.trim).toBe(first)
+ expect(await readFile(join(clonePath, 'state.md'), 'utf8')).toBe('first\n')
+ })
+
+ it('still takes HEAD when no commit is named, which is every other run', async => {
+ const { source, head } = await buildHistory
+ const { clonePath } = await prepareRunWorkspace(source, 'pinned-2')
+ expect((await git(clonePath, ['rev-parse', 'HEAD'])).stdout.trim).toBe(head)
+ })
+
+ it('fails on a commit the clone does not contain, rather than falling back to HEAD', async => {
+ // The silent alternative is the whole reason this is asserted: a screening run that
+ // quietly opened at HEAD would report a verdict about a commit nobody asked for, and
+ // The control would have drifted without anything saying so.
+ const { source } = await buildHistory
+ await expect(
+ prepareRunWorkspace(source, 'pinned-3', '0000000000000000000000000000000000000000'),
+).rejects.toThrow
+ })
+
+ it('still applies the hook and fsmonitor pinning repository binding requires', async => {
+ const { source, first } = await buildHistory
+ const { clonePath } = await prepareRunWorkspace(source, 'pinned-4', first)
+ expect((await git(clonePath, ['config', 'core.hooksPath'])).stdout.trim).toBe('/dev/null')
+ expect((await git(clonePath, ['config', 'core.fsmonitor'])).stdout.trim).toBe('false')
+ })
+})

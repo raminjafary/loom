@@ -33,6 +33,12 @@ const scratchRoot = : string => process.env.LOOM_RUN_SCRATCH_ROOT ?? tmpdir
 export const prepareRunWorkspace = async (
  sourcePath: string,
  runId: string,
+ /**
+ * Open the branch at this commit instead of at the clone's HEAD. A sha the clone does not contain **fails**, because `checkout -b`
+ * fails: falling back to HEAD would hand a screening run a different problem from the one
+ * the replay item names, and report the verdict as if it were about the same one.
+ */
+ baseCommitSha?: string,
 ): Promise<RunWorkspace> => {
  const branchName = `loom/run-${runId}`
  const clonePath = await mkdtemp(join(scratchRoot, `loom-run-${runId}-`))
@@ -43,7 +49,14 @@ export const prepareRunWorkspace = async (
  await chmod(homePath, 0o777)
 
  await execFileAsync('git', ['clone', '--quiet', sourcePath, clonePath])
- await execFileAsync('git', ['-C', clonePath, 'checkout', '-b', branchName])
+ await execFileAsync('git', [
+ '-C',
+ clonePath,
+ 'checkout',
+ '-b',
+ branchName,
+...(baseCommitSha === undefined ? []: [baseCommitSha]),
+ ])
  await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
  await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
 

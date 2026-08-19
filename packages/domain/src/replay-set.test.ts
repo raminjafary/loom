@@ -5,6 +5,7 @@ import {
  assembleReplaySet,
  describeReplaySet,
  screenGate,
+ screenOutcomeFor,
  tallyScreenScore,
  type DecidedRunRecord,
  type ReplayCheckOutcome,
@@ -226,5 +227,41 @@ describe('screenGate', => {
  ].map((verdict) => verdict.decision),
 )
  expect([...decisions].sort).toEqual(['admitted', 'rejected'])
+ })
+})
+
+describe('screenOutcomeFor', => {
+ it('reads the definition of done and nothing else', => {
+ expect(screenOutcomeFor({ runStatus: 'completed', verificationStatus: 'passed' })).toEqual({
+ outcome: 'passed',
+ reason: null,
+ })
+ expect(screenOutcomeFor({ runStatus: 'completed', verificationStatus: 'failed' })).toEqual({
+ outcome: 'failed',
+ reason: null,
+ })
+ })
+
+ it.each(['skipped', 'refused', 'error'] as const)(
+ 'does not read %s as a failure, because it is a fact about the setup',
+ (status) => {
+ const result = screenOutcomeFor({ runStatus: 'completed', verificationStatus: status })
+ expect(result.outcome).toBe('not-scored')
+ expect(result.reason).toContain(status)
+ },
+)
+
+ it('does not score a branch nothing ran against', => {
+ const result = screenOutcomeFor({ runStatus: 'completed', verificationStatus: null })
+ expect(result.outcome).toBe('not-scored')
+ expect(result.reason).toContain('no definition of done')
+ })
+
+ it.each(['failed', 'cancelled'] as const)('does not score a run that %s', (runStatus) => {
+ const result = screenOutcomeFor({ runStatus, verificationStatus: 'passed' })
+ // A verification verdict on a run that did not finish is about whatever the run
+ // happened to leave behind, not about what the prompt would have produced.
+ expect(result.outcome).toBe('not-scored')
+ expect(result.reason).toContain(runStatus)
  })
 })

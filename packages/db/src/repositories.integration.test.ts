@@ -11,6 +11,9 @@ import {
  NotFoundError,
  ValidationError,
  agentRunActor,
+ asAgentPersonaId,
+ asAgentRunId,
+ asRepositoryId,
  asUserId,
  asWorkspaceId,
  userActor,
@@ -28,6 +31,7 @@ import {
  personaVariantRepository,
  subjectMapRepository,
 } from './agent-repositories.js'
+import { screenRepository } from './screen-repositories.js'
 import {
  auditAdapter,
  channelRepository,
@@ -1217,5 +1221,432 @@ describe('atlas repository', => {
  proposedByRunId: null,
  })
  expect(await atlas.list(OTHER_WS)).toHaveLength(0)
+ })
+})
+
+/**
+ * The held-out screen, against real Postgres.
+ *
+ * The queries are the risk here, not the arithmetic — `replay-set.test.ts` covers that. What
+ * these assert is the two things a join gets wrong silently: which runs are eligible material
+ * for a set, and the difference between "no screen" and "nothing admitted", which decide
+ * whether a search deals candidates at all.
+ */
+describe('the held-out screen', => {
+ const screens = screenRepository(db)
+ const variants = personaVariantRepository(db)
+ let seq = 0
+
+ const scaffold = async (workspaceId: WorkspaceId, personaName: string) => {
+ seq += 1
+ const [ch] = await db
+.insert(channel)
+.values({ workspaceId, name: `screen-${seq}`, isPrivate: false })
+.returning({ id: channel.id })
+ const [th] = await db
+.insert(thread)
+.values({ workspaceId, channelId: ch!.id, isRoot: true })
+.returning({ id: thread.id })
+ const [rn] = await db
+.insert(runner)
+.values({ workspaceId, name: `runner-screen-${seq}`, pairingTokenHash: `hash-screen-${seq}` })
+.returning({ id: runner.id })
+ const [repo] = await db
+.insert(repository)
+.values({
+ workspaceId,
+ runnerId: rn!.id,
+ displayName: 'repo',
+ absolutePath: `/tmp/screen-${seq}`,
+ defaultBranch: 'main',
+ })
+.returning({ id: repository.id })
+ const [persona] = await db
+.insert(agentPersona)
+.values({
+ workspaceId,
+ name: personaName,
+ description: 'd',
+ markdownSource: 'live',
+ model: 'claude-haiku-4-5',
+ })
+.returning({ id: agentPersona.id })
+ return {
+ threadId: th!.id,
+ runnerId: rn!.id,
+ repositoryId: asRepositoryId(repo!.id),
+ personaId: asAgentPersonaId(persona!.id),
+ }
+ }
+
+ type Scaffolding = Awaited<ReturnType<typeof scaffold>>
+
+ const addRun = async (
+ workspaceId: WorkspaceId,
+ s: Scaffolding,
+ input: {
+ personaName: string
+ baseCommitSha?: string | null
+ task?: string | null
+ disposition?: 'merged' | 'discarded' | null
+ status?: 'completed' | 'failed' | 'running'
+ relation?: string
+ completedAt?: Date
+ },
+) => {
+ const [run] = await db
+.insert(agentRun)
+.values({
+ workspaceId,
+ threadId: s.threadId,
+ repositoryId: s.repositoryId,
+ runnerId: s.runnerId,
+ persona: {
+ name: input.personaName,
+ model: 'claude-haiku-4-5',
+ systemPrompt: 'x',
+ tools: [],
+ approvalMode: 'ask' as const,
+ },
+ status: input.status ?? 'completed',
+ branchName: 'loom/x',
+ baseCommitSha: input.baseCommitSha === undefined ? 'abc123': input.baseCommitSha,
+ task: input.task === undefined ? 'Do the thing.': input.task,
+ branchDisposition: input.disposition === undefined ? 'merged': input.disposition,
+...(input.relation === undefined ? {}: { relation: input.relation }),
+ completedAt: input.completedAt ?? new Date,
+ })
+.returning({ id: agentRun.id })
+ return asAgentRunId(run!.id)
+ }
+
+ it('offers a decided run of this persona, with its commit, task and outcome', async => {
+ const s = await scaffold(WS, 'screened-1')
+ await addRun(WS, s, { personaName: 'screened-1', disposition: 'discarded' })
+ const records = await screens.listDecidedRunsForPersona(WS, 'screened-1', 50)
+ expect(records).toHaveLength(1)
+ expect(records[0]).toMatchObject({
+ baseCommitSha: 'abc123',
+ task: 'Do the thing.',
+ outcome: 'discarded',
+ wasMeasured: false,
+ })
+ })
+
+ it('does not offer another persona\'s runs, resolved by the snapshot\'s name', async => {
+ const s = await scaffold(WS, 'screened-2')
+ await addRun(WS, s, { personaName: 'somebody-else' })
+ expect(await screens.listDecidedRunsForPersona(WS, 'screened-2', 50)).toEqual([])
+ })
+
+ it('does not offer an undecided run', async => {
+ const s = await scaffold(WS, 'screened-3')
+ await addRun(WS, s, { personaName: 'screened-3', status: 'running', disposition: null })
+ expect(await screens.listDecidedRunsForPersona(WS, 'screened-3', 50)).toEqual([])
+ })
+
+ it('marks a run that was an arm of a search, so a set is not built from other prompts', async => {
+ const s = await scaffold(WS, 'screened-4')
+ const runId = await addRun(WS, s, { personaName: 'screened-4' })
+ const opened = await variants.openSet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ candidates: [
+ { markdownSource: 'a', rationale: 'r' },
+ { markdownSource: 'b', rationale: 'r' },
+ ],
+ })
+ await variants.recordVariantUse({
+ workspaceId: WS,
+ setId: opened.set.id,
+ variantId: opened.variants[0]!.id,
+ agentRunId: runId as never,
+ })
+ const [record] = await screens.listDecidedRunsForPersona(WS, 'screened-4', 50)
+ expect(record?.wasMeasured).toBe(true)
+ })
+
+ it('never offers a screening run as material, which would fold its output into its input', async => {
+ const s = await scaffold(WS, 'screened-5')
+ await addRun(WS, s, { personaName: 'screened-5', relation: 'screen' })
+ expect(await screens.listDecidedRunsForPersona(WS, 'screened-5', 50)).toEqual([])
+ })
+
+ it('carries the gaps through rather than filtering them, so the caller can count them', async => {
+ // The "no silent truncation" lives in `assembleReplaySet`, which can only report a
+ // gap it was shown. A query that pre-filtered would make `considered` a lie.
+ const s = await scaffold(WS, 'screened-6')
+ await addRun(WS, s, { personaName: 'screened-6', baseCommitSha: null })
+ await addRun(WS, s, { personaName: 'screened-6', task: null })
+ const records = await screens.listDecidedRunsForPersona(WS, 'screened-6', 50)
+ expect(records).toHaveLength(2)
+ expect(records.map((r) => r.baseCommitSha === null || r.task === null)).toEqual([true, true])
+ })
+
+ it('versions a set per persona, from one', async => {
+ const s = await scaffold(WS, 'screened-7')
+ const draft = {
+ items: [],
+ excluded: [],
+ eligible: 0,
+ considered: 3,
+ }
+ const first = await screens.openReplaySet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ draft,
+ detail: 'first',
+ })
+ const second = await screens.openReplaySet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ draft,
+ detail: 'second',
+ })
+ expect(first.set.version).toBe(1)
+ expect(second.set.version).toBe(2)
+ })
+
+ it('opens one screen per arm including the incumbent, each with one run per item', async => {
+ const s = await scaffold(WS, 'screened-8')
+ const runId = await addRun(WS, s, { personaName: 'screened-8' })
+ const set = await screens.openReplaySet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ draft: {
+ items: [
+ {
+ sourceRunId: runId,
+ repositoryId: s.repositoryId,
+ commitSha: 'abc123',
+ task: 'Do the thing.',
+ observedOutcome: 'merged' as const,
+ },
+ ],
+ excluded: [],
+ eligible: 1,
+ considered: 1,
+ },
+ detail: 'one item',
+ })
+ const opened = await variants.openSet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ candidates: [
+ { markdownSource: 'a', rationale: 'r' },
+ { markdownSource: 'b', rationale: 'r' },
+ ],
+ })
+ await screens.openScreens({
+ workspaceId: WS,
+ setId: opened.set.id,
+ replaySetId: set.set.id,
+ variantIds: opened.variants.map((v) => v.id),
+ itemIds: set.items.map((i) => i.id),
+ })
+
+ const rows = await screens.screensForSet(WS, opened.set.id)
+ expect(rows).toHaveLength(3)
+ expect(rows.filter((row) => row.screen.variantId === null)).toHaveLength(1)
+ expect(rows.every((row) => row.runs.length === 1)).toBe(true)
+ expect(rows.every((row) => row.runs[0]?.outcome === 'pending')).toBe(true)
+ })
+
+ it('distinguishes no screen from nothing admitted, which decides whether a search deals arms', async => {
+ const s = await scaffold(WS, 'screened-9')
+ const opened = await variants.openSet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ candidates: [
+ { markdownSource: 'a', rationale: 'r' },
+ { markdownSource: 'b', rationale: 'r' },
+ ],
+ })
+ // No screen: null, which the caller reads as "deal every candidate as before".
+ expect(await screens.admittedVariantIds(WS, opened.set.id)).toBeNull
+
+ const set = await screens.openReplaySet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ draft: { items: [], excluded: [], eligible: 0, considered: 0 },
+ detail: 'none',
+ })
+ await screens.openScreens({
+ workspaceId: WS,
+ setId: opened.set.id,
+ replaySetId: set.set.id,
+ variantIds: opened.variants.map((v) => v.id),
+ itemIds: [],
+ })
+ // A screen exists and has decided nothing: an empty list, so no candidate is dealt yet.
+ expect(await screens.admittedVariantIds(WS, opened.set.id)).toEqual([])
+
+ const rows = await screens.screensForSet(WS, opened.set.id)
+ const candidate = rows.find((row) => row.screen.variantId !== null)!
+ await screens.decideScreen(WS, candidate.screen.id, {
+ decision: 'admitted',
+ reason: 'good enough',
+ })
+ expect(await screens.admittedVariantIds(WS, opened.set.id)).toEqual([
+ candidate.screen.variantId,
+ ])
+ })
+
+ it('claims a screening run once, and gives the claim back on release', async => {
+ const s = await scaffold(WS, 'screened-10')
+ const set = await screens.openReplaySet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ draft: {
+ items: [
+ {
+ sourceRunId: await addRun(WS, s, { personaName: 'source' }),
+ repositoryId: s.repositoryId,
+ commitSha: 'abc123',
+ task: 'Do the thing.',
+ observedOutcome: 'merged' as const,
+ },
+ ],
+ excluded: [],
+ eligible: 1,
+ considered: 1,
+ },
+ detail: 'one item',
+ })
+ const opened = await variants.openSet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ candidates: [
+ { markdownSource: 'a', rationale: 'r' },
+ { markdownSource: 'b', rationale: 'r' },
+ ],
+ })
+ await screens.openScreens({
+ workspaceId: WS,
+ setId: opened.set.id,
+ replaySetId: set.set.id,
+ variantIds: opened.variants.map((v) => v.id),
+ itemIds: set.items.map((i) => i.id),
+ })
+ const [first] = await screens.screensForSet(WS, opened.set.id)
+ const screenRunId = first!.runs[0]!.id
+
+ expect(await screens.claimScreenRun(WS, screenRunId)).toBe(true)
+ // The second sweep loses, which is what stops two runs against one item.
+ expect(await screens.claimScreenRun(WS, screenRunId)).toBe(false)
+ await screens.releaseScreenRun(WS, screenRunId)
+ expect(await screens.claimScreenRun(WS, screenRunId)).toBe(true)
+ })
+
+ it('records an outcome once, so a second sweep does not overwrite what the gate read', async => {
+ const s = await scaffold(WS, 'screened-11')
+ const set = await screens.openReplaySet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ draft: {
+ items: [
+ {
+ sourceRunId: await addRun(WS, s, { personaName: 'source' }),
+ repositoryId: s.repositoryId,
+ commitSha: 'abc123',
+ task: 'Do the thing.',
+ observedOutcome: 'merged' as const,
+ },
+ ],
+ excluded: [],
+ eligible: 1,
+ considered: 1,
+ },
+ detail: 'one item',
+ })
+ const opened = await variants.openSet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ candidates: [
+ { markdownSource: 'a', rationale: 'r' },
+ { markdownSource: 'b', rationale: 'r' },
+ ],
+ })
+ await screens.openScreens({
+ workspaceId: WS,
+ setId: opened.set.id,
+ replaySetId: set.set.id,
+ variantIds: opened.variants.map((v) => v.id),
+ itemIds: set.items.map((i) => i.id),
+ })
+ const [first] = await screens.screensForSet(WS, opened.set.id)
+ const screenRunId = first!.runs[0]!.id
+
+ await screens.recordScreenRunOutcome(WS, screenRunId, { outcome: 'passed', reason: null })
+ await screens.recordScreenRunOutcome(WS, screenRunId, { outcome: 'failed', reason: 'later' })
+ const [again] = await screens.screensForSet(WS, opened.set.id)
+ expect(again!.runs[0]?.outcome).toBe('passed')
+ })
+
+ it('decides a screen once, so two sweeps cannot record two verdicts', async => {
+ const s = await scaffold(WS, 'screened-12')
+ const set = await screens.openReplaySet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ draft: { items: [], excluded: [], eligible: 0, considered: 0 },
+ detail: 'none',
+ })
+ const opened = await variants.openSet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ candidates: [
+ { markdownSource: 'a', rationale: 'r' },
+ { markdownSource: 'b', rationale: 'r' },
+ ],
+ })
+ await screens.openScreens({
+ workspaceId: WS,
+ setId: opened.set.id,
+ replaySetId: set.set.id,
+ variantIds: opened.variants.map((v) => v.id),
+ itemIds: [],
+ })
+ const candidate = (await screens.screensForSet(WS, opened.set.id)).find(
+ (row) => row.screen.variantId !== null,
+)!
+ await screens.decideScreen(WS, candidate.screen.id, { decision: 'admitted', reason: 'first' })
+ await screens.decideScreen(WS, candidate.screen.id, { decision: 'rejected', reason: 'second' })
+ const after = (await screens.screensForSet(WS, opened.set.id)).find(
+ (row) => row.screen.id === candidate.screen.id,
+)!
+ expect(after.screen.decision).toBe('admitted')
+ expect(after.screen.reason).toBe('first')
+ })
+
+ it('lists only sets whose search is still open, so a settled one is not swept forever', async => {
+ const s = await scaffold(WS, 'screened-13')
+ const set = await screens.openReplaySet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ draft: { items: [], excluded: [], eligible: 0, considered: 0 },
+ detail: 'none',
+ })
+ const opened = await variants.openSet({
+ workspaceId: WS,
+ personaId: s.personaId,
+ candidates: [
+ { markdownSource: 'a', rationale: 'r' },
+ { markdownSource: 'b', rationale: 'r' },
+ ],
+ })
+ await screens.openScreens({
+ workspaceId: WS,
+ setId: opened.set.id,
+ replaySetId: set.set.id,
+ variantIds: opened.variants.map((v) => v.id),
+ itemIds: [],
+ })
+ expect((await screens.listSetsWithOpenScreens).some((row) => row.setId === opened.set.id)).toBe(
+ true,
+)
+ await variants.settleSet(WS, opened.set.id, { promotedVariantId: null })
+ expect((await screens.listSetsWithOpenScreens).some((row) => row.setId === opened.set.id)).toBe(
+ false,
+)
  })
 })

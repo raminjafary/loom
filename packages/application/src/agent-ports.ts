@@ -1,5 +1,16 @@
 import type {
  AtlasEdgeStatus,
+ DecidedRunRecord,
+ ReplayCheckOutcome,
+ ReplayItemId,
+ ReplayItemRecord,
+ ReplaySetDraft,
+ ReplaySetId,
+ ReplaySetRecord,
+ ScreenDecision,
+ VariantScreenId,
+ VariantScreenRecord,
+ VariantScreenRunRecord,
  AtlasRelation,
  ColosseumClaim,
  ColosseumSession,
@@ -800,6 +811,142 @@ export interface PersonaRepositoryPort {
  * Nothing here decides anything: the rules are `prompt-variants.ts`, the fitness is
  * `summarizeVariantSearch`, and the two human acts are use cases. This is storage.
  */
+/**
+ * The held-out screen's storage.
+ *
+ * Separate from `PersonaVariantRepositoryPort` because it answers a different question. That
+ * port is about a search — what is being measured, and by which runs. This one is about
+ * whether a candidate should have been measured at all, and its rows outlive the search: a
+ * rejected candidate and the reason it was rejected are the buffer the piece 3 hands to
+ * a proposer.
+ */
+export interface ScreenRepositoryPort {
+ /**
+ * This persona's decided runs, newest first, for `assembleReplaySet`.
+ *
+ * By persona **name**, not id, because a run carries a persona *snapshot* and the snapshot
+ * is what says which persona did the work — the same resolution `proposeOwnVariants`
+ * already makes, and for the same reason: an id on the run would answer for a row that may
+ * since have been renamed or replaced.
+ *
+ * Bounded by `limit`, and the bound is why `assembleReplaySet` reports `considered`: a
+ * count of what it saw is only honest if the caller says how much it was shown.
+ */
+ listDecidedRunsForPersona(
+ workspaceId: WorkspaceId,
+ personaName: string,
+ limit: number,
+): Promise<DecidedRunRecord[]>
+
+ /**
+ * Writes one version of a held-out set with its items, in one transaction.
+ *
+ * The version is assigned here — `max(version) + 1` for this persona under the unique
+ * index — rather than by the caller, because two searches opening at once would otherwise
+ * both compute the same next number and one would lose a set it had already reported on.
+ */
+ openReplaySet(input: {
+ workspaceId: WorkspaceId
+ personaId: AgentPersonaId
+ draft: ReplaySetDraft
+ detail: string
+ }): Promise<{ set: ReplaySetRecord; items: ReplayItemRecord[] }>
+
+ /**
+ * Opens one screening per arm — every candidate plus the incumbent — each with one pending
+ * run per item.
+ *
+ * The incumbent is not optional: it is the control the gate compares against, and a screen
+ * without one can only compare a candidate to a threshold, which would be a claim about how
+ * hard this workspace's tasks are.
+ */
+ openScreens(input: {
+ workspaceId: WorkspaceId
+ setId: PersonaVariantSetId
+ replaySetId: ReplaySetId
+ variantIds: readonly PersonaVariantId[]
+ itemIds: readonly ReplayItemId[]
+ }): Promise<void>
+
+ /** Every screen of one search with its per-item runs, for the sweep and for the panel. */
+ screensForSet(
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+): Promise<
+ {
+ screen: VariantScreenRecord
+ runs: VariantScreenRunRecord[]
+ }[]
+ >
+
+ /** Sets with an undecided screen, so the sweep does not read every search ever run. */
+ listSetsWithOpenScreens: Promise<
+ { workspaceId: WorkspaceId; setId: PersonaVariantSetId }[]
+ >
+
+ /** The items of a set, in order, so the sweep can dispatch a run for one. */
+ listReplayItems(
+ workspaceId: WorkspaceId,
+ replaySetId: ReplaySetId,
+): Promise<ReplayItemRecord[]>
+
+ /**
+ * Claims one unclaimed screening run, before the run that will answer it exists.
+ *
+ * Returns false when another sweep got there first — by predicate on the row's own state,
+ * not by a read-then-write, since two sweeps ticking at once is the ordinary case and a
+ * double claim would start two runs against one item, the second overwriting the first's
+ * outcome.
+ */
+ claimScreenRun(workspaceId: WorkspaceId, screenRunId: string): Promise<boolean>
+
+ /** Attaches the run that will answer a claimed item. */
+ attachScreenRun(
+ workspaceId: WorkspaceId,
+ screenRunId: string,
+ agentRunId: AgentRunId,
+): Promise<void>
+
+ /**
+ * Gives a claim back when the run could not be started — a workspace at its concurrency
+ * limit, a Runner that is gone. Released rather than scored, because "we did not try yet" is
+ * not a verdict about a prompt.
+ */
+ releaseScreenRun(workspaceId: WorkspaceId, screenRunId: string): Promise<void>
+
+ /** Records what one item said about one arm. Idempotent: only a `pending` row is written. */
+ recordScreenRunOutcome(
+ workspaceId: WorkspaceId,
+ screenRunId: string,
+ input: { outcome: ReplayCheckOutcome; reason: string | null },
+): Promise<void>
+
+ /**
+ * Writes a screen's decision, and only onto one that has none.
+ *
+ * The `decision is null` predicate is what makes a second sweep a no-op rather than a
+ * second verdict — the merge queue's and the harness's pattern, for the same reason.
+ */
+ decideScreen(
+ workspaceId: WorkspaceId,
+ screenId: VariantScreenId,
+ input: { decision: ScreenDecision; reason: string },
+): Promise<void>
+
+ /**
+ * Which candidates of an open search may be dealt a live run.
+ *
+ * **Null means there is no screen at all**, which is not the same as "none admitted": a
+ * search opened before there was a screen, or one whose persona has too few held-out items,
+ * must deal every candidate exactly as it did before. Returning an empty array for that
+ * case would silently stop every such search from ever measuring anything.
+ */
+ admittedVariantIds(
+ workspaceId: WorkspaceId,
+ setId: PersonaVariantSetId,
+): Promise<PersonaVariantId[] | null>
+}
+
 export interface PersonaVariantRepositoryPort {
  /**
  * Opens a search with its candidates, in one transaction.
@@ -1170,6 +1317,11 @@ export interface RunDispatchPort {
  repositoryId?: RepositoryId
  /** What a human asked for via `@mention`; absent for the sidebar-picker path. */
  task?: string
+ /**
+ * Open the clone at this commit rather than at HEAD. A sha the clone does not contain fails the run, deliberately: a screening
+ * run that quietly opened at HEAD would report a verdict about a different problem.
+ */
+ baseCommitSha?: string
  /**
  * The tree's worker-notes ledger, already rendered and already fenced — absent for the first run in a tree, which has no shared context
  * to be given.

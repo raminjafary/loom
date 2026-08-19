@@ -1,5 +1,6 @@
 import {
  advanceMergeQueue,
+ advanceScreenQueue,
  advanceVerificationQueue,
  curateIdleWorkspaces,
  expireStaleApprovals,
@@ -27,6 +28,7 @@ import {
  personaGroupRepository,
  personaRepository,
  personaVariantRepository,
+ screenRepository,
  repositoryRepository,
  runnerRepository,
  threadRepository,
@@ -118,6 +120,7 @@ export const buildApp = async (
  capabilities: capabilityRepository(db),
  personas: personaRepository(db),
  personaVariants: personaVariantRepository(db),
+ screens: screenRepository(db),
  personaGroups: personaGroupRepository(db),
  runControl: workspaceRunControlRepository(db),
  blobs: fileBlobStorage(config.BLOB_STORAGE_ROOT),
@@ -191,6 +194,16 @@ export const buildApp = async (
  verificationStuckMs: config.MERGE_STUCK_TIMEOUT_MS,
  })
  await advanceMergeQueue(deps, { mergeStuckMs: config.MERGE_STUCK_TIMEOUT_MS })
+ /**
+ * The held-out screen, after the verification harness because that is what
+ * it reads: a screening run's item is scored from the definition-of-done verdict
+ * on its branch, so a sweep that ran first would find every finished run
+ * unscored and have to wait a whole tick to notice.
+ */
+ await advanceScreenQueue(deps, {
+ screenStuckMs: config.SCREEN_STUCK_TIMEOUT_MS,
+ maxStartsPerTick: config.SCREEN_MAX_STARTS_PER_TICK,
+ })
  /**
  * Curation, last and only while nothing is running.
  *

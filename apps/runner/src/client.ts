@@ -1344,7 +1344,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
  }
  return prepareReviewWorkspace(target.clonePath, review.branchName, runId)
  })
-: prepareRunWorkspace(frame.cwd, runId)
+: prepareRunWorkspace(frame.cwd, runId, frame.baseCommitSha)
 
  void prepare
 .then(async (workspace) => {
