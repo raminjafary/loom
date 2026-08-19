@@ -1409,10 +1409,19 @@ export const advanceScreenQueue = async (
  const open = await deps.screens.listSetsWithOpenScreens
  let budget = options.maxStartsPerTick
  for (const entry of open) {
- if (budget <= 0) break
+ /**
+ * Every set is advanced, even once the start budget is spent — the budget bounds *starts*
+ * and nothing else.
+ *
+ * It used to `break` here, and a live driver caught what that costs: scoring what finished
+ * and deciding what is complete are the two things this sweep does that are not starts, so
+ * a workspace with more than one open search would have advanced only the first, forever.
+ * The symptom is the one this whole sweep is written to avoid — a screen that never decides
+ * looks exactly like a search that is merely slow.
+ */
  budget -= await advanceScreensForSet(deps, entry.workspaceId, entry.setId, {
  screenStuckMs: options.screenStuckMs,
- maxStarts: budget,
+ maxStarts: Math.max(0, budget),
  })
  }
 }

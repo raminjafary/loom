@@ -375,6 +375,33 @@ describe('advanceScreenQueue: starting', => {
  expect(recordScreenRunOutcome).not.toHaveBeenCalled
  })
 
+
+ it('still scores and decides once the start budget is spent', async => {
+ // Found by `tools/screen-check.mts`: the sweep used to `break` when the budget ran out, so
+ // scoring and deciding — the two things it does that are not starts — never happened for
+ // anything after the first search. A screen that never decides is indistinguishable from a
+ // search that is merely slow, which is the failure this sweep exists to avoid.
+ const { deps, decideScreen } = harness({
+ screens: [
+ {
+ screen: screen('s_inc', null),
+ runs: [0, 1, 2, 3].map((i) =>
+ screenRun('s_inc', i, { outcome: 'passed', agentRunId: asAgentRunId(`r${i}`) }),
+),
+ },
+ {
+ screen: screen('s_cand', CANDIDATE),
+ runs: [0, 1, 2, 3].map((i) =>
+ screenRun('s_cand', i, { outcome: 'failed', agentRunId: asAgentRunId(`c${i}`) }),
+),
+ },
+ ],
+ })
+ await advanceScreenQueue(deps, { screenStuckMs: 3_600_000, maxStartsPerTick: 0 })
+ expect(decideScreen).toHaveBeenCalledTimes(1)
+ expect(callsOf(decideScreen)[0]?.[2]).toMatchObject({ decision: 'rejected' })
+ })
+
  it('honours the per-tick start budget across a whole search', async => {
  const { deps, claimScreenRun } = harness({
  screens: [
