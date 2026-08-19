@@ -3,7 +3,7 @@
 [![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
-![tests](https://img.shields.io/badge/tests-1%2C663-brightgreen)
+![tests](https://img.shields.io/badge/tests-1%2C778-brightgreen)
 
 **Run many AI coding agents at once on your own hardware. Each gets its own git clone and
 container sandbox. You stay in the loop only where it matters: approving a risky command,
@@ -32,6 +32,13 @@ real software work rather than a demo:
 - 🧠 **Persona memory and self-improving prompts that are measured, not assumed** — an agent may
  rewrite its own instructions inside a ceiling a human sets, and the platform runs both versions
  to find out whether the edit actually helped
+- 🗺️ **[Expertise](#expertise-and-the-colosseum): a map an agent built and can be held to** — a
+ mastery run's deliverable is a graph of a codebase rather than a diff, every claim carries how
+ it was arrived at, and retrieval is a trial with a deliberately-withheld baseline, because an
+ expertise that cannot be shown to help is a context-window tax with a reassuring name
+- ⚔️ **[The Colosseum](#expertise-and-the-colosseum): agents that put questions to each other,
+ where nothing is settled by agreement** — two agents who mastered different parts of a system
+ know different things, and the arbiter is the repository's own tests and history, not a vote
 
 **Self-hosted and private by design.** Your code never leaves your machine except as model API
 calls, and those go through a proxy you run. No SaaS, no telemetry, no cloud dependency beyond
@@ -41,7 +48,8 @@ Built in TypeScript on Node 22, Postgres, Valkey, Fastify, oRPC, Vue 3 and the C
 — with every layer behind a port, so the execution backend, the store, the transport and the UI
 framework are each replaceable.
 
-**Contents** · [Screenshots](#screenshots) · [Features](#features) · [Quickstart](#quickstart)
+**Contents** · [Screenshots](#screenshots) · [Features](#features) ·
+[Expertise and the Colosseum](#expertise-and-the-colosseum) · [Quickstart](#quickstart)
 · [How it works](#how-it-works) · [Security model](#security-model) · [Development](#development)
 · [Configuration](#configuration) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
@@ -85,6 +93,8 @@ nine cents.
 | 🧠 | **Measured persona memory** | Subject maps, an atlas across projects, and retrieval as a trial with a deliberately-denied baseline arm |
 | ⚔️ | **The Colosseum** | Two agents that learned different things put questions to each other in a bounded, recorded session — settled by a check the repository can answer, never by agreement |
 | ♻️ | **Self-editing inside a ceiling** | An envelope bounds what a persona may become; edits go on trial against what they replaced, judged by outcomes rather than by a model's opinion |
+| 🎯 | **A held-out screen before a candidate costs anything** | A proposed prompt is replayed against past decided work at the commit each run opened at. One that does worse than the prompt in use is refused an arm, so no live run is spent on it |
+| ⏮️ | **A rehearsed rollback** | A scripted drill promotes a knowingly-broken change to Loom's own source and recovers from it — with the recovery running from a checkout pinned before the change, so the broken code cannot take part in its own repair |
 | 🖼️ | **Two canvases** | Design a team on a canvas that will not draw an edge the runtime would refuse, and watch a live graph of what each run is doing now |
 | ⚡ | **Warm dependency trees** | Optional: runs open with `node_modules` already in place instead of spending a model turn installing |
 
@@ -310,6 +320,7 @@ web page is reading attacker-controllable instructions. The load-bearing control
 | **The sandbox is the boundary** | `--network=none` by default with all egress through the proxy, never the container socket, `--cap-drop=ALL`, no-new-privileges, default seccomp, non-root in a userns, read-only rootfs, only the run's clone mounted. |
 | **The clone gets no vote** | The SDK runs with `settingSources: []`, so a `.claude/settings.json` committed to a repository cannot grant permissions nobody was asked for. A repo's `CLAUDE.md` is not auto-injected either — the persona is the instruction source. |
 | **A planner cannot act** | Read-only tools, enforced at persona-authoring time. Its only effect on the world is a decomposition the server validates itself. |
+| **The realtime stream asks who is listening** | A subscriber presents a short-lived token the server signs from its session; the workspace is inside the token, so a client cannot name one. The fan-out service verifies and never signs, so it can read what it was already forwarding and cannot mint itself anything else. |
 
 Three limits stated plainly rather than buried:
 
@@ -330,7 +341,7 @@ Full limitations, each with the work that closes it: [the open-items list](./).
 
 ```bash
 make check # what CI runs: typecheck, lint, the suite, the boundary test
-pnpm test # 1,663 tests across 96 files
+pnpm test # 1,778 tests across 100 files
 pnpm db:test:prepare # four test databases — re-run after any db:generate
 ```
 
@@ -400,16 +411,11 @@ behind every decision live in the design notes; is a reference key.
 
 | | |
 |---|---|
-| **A held-out screen for the improvement loop** | The loop is built but slow to converge — a verdict currently costs fifteen to twenty real runs on one persona. Screening candidates against replayed past runs makes it affordable |
+| **A proposer that is not the run being edited** | Candidates are currently written by the run that just did the work, about itself. A separate read-only session, shown the losing arms and the rejected-edit buffer, is the mirror of the blinded verifier that already exists |
+| **Self-modification over Loom's own source** | Tiers 3 and 4 — code and dependencies — build-and-promote with a health-checked swap and a retained previous revision. The rollback drill that gated them now passes (Phase 3b) |
 | **Model routing** | A definition-of-done failure retries once at a higher tier, then a `(task class, model)` table read from runs already happening. The largest single cost lever in the system |
-| **The rollback drill** | The one thing standing between self-modification tiers 3–4 and being switched on (Phase 3b) |
 | **Other execution backends** | Codex, vLLM and Cursor adapters — the port is enforced today, but nothing else has been driven through it (Phase 3) |
 | **microVM isolation** | Containers alone are insufficient; Kata or microsandbox is the boundary (Phase 3) |
-| **A real browser in CI** | Deliberately the trailing item. Every UI defect this project has shipped was found by a human looking at a browser, and none by the test suite (Phase 3c) |
-
-**Every current limitation** — what it is, why it stands, and the section that closes it — is
-tabulated in **[the open-items list](./)**, including three found by audit rather than by use.
-Nothing is omitted there to make this page read better.
 
 ## Contributing
 
