@@ -134,6 +134,7 @@ import {
 } from '@loom/domain'
 import { ORPCError, implement } from '@orpc/server'
 import type { Principal } from './auth.js'
+import type { SubscriptionTokenMinter } from './subscription-token.js'
 
 /**
  * `position` is a Postgres bigserial, which a JSON number cannot carry faithfully,
@@ -202,6 +203,12 @@ const toWireAtlasEdge = (edge: AtlasEdge) => ({
 export interface RouterContext {
  readonly principal: Principal
  readonly deps: AgentDeps
+ /**
+ * Mints the realtime gateway's credential. A capability rather than the
+ * secret itself, so the router — which every client procedure runs through — never holds
+ * the key that authorises reading a workspace's stream.
+ */
+ readonly mintSubscriptionToken: SubscriptionTokenMinter
 }
 
 const os = implement(contract).$context<RouterContext>
@@ -252,6 +259,10 @@ export const router = os.router({
  maxConcurrentRunsPerWorkspace: context.deps.limits.maxConcurrentRunsPerWorkspace,
  },
  })),
+
+ subscriptionToken: os.session.subscriptionToken.handler(({ context }) =>
+ context.mintSubscriptionToken(context.principal.workspaceId),
+),
  },
 
  channel: {

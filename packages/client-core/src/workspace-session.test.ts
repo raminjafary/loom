@@ -40,7 +40,10 @@ const stubApi = (overrides: {
  backfill?: (input: { afterMessageId: string; limit?: number }) => Promise<Message[]>
 }): LoomApi =>
  ({
- session: { me: async => ({ actor: { kind: 'user', userId: 'u1' }, workspaceId: 'w1' }) },
+ session: {
+ me: async => ({ actor: { kind: 'user', userId: 'u1' }, workspaceId: 'w1' }),
+ subscriptionToken: async => ({ token: 'token', expiresAt: new Date }),
+ },
  channel: {
  list: async => [
  {

@@ -76,6 +76,23 @@ export const contract = {
  }),
  }),
 ),
+
+ /**
+ * A short-lived credential for the realtime gateway.
+ *
+ * Its own procedure rather than a field on `me`, because a socket outlives the token
+ * that opened it: a client reconnects for hours off one `me`, and a credential that
+ * came with identity would be stale by the second attempt. Takes no input — the
+ * workspace is read off the session, since a workspace id in the request is the exact
+ * forgery identity-bound approval closes.
+ */
+ subscriptionToken: oc.output(
+ z.object({
+ token: z.string,
+ /** Advisory: the gateway checks the signed expiry, never this field. */
+ expiresAt: z.date,
+ }),
+),
  },
 
  channel: {

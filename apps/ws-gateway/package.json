@@ -13,6 +13,7 @@
   "dependencies": {
     "@fastify/websocket": "^11.2.0",
     "@loom/api-contract": "workspace:*",
+    "@loom/domain": "workspace:*",
     "fastify": "^5.10.0",
     "ioredis": "^5.9.0",
     "zod": "^4.4.3"

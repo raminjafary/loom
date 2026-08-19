@@ -45,6 +45,7 @@ const config = loadConfig({
 ...process.env,
  NODE_ENV: 'test',
  BETTER_AUTH_SECRET: 'test-secret-at-least-32-characters-long-value',
+ WS_SUBSCRIPTION_SECRET: 'test-subscription-secret-at-least-32-chars',
 } as NodeJS.ProcessEnv)
 
 const { db, close: closeDb } = createDatabase(config.DATABASE_URL)

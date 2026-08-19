@@ -10,6 +10,24 @@ const EnvSchema = z.object({
  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
  BETTER_AUTH_SECRET: z.string.min(32, 'BETTER_AUTH_SECRET must be at least 32 characters'),
  BETTER_AUTH_URL: z.string.default('http://localhost:3001'),
+ /**
+ * Shared with apps/ws-gateway, and the only thing standing in front of a workspace's
+ * entire agent transcript. This server
+ * signs subscription tokens with it; the gateway verifies them and holds nothing else.
+ *
+ * Deliberately not `BETTER_AUTH_SECRET`: sharing that one would put the session-signing
+ * key in a stateless fan-out service that has no business holding it. Validated like
+ * `LOOM_EGRESS_CONTROL_SECRET` for the same reason — a copied example value is not a
+ * secret, and being merely *set* is not a check.
+ */
+ WS_SUBSCRIPTION_SECRET: z
+.string
+.min(32, 'WS_SUBSCRIPTION_SECRET must be at least 32 characters')
+.refine((secret) => !/change-me|changeme|your-secret|placeholder|example/i.test(secret), {
+ message:
+ 'WS_SUBSCRIPTION_SECRET still looks like the example value. It is the whole ' +
+ 'authentication of /ws/client — generate one with `openssl rand -base64 32`.',
+ }),
  // Dead-run reaper — see agent-use-cases.ts's
  // reapStuckRuns for how the two timeouts are used.
  REAPER_INTERVAL_MS: z.coerce.number.int.positive.default(30_000),

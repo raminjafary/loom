@@ -195,8 +195,8 @@ the CLI, but it needs the same underlying auth.
 
 ```bash
 pnpm install
-cp.env.example.env # then set BETTER_AUTH_SECRET
-openssl rand -base64 32 # ← use this for it
+cp.env.example.env # then set BETTER_AUTH_SECRET and WS_SUBSCRIPTION_SECRET
+openssl rand -base64 32 # ← generate one for each; both are refused if short
 make up # containers, migrations, then every app
 ```
 
@@ -375,6 +375,7 @@ Two things that otherwise cost you a pass:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `WS_SUBSCRIPTION_SECRET` | — | Shared by the server and the realtime gateway: the server signs a short-lived subscription token, the gateway verifies it. It is the whole authentication of `/ws/client`, so both refuse to start without a real one |
 | `LOOM_SANDBOX_ENABLED` | on | Container isolation per run. Needs `LOOM_EGRESS_CONTROL_SECRET` set, or runs are refused rather than sandboxed |
 | `LOOM_ALLOW_UNSANDBOXED` | unset | The acknowledgement that lets a run hold the Runner's privileges |
 | `LOOM_USE_HOST_CLAUDE_AUTH` | off | Lets the Runner read the host's Claude OAuth token and push it to the proxy |

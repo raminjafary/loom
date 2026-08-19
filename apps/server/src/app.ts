@@ -48,6 +48,7 @@ import type { Config } from './config.js'
 import { createEventPublisher } from './events.js'
 import { webPushNotificationPort } from './notifications.js'
 import { router } from './router.js'
+import { subscriptionTokenMinter } from './subscription-token.js'
 import { fileBlobStorage } from './blob-storage.js'
 import { createRunnerGateway } from './runner-gateway.js'
 
@@ -233,6 +234,8 @@ export const buildApp = async (
  await toNodeHandler(betterAuth.handler)(request.raw, reply.raw)
  })
 
+ const mintSubscriptionToken = subscriptionTokenMinter(config.WS_SUBSCRIPTION_SECRET)
+
  const handler = new RPCHandler(router)
 
  // oRPC reads the raw request stream itself, so Fastify must not consume the
@@ -256,7 +259,7 @@ export const buildApp = async (
 
  const { matched } = await handler.handle(request.raw, reply.raw, {
  prefix: '/rpc',
- context: { principal, deps },
+ context: { principal, deps, mintSubscriptionToken },
  })
 
  if (!matched) {

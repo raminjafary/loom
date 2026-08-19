@@ -216,6 +216,9 @@ importers:
       '@loom/api-contract':
         specifier: workspace:*
         version: link:../../packages/api-contract
+      '@loom/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       fastify:
         specifier: ^5.10.0
         version: 5.10.0

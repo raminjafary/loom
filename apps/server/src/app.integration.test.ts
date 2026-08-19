@@ -31,6 +31,7 @@ const config = loadConfig({
 ...process.env,
  NODE_ENV: 'test',
  BETTER_AUTH_SECRET: 'test-secret-at-least-32-characters-long-value',
+ WS_SUBSCRIPTION_SECRET: 'test-subscription-secret-at-least-32-chars',
  SERVER_PORT: '0',
  VAPID_PUBLIC_KEY: vapidKeys.publicKey,
  VAPID_PRIVATE_KEY: vapidKeys.privateKey,

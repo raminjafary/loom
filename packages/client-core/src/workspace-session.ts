@@ -341,7 +341,8 @@ export const createWorkspaceSession = (options: {
 
  realtime = connectRealtime({
  wsUrl: options.wsUrl,
- workspaceId: me.workspaceId,
+ // Fetched per connect, not held from `me` — see `RealtimeOptions.mintToken`.
+ mintToken: async => (await options.api.session.subscriptionToken).token,
  onEvent: handleEvent,
  onState: (connection) => patch({ connection }),
  // A dropped socket means missed frames; replay rather than assume.
