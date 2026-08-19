@@ -247,6 +247,20 @@ export const agentRun = pgTable(
  // Set once the Runner finishes cloning — null until then,
  // and for any run that fails before a workspace is ever prepared.
  clonePath: text('clone_path'),
+ /**
+ * The commit the clone opened at.
+ *
+ * Reported on the same frame as `clonePath`, where the mastery map already read it,
+ * and stored here because a *replay* needs it: an item in a held-out set is
+ * `(repository @ commit, task, observed outcome)`, and replaying at whatever the
+ * repository's head happens to be later means two candidates were screened on
+ * different problems. A control that drifts is not a control.
+ *
+ * Null for every run written before this column existed, and for any run that fails
+ * before a clone. The "no silent truncation" is why those are *excluded and
+ * counted* when a set is assembled rather than replayed at head.
+ */
+ baseCommitSha: text('base_commit_sha'),
  branchName: text('branch_name'),
  // Set by a human's end-of-run keep/discard decision on DiffView — null until then. `discarded` also implies the
  // clone on disk has been removed by the Runner.

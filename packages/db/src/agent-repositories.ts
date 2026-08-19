@@ -851,7 +851,13 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
  async recordWorkspace(workspaceId, id, patch) {
  const [row] = await db
 .update(agentRun)
-.set({ clonePath: patch.clonePath, branchName: patch.branchName })
+.set({
+ clonePath: patch.clonePath,
+ branchName: patch.branchName,
+ // Only written when the Runner sent one: an absent sha must not overwrite a
+ // recorded one, which is what a bare `patch.baseCommitSha ?? null` would do.
+...(patch.baseCommitSha === undefined ? {}: { baseCommitSha: patch.baseCommitSha }),
+ })
 .where(and(eq(agentRun.workspaceId, workspaceId), eq(agentRun.id, id)))
 .returning
  if (!row) throw new NotFoundError('AgentRun')

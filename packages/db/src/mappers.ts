@@ -483,6 +483,7 @@ export interface AgentRunRow {
  totalCostUsd: number | null
  errorMessage: string | null
  clonePath: string | null
+ baseCommitSha: string | null
  branchName: string | null
  branchDisposition: string | null
  lastHeartbeatAt: Date | null
@@ -552,6 +553,7 @@ export const toAgentRun = (row: AgentRunRow): AgentRun => ({
  totalCostUsd: row.totalCostUsd,
  errorMessage: row.errorMessage,
  clonePath: row.clonePath,
+ baseCommitSha: row.baseCommitSha,
  branchName: row.branchName,
  branchDisposition: toAgentRunBranchDisposition(row.branchDisposition),
  lastHeartbeatAt: row.lastHeartbeatAt,

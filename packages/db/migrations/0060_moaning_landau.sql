@@ -1,0 +1,1 @@
+ALTER TABLE "agent_run" ADD COLUMN "base_commit_sha" text;

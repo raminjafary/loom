@@ -7128,3 +7128,100 @@ The prompt it started with.`
  socket.close
  })
 })
+
+/**
+ * The generating side — the held-out screen. A replay item is `(repository @ commit, task,
+ * observed outcome)`, so the commit a run *started from* has to be on the row. The sha
+ * already travelled on `run_workspace_ready` for the mastery map; what was missing is
+ * that anything kept it for an ordinary run.
+ */
+describe('runner-gateway: the commit a run started from', => {
+ const readyRun = async (socket: WebSocket, repositoryId: string, threadId: string) => {
+ const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+ const run = await client.agentRun.start({ threadId, repositoryId, personaId: testPersonaId })
+ await startFrame
+ return run
+ }
+
+ const baseShaOf = async (runId: string): Promise<string | null> => {
+ const run = await app.deps.agentRuns.findById(asWorkspaceId(workspaceId), asAgentRunId(runId))
+ return run?.baseCommitSha ?? null
+ }
+
+ it('records the sha the clone opened at, for an ordinary run and not only a mastery one', async => {
+ const { socket, runnerId } = await pairFakeRunner('base-sha-runner')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const { rootThread } = await client.channel.create({ name: 'base-sha' })
+ const run = await readyRun(socket, repo.id, rootThread.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: run.id,
+ clonePath: '/tmp/base-sha',
+ branchName: 'loom/base-sha',
+ headSha: 'deadbeefcafe1234',
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ if ((await baseShaOf(run.id)) !== null) break
+ await new Promise((resolve) => setTimeout(resolve, 50))
+ }
+ expect(await baseShaOf(run.id)).toBe('deadbeefcafe1234')
+
+ socket.close
+ })
+
+ it('leaves it null when the Runner could not read a HEAD, rather than inventing one', async => {
+ // The "no silent truncation": an item with no commit is *excluded and counted*
+ // when a set is assembled, which only works if the absence is recorded as an absence.
+ const { socket, runnerId } = await pairFakeRunner('no-sha-runner')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const { rootThread } = await client.channel.create({ name: 'no-sha' })
+ const run = await readyRun(socket, repo.id, rootThread.id)
+
+ socket.send(
+ JSON.stringify({
+ type: 'run_workspace_ready',
+ runId: run.id,
+ clonePath: '/tmp/no-sha',
+ branchName: 'loom/no-sha',
+ }),
+)
+ for (let i = 0; i < 40; i += 1) {
+ const stored = await app.deps.agentRuns.findById(
+ asWorkspaceId(workspaceId),
+ asAgentRunId(run.id),
+)
+ if (stored?.clonePath !== null) break
+ await new Promise((resolve) => setTimeout(resolve, 50))
+ }
+ expect(await baseShaOf(run.id)).toBeNull
+
+ socket.close
+ })
+
+ it('does not erase a recorded sha when a later frame omits it', async => {
+ // A resumed or retried clone report is the case: `recordWorkspace` writes the whole
+ // patch, so an absent field that reached the column as null would lose the commit
+ // every replay item depends on.
+ const { socket, runnerId } = await pairFakeRunner('resume-sha-runner')
+ const repo = await bindViaFakeRunner(socket, runnerId)
+ const { rootThread } = await client.channel.create({ name: 'resume-sha' })
+ const run = await readyRun(socket, repo.id, rootThread.id)
+
+ const ready = { type: 'run_workspace_ready', runId: run.id, clonePath: '/tmp/resume', branchName: 'loom/resume' }
+ socket.send(JSON.stringify({...ready, headSha: 'aaaabbbbcccc' }))
+ for (let i = 0; i < 40; i += 1) {
+ if ((await baseShaOf(run.id)) !== null) break
+ await new Promise((resolve) => setTimeout(resolve, 50))
+ }
+ expect(await baseShaOf(run.id)).toBe('aaaabbbbcccc')
+
+ socket.send(JSON.stringify(ready))
+ await new Promise((resolve) => setTimeout(resolve, 300))
+ expect(await baseShaOf(run.id)).toBe('aaaabbbbcccc')
+
+ socket.close
+ })
+})

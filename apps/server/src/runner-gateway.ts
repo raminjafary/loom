@@ -624,6 +624,13 @@ export const createRunnerGateway = (
  agentRunId: asAgentRunId(frame.runId),
  clonePath: frame.clonePath,
  branchName: frame.branchName,
+ /**
+ * The same sha the mastery map already read off this frame, now also persisted
+ * on the run. Forwarded explicitly rather than by spreading the
+ * frame: a spread past a port is how this repository has dropped a field before,
+ * because excess-property checking does not apply to one.
+ */
+...(frame.headSha === undefined ? {}: { baseCommitSha: frame.headSha }),
  })
  // A mastery run's map is waiting on this: it was opened `pending` at dispatch,
  // because the commit only exists once the Runner has cloned.

@@ -1411,9 +1411,14 @@ export const connectRunner = (options: RunnerClientOptions): { close: => void } 
 )
  /**
  * The clone's HEAD travels with this frame because it is the first moment
- * anything knows it, and a mastery run's map is waiting on it. Best-effort: a repository
- * whose HEAD cannot be read still runs, and its map stays pending and is
- * marked failed rather than being given a revision nobody checked.
+ * anything knows it. Two things read it: a mastery run's map is waiting on
+ * it, and **every** run now
+ * records it as the commit it started from, because a held-out replay item is
+ * `(repository @ commit, task, outcome)` and a set that cannot pin the commit
+ * is not a control. Best-effort: a repository whose HEAD cannot be
+ * read still runs, its map stays pending rather than being given a revision
+ * nobody checked, and its run is excluded from a replay set rather than
+ * silently replayed at head.
  */
  const headSha = await readHeadSha(clonePath)
  send({

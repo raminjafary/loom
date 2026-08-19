@@ -488,7 +488,7 @@ export interface AgentRunRepositoryPort {
  recordWorkspace(
  workspaceId: WorkspaceId,
  id: AgentRunId,
- patch: { clonePath: string; branchName: string },
+ patch: { clonePath: string; branchName: string; baseCommitSha?: string },
 ): Promise<AgentRun>
  /**
  * How many runs reference a repository, and how many of those are still live.

@@ -557,6 +557,11 @@ export interface AgentRun {
  readonly errorMessage: string | null
  // Set once the Runner finishes cloning — null until then.
  readonly clonePath: string | null
+ /**
+ * The commit the clone opened at. Null before the Runner reports a
+ * workspace, and for every run older than the column.
+ */
+ readonly baseCommitSha: string | null
  readonly branchName: string | null
  // A human's end-of-run keep/discard decision on DiffView — null until made.
  readonly branchDisposition: AgentRunBranchDisposition | null

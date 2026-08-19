@@ -3515,11 +3515,18 @@ export const recordRunWorkspace = async (
  agentRunId: AgentRunId
  clonePath: string
  branchName: string
+ /**
+ * The commit the clone opened at. Optional because a Runner older
+ * than the field sends none, and absent is not the same as "no commit" — see the
+ * repository's write.
+ */
+ baseCommitSha?: string
  },
 ): Promise<AgentRun> => {
  const run = await deps.agentRuns.recordWorkspace(input.workspaceId, input.agentRunId, {
  clonePath: input.clonePath,
  branchName: input.branchName,
+...(input.baseCommitSha === undefined ? {}: { baseCommitSha: input.baseCommitSha }),
  })
 
  // The worker-notes design names the branch as one of the structural facts the platform knows
