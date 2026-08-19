@@ -1094,6 +1094,26 @@ export const router = os.router({
  reason: found.verifier.reason,
  detail: found.verifier.detail,
  },
+ // Named field by field for the reason the comment above gives, and this one is the
+ // case it warns about: the screen is what decides whether a candidate is measured
+ // at all, so a field dropped here is a refusal a human never sees.
+ screen:
+ found.screen === null
+ ? null
+: {
+ replaySetVersion: found.screen.replaySetVersion,
+ detail: found.screen.detail,
+ itemCount: found.screen.itemCount,
+ arms: found.screen.arms.map((arm) => ({
+ variantId: arm.variantId === null ? null: (arm.variantId as string),
+ decision: arm.decision,
+ reason: arm.reason,
+ passed: arm.passed,
+ failed: arm.failed,
+ notScored: arm.notScored,
+ pending: arm.pending,
+ })),
+ },
  arms: found.effect.arms.map((arm) => ({
  variantId: arm.variantId === null ? null: (arm.variantId as string),
  decided: arm.decided,

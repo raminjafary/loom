@@ -176,6 +176,13 @@ const search = computed( =>
  * Null is the incumbent, and the caller labels it: the prompt in use is not a candidate,
  * and a row that read "candidate: (none)" would hide the one arm a promotion displaces.
  */
+/**
+ * The screen row for one arm. Null when this search has no screen at all, which the
+ * markup renders as a sentence rather than as "0 admitted" — see the schema's note.
+ */
+const screenArmOf = (variantId: string | null) =>
+ search.value?.screen?.arms.find((arm) => arm.variantId === variantId) ?? null
+
 const candidateOf = (variantId: string | null) =>
  variantId === null
  ? null
@@ -920,6 +927,23 @@ const harnessSummary = (persona: AgentPersona): string => {
  <section v-if="mode === 'edit' && search" class="trial search">
  <h4>{{ search.leader ? 'A candidate is ahead': 'Trying several prompts' }}</h4>
  <p class="detail">{{ search.detail }}</p>
+ <!--
+ The held-out screen. Above the arms because it is upstream of them: a candidate
+ the screen refused has no arm, so a reader who met an empty row first would be looking
+ for a measurement that was deliberately never taken.
+
+ The set's version and its counts are shown rather than summarised — the "no
+ silent truncation" is only worth anything if the number that was left out reaches the
+ person reading the score.
+ -->
+ <p v-if="search.screen" class="detail screen-detail">
+ Screened against held-out set v{{ search.screen.replaySetVersion }}, before any live
+ run was spent: {{ search.screen.detail }}
+ </p>
+ <p v-else class="detail screen-detail">
+ Not screened against held-out work — this persona has too little decided history to
+ build a set from, so the arms below are the only measurement.
+ </p>
  <ul class="arms">
  <li v-for="arm in search.arms":key="arm.variantId ?? 'incumbent'">
  <strong>{{
@@ -936,6 +960,31 @@ const harnessSummary = (persona: AgentPersona): string => {
  STANDING_LABEL[arm.standing]
  }}</span>
  <!--
+ What the screen said, and why the arm above may be empty. `pending` is shown for
+ the reason a pending verification is shown on an Inbox card: a blank where a
+ verdict is coming reads as a verdict.
+ -->
+ <span
+ v-if="screenArmOf(arm.variantId)"
+ class="screen"
+:class="screenArmOf(arm.variantId)!.decision ?? 'screen-pending'"
+ >
+ <template v-if="screenArmOf(arm.variantId)!.pending > 0">
+ screening — {{ screenArmOf(arm.variantId)!.pending }} of
+ {{ search.screen!.itemCount }} held-out items still running
+ </template>
+ <template v-else>
+ held out: {{ screenArmOf(arm.variantId)!.passed }} passed,
+ {{ screenArmOf(arm.variantId)!.failed }} failed<template
+ v-if="screenArmOf(arm.variantId)!.notScored > 0"
+ >, {{ screenArmOf(arm.variantId)!.notScored }} not scored</template
+ >
+ </template>
+ </span>
+ <p v-if="screenArmOf(arm.variantId)?.reason" class="hint screen-reason">
+ {{ screenArmOf(arm.variantId)!.reason }}
+ </p>
+ <!--
  The candidate's own text, because promoting one is agreeing to it. A panel
  that showed only its score would be asking a human to approve a document
  they had not read.
@@ -944,6 +993,12 @@ const harnessSummary = (persona: AgentPersona): string => {
  <summary>read it</summary>
  <pre>{{ candidateOf(arm.variantId)?.body }}</pre>
  </details>
+ <!--
+ A rejected candidate can still be promoted, and that is deliberate: the screen
+ gates whether the platform *measures* a candidate, never whether a human may
+ choose it. The reason it was refused an arm is printed above, so the
+ choice is an informed one rather than a hidden one.
+ -->
  <ConfirmButton
  v-if="arm.variantId !== null"
  variant="link"
@@ -1054,6 +1109,31 @@ const harnessSummary = (persona: AgentPersona): string => {
 
 .trial.search.standing {
  opacity: 0.75;
+}
+
+/*
+ The screen. `rejected` is the only state that gets the danger colour, because it is
+ the only one that means a candidate was refused something — `not scored` and `pending` are
+ states of the measurement, not verdicts about a prompt.
+*/
+.trial.search.screen {
+ opacity: 0.85;
+}
+
+.trial.search.screen.rejected {
+ color: var(--danger, #f7768e);
+ opacity: 1;
+}
+
+.trial.search.screen.admitted {
+ color: var(--ok, #9ece6a);
+ opacity: 1;
+}
+
+.trial.search.screen-reason,
+.trial.search.screen-detail {
+ grid-column: 1 / -1;
+ margin: 0.15rem 0 0;
 }
 
 .trial.search.verdict {

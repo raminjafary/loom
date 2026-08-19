@@ -118,6 +118,7 @@ import {
  type PersonaRevisionId,
  type PersonaVariant,
  type ReplayCheckOutcome,
+ type ScreenDecision,
  type VariantScreenRunRecord,
  type PersonaVariantId,
  type PersonaVariantSet,
@@ -1770,6 +1771,59 @@ export const variantSearchFor = async (
 }
 
 /**
+ * What the screen has said about a search, for the panel.
+ *
+ * Null when there is no screen, which is the same distinction the gate makes and must survive
+ * onto the wire: a panel that showed "0 admitted" for a search that was never screened would be
+ * describing a refusal nobody made.
+ *
+ * `pending` is on the wire beside the counts for the reason the harness puts `pending` on an
+ * Inbox card: a blank where a verdict is coming reads as a verdict.
+ */
+export const screenForSearch = async (
+ deps: AgentDeps,
+ input: { workspaceId: WorkspaceId; setId: PersonaVariantSetId },
+): Promise<{
+ replaySetVersion: number
+ detail: string
+ itemCount: number
+ arms: {
+ variantId: PersonaVariantId | null
+ decision: ScreenDecision | null
+ reason: string | null
+ passed: number
+ failed: number
+ notScored: number
+ pending: number
+ }[]
+} | null> => {
+ const screens = await deps.screens.screensForSet(input.workspaceId, input.setId)
+ const first = screens[0]
+ if (!first) return null
+ const set = await deps.screens.findReplaySet(input.workspaceId, first.screen.replaySetId)
+ if (!set) return null
+ const items = await deps.screens.listReplayItems(input.workspaceId, first.screen.replaySetId)
+
+ return {
+ replaySetVersion: set.version,
+ detail: set.detail,
+ itemCount: items.length,
+ arms: screens.map(({ screen, runs }) => {
+ const count = (outcome: string) => runs.filter((run) => run.outcome === outcome).length
+ return {
+ variantId: screen.variantId,
+ decision: screen.decision,
+ reason: screen.reason,
+ passed: count('passed'),
+ failed: count('failed'),
+ notScored: count('not-scored'),
+ pending: count('pending'),
+ }
+ }),
+ }
+}
+
+/**
  * Every search running in the workspace, each with its own reading.
  *
  * The list a settings surface renders from. Empty is the ordinary answer: a search is
@@ -1790,6 +1844,8 @@ export const listVariantSearches = async (
  reason: string
  detail: string
  } | null
+ /** The screen, or null when this search has none. */
+ screen: Awaited<ReturnType<typeof screenForSearch>>
  }[]
 > => {
  const open = await deps.personaVariants.listOpenSets(input.workspaceId)
@@ -1821,6 +1877,10 @@ export const listVariantSearches = async (
  measured: effect.leader !== null,
  }),
  },
+ screen: await screenForSearch(deps, {
+ workspaceId: input.workspaceId,
+ setId: entry.set.id,
+ }),
  }
  }),
 )

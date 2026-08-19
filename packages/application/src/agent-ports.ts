@@ -884,6 +884,12 @@ export interface ScreenRepositoryPort {
  { workspaceId: WorkspaceId; setId: PersonaVariantSetId }[]
  >
 
+ /** One held-out set's own record — its version and the sentence stamped at assembly. */
+ findReplaySet(
+ workspaceId: WorkspaceId,
+ replaySetId: ReplaySetId,
+): Promise<ReplaySetRecord | null>
+
  /** The items of a set, in order, so the sweep can dispatch a run for one. */
  listReplayItems(
  workspaceId: WorkspaceId,

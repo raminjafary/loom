@@ -378,6 +378,7 @@ describe('the variant search panel', => {
  detail: 'One candidate is ahead.',
  leader: 'v2',
  verifier: null,
+ screen: null,
  candidates: [
  { variantId: 'v1', body: 'READ THE TESTS FIRST.', rationale: 'tests before code' },
  { variantId: 'v2', body: 'WRITE THE SMALLEST DIFF.', rationale: 'small diffs land' },
@@ -430,6 +431,87 @@ describe('the variant search panel', => {
  await wrapper.get('.row-actions.link').trigger('click')
  return wrapper
  }
+
+
+ /**
+ * The held-out screen on the panel. What matters is not that the numbers render — it is
+ * that the two states a reader will confuse are visibly different: a candidate the screen
+ * *refused* has an empty arm on purpose, and a search that was *never screened* has one for
+ * an entirely different reason.
+ */
+ const screened = (over: Partial<NonNullable<VariantSearch['screen']>> = {}) => ({
+ replaySetVersion: 3,
+ detail: '6 held-out items (5 merged, 1 discarded), from 40 decided runs considered.',
+ itemCount: 6,
+ arms: [
+ { variantId: null, decision: null, reason: null, passed: 5, failed: 1, notScored: 0, pending: 0 },
+ {
+ variantId: 'v1',
+ decision: 'rejected' as const,
+ reason: 'Rejected by the held-out screen: it passed 1 of 6 items (17%) where the prompt in use passed 5 of 6 (83%).',
+ passed: 1,
+ failed: 5,
+ notScored: 0,
+ pending: 0,
+ },
+ {
+ variantId: 'v2',
+ decision: 'admitted' as const,
+ reason: 'Admitted by the held-out screen: it passed 6 of 6 items (100%) against 83% for the prompt in use.',
+ passed: 6,
+ failed: 0,
+ notScored: 0,
+ pending: 0,
+ },
+ ],
+...over,
+ })
+
+ it('names the held-out set version, because a score without one compares two things', async => {
+ const wrapper = await openedSearch(search({ screen: screened }))
+ expect(wrapper.get('.trial.search').text).toContain('held-out set v3')
+ })
+
+ it('reports what the set left out rather than only what it holds', async => {
+ const wrapper = await openedSearch(search({ screen: screened }))
+ expect(wrapper.get('.trial.search').text).toContain('40 decided runs considered')
+ })
+
+ it('says a search was not screened, which is not the same as nothing being admitted', async => {
+ const wrapper = await openedSearch(search({ screen: null }))
+ const text = wrapper.get('.trial.search').text
+ expect(text).toContain('Not screened against held-out work')
+ expect(text).not.toContain('held-out set v')
+ })
+
+ it('gives the reason a candidate was refused an arm, which is why its arm may be empty', async => {
+ const wrapper = await openedSearch(search({ screen: screened }))
+ expect(wrapper.get('.trial.search').text).toContain('passed 1 of 6 items')
+ })
+
+ it('shows a candidate still being screened as screening, not as a verdict', async => {
+ const wrapper = await openedSearch(
+ search({
+ screen: screened({
+ arms: [
+ { variantId: null, decision: null, reason: null, passed: 6, failed: 0, notScored: 0, pending: 0 },
+ { variantId: 'v1', decision: null, reason: null, passed: 2, failed: 0, notScored: 0, pending: 4 },
+ { variantId: 'v2', decision: null, reason: null, passed: 0, failed: 0, notScored: 0, pending: 6 },
+ ],
+ }),
+ }),
+)
+ const text = wrapper.get('.trial.search').text
+ expect(text).toContain('4 of 6 held-out items still running')
+ // A blank where a verdict is coming reads as a verdict, so it must say it is coming.
+ expect(text).toContain('screening')
+ })
+
+ it('still offers to promote a rejected candidate — the screen gates measurement, not choice', async => {
+ const wrapper = await openedSearch(search({ screen: screened }))
+ const rejectedArm = wrapper.findAll('.trial.search.arms li')[1]!
+ expect(rejectedArm.text).toContain('Promote')
+ })
 
  it('shows every arm including the prompt in use, and each candidate"s own text', async => {
  const wrapper = await openedSearch(search)

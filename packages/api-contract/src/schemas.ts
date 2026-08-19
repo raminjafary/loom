@@ -970,6 +970,36 @@ export const VariantSearchSchema = z.object({
  standing: z.enum(['undecided', 'better', 'worse', 'no-better']),
  }),
 ),
+ /**
+ * The held-out screen: which candidates were allowed an arm at all, and why.
+ *
+ * **Null means this search has no screen** — it opened before there was one, or the persona
+ * has too few decided runs to build a set from. That is not the same as "nothing was
+ * admitted", and a panel that rendered them alike would be describing a refusal nobody made.
+ */
+ screen: z
+.object({
+ /** A score is meaningless without it: a set that changed measured something else. */
+ replaySetVersion: z.number.int,
+ /** `describeReplaySet`'s sentence, stamped at assembly — the counts, not a claim. */
+ detail: z.string,
+ itemCount: z.number.int,
+ arms: z.array(
+ z.object({
+ /** Null is the incumbent — the control, which is screened and never gated. */
+ variantId: z.string.nullable,
+ decision: z.enum(['admitted', 'rejected']).nullable,
+ reason: z.string.nullable,
+ passed: z.number.int,
+ failed: z.number.int,
+ notScored: z.number.int,
+ /** On the wire for the reason a `pending` verdict is on an Inbox card: a blank where
+ * a verdict is coming reads as a verdict. */
+ pending: z.number.int,
+ }),
+),
+ })
+.nullable,
 })
 
 export const AgentPersonaSchema = z.object({

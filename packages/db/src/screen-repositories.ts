@@ -315,6 +315,15 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
  }))
  },
 
+ async findReplaySet(workspaceId, replaySetId) {
+ const [row] = await db
+.select
+.from(replaySet)
+.where(and(eq(replaySet.workspaceId, workspaceId), eq(replaySet.id, replaySetId)))
+.limit(1)
+ return row ? toReplaySet(row): null
+ },
+
  async listReplayItems(workspaceId, replaySetId) {
  const rows = await db
 .select
