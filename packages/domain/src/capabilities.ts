@@ -3,7 +3,7 @@ import type { AgentPersonaId, CapabilityId, WorkspaceId } from './ids.js'
 /**
  * The capability registry.
  *
- * **This settles a contradiction the plan carries.** the roadmap lists skills attachment
+ * **This settles a contradiction the plan carries.** The roadmap lists skills attachment
  * under Phase 1, while the own phasing note puts MCP *and* skills behind this
  * registry in Phase 2. The registry reading wins, for a reason that only became
  * visible once `settingSources: []` landed: with filesystem settings off, a skill
@@ -22,47 +22,47 @@ export type CapabilityKind = 'mcp' | 'skill'
 export type McpTransport = 'stdio' | 'sse' | 'http'
 
 export interface Capability {
- readonly id: CapabilityId
- readonly workspaceId: WorkspaceId
- readonly kind: CapabilityKind
- readonly name: string
- readonly description: string
- /** MCP only. */
- readonly transport: McpTransport | null
- readonly command: string | null
- readonly args: string[]
- readonly url: string | null
- /**
- * MCP only, and the point of the "**pinned tool-list hash**". An MCP server is
- * a live process that decides for itself what tools it exposes; without a pin,
- * a server that was reviewed offering three read-only tools can start offering a
- * fourth that writes, and nothing would notice. Null until first observed.
- */
- readonly toolListHash: string | null
- /** Skill only: the SKILL.md source, held here rather than on any run's disk. */
- readonly content: string | null
- /**
- * Hosts a persona holding this may reach through the egress proxy.
- *
- * **The capability is the grant, and the tool is only the means.** A persona reaches
- * the open web because an operator attached something that says so — not because its
- * tool list happens to contain `WebFetch`, and not because a deployment-wide env var
- * opened the host for every run in the workspace. That is what makes "off by default"
- * a statement about an agent rather than about a deployment.
- */
- readonly egressHosts: string[]
- readonly createdAt: Date
- readonly updatedAt: Date
+  readonly id: CapabilityId
+  readonly workspaceId: WorkspaceId
+  readonly kind: CapabilityKind
+  readonly name: string
+  readonly description: string
+  /** MCP only. */
+  readonly transport: McpTransport | null
+  readonly command: string | null
+  readonly args: string[]
+  readonly url: string | null
+  /**
+   * MCP only, and the point of the "**pinned tool-list hash**". An MCP server is
+   * a live process that decides for itself what tools it exposes; without a pin,
+   * a server that was reviewed offering three read-only tools can start offering a
+   * fourth that writes, and nothing would notice. Null until first observed.
+   */
+  readonly toolListHash: string | null
+  /** Skill only: the SKILL.md source, held here rather than on any run's disk. */
+  readonly content: string | null
+  /**
+   * Hosts a persona holding this may reach through the egress proxy.
+   *
+   * **The capability is the grant, and the tool is only the means.** A persona reaches
+   * the open web because an operator attached something that says so — not because its
+   * tool list happens to contain `WebFetch`, and not because a deployment-wide env var
+   * opened the host for every run in the workspace. That is what makes "off by default"
+   * a statement about an agent rather than about a deployment.
+   */
+  readonly egressHosts: string[]
+  readonly createdAt: Date
+  readonly updatedAt: Date
 }
 
 /** One attachment, with the per-attachment scopes. */
 export interface PersonaCapability {
- readonly id: string
- readonly workspaceId: WorkspaceId
- readonly personaId: AgentPersonaId
- readonly capabilityId: CapabilityId
- /** Narrows what the persona may use from this capability; empty means everything it offers. */
- readonly allowedTools: string[]
+  readonly id: string
+  readonly workspaceId: WorkspaceId
+  readonly personaId: AgentPersonaId
+  readonly capabilityId: CapabilityId
+  /** Narrows what the persona may use from this capability; empty means everything it offers. */
+  readonly allowedTools: string[]
 }
 
 /**
@@ -72,38 +72,37 @@ export interface PersonaCapability {
  * back to the server to do so mid-start.
  */
 export type CapabilitySpec =
- | {
- readonly kind: 'mcp'
- readonly name: string
- readonly transport: McpTransport
- readonly command: string | null
- readonly args: string[]
- readonly url: string | null
- readonly toolListHash: string | null
- readonly allowedTools: string[]
- /**
- * Hosts a run holding this capability may reach through the egress proxy
- *.
- *
- * **The capability is the grant; the tool is only the means.** A persona reaches
- * the open web because an operator attached something that says so — not because
- * its tool list happens to contain `WebFetch`, and not because a deployment-wide
- * env var opened the host for every run in the workspace. That distinction is what
- * makes "off by default" true per persona rather than per deployment.
- *
- * Snapshotted onto the run like the rest of this spec, and attenuated with it: a
- * child may hold no capability its parent does not, so it can reach no host its
- * parent could not.
- */
- readonly egressHosts: string[]
- }
- | {
- readonly kind: 'skill'
- readonly name: string
- readonly content: string
- /** See the mcp variant: a skill may be a pure grant, with no tools of its own. */
- readonly egressHosts: string[]
- }
+  | {
+      readonly kind: 'mcp'
+      readonly name: string
+      readonly transport: McpTransport
+      readonly command: string | null
+      readonly args: string[]
+      readonly url: string | null
+      readonly toolListHash: string | null
+      readonly allowedTools: string[]
+      /**
+       * Hosts a run holding this capability may reach through the egress proxy.
+       *
+       * **The capability is the grant; the tool is only the means.** A persona reaches
+       * the open web because an operator attached something that says so — not because
+       * its tool list happens to contain `WebFetch`, and not because a deployment-wide
+       * env var opened the host for every run in the workspace. That distinction is what
+       * makes "off by default" true per persona rather than per deployment.
+       *
+       * Snapshotted onto the run like the rest of this spec, and attenuated with it: a
+       * child may hold no capability its parent does not, so it can reach no host its
+       * parent could not.
+       */
+      readonly egressHosts: string[]
+    }
+  | {
+      readonly kind: 'skill'
+      readonly name: string
+      readonly content: string
+      /** See the mcp variant: a skill may be a pure grant, with no tools of its own. */
+      readonly egressHosts: string[]
+    }
 
 /**
  * The canonical form a tool list is hashed over. Sorted and deduplicated so that
@@ -114,11 +113,11 @@ export type CapabilitySpec =
  * domain stays dependency-free and owns only what "the same tool list" means.
  */
 export const canonicalToolList = (tools: readonly string[]): string =>
- [...new Set(tools)].sort.join('\n')
+  [...new Set(tools)].sort().join('\n')
 
 export type ToolListVerdict =
- | { readonly ok: true; readonly firstObservation: boolean }
- | { readonly ok: false; readonly reason: string }
+  | { readonly ok: true; readonly firstObservation: boolean }
+  | { readonly ok: false; readonly reason: string }
 
 /**
  * Compares an MCP server's live tool list against what was pinned when a human
@@ -131,17 +130,17 @@ export type ToolListVerdict =
  * and a server that changed them has not been reviewed in its current form.
  */
 export const verifyToolListHash = (
- pinned: string | null,
- observed: string,
+  pinned: string | null,
+  observed: string,
 ): ToolListVerdict => {
- if (pinned === null) return { ok: true, firstObservation: true }
- if (pinned === observed) return { ok: true, firstObservation: false }
- return {
- ok: false,
- reason:
- 'This MCP server is offering a different set of tools than the one that was ' +
- 'reviewed. Re-review it and re-pin before using it again.',
- }
+  if (pinned === null) return { ok: true, firstObservation: true }
+  if (pinned === observed) return { ok: true, firstObservation: false }
+  return {
+    ok: false,
+    reason:
+      'This MCP server is offering a different set of tools than the one that was ' +
+      'reviewed. Re-review it and re-pin before using it again.',
+  }
 }
 
 /**
@@ -154,42 +153,42 @@ export const verifyToolListHash = (
  * around by attaching a capability to its child.
  */
 export const attenuateChildCapabilities = (
- parent: readonly CapabilitySpec[],
- child: readonly CapabilitySpec[],
+  parent: readonly CapabilitySpec[],
+  child: readonly CapabilitySpec[],
 ): { readonly ok: true } | { readonly ok: false; readonly reason: string } => {
- const parentNames = new Set(parent.map((capability) => capability.name))
- const escalated = child.filter((capability) => !parentNames.has(capability.name))
- if (escalated.length > 0) {
- return {
- ok: false,
- reason: `Child run may not use capabilities its parent lacks: ${escalated
-.map((capability) => capability.name)
-.join(', ')}`,
- }
- }
+  const parentNames = new Set(parent.map((capability) => capability.name))
+  const escalated = child.filter((capability) => !parentNames.has(capability.name))
+  if (escalated.length > 0) {
+    return {
+      ok: false,
+      reason: `Child run may not use capabilities its parent lacks: ${escalated
+        .map((capability) => capability.name)
+        .join(', ')}`,
+    }
+  }
 
- // A parent's narrowed tool list must narrow the child's too, or the scope on the
- // parent's attachment would be advisory.
- for (const childCapability of child) {
- if (childCapability.kind !== 'mcp') continue
- const parentCapability = parent.find(
- (candidate) => candidate.name === childCapability.name && candidate.kind === 'mcp',
-)
- if (!parentCapability || parentCapability.kind !== 'mcp') continue
- if (parentCapability.allowedTools.length === 0) continue
+  // A parent's narrowed tool list must narrow the child's too, or the scope on the
+  // parent's attachment would be advisory.
+  for (const childCapability of child) {
+    if (childCapability.kind !== 'mcp') continue
+    const parentCapability = parent.find(
+      (candidate) => candidate.name === childCapability.name && candidate.kind === 'mcp',
+    )
+    if (!parentCapability || parentCapability.kind !== 'mcp') continue
+    if (parentCapability.allowedTools.length === 0) continue
 
- const allowed = new Set(parentCapability.allowedTools)
- const wider =
- childCapability.allowedTools.length === 0
- ? ['(all tools)']
-: childCapability.allowedTools.filter((tool) => !allowed.has(tool))
- if (wider.length > 0) {
- return {
- ok: false,
- reason: `Child run's scope on ${childCapability.name} exceeds its parent's: ${wider.join(', ')}`,
- }
- }
- }
+    const allowed = new Set(parentCapability.allowedTools)
+    const wider =
+      childCapability.allowedTools.length === 0
+        ? ['(all tools)']
+        : childCapability.allowedTools.filter((tool) => !allowed.has(tool))
+    if (wider.length > 0) {
+      return {
+        ok: false,
+        reason: `Child run's scope on ${childCapability.name} exceeds its parent's: ${wider.join(', ')}`,
+      }
+    }
+  }
 
- return { ok: true }
+  return { ok: true }
 }

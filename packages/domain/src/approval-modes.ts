@@ -19,11 +19,11 @@
  * could quietly become a preference:
  *
  * - The path-scoped write boundary. A target outside the run's clone is
- * denied outright, in every mode, before a mode is consulted. `accept-edits`
- * therefore only ever skips a gate on a file *inside the run's own clone*, which is
- * what makes it a defensible middle rather than a smaller `auto`.
+ *   denied outright, in every mode, before a mode is consulted. `accept-edits`
+ *   therefore only ever skips a gate on a file *inside the run's own clone*, which is
+ *   what makes it a defensible middle rather than a smaller `auto`.
  * - The denied Bash effects (pushing, privilege escalation, credential reads). Those
- * are refusals, not questions, and no mode turns one into an allow.
+ *   are refusals, not questions, and no mode turns one into an allow.
  * - The sandbox, which is the actual boundary either way.
  */
 
@@ -35,7 +35,7 @@ export const APPROVAL_MODES: readonly ApprovalMode[] = ['ask', 'accept-edits', '
 export const DEFAULT_APPROVAL_MODE: ApprovalMode = 'ask'
 
 export const isApprovalMode = (value: unknown): value is ApprovalMode =>
- typeof value === 'string' && (APPROVAL_MODES as readonly string[]).includes(value)
+  typeof value === 'string' && (APPROVAL_MODES as readonly string[]).includes(value)
 
 /**
  * Higher is wider. The one definition of the order, so a child-start check, a
@@ -45,16 +45,16 @@ export const isApprovalMode = (value: unknown): value is ApprovalMode =>
 export const approvalModeRank = (mode: ApprovalMode): number => APPROVAL_MODES.indexOf(mode)
 
 export const isWiderApprovalMode = (child: ApprovalMode, parent: ApprovalMode): boolean =>
- approvalModeRank(child) > approvalModeRank(parent)
+  approvalModeRank(child) > approvalModeRank(parent)
 
 /**
  * The tools `accept-edits` covers: writing a file inside the run's own clone.
  *
- * Deliberately not `Bash`, and that is the whole distinction. A shell can write a
- * file too, but it can also push, install, read a credential and run anything the
- * model wrote — `classifyBashCommand` triages those and cannot be made sound (effect-based classification
- * says so itself), so "accept edits" must not silently mean "accept a shell that
- * happens to edit".
+ * Deliberately not `Bash`, and that is the whole distinction. A shell can write a file too,
+ * but it can also push, install, read a credential and run anything the model wrote —
+ * `classifyBashCommand` triages those and cannot be made sound (effect-based classification
+ * says so itself), so "accept edits" must not silently mean "accept a shell that happens to
+ * edit".
  */
 export const EDIT_TOOLS: readonly string[] = ['Edit', 'Write', 'NotebookEdit']
 
@@ -67,21 +67,21 @@ export const EDIT_TOOLS: readonly string[] = ['Edit', 'Write', 'NotebookEdit']
  * — never "a rule was skipped".
  */
 export const approvalModeAllows = (mode: ApprovalMode, toolName: string): boolean => {
- if (mode === 'auto') return true
- if (mode === 'accept-edits') return EDIT_TOOLS.includes(toolName)
- return false
+  if (mode === 'auto') return true
+  if (mode === 'accept-edits') return EDIT_TOOLS.includes(toolName)
+  return false
 }
 
 /** One line for a UI, in the terms a human chooses between. */
 export const describeApprovalMode = (mode: ApprovalMode): string => {
- switch (mode) {
- case 'ask':
- return 'Asks before every risky call.'
- case 'accept-edits':
- return 'Takes file edits inside its own clone; still asks before running a shell.'
- case 'auto':
- return 'Runs unattended — asks about nothing.'
- }
+  switch (mode) {
+    case 'ask':
+      return 'Asks before every risky call.'
+    case 'accept-edits':
+      return 'Takes file edits inside its own clone; still asks before running a shell.'
+    case 'auto':
+      return 'Runs unattended — asks about nothing.'
+  }
 }
 
 /**
@@ -94,9 +94,9 @@ export const describeApprovalMode = (mode: ApprovalMode): string => {
  * boolean's two states were the outer two.
  */
 export const approvalModeFromSnapshot = (snapshot: {
- readonly approvalMode?: unknown
- readonly autoApprove?: unknown
+  readonly approvalMode?: unknown
+  readonly autoApprove?: unknown
 }): ApprovalMode => {
- if (isApprovalMode(snapshot.approvalMode)) return snapshot.approvalMode
- return snapshot.autoApprove === true ? 'auto': DEFAULT_APPROVAL_MODE
+  if (isApprovalMode(snapshot.approvalMode)) return snapshot.approvalMode
+  return snapshot.autoApprove === true ? 'auto' : DEFAULT_APPROVAL_MODE
 }

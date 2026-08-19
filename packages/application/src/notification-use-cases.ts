@@ -1,17 +1,17 @@
 import {
- ForbiddenError,
- ValidationError,
- isHuman,
- type Actor,
- type NotificationTarget,
- type NotificationTransport,
- type WorkspaceId,
+  ForbiddenError,
+  ValidationError,
+  isHuman,
+  type Actor,
+  type NotificationTarget,
+  type NotificationTransport,
+  type WorkspaceId,
 } from '@loom/domain'
 import type { NotificationPort, NotificationTargetRepositoryPort } from './ports.js'
 
 export interface NotificationDeps {
- readonly notifications: NotificationPort
- readonly notificationTargets: NotificationTargetRepositoryPort
+  readonly notifications: NotificationPort
+  readonly notificationTargets: NotificationTargetRepositoryPort
 }
 
 /**
@@ -21,34 +21,34 @@ export interface NotificationDeps {
  * forgery identity-bound approval closes for approvals.
  */
 export const registerNotificationTarget = async (
- deps: NotificationDeps,
- input: {
- workspaceId: WorkspaceId
- actor: Actor
- transport: NotificationTransport
- endpoint: string
- credentials: Record<string, string>
- },
+  deps: NotificationDeps,
+  input: {
+    workspaceId: WorkspaceId
+    actor: Actor
+    transport: NotificationTransport
+    endpoint: string
+    credentials: Record<string, string>
+  },
 ): Promise<NotificationTarget> => {
- if (!isHuman(input.actor) || input.actor.kind !== 'user') {
- throw new ForbiddenError('Only a human may register a notification target')
- }
+  if (!isHuman(input.actor) || input.actor.kind !== 'user') {
+    throw new ForbiddenError('Only a human may register a notification target')
+  }
 
- const configured = deps.notifications.clientConfig
- if (configured.transport === null) {
- throw new ValidationError('Notifications are not configured on this deployment')
- }
- if (configured.transport !== input.transport) {
- throw new ValidationError(`Unsupported notification transport: ${input.transport}`)
- }
+  const configured = deps.notifications.clientConfig()
+  if (configured.transport === null) {
+    throw new ValidationError('Notifications are not configured on this deployment')
+  }
+  if (configured.transport !== input.transport) {
+    throw new ValidationError(`Unsupported notification transport: ${input.transport}`)
+  }
 
- return deps.notificationTargets.register({
- workspaceId: input.workspaceId,
- userId: input.actor.userId,
- transport: input.transport,
- endpoint: input.endpoint,
- credentials: input.credentials,
- })
+  return deps.notificationTargets.register({
+    workspaceId: input.workspaceId,
+    userId: input.actor.userId,
+    transport: input.transport,
+    endpoint: input.endpoint,
+    credentials: input.credentials,
+  })
 }
 
 /**
@@ -59,17 +59,17 @@ export const registerNotificationTarget = async (
  * enumerate anyone else's.
  */
 export const unregisterNotificationTarget = async (
- deps: NotificationDeps,
- input: { workspaceId: WorkspaceId; actor: Actor; endpoint: string },
+  deps: NotificationDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; endpoint: string },
 ): Promise<void> => {
- if (!isHuman(input.actor)) {
- throw new ForbiddenError('Only a human may unregister a notification target')
- }
- await deps.notificationTargets.unregister(input.workspaceId, input.endpoint)
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError('Only a human may unregister a notification target')
+  }
+  await deps.notificationTargets.unregister(input.workspaceId, input.endpoint)
 }
 
 /** What a client needs before it can subscribe; see NotificationPort.clientConfig. */
 export const getNotificationConfig = (
- deps: NotificationDeps,
+  deps: NotificationDeps,
 ): { transport: NotificationTransport | null; publicKey: string | null } =>
- deps.notifications.clientConfig
+  deps.notifications.clientConfig()

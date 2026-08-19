@@ -16,21 +16,21 @@ import type { Thread } from '@loom/api-contract'
 
 /** Message id → the thread hanging off it. At most one, by construction. */
 export const threadsByParentMessage = (threads: readonly Thread[]): Map<string, Thread> => {
- const byParent = new Map<string, Thread>
- for (const thread of threads) {
- if (thread.parentMessageId === null) continue
- // First wins rather than last: threads come back oldest-first, and if a message
- // ever ended up with two, the one the announcement described is the older.
- if (!byParent.has(thread.parentMessageId)) byParent.set(thread.parentMessageId, thread)
- }
- return byParent
+  const byParent = new Map<string, Thread>()
+  for (const thread of threads) {
+    if (thread.parentMessageId === null) continue
+    // First wins rather than last: threads come back oldest-first, and if a message
+    // ever ended up with two, the one the announcement described is the older.
+    if (!byParent.has(thread.parentMessageId)) byParent.set(thread.parentMessageId, thread)
+  }
+  return byParent
 }
 
 export interface ThreadTrailStep {
- readonly threadId: string
- readonly label: string
- /** The step the user is currently in — rendered as text, not as a link back to itself. */
- readonly current: boolean
+  readonly threadId: string
+  readonly label: string
+  /** The step the user is currently in — rendered as text, not as a link back to itself. */
+  readonly current: boolean
 }
 
 /**
@@ -51,40 +51,40 @@ export interface ThreadTrailStep {
  * rather than a message list, so this stays a pure function over ids.
  */
 export const buildThreadTrail = (
- threads: readonly Thread[],
- activeThreadId: string | null,
- labelFor: (parentMessageId: string) => string | null,
+  threads: readonly Thread[],
+  activeThreadId: string | null,
+  labelFor: (parentMessageId: string) => string | null,
 ): ThreadTrailStep[] => {
- const root = threads.find((thread) => thread.isRoot) ?? null
- const active =
- activeThreadId === null ? null: (threads.find((t) => t.id === activeThreadId) ?? null)
- if (!active || !root) return []
- // A channel whose active thread is its root has no trail to draw: one step that is
- // also the root is a breadcrumb reading "you are here", which is noise on every
- // ordinary channel and on every channel that has never run a swarm.
- if (active.id === root.id) return []
+  const root = threads.find((thread) => thread.isRoot) ?? null
+  const active =
+    activeThreadId === null ? null : (threads.find((t) => t.id === activeThreadId) ?? null)
+  if (!active || !root) return []
+  // A channel whose active thread is its root has no trail to draw: one step that is
+  // also the root is a breadcrumb reading "you are here", which is noise on every
+  // ordinary channel and on every channel that has never run a swarm.
+  if (active.id === root.id) return []
 
- return [
- { threadId: root.id, label: 'Channel', current: false },
- {
- threadId: active.id,
- label: (active.parentMessageId && labelFor(active.parentMessageId)) || 'Area',
- current: true,
- },
- ]
+  return [
+    { threadId: root.id, label: 'Channel', current: false },
+    {
+      threadId: active.id,
+      label: (active.parentMessageId && labelFor(active.parentMessageId)) || 'Area',
+      current: true,
+    },
+  ]
 }
 
 /**
  * A short label for an area thread, from the announcement message that spawned it.
  *
- * The announcement is platform-authored and shaped `"<title> → <persona>:..."`, so the
+ * The announcement is platform-authored and shaped `"<title> → <persona>: ..."`, so the
  * part before the arrow is the subtask title the Planner chose. Falls back to the whole
  * line trimmed, then to "Area" — a breadcrumb that says nothing is still better than
  * one that says `undefined`.
  */
 export const areaLabelFromAnnouncement = (text: string | null | undefined): string => {
- if (!text) return 'Area'
- const beforeArrow = text.split('→')[0]?.trim
- if (beforeArrow && beforeArrow.length > 0) return beforeArrow.slice(0, 60)
- return text.trim.slice(0, 60) || 'Area'
+  if (!text) return 'Area'
+  const beforeArrow = text.split('→')[0]?.trim()
+  if (beforeArrow && beforeArrow.length > 0) return beforeArrow.slice(0, 60)
+  return text.trim().slice(0, 60) || 'Area'
 }

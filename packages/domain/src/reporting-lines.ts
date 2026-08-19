@@ -31,9 +31,9 @@
  * saying who *should* do this work, never granting permission to do it.
  *
  * **3. It is a tree, and cycles are refused.** A sub-planner reporting to a root planner is
- * the whole point — that is the chain of command the corporation describes. Two planners reporting
- * to each other is not a chain, and left unchecked it would make "which planner is this
- * worker's" depend on which one asked first.
+ * the whole point — that is the chain of command the corporation describes. Two planners
+ * reporting to each other is not a chain, and left unchecked it would make "which planner
+ * is this worker's" depend on which one asked first.
  */
 
 export type ReportingLines = Record<string, string>
@@ -45,12 +45,12 @@ export type ReportingLines = Record<string, string>
  * team's current state, so absence has to mean "no narrowing" rather than "nobody".
  */
 export const reportsToPlanner = (
- lines: ReportingLines,
- workerPersonaId: string,
- plannerPersonaId: string,
+  lines: ReportingLines,
+  workerPersonaId: string,
+  plannerPersonaId: string,
 ): boolean => {
- const assigned = lines[workerPersonaId]
- return assigned === undefined || assigned === plannerPersonaId
+  const assigned = lines[workerPersonaId]
+  return assigned === undefined || assigned === plannerPersonaId
 }
 
 /**
@@ -60,14 +60,14 @@ export const reportsToPlanner = (
  * roster: this file knows about ids and assignments and deliberately nothing else.
  */
 export const scopeToReportingLines = <T extends { readonly id: string }>(
- candidates: readonly T[],
- lines: ReportingLines,
- plannerPersonaId: string,
+  candidates: readonly T[],
+  lines: ReportingLines,
+  plannerPersonaId: string,
 ): T[] => candidates.filter((candidate) => reportsToPlanner(lines, candidate.id, plannerPersonaId))
 
 /** Whether any line is drawn at all — what tells "nobody assigned" from "assigned elsewhere". */
 export const hasReportingLines = (lines: ReportingLines): boolean =>
- Object.keys(lines).length > 0
+  Object.keys(lines).length > 0
 
 /**
  * What a save would refuse.
@@ -77,69 +77,69 @@ export const hasReportingLines = (lines: ReportingLines): boolean =>
  * a canvas that reports one refusal at a time is the failure the roadmap describes.
  */
 export const reportingLineProblems = (input: {
- /** The team's members. A line to or from a non-member is a line to nothing. */
- readonly memberIds: readonly string[]
- /** Which members are planners, by id. Only a planner can be reported *to*. */
- readonly plannerIds: readonly string[]
- readonly lines: ReportingLines
- /** For messages a human can act on — ids are not what they drew. */
- readonly nameOf?: (personaId: string) => string
+  /** The team's members. A line to or from a non-member is a line to nothing. */
+  readonly memberIds: readonly string[]
+  /** Which members are planners, by id. Only a planner can be reported *to*. */
+  readonly plannerIds: readonly string[]
+  readonly lines: ReportingLines
+  /** For messages a human can act on — ids are not what they drew. */
+  readonly nameOf?: (personaId: string) => string
 }): string[] => {
- const problems: string[] = []
- const members = new Set(input.memberIds)
- const planners = new Set(input.plannerIds)
- const name = input.nameOf ?? ((id: string) => id)
+  const problems: string[] = []
+  const members = new Set(input.memberIds)
+  const planners = new Set(input.plannerIds)
+  const name = input.nameOf ?? ((id: string) => id)
 
- for (const [workerId, plannerId] of Object.entries(input.lines)) {
- if (!members.has(workerId)) {
- problems.push(`${name(workerId)} is not on this team, so it cannot report to anyone here.`)
- continue
- }
- if (!members.has(plannerId)) {
- problems.push(`${name(workerId)} reports to ${name(plannerId)}, who is not on this team.`)
- continue
- }
- if (workerId === plannerId) {
- problems.push(`${name(workerId)} cannot report to itself.`)
- continue
- }
- /**
- * Only a planner may be reported to, and this is the check that keeps a reporting line
- * from meaning something the runtime cannot do: a worker is never given a roster, so a
- * line into one would be an assignment nothing ever reads.
- */
- if (!planners.has(plannerId)) {
- problems.push(
- `${name(plannerId)} is not a planner, so nothing can report to it — only a planner is ` +
- 'given a roster to delegate from.',
-)
- }
- }
+  for (const [workerId, plannerId] of Object.entries(input.lines)) {
+    if (!members.has(workerId)) {
+      problems.push(`${name(workerId)} is not on this team, so it cannot report to anyone here.`)
+      continue
+    }
+    if (!members.has(plannerId)) {
+      problems.push(`${name(workerId)} reports to ${name(plannerId)}, who is not on this team.`)
+      continue
+    }
+    if (workerId === plannerId) {
+      problems.push(`${name(workerId)} cannot report to itself.`)
+      continue
+    }
+    /**
+     * Only a planner may be reported to, and this is the check that keeps a reporting line
+     * from meaning something the runtime cannot do: a worker is never given a roster, so a
+     * line into one would be an assignment nothing ever reads.
+     */
+    if (!planners.has(plannerId)) {
+      problems.push(
+        `${name(plannerId)} is not a planner, so nothing can report to it — only a planner is ` +
+          'given a roster to delegate from.',
+      )
+    }
+  }
 
- /**
- * Cycles, walked from each assigned worker.
- *
- * A chain is legitimate and a loop is not — see decision 3. Walked rather than
- * depth-limited because the chain's length is bounded by the team's size and a
- * depth-limited check would call a long legitimate chain a cycle.
- */
- for (const start of Object.keys(input.lines)) {
- const seen = new Set<string>([start])
- let current = input.lines[start]
- while (current !== undefined) {
- if (seen.has(current)) {
- problems.push(
- `${name(start)}'s reporting line runs in a circle (through ${name(current)}). A chain ` +
- 'of command has to end somewhere.',
-)
- break
- }
- seen.add(current)
- current = input.lines[current]
- }
- }
+  /**
+   * Cycles, walked from each assigned worker.
+   *
+   * A chain is legitimate and a loop is not — see decision 3. Walked rather than
+   * depth-limited because the chain's length is bounded by the team's size and a
+   * depth-limited check would call a long legitimate chain a cycle.
+   */
+  for (const start of Object.keys(input.lines)) {
+    const seen = new Set<string>([start])
+    let current = input.lines[start]
+    while (current !== undefined) {
+      if (seen.has(current)) {
+        problems.push(
+          `${name(start)}'s reporting line runs in a circle (through ${name(current)}). A chain ` +
+            'of command has to end somewhere.',
+        )
+        break
+      }
+      seen.add(current)
+      current = input.lines[current]
+    }
+  }
 
- return [...new Set(problems)]
+  return [...new Set(problems)]
 }
 
 /**
@@ -154,33 +154,33 @@ export const reportingLineProblems = (input: {
  * one, which is every team today.
  */
 export const describeReportingLines = (input: {
- readonly lines: ReportingLines
- readonly plannerPersonaId: string
- readonly assignedNames: readonly string[]
- readonly elsewhereNames: readonly string[]
+  readonly lines: ReportingLines
+  readonly plannerPersonaId: string
+  readonly assignedNames: readonly string[]
+  readonly elsewhereNames: readonly string[]
 }): string => {
- if (!hasReportingLines(input.lines)) return ''
- if (input.assignedNames.length === 0 && input.elsewhereNames.length === 0) return ''
+  if (!hasReportingLines(input.lines)) return ''
+  if (input.assignedNames.length === 0 && input.elsewhereNames.length === 0) return ''
 
- const parts: string[] = ['', '']
- if (input.assignedNames.length > 0) {
- parts.push(
- `On this team, ${input.assignedNames.join(', ')} report(s) to you. Those are your people ` +
- 'and the work you decompose is theirs to do.',
-)
- }
- /**
- * Naming who is *not* yours, and why that is worth the words: a planner that cannot see a
- * persona it knows exists will otherwise assign work to it and have the subtask refused,
- * or decide the goal is impossible. "Somebody else's" is a fact it can act on — by giving
- * that part of the goal to the planner who owns them.
- */
- if (input.elsewhereNames.length > 0) {
- parts.push(
- `${input.elsewhereNames.join(', ')} are on this team but report to another planner, so ` +
- 'they are not yours to assign. If part of the goal belongs to them, give that part to ' +
- 'the planner they report to instead of naming them directly.',
-)
- }
- return parts.join('\n')
+  const parts: string[] = ['', '']
+  if (input.assignedNames.length > 0) {
+    parts.push(
+      `On this team, ${input.assignedNames.join(', ')} report(s) to you. Those are your people ` +
+        'and the work you decompose is theirs to do.',
+    )
+  }
+  /**
+   * Naming who is *not* yours, and why that is worth the words: a planner that cannot see a
+   * persona it knows exists will otherwise assign work to it and have the subtask refused,
+   * or decide the goal is impossible. "Somebody else's" is a fact it can act on — by giving
+   * that part of the goal to the planner who owns them.
+   */
+  if (input.elsewhereNames.length > 0) {
+    parts.push(
+      `${input.elsewhereNames.join(', ')} are on this team but report to another planner, so ` +
+        'they are not yours to assign. If part of the goal belongs to them, give that part to ' +
+        'the planner they report to instead of naming them directly.',
+    )
+  }
+  return parts.join('\n')
 }

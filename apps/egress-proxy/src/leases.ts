@@ -14,39 +14,39 @@ import { createHash, randomBytes } from 'node:crypto'
  */
 
 export interface Lease {
- readonly runId: string
- readonly token: string
- /** Null means unmetered — no cap to enforce. */
- readonly budgetCapUsd: number | null
- spentUsd: number
- /**
- * Set once a cap is breached. Latched rather than recomputed so that a run
- * cannot slip another request through while its abort is still in flight.
- */
- exhausted: boolean
- /**
- * Hosts this run may reach **on top of** the deployment allowlist.
- *
- * On the lease rather than in the proxy's own config, because that is what makes the
- * grant a property of the *agent*: a persona with no capability saying "the web" gets
- * an empty list, and a persona that has one reaches only what its operator named. The
- * lease is issued from the run's frozen persona snapshot, so a mid-run edit cannot
- * widen it and a child cannot hold a host its parent could not.
- */
- readonly egressHosts: readonly string[]
- readonly createdAt: number
+  readonly runId: string
+  readonly token: string
+  /** Null means unmetered — no cap to enforce. */
+  readonly budgetCapUsd: number | null
+  spentUsd: number
+  /**
+   * Set once a cap is breached. Latched rather than recomputed so that a run
+   * cannot slip another request through while its abort is still in flight.
+   */
+  exhausted: boolean
+  /**
+   * Hosts this run may reach **on top of** the deployment allowlist.
+   *
+   * On the lease rather than in the proxy's own config, because that is what makes the
+   * grant a property of the *agent*: a persona with no capability saying "the web" gets
+   * an empty list, and a persona that has one reaches only what its operator named. The
+   * lease is issued from the run's frozen persona snapshot, so a mid-run edit cannot
+   * widen it and a child cannot hold a host its parent could not.
+   */
+  readonly egressHosts: readonly string[]
+  readonly createdAt: number
 }
 
 export interface UsageRecord {
- readonly runId: string
- readonly model: string
- readonly usage: TokenUsage
- /** Null when the model has no price entry — see usageCostUsd. */
- readonly costUsd: number | null
- readonly spentUsd: number
- readonly capUsd: number | null
- /** True on the request that pushed this run over its cap. */
- readonly exhausted: boolean
+  readonly runId: string
+  readonly model: string
+  readonly usage: TokenUsage
+  /** Null when the model has no price entry — see usageCostUsd. */
+  readonly costUsd: number | null
+  readonly spentUsd: number
+  readonly capUsd: number | null
+  /** True on the request that pushed this run over its cap. */
+  readonly exhausted: boolean
 }
 
 /**
@@ -80,99 +80,99 @@ const TOKEN_PREFIX = 'sk-ant-api03-'
 const TOKEN_LENGTH = 108
 
 export const createLeaseRegistry = (options: {
- onUsage?: (record: UsageRecord) => void
+  onUsage?: (record: UsageRecord) => void
 } = {}) => {
- const byToken = new Map<string, Lease>
- const byRunId = new Map<string, Lease>
+  const byToken = new Map<string, Lease>()
+  const byRunId = new Map<string, Lease>()
 
- return {
- issue(input: {
- runId: string
- budgetCapUsd: number | null
- egressHosts?: readonly string[]
- }): Lease {
- // Re-leasing the same run replaces the old token rather than adding a
- // second one, so a Runner restart cannot leave a live orphan token behind.
- const existing = byRunId.get(input.runId)
- if (existing) byToken.delete(existing.token)
+  return {
+    issue(input: {
+      runId: string
+      budgetCapUsd: number | null
+      egressHosts?: readonly string[]
+    }): Lease {
+      // Re-leasing the same run replaces the old token rather than adding a
+      // second one, so a Runner restart cannot leave a live orphan token behind.
+      const existing = byRunId.get(input.runId)
+      if (existing) byToken.delete(existing.token)
 
- const lease: Lease = {
- runId: input.runId,
- token: `${TOKEN_PREFIX}${randomBytes(TOKEN_LENGTH)
-.toString('hex')
-.slice(0, TOKEN_LENGTH - TOKEN_PREFIX.length)}`,
- budgetCapUsd: input.budgetCapUsd,
- // Replaced on a re-lease rather than carried over, unlike spend: the hosts come
- // from the persona snapshot the Runner is starting with, and the newer snapshot
- // is the authority on what this run was granted.
- egressHosts: input.egressHosts ?? [],
- // Spend carries over across a re-lease: a run must not get a fresh
- // budget by reconnecting.
- spentUsd: existing?.spentUsd ?? 0,
- exhausted: existing?.exhausted ?? false,
- createdAt: Date.now,
- }
- byToken.set(lease.token, lease)
- byRunId.set(lease.runId, lease)
- return lease
- },
+      const lease: Lease = {
+        runId: input.runId,
+        token: `${TOKEN_PREFIX}${randomBytes(TOKEN_LENGTH)
+          .toString('hex')
+          .slice(0, TOKEN_LENGTH - TOKEN_PREFIX.length)}`,
+        budgetCapUsd: input.budgetCapUsd,
+        // Replaced on a re-lease rather than carried over, unlike spend: the hosts come
+        // from the persona snapshot the Runner is starting with, and the newer snapshot
+        // is the authority on what this run was granted.
+        egressHosts: input.egressHosts ?? [],
+        // Spend carries over across a re-lease: a run must not get a fresh
+        // budget by reconnecting.
+        spentUsd: existing?.spentUsd ?? 0,
+        exhausted: existing?.exhausted ?? false,
+        createdAt: Date.now(),
+      }
+      byToken.set(lease.token, lease)
+      byRunId.set(lease.runId, lease)
+      return lease
+    },
 
- revoke(runId: string): boolean {
- const lease = byRunId.get(runId)
- if (!lease) return false
- byToken.delete(lease.token)
- byRunId.delete(runId)
- return true
- },
+    revoke(runId: string): boolean {
+      const lease = byRunId.get(runId)
+      if (!lease) return false
+      byToken.delete(lease.token)
+      byRunId.delete(runId)
+      return true
+    },
 
- resolve(token: string | null): Lease | null {
- if (!token) return null
- return byToken.get(token) ?? null
- },
+    resolve(token: string | null): Lease | null {
+      if (!token) return null
+      return byToken.get(token) ?? null
+    },
 
- findByRunId(runId: string): Lease | null {
- return byRunId.get(runId) ?? null
- },
+    findByRunId(runId: string): Lease | null {
+      return byRunId.get(runId) ?? null
+    },
 
- /**
- * Hashed identifiers of every live lease, for refusal logs. Hashes rather than
- * tokens so a log can answer "was this ever issued?" without being a place a
- * token leaks.
- */
- fingerprints: string[] {
- return [...byToken.entries].map(
- ([token, lease]) =>
- `${lease.runId}:${createHash('sha256').update(token).digest('hex').slice(0, 10)}`,
-)
- },
+    /**
+     * Hashed identifiers of every live lease, for refusal logs. Hashes rather than
+     * tokens so a log can answer "was this ever issued?" without being a place a
+     * token leaks.
+     */
+    fingerprints(): string[] {
+      return [...byToken.entries()].map(
+        ([token, lease]) =>
+          `${lease.runId}:${createHash('sha256').update(token).digest('hex').slice(0, 10)}`,
+      )
+    },
 
- /**
- * Records one metered call and reports whether the run has now exhausted its
- * cap. An unpriced model contributes nothing to `spentUsd` — the alternative,
- * guessing a price, would enforce a cap against a number nobody can audit —
- * and `costUsd: null` in the record is what makes that visible upstream
- * rather than silent.
- */
- meter(lease: Lease, model: string, usage: TokenUsage): UsageRecord {
- const costUsd = usageCostUsd(model, usage)
- if (costUsd !== null) lease.spentUsd += costUsd
- if (lease.budgetCapUsd !== null && lease.spentUsd >= lease.budgetCapUsd) {
- lease.exhausted = true
- }
+    /**
+     * Records one metered call and reports whether the run has now exhausted its
+     * cap. An unpriced model contributes nothing to `spentUsd` — the alternative,
+     * guessing a price, would enforce a cap against a number nobody can audit —
+     * and `costUsd: null` in the record is what makes that visible upstream
+     * rather than silent.
+     */
+    meter(lease: Lease, model: string, usage: TokenUsage): UsageRecord {
+      const costUsd = usageCostUsd(model, usage)
+      if (costUsd !== null) lease.spentUsd += costUsd
+      if (lease.budgetCapUsd !== null && lease.spentUsd >= lease.budgetCapUsd) {
+        lease.exhausted = true
+      }
 
- const record: UsageRecord = {
- runId: lease.runId,
- model,
- usage,
- costUsd,
- spentUsd: lease.spentUsd,
- capUsd: lease.budgetCapUsd,
- exhausted: lease.exhausted,
- }
- options.onUsage?.(record)
- return record
- },
- }
+      const record: UsageRecord = {
+        runId: lease.runId,
+        model,
+        usage,
+        costUsd,
+        spentUsd: lease.spentUsd,
+        capUsd: lease.budgetCapUsd,
+        exhausted: lease.exhausted,
+      }
+      options.onUsage?.(record)
+      return record
+    },
+  }
 }
 
 export type LeaseRegistry = ReturnType<typeof createLeaseRegistry>

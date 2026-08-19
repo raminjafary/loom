@@ -10,21 +10,21 @@ import { workspaceMember } from './schema.js'
  * not something to half-build under this task.
  */
 export const ensureWorkspaceMembership = async (
- db: Database,
- userId: string,
- defaults: { slug: string; name: string },
+  db: Database,
+  userId: string,
+  defaults: { slug: string; name: string },
 ): Promise<{ workspaceId: string; created: boolean }> => {
- const { id: workspaceId, created } = await ensureWorkspace(db, defaults.slug, defaults.name)
+  const { id: workspaceId, created } = await ensureWorkspace(db, defaults.slug, defaults.name)
 
- const existing = await db
-.select({ id: workspaceMember.id })
-.from(workspaceMember)
-.where(and(eq(workspaceMember.workspaceId, workspaceId), eq(workspaceMember.userId, userId)))
-.limit(1)
+  const existing = await db
+    .select({ id: workspaceMember.id })
+    .from(workspaceMember)
+    .where(and(eq(workspaceMember.workspaceId, workspaceId), eq(workspaceMember.userId, userId)))
+    .limit(1)
 
- if (!existing[0]) {
- await db.insert(workspaceMember).values({ workspaceId, userId, role: 'member' })
- }
+  if (!existing[0]) {
+    await db.insert(workspaceMember).values({ workspaceId, userId, role: 'member' })
+  }
 
- return { workspaceId, created }
+  return { workspaceId, created }
 }

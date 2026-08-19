@@ -1,9 +1,9 @@
 import { createHmac } from 'node:crypto'
 import {
- SUBSCRIPTION_TOKEN_TTL_MS,
- formatSubscriptionToken,
- subscriptionTokenSignedInput,
- type WorkspaceId,
+  SUBSCRIPTION_TOKEN_TTL_MS,
+  formatSubscriptionToken,
+  subscriptionTokenSignedInput,
+  type WorkspaceId,
 } from '@loom/domain'
 
 /**
@@ -16,25 +16,25 @@ import {
  */
 
 export interface SubscriptionTokenGrant {
- readonly token: string
- readonly expiresAt: Date
+  readonly token: string
+  readonly expiresAt: Date
 }
 
 export type SubscriptionTokenMinter = (workspaceId: WorkspaceId) => SubscriptionTokenGrant
 
 export const subscriptionTokenMinter =
- (secret: string, clock: => number = Date.now): SubscriptionTokenMinter =>
- (workspaceId) => {
- const expiresAtMs = clock + SUBSCRIPTION_TOKEN_TTL_MS
- /**
- * The workspace is taken from the resolved session by every caller and never from
- * input — the rule, and the one that matters most here, since a minted token is
- * exactly the authority this endpoint would otherwise hand out on request.
- */
- const signedInput = subscriptionTokenSignedInput({ workspaceId, expiresAtMs })
- const signature = createHmac('sha256', secret).update(signedInput).digest('base64url')
- return {
- token: formatSubscriptionToken({ workspaceId, expiresAtMs }, signature),
- expiresAt: new Date(expiresAtMs),
- }
- }
+  (secret: string, clock: () => number = Date.now): SubscriptionTokenMinter =>
+  (workspaceId) => {
+    const expiresAtMs = clock() + SUBSCRIPTION_TOKEN_TTL_MS
+    /**
+     * The workspace is taken from the resolved session by every caller and never from
+     * input — the rule, and the one that matters most here, since a minted token is
+     * exactly the authority this endpoint would otherwise hand out on request.
+     */
+    const signedInput = subscriptionTokenSignedInput({ workspaceId, expiresAtMs })
+    const signature = createHmac('sha256', secret).update(signedInput).digest('base64url')
+    return {
+      token: formatSubscriptionToken({ workspaceId, expiresAtMs }, signature),
+      expiresAt: new Date(expiresAtMs),
+    }
+  }

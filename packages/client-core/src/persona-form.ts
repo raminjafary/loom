@@ -1,9 +1,8 @@
 import type { AgentPersona, ApprovalMode, PersonaDraft } from '@loom/api-contract'
 
 /**
- * The persona form (the product shape — product shape: "Phase 1 ships a persona form
- * (name, description, model, tools, prompt) writing the same markdown, with a
- * raw-markdown toggle"). This is the "writing the same markdown" half.
+ * The persona form — name, description, model, tools, prompt — writing the same markdown
+ * a hand-authored persona uses, with a raw-markdown toggle. This is the writing half.
  *
  * **Only the serialize direction lives here.** Reading a markdown back into fields
  * goes through `persona.parse` on the contract, so the form is always populated by
@@ -20,28 +19,28 @@ import type { AgentPersona, ApprovalMode, PersonaDraft } from '@loom/api-contrac
  */
 
 export interface PersonaFormState {
- readonly name: string
- readonly description: string
- readonly model: string
- readonly tools: readonly string[]
- readonly systemPrompt: string
- readonly planner: boolean
- readonly delegates: readonly string[]
- readonly approvalMode: ApprovalMode
- readonly effort: string | null
- readonly maxTurns: number | null
- readonly budgetCapUsd: number | null
- /**
- * The self-modification envelope, or null for a persona that may not
- * rewrite itself — which is every persona until somebody says otherwise.
- *
- * In the form rather than only in the raw markdown tab, and that is a decision worth
- * stating: the whole safety property is that widening a ceiling is a *deliberate human
- * act*. A ceiling only reachable by hand-editing frontmatter is one most operators will
- * never set, and an unset envelope is a persona that cannot self-modify at all — so
- * hiding the field would not be safe-by-default, it would be feature-off-by-obscurity.
- */
- readonly envelope: PersonaFormEnvelope | null
+  readonly name: string
+  readonly description: string
+  readonly model: string
+  readonly tools: readonly string[]
+  readonly systemPrompt: string
+  readonly planner: boolean
+  readonly delegates: readonly string[]
+  readonly approvalMode: ApprovalMode
+  readonly effort: string | null
+  readonly maxTurns: number | null
+  readonly budgetCapUsd: number | null
+  /**
+   * The self-modification envelope, or null for a persona that may not
+   * rewrite itself — which is every persona until somebody says otherwise.
+   *
+   * In the form rather than only in the raw markdown tab, and that is a decision worth
+   * stating: The whole safety property is that widening a ceiling is a *deliberate human
+   * act*. A ceiling only reachable by hand-editing frontmatter is one most operators will
+   * never set, and an unset envelope is a persona that cannot self-modify at all — so
+   * hiding the field would not be safe-by-default, it would be feature-off-by-obscurity.
+   */
+  readonly envelope: PersonaFormEnvelope | null
 }
 
 /**
@@ -51,12 +50,12 @@ export interface PersonaFormState {
  * editor converts at its inputs, as it already does for `budgetCapUsd`.
  */
 export interface PersonaFormEnvelope {
- readonly tools: readonly string[]
- readonly model: string | null
- readonly budgetCapUsd: number | null
- readonly capabilities: readonly string[]
- readonly subagentDepth: number | null
- readonly approvalMode: ApprovalMode | null
+  readonly tools: readonly string[]
+  readonly model: string | null
+  readonly budgetCapUsd: number | null
+  readonly capabilities: readonly string[]
+  readonly subagentDepth: number | null
+  readonly approvalMode: ApprovalMode | null
 }
 
 /**
@@ -65,61 +64,62 @@ export interface PersonaFormEnvelope {
  * persona should not have to remember the SDK's exact spelling of `NotebookEdit`.
  *
  * `acting` is what `PLANNER_ALLOWED_TOOLS` calls the other side of the line: a planner may
- * hold only the tools that change nothing (the planner/worker trust boundary — the read-only three, plus the two that
- * only *read* outside the repository), and the form greys the rest out rather than letting a
- * human type a persona the server will refuse.
+ * hold only the tools that change nothing (the planner/worker trust boundary — the
+ * read-only three, plus the two that only *read* outside the repository), and the form
+ * greys the rest out rather than letting a human type a persona the server will refuse.
  */
 export const SELECTABLE_TOOLS: ReadonlyArray<{
- readonly name: string
- readonly acting: boolean
- readonly summary: string
+  readonly name: string
+  readonly acting: boolean
+  readonly summary: string
 }> = [
- { name: 'Read', acting: false, summary: 'Open a file' },
- { name: 'Grep', acting: false, summary: 'Search file contents' },
- { name: 'Glob', acting: false, summary: 'Find files by name' },
- { name: 'Edit', acting: true, summary: 'Change an existing file' },
- { name: 'Write', acting: true, summary: 'Create or overwrite a file' },
- { name: 'NotebookEdit', acting: true, summary: 'Change a notebook cell' },
- { name: 'Bash', acting: true, summary: 'Run a shell command' },
- /**
- * The two that reach outside the sandbox, and the summary says so.
- *
- * `WebFetch` goes through the egress proxy, so it reaches nothing until a capability
- * an operator attached names the host — the tool alone is inert. `WebSearch` is
- * executed by the model API rather than by the sandbox, so the allowlist never sees it
- * and adding it here *is* the grant: metered like any other model call, and bounded by
- * the run's budget cap, but not host-scoped. Saying which is which is the difference
- * between an operator who knows what they turned on and one who assumed.
- *
- * **`acting: false`, and it was `true` — which was wrong and said so in the UI.** This
- * flag decides two things: whether the form greys a tool out on a planner, and what the
- * label "an acting tool is one that changes something" claims about it. Fetching a URL
- * changes nothing, so the label was false; and the amendment draws its line at
- * "reading is not acting", so the planner exclusion was not the planner/worker trust boundary's rule either. See
- * `planner-tools.ts` for why it was nevertheless defensible and what the operator
- * changed. Both halves are now consistent: the label is true, and a planner may research.
- */
- { name: 'WebFetch', acting: false, summary: 'Fetch a URL — only hosts a capability allows' },
- { name: 'WebSearch', acting: false, summary: 'Search the web via the model API — not host-scoped' },
+  { name: 'Read', acting: false, summary: 'Open a file' },
+  { name: 'Grep', acting: false, summary: 'Search file contents' },
+  { name: 'Glob', acting: false, summary: 'Find files by name' },
+  { name: 'Edit', acting: true, summary: 'Change an existing file' },
+  { name: 'Write', acting: true, summary: 'Create or overwrite a file' },
+  { name: 'NotebookEdit', acting: true, summary: 'Change a notebook cell' },
+  { name: 'Bash', acting: true, summary: 'Run a shell command' },
+  /**
+   * The two that reach outside the sandbox, and the summary says so.
+   *
+   * `WebFetch` goes through the egress proxy, so it reaches nothing until a capability
+   * an operator attached names the host — the tool alone is inert. `WebSearch` is
+   * executed by the model API rather than by the sandbox, so the allowlist never sees it
+   * and adding it here *is* the grant: metered like any other model call, and bounded by
+   * the run's budget cap, but not host-scoped. Saying which is which is the difference
+   * between an operator who knows what they turned on and one who assumed.
+   *
+   * **`acting: false`, and it was `true` — which was wrong and said so in the UI.** This
+   * flag decides two things: whether the form greys a tool out on a planner, and what the
+   * label "an acting tool is one that changes something" claims about it. Fetching a URL
+   * changes nothing, so the label was false; and the amendment draws its line at "reading
+   * is not acting", so the planner exclusion was not the planner/worker trust boundary's
+   * rule either. See `planner-tools.ts` for why it was nevertheless defensible and what the
+   * operator changed. Both halves are now consistent: the label is true, and a planner may
+   * research.
+   */
+  { name: 'WebFetch', acting: false, summary: 'Fetch a URL — only hosts a capability allows' },
+  { name: 'WebSearch', acting: false, summary: 'Search the web via the model API — not host-scoped' },
 ]
 
 /** Mirrors `PLANNER_READABLE_TOOLS`; the server refuses anything else on a planner. */
 export const isActingTool = (tool: string): boolean =>
- SELECTABLE_TOOLS.find((entry) => entry.name === tool)?.acting ?? true
+  SELECTABLE_TOOLS.find((entry) => entry.name === tool)?.acting ?? true
 
 export const EMPTY_PERSONA_FORM: PersonaFormState = {
- name: '',
- description: '',
- model: 'claude-haiku-4-5-20251001',
- tools: ['Read', 'Grep', 'Glob'],
- systemPrompt: '',
- planner: false,
- delegates: [],
- approvalMode: 'ask',
- effort: null,
- maxTurns: null,
- budgetCapUsd: null,
- envelope: null,
+  name: '',
+  description: '',
+  model: 'claude-haiku-4-5-20251001',
+  tools: ['Read', 'Grep', 'Glob'],
+  systemPrompt: '',
+  planner: false,
+  delegates: [],
+  approvalMode: 'ask',
+  effort: null,
+  maxTurns: null,
+  budgetCapUsd: null,
+  envelope: null,
 }
 
 const DELIM = '---'
@@ -135,11 +135,11 @@ const DELIM = '---'
  * instead of an empty box.
  */
 const bodyOf = (markdownSource: string): string => {
- const lines = markdownSource.replace(/^﻿/, '').split('\n')
- if (lines[0]?.trim !== DELIM) return markdownSource.trim
- const end = lines.findIndex((line, index) => index > 0 && line.trim === DELIM)
- if (end === -1) return markdownSource.trim
- return lines.slice(end + 1).join('\n').trim
+  const lines = markdownSource.replace(/^﻿/, '').split('\n')
+  if (lines[0]?.trim() !== DELIM) return markdownSource.trim()
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === DELIM)
+  if (end === -1) return markdownSource.trim()
+  return lines.slice(end + 1).join('\n').trim()
 }
 
 /**
@@ -147,38 +147,38 @@ const bodyOf = (markdownSource: string): string => {
  * so opening the editor shows the server's reading, not the client's.
  */
 export const personaFormFromPersona = (persona: AgentPersona): PersonaFormState => ({
- name: persona.name,
- description: persona.description,
- model: persona.model,
- tools: persona.tools,
- systemPrompt: bodyOf(persona.markdownSource),
- planner: persona.harnessPlanner,
- delegates: persona.harnessDelegates,
- approvalMode: persona.harnessApprovalMode,
- effort: persona.harnessEffort,
- maxTurns: persona.harnessMaxTurns,
- budgetCapUsd: persona.harnessBudgetCapUsd,
- envelope: persona.envelope,
+  name: persona.name,
+  description: persona.description,
+  model: persona.model,
+  tools: persona.tools,
+  systemPrompt: bodyOf(persona.markdownSource),
+  planner: persona.harnessPlanner,
+  delegates: persona.harnessDelegates,
+  approvalMode: persona.harnessApprovalMode,
+  effort: persona.harnessEffort,
+  maxTurns: persona.harnessMaxTurns,
+  budgetCapUsd: persona.harnessBudgetCapUsd,
+  envelope: persona.envelope,
 })
 
 /** A `persona.parse` result as form state — used when a human returns from the raw tab. */
 export const personaFormFromDraft = (draft: PersonaDraft): PersonaFormState | null => {
- if (!draft.parsed) return null
- const parsed = draft.parsed
- return {
- name: parsed.name,
- description: parsed.description,
- model: parsed.model,
- tools: parsed.tools,
- systemPrompt: parsed.systemPrompt,
- planner: parsed.harnessPlanner,
- delegates: parsed.harnessDelegates,
- approvalMode: parsed.harnessApprovalMode,
- effort: parsed.harnessEffort,
- maxTurns: parsed.harnessMaxTurns,
- budgetCapUsd: parsed.harnessBudgetCapUsd,
- envelope: parsed.envelope,
- }
+  if (!draft.parsed) return null
+  const parsed = draft.parsed
+  return {
+    name: parsed.name,
+    description: parsed.description,
+    model: parsed.model,
+    tools: parsed.tools,
+    systemPrompt: parsed.systemPrompt,
+    planner: parsed.harnessPlanner,
+    delegates: parsed.harnessDelegates,
+    approvalMode: parsed.harnessApprovalMode,
+    effort: parsed.harnessEffort,
+    maxTurns: parsed.harnessMaxTurns,
+    budgetCapUsd: parsed.harnessBudgetCapUsd,
+    envelope: parsed.envelope,
+  }
 }
 
 /**
@@ -187,53 +187,53 @@ export const personaFormFromDraft = (draft: PersonaDraft): PersonaFormState | nu
  * which is what the conformance test pins.
  */
 export const personaFormToMarkdown = (form: PersonaFormState): string => {
- const lines = [
- DELIM,
- `name: ${form.name}`,
- `description: ${form.description}`,
- `model: ${form.model}`,
- `tools: [${form.tools.join(', ')}]`,
- ]
- const harness =
- form.effort !== null ||
- form.maxTurns !== null ||
- form.approvalMode !== 'ask' ||
- form.planner ||
- form.delegates.length > 0 ||
- form.budgetCapUsd !== null
- if (harness) {
- lines.push('harness:')
- if (form.effort !== null) lines.push(` effort: ${form.effort}`)
- if (form.maxTurns !== null) lines.push(` maxTurns: ${form.maxTurns}`)
- if (form.approvalMode !== 'ask') lines.push(` approvalMode: ${form.approvalMode}`)
- if (form.planner) lines.push(' planner: true')
- if (form.delegates.length > 0) lines.push(` delegates: [${form.delegates.join(', ')}]`)
- if (form.budgetCapUsd !== null) lines.push(` budgetCapUsd: ${form.budgetCapUsd}`)
- }
- /**
- * Written whenever it exists, including empty — see the domain serializer's own note:
- * `envelope:` with nothing under it is a real state, and dropping the empty block would
- * silently withdraw permission on every save.
- */
- if (form.envelope !== null) {
- lines.push('envelope:')
- lines.push(` tools: [${form.envelope.tools.join(', ')}]`)
- if (form.envelope.model !== null) lines.push(` model: ${form.envelope.model}`)
- if (form.envelope.budgetCapUsd !== null) {
- lines.push(` budgetCapUsd: ${form.envelope.budgetCapUsd}`)
- }
- if (form.envelope.capabilities.length > 0) {
- lines.push(` capabilities: [${form.envelope.capabilities.join(', ')}]`)
- }
- if (form.envelope.subagentDepth !== null) {
- lines.push(` subagentDepth: ${form.envelope.subagentDepth}`)
- }
- if (form.envelope.approvalMode !== null) {
- lines.push(` approvalMode: ${form.envelope.approvalMode}`)
- }
- }
- lines.push(DELIM, '', form.systemPrompt)
- return lines.join('\n')
+  const lines = [
+    DELIM,
+    `name: ${form.name}`,
+    `description: ${form.description}`,
+    `model: ${form.model}`,
+    `tools: [${form.tools.join(', ')}]`,
+  ]
+  const harness =
+    form.effort !== null ||
+    form.maxTurns !== null ||
+    form.approvalMode !== 'ask' ||
+    form.planner ||
+    form.delegates.length > 0 ||
+    form.budgetCapUsd !== null
+  if (harness) {
+    lines.push('harness:')
+    if (form.effort !== null) lines.push(`  effort: ${form.effort}`)
+    if (form.maxTurns !== null) lines.push(`  maxTurns: ${form.maxTurns}`)
+    if (form.approvalMode !== 'ask') lines.push(`  approvalMode: ${form.approvalMode}`)
+    if (form.planner) lines.push('  planner: true')
+    if (form.delegates.length > 0) lines.push(`  delegates: [${form.delegates.join(', ')}]`)
+    if (form.budgetCapUsd !== null) lines.push(`  budgetCapUsd: ${form.budgetCapUsd}`)
+  }
+  /**
+   * Written whenever it exists, including empty — see the domain serializer's own note:
+   * `envelope:` with nothing under it is a real state, and dropping the empty block would
+   * silently withdraw permission on every save.
+   */
+  if (form.envelope !== null) {
+    lines.push('envelope:')
+    lines.push(`  tools: [${form.envelope.tools.join(', ')}]`)
+    if (form.envelope.model !== null) lines.push(`  model: ${form.envelope.model}`)
+    if (form.envelope.budgetCapUsd !== null) {
+      lines.push(`  budgetCapUsd: ${form.envelope.budgetCapUsd}`)
+    }
+    if (form.envelope.capabilities.length > 0) {
+      lines.push(`  capabilities: [${form.envelope.capabilities.join(', ')}]`)
+    }
+    if (form.envelope.subagentDepth !== null) {
+      lines.push(`  subagentDepth: ${form.envelope.subagentDepth}`)
+    }
+    if (form.envelope.approvalMode !== null) {
+      lines.push(`  approvalMode: ${form.envelope.approvalMode}`)
+    }
+  }
+  lines.push(DELIM, '', form.systemPrompt)
+  return lines.join('\n')
 }
 
 /**
@@ -245,77 +245,77 @@ export const personaFormToMarkdown = (form: PersonaFormState): string => {
  * human can fill in and one that rejects them after the fact.
  */
 export const personaFormProblems = (
- form: PersonaFormState,
- context: { readonly existingNames?: readonly string[]; readonly editing?: boolean } = {},
+  form: PersonaFormState,
+  context: { readonly existingNames?: readonly string[]; readonly editing?: boolean } = {},
 ): string[] => {
- const problems: string[] = []
- if (!form.name.trim) problems.push('A persona needs a name.')
- if (!form.description.trim) problems.push('A persona needs a one-line description.')
- if (!form.model.trim) problems.push('A persona needs a model.')
- if (!form.systemPrompt.trim) {
- problems.push('A persona needs a system prompt — the body below the frontmatter.')
- }
- if (/\n/.test(form.name) || /\n/.test(form.description)) {
- problems.push('Name and description are single frontmatter lines and cannot contain a newline.')
- }
- if (!context.editing && context.existingNames?.includes(form.name.trim)) {
- problems.push(`Persona "${form.name.trim}" already exists.`)
- }
+  const problems: string[] = []
+  if (!form.name.trim()) problems.push('A persona needs a name.')
+  if (!form.description.trim()) problems.push('A persona needs a one-line description.')
+  if (!form.model.trim()) problems.push('A persona needs a model.')
+  if (!form.systemPrompt.trim()) {
+    problems.push('A persona needs a system prompt — the body below the frontmatter.')
+  }
+  if (/\n/.test(form.name) || /\n/.test(form.description)) {
+    problems.push('Name and description are single frontmatter lines and cannot contain a newline.')
+  }
+  if (!context.editing && context.existingNames?.includes(form.name.trim())) {
+    problems.push(`Persona "${form.name.trim()}" already exists.`)
+  }
 
- const acting = form.tools.filter(isActingTool)
- if (form.planner && acting.length > 0) {
- problems.push(
- `A planner may only read — Read, Grep, Glob. Remove: ${acting.join(', ')}`,
-)
- }
- if (!form.planner && form.delegates.length > 0) {
- problems.push(
- 'Only a planner may declare a delegation envelope — it is what its children are attenuated against.',
-)
- }
+  const acting = form.tools.filter(isActingTool)
+  if (form.planner && acting.length > 0) {
+    problems.push(
+      `A planner may only read — Read, Grep, Glob. Remove: ${acting.join(', ')}`,
+    )
+  }
+  if (!form.planner && form.delegates.length > 0) {
+    problems.push(
+      'Only a planner may declare a delegation envelope — it is what its children are attenuated against.',
+    )
+  }
 
- /**
- * The envelope's own rules, mirrored.
- *
- * A *mirror* like everything else here: `assertFitsItsEnvelope` on the server is the
- * authority and still runs. What this buys is that a human writing a ceiling narrower
- * than the persona they are writing finds out while they are still typing, rather than
- * from a rejected save that names one of the three fields that are wrong.
- */
- if (form.envelope !== null) {
- const outside = form.tools.filter((tool) => !form.envelope!.tools.includes(tool))
- if (outside.length > 0) {
- problems.push(
- `This persona holds tools its own envelope does not allow: ${outside.join(', ')}. ` +
- 'A ceiling below what the persona already is refuses every change it could make.',
-)
- }
- const handedOutside = form.planner
- ? form.delegates.filter((tool) => !form.envelope!.tools.includes(tool))
-: []
- if (handedOutside.length > 0) {
- problems.push(
- `This planner delegates tools its envelope does not allow: ${handedOutside.join(', ')}. ` +
- 'What a persona may become bounds what it may hand down.',
-)
- }
- if (
- form.envelope.budgetCapUsd !== null &&
- (form.budgetCapUsd === null || form.budgetCapUsd > form.envelope.budgetCapUsd)
-) {
- problems.push(
- `The envelope caps spend at $${form.envelope.budgetCapUsd}, so this persona needs a cap ` +
- 'at or below it.',
-)
- }
- }
- if (form.budgetCapUsd !== null && !(form.budgetCapUsd > 0)) {
- problems.push('A budget cap must be greater than zero, or absent for uncapped.')
- }
- if (form.maxTurns !== null && !(Number.isInteger(form.maxTurns) && form.maxTurns > 0)) {
- problems.push('Max turns must be a whole number greater than zero, or absent.')
- }
- return problems
+  /**
+   * The envelope's own rules, mirrored.
+   *
+   * A *mirror* like everything else here: `assertFitsItsEnvelope` on the server is the
+   * authority and still runs. What this buys is that a human writing a ceiling narrower
+   * than the persona they are writing finds out while they are still typing, rather than
+   * from a rejected save that names one of the three fields that are wrong.
+   */
+  if (form.envelope !== null) {
+    const outside = form.tools.filter((tool) => !form.envelope!.tools.includes(tool))
+    if (outside.length > 0) {
+      problems.push(
+        `This persona holds tools its own envelope does not allow: ${outside.join(', ')}. ` +
+          'A ceiling below what the persona already is refuses every change it could make.',
+      )
+    }
+    const handedOutside = form.planner
+      ? form.delegates.filter((tool) => !form.envelope!.tools.includes(tool))
+      : []
+    if (handedOutside.length > 0) {
+      problems.push(
+        `This planner delegates tools its envelope does not allow: ${handedOutside.join(', ')}. ` +
+          'What a persona may become bounds what it may hand down.',
+      )
+    }
+    if (
+      form.envelope.budgetCapUsd !== null &&
+      (form.budgetCapUsd === null || form.budgetCapUsd > form.envelope.budgetCapUsd)
+    ) {
+      problems.push(
+        `The envelope caps spend at $${form.envelope.budgetCapUsd}, so this persona needs a cap ` +
+          'at or below it.',
+      )
+    }
+  }
+  if (form.budgetCapUsd !== null && !(form.budgetCapUsd > 0)) {
+    problems.push('A budget cap must be greater than zero, or absent for uncapped.')
+  }
+  if (form.maxTurns !== null && !(Number.isInteger(form.maxTurns) && form.maxTurns > 0)) {
+    problems.push('Max turns must be a whole number greater than zero, or absent.')
+  }
+  return problems
 }
 
 /**
@@ -328,24 +328,24 @@ export const personaFormProblems = (
  * server's answer as though it had been the request.
  */
 export const personaSaveDiscrepancies = (
- intended: PersonaFormState,
- stored: AgentPersona,
+  intended: PersonaFormState,
+  stored: AgentPersona,
 ): string[] => {
- const problems: string[] = []
- const compare = (label: string, want: unknown, got: unknown) => {
- const a = JSON.stringify(want)
- const b = JSON.stringify(got)
- if (a !== b) problems.push(`${label}: asked for ${a}, stored ${b}`)
- }
- compare('name', intended.name.trim, stored.name)
- compare('description', intended.description.trim, stored.description)
- compare('model', intended.model.trim, stored.model)
- compare('tools', [...intended.tools], stored.tools)
- compare('planner', intended.planner, stored.harnessPlanner)
- compare('delegates', [...intended.delegates], stored.harnessDelegates)
- compare('approval mode', intended.approvalMode, stored.harnessApprovalMode)
- compare('effort', intended.effort, stored.harnessEffort)
- compare('max turns', intended.maxTurns, stored.harnessMaxTurns)
- compare('budget cap', intended.budgetCapUsd, stored.harnessBudgetCapUsd)
- return problems
+  const problems: string[] = []
+  const compare = (label: string, want: unknown, got: unknown) => {
+    const a = JSON.stringify(want)
+    const b = JSON.stringify(got)
+    if (a !== b) problems.push(`${label}: asked for ${a}, stored ${b}`)
+  }
+  compare('name', intended.name.trim(), stored.name)
+  compare('description', intended.description.trim(), stored.description)
+  compare('model', intended.model.trim(), stored.model)
+  compare('tools', [...intended.tools], stored.tools)
+  compare('planner', intended.planner, stored.harnessPlanner)
+  compare('delegates', [...intended.delegates], stored.harnessDelegates)
+  compare('approval mode', intended.approvalMode, stored.harnessApprovalMode)
+  compare('effort', intended.effort, stored.harnessEffort)
+  compare('max turns', intended.maxTurns, stored.harnessMaxTurns)
+  compare('budget cap', intended.budgetCapUsd, stored.harnessBudgetCapUsd)
+  return problems
 }

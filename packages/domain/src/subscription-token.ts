@@ -31,16 +31,16 @@ export const SUBSCRIPTION_TOKEN_VERSION = 'v1'
 export const SUBSCRIPTION_TOKEN_TTL_MS = 120_000
 
 export interface SubscriptionTokenClaims {
- readonly workspaceId: string
- /** Absolute, epoch milliseconds. Absolute rather than a duration so the bearer cannot extend it. */
- readonly expiresAtMs: number
+  readonly workspaceId: string
+  /** Absolute, epoch milliseconds. Absolute rather than a duration so the bearer cannot extend it. */
+  readonly expiresAtMs: number
 }
 
 export interface ParsedSubscriptionToken {
- readonly claims: SubscriptionTokenClaims
- /** Exactly the bytes the signature covers — never reassembled by the verifier. */
- readonly signedInput: string
- readonly signature: string
+  readonly claims: SubscriptionTokenClaims
+  /** Exactly the bytes the signature covers — never reassembled by the verifier. */
+  readonly signedInput: string
+  readonly signature: string
 }
 
 /**
@@ -53,23 +53,23 @@ const isSignableField = (value: string): boolean => value.length > 0 && !value.i
 
 /** The bytes an adapter signs. Never sent on its own — `formatSubscriptionToken` appends the signature. */
 export const subscriptionTokenSignedInput = (claims: SubscriptionTokenClaims): string => {
- if (!isSignableField(claims.workspaceId)) {
- throw new Error('workspace id cannot be put in a subscription token: it contains a "."')
- }
- if (!Number.isSafeInteger(claims.expiresAtMs) || claims.expiresAtMs <= 0) {
- throw new Error('subscription token expiry must be a positive epoch-millisecond integer')
- }
- return `${SUBSCRIPTION_TOKEN_VERSION}.${claims.workspaceId}.${claims.expiresAtMs}`
+  if (!isSignableField(claims.workspaceId)) {
+    throw new Error('workspace id cannot be put in a subscription token: it contains a "."')
+  }
+  if (!Number.isSafeInteger(claims.expiresAtMs) || claims.expiresAtMs <= 0) {
+    throw new Error('subscription token expiry must be a positive epoch-millisecond integer')
+  }
+  return `${SUBSCRIPTION_TOKEN_VERSION}.${claims.workspaceId}.${claims.expiresAtMs}`
 }
 
 export const formatSubscriptionToken = (
- claims: SubscriptionTokenClaims,
- signature: string,
+  claims: SubscriptionTokenClaims,
+  signature: string,
 ): string => {
- if (!isSignableField(signature)) {
- throw new Error('subscription token signature cannot contain a "."')
- }
- return `${subscriptionTokenSignedInput(claims)}.${signature}`
+  if (!isSignableField(signature)) {
+    throw new Error('subscription token signature cannot contain a "."')
+  }
+  return `${subscriptionTokenSignedInput(claims)}.${signature}`
 }
 
 /**
@@ -78,24 +78,24 @@ export const formatSubscriptionToken = (
  * `subscriptionTokenVerdict`.
  */
 export const parseSubscriptionToken = (raw: string): ParsedSubscriptionToken | null => {
- const parts = raw.split('.')
- if (parts.length !== 4) return null
- const [version, workspaceId, expiresAt, signature] = parts as [string, string, string, string]
- if (version !== SUBSCRIPTION_TOKEN_VERSION) return null
- if (workspaceId.length === 0 || signature.length === 0) return null
- if (!/^[0-9]+$/.test(expiresAt)) return null
- const expiresAtMs = Number(expiresAt)
- if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= 0) return null
- return {
- claims: { workspaceId, expiresAtMs },
- signedInput: `${version}.${workspaceId}.${expiresAt}`,
- signature,
- }
+  const parts = raw.split('.')
+  if (parts.length !== 4) return null
+  const [version, workspaceId, expiresAt, signature] = parts as [string, string, string, string]
+  if (version !== SUBSCRIPTION_TOKEN_VERSION) return null
+  if (workspaceId.length === 0 || signature.length === 0) return null
+  if (!/^[0-9]+$/.test(expiresAt)) return null
+  const expiresAtMs = Number(expiresAt)
+  if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= 0) return null
+  return {
+    claims: { workspaceId, expiresAtMs },
+    signedInput: `${version}.${workspaceId}.${expiresAt}`,
+    signature,
+  }
 }
 
 export type SubscriptionTokenVerdict =
- | { readonly ok: true; readonly workspaceId: string }
- | { readonly ok: false; readonly reason: string }
+  | { readonly ok: true; readonly workspaceId: string }
+  | { readonly ok: false; readonly reason: string }
 
 /**
  * The order is the point: shape, then signature, then expiry.
@@ -106,27 +106,27 @@ export type SubscriptionTokenVerdict =
  * "bad signature" and "expired" together tell a prober which half to work on.
  */
 export const subscriptionTokenVerdict = (input: {
- readonly token: ParsedSubscriptionToken | null
- readonly signatureMatches: boolean
- readonly nowMs: number
+  readonly token: ParsedSubscriptionToken | null
+  readonly signatureMatches: boolean
+  readonly nowMs: number
 }): SubscriptionTokenVerdict => {
- const refused = { ok: false as const, reason: 'subscription refused' }
- if (!input.token) return refused
- if (!input.signatureMatches) return refused
- if (input.token.claims.expiresAtMs <= input.nowMs) return refused
- return { ok: true, workspaceId: input.token.claims.workspaceId }
+  const refused = { ok: false as const, reason: 'subscription refused' }
+  if (!input.token) return refused
+  if (!input.signatureMatches) return refused
+  if (input.token.claims.expiresAtMs <= input.nowMs) return refused
+  return { ok: true, workspaceId: input.token.claims.workspaceId }
 }
 
 /**
  * Whether a browser's `Origin` is one this deployment serves.
  *
- * Absent is allowed, and that is deliberate rather than lax: the contract is
+ * Absent is allowed, and that is deliberate rather than lax: The contract is
  * client-agnostic, a terminal client sends no `Origin` at all, and a check that refused
  * one would make the browser the only client that can subscribe. A *present* origin is
  * checked, because a browser that sends the wrong one is a page that should not be here.
  * The token is the authentication; this is a second, weaker fence that costs nothing.
  */
 export const originAllowed = (origin: string | undefined, webOrigin: string): boolean => {
- if (origin === undefined || origin === '') return true
- return origin === webOrigin
+  if (origin === undefined || origin === '') return true
+  return origin === webOrigin
 }

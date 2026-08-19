@@ -29,13 +29,13 @@ export const DEFAULT_THREAD_VIEW: ThreadView = 'headline'
  * can hide a run that is waiting.
  */
 export const messageInView = (
- message: { readonly author: Actor },
- view: ThreadView,
- focusRunId?: string,
+  message: { readonly author: Actor },
+  view: ThreadView,
+  focusRunId?: string,
 ): boolean => {
- if (view === 'all') return true
- if (view === 'headline') return message.author.kind === 'system' || message.author.kind === 'user'
- if (focusRunId === undefined) return false
- if (message.author.kind === 'user') return true
- return message.author.kind === 'agent_run' && message.author.agentRunId === focusRunId
+  if (view === 'all') return true
+  if (view === 'headline') return message.author.kind === 'system' || message.author.kind === 'user'
+  if (focusRunId === undefined) return false
+  if (message.author.kind === 'user') return true
+  return message.author.kind === 'agent_run' && message.author.agentRunId === focusRunId
 }

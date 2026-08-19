@@ -18,27 +18,27 @@ Loom is an answer to those five questions, built as a **multi-agent orchestratio
 real software work rather than a demo:
 
 - 🧵 **A planner that decomposes** a goal into a DAG of subtasks, with sub-planners for their own
- areas and workers that share a notes ledger
+  areas and workers that share a notes ledger
 - 📦 **Clone-per-run isolation** and a **container sandbox** that holds no credentials, so an
- agent's blast radius is its own working copy
+  agent's blast radius is its own working copy
 - 🛡️ **Human-in-the-loop approval** on a card showing the **exact argv**, never a model's summary
- of what it is about to do — prompt injection is the threat model, not an edge case
+  of what it is about to do — prompt injection is the threat model, not an edge case
 - 🚦 **A serialized merge queue** with a reconciler agent that resolves additive conflicts and
- refuses real ones, so sibling branches converge instead of racing
+  refuses real ones, so sibling branches converge instead of racing
 - ✅ **A definition of done that belongs to the repository** — named, ordered checks run in the
- sandbox, with the verdict derived server-side so an agent cannot certify its own work
+  sandbox, with the verdict derived server-side so an agent cannot certify its own work
 - 💸 **Authoritative cost metering and enforced budget caps**, measured at the network boundary
- rather than taken from a model's self-report
+  rather than taken from a model's self-report
 - 🧠 **Persona memory and self-improving prompts that are measured, not assumed** — an agent may
- rewrite its own instructions inside a ceiling a human sets, and the platform runs both versions
- to find out whether the edit actually helped
+  rewrite its own instructions inside a ceiling a human sets, and the platform runs both versions
+  to find out whether the edit actually helped
 - 🗺️ **[Expertise](#expertise-and-the-colosseum): a map an agent built and can be held to** — a
- mastery run's deliverable is a graph of a codebase rather than a diff, every claim carries how
- it was arrived at, and retrieval is a trial with a deliberately-withheld baseline, because an
- expertise that cannot be shown to help is a context-window tax with a reassuring name
+  mastery run's deliverable is a graph of a codebase rather than a diff, every claim carries how
+  it was arrived at, and retrieval is a trial with a deliberately-withheld baseline, because an
+  expertise that cannot be shown to help is a context-window tax with a reassuring name
 - ⚔️ **[The Colosseum](#expertise-and-the-colosseum): agents that put questions to each other,
- where nothing is settled by agreement** — two agents who mastered different parts of a system
- know different things, and the arbiter is the repository's own tests and history, not a vote
+  where nothing is settled by agreement** — two agents who mastered different parts of a system
+  know different things, and the arbiter is the repository's own tests and history, not a vote
 
 **Self-hosted and private by design.** Your code never leaves your machine except as model API
 calls, and those go through a proxy you run. No SaaS, no telemetry, no cloud dependency beyond
@@ -164,21 +164,21 @@ workspace would convene a session — two personas sharing one model, one prompt
 one decoding prior, whose errors therefore correlate. So:
 
 - **The arbiter is the repository.** A question its tests, its history or its actual
- imports can answer is answered by running that check. A claim that can cite no such check
- is left unsettled rather than talked into a verdict.
+  imports can answer is answered by running that check. A claim that can cite no such check
+  is left unsettled rather than talked into a verdict.
 - **Disagreement is preserved, not resolved.** Both claims kept, both scores lowered — a
- *successful* outcome, because a venue that must produce agreement will produce agreement.
+  *successful* outcome, because a venue that must produce agreement will produce agreement.
 - **Every claim's holder is recorded before anyone speaks**, and an opening claim is
- refused once a session has started. That refusal *is* the measurement: a claim entered
- mid-session cannot afterwards be told apart from one the conversation produced.
+  refused once a session has started. That refusal *is* the measurement: a claim entered
+  mid-session cannot afterwards be told apart from one the conversation produced.
 - **A roster is refused when everyone brings the same knowledge on the same model** — and
- when nobody brings anything at all. The panel says so in as many words: *one model, so
- their mistakes correlate*, and *swe · brings no map*.
+  when nobody brings anything at all. The panel says so in as many words: *one model, so
+  their mistakes correlate*, and *swe · brings no map*.
 - **Everything said in a session is a model's output**, so it stays untrusted input to
- whoever hears it, permanently and however many sessions the speaker has won. A reply is
- data with a citation, never an instruction, and no track record converts into trust.
+  whoever hears it, permanently and however many sessions the speaker has won. A reply is
+  data with a citation, never an instruction, and no track record converts into trust.
 - **Nothing a session says is written into a map by the session.** There is no function
- anywhere that does it. Promotion is a human act, and so, today, is convening.
+  anywhere that does it. Promotion is a human act, and so, today, is convening.
 
 Reaching the turn cap **abandons** a session rather than concluding it — a conversation
 that was cut off has not reached a verdict — and a session that dropped more claims than it
@@ -205,19 +205,19 @@ the CLI, but it needs the same underlying auth.
 
 ```bash
 pnpm install
-cp.env.example.env # then set BETTER_AUTH_SECRET and WS_SUBSCRIPTION_SECRET
-openssl rand -base64 32 # ← generate one for each; both are refused if short
-make up # containers, migrations, then every app
+cp .env.example .env                      # then set BETTER_AUTH_SECRET and WS_SUBSCRIPTION_SECRET
+openssl rand -base64 32                   # ← generate one for each; both are refused if short
+make up                                   # containers, migrations, then every app
 ```
 
 `make up` is the whole stack. Individually:
 
 ```bash
-docker compose up -d # Postgres 18 + Valkey 9 + egress proxy
-pnpm db:migrate # apply the schema
-pnpm --filter @loom/server dev # API + /rpc + /ws/runner:3001
-pnpm --filter @loom/ws-gateway dev # realtime fan-out:3002
-pnpm --filter @loom/web dev # UI:5173
+docker compose up -d                      # Postgres 18 + Valkey 9 + egress proxy
+pnpm db:migrate                           # apply the schema
+pnpm --filter @loom/server dev            # API + /rpc + /ws/runner  :3001
+pnpm --filter @loom/ws-gateway dev        # realtime fan-out         :3002
+pnpm --filter @loom/web dev               # UI                       :5173
 ```
 
 Sign up through the UI (email/password via Better Auth); a default workspace auto-provisions on
@@ -235,12 +235,12 @@ Everything below is reachable from the UI sidebar. To drive it over RPC instead:
 
 1. `runner.createPairingToken({name})` → a `runnerId` and a raw pairing token.
 2. Start the Runner against the *parent directory* of your repos:
- ```bash
- LOOM_SERVER_WS_URL=ws://localhost:3001/ws/runner \
- LOOM_PAIRING_TOKEN=<token> \
- LOOM_ALLOWED_ROOTS=/absolute/path/to/allowed/parent \
- pnpm --filter @loom/runner start
- ```
+   ```bash
+   LOOM_SERVER_WS_URL=ws://localhost:3001/ws/runner \
+   LOOM_PAIRING_TOKEN=<token> \
+   LOOM_ALLOWED_ROOTS=/absolute/path/to/allowed/parent \
+   pnpm --filter @loom/runner start
+   ```
 3. `repository.bindExisting({runnerId, path, displayName})`
 4. `persona.create({markdownSource})` — markdown plus frontmatter.
 5. `agentRun.start({threadId, repositoryId, personaId})`
@@ -277,21 +277,21 @@ changes on the target branch, and a target that moved mid-merge.
 
 ```
 packages/
- domain/ pure entities and rules, zero dependencies
- application/ use-cases + ports (interfaces only)
- db/ Drizzle/Postgres adapters — the only place ORM types exist
- api-contract/ oRPC procedures + Zod schemas (the browser/client wire boundary)
- runner-protocol/ WS frame schemas shared by apps/server and apps/runner
- client-core/ framework-agnostic client logic
+  domain/            pure entities and rules, zero dependencies
+  application/       use-cases + ports (interfaces only)
+  db/                Drizzle/Postgres adapters — the only place ORM types exist
+  api-contract/      oRPC procedures + Zod schemas (the browser/client wire boundary)
+  runner-protocol/   WS frame schemas shared by apps/server and apps/runner
+  client-core/       framework-agnostic client logic
 apps/
- server/ Fastify + oRPC + /ws/runner; implements the contract, drives Runners
- ws-gateway/ stateless realtime service (Valkey fan-out to browsers only)
- web/ Vite + Vue 3 — thin views over client-core
- runner/ local daemon: pairs with the server, drives the real Agent SDK
- egress-proxy/ credential-injecting, metering, allowlisting egress boundary
+  server/            Fastify + oRPC + /ws/runner; implements the contract, drives Runners
+  ws-gateway/        stateless realtime service (Valkey fan-out to browsers only)
+  web/               Vite + Vue 3 — thin views over client-core
+  runner/            local daemon: pairs with the server, drives the real Agent SDK
+  egress-proxy/      credential-injecting, metering, allowlisting egress boundary
 tools/
- architecture.test.ts asserts the dependency rule holds
- *-check.mts live drivers: real server, real Runner process, real SDK, real git
+  architecture.test.ts   asserts the dependency rule holds
+  *-check.mts            live drivers: real server, real Runner process, real SDK, real git
 ```
 
 **The dependency rule — outer layers depend on inner, never the reverse — is enforced by
@@ -303,9 +303,9 @@ holds your repositories, connected by an authenticated WebSocket; the server nev
 filesystem. The **egress proxy** sits between every sandbox and the network, holding the real
 credential so the sandbox holds only an opaque per-run lease.
 
-Design decisions and their reasoning live in the design notes — is a reference key
-mapping every section to what it decides. Code cites it (`the worker-notes design — worker notes`),
-so a comment that explains *why* is one search away from the argument behind it.
+Design decisions and their reasoning live in the code, next to what they constrain: a
+comment explains *why* a boundary sits where it does, so the argument is where the change
+would be made.
 
 ## Security model
 
@@ -325,23 +325,21 @@ web page is reading attacker-controllable instructions. The load-bearing control
 Three limits stated plainly rather than buried:
 
 - **The model API call is itself an unblockable exfiltration channel.** That is why the real
- control is "secrets never enter the sandbox" rather than "the sandbox cannot talk out".
+  control is "secrets never enter the sandbox" rather than "the sandbox cannot talk out".
 - **Unsandboxed runs get the Runner's own privileges** — one `Bash` call reaches the login
- keychain — so that mode needs a separate, deliberately awkward acknowledgement.
+  keychain — so that mode needs a separate, deliberately awkward acknowledgement.
 - **Concurrent sandboxes share one network, and the egress proxy's control plane is on it.**
- Publishing that port to host loopback is not the same as unreachability, so the control secret
- is a real boundary and is validated as one: at least 32 characters, and example values refused
- at boot. Splitting the control plane out is the fix.
-
-Full limitations, each with the work that closes it: [the open-items list](./).
+  Publishing that port to host loopback is not the same as unreachability, so the control secret
+  is a real boundary and is validated as one: at least 32 characters, and example values refused
+  at boot. Splitting the control plane out is the fix.
 
 ---
 
 ## Development
 
 ```bash
-make check # what CI runs: typecheck, lint, the suite, the boundary test
-pnpm test # 1,778 tests across 100 files
+make check          # what CI runs: typecheck, lint, the suite, the boundary test
+pnpm test           # 1,778 tests across 100 files
 pnpm db:test:prepare # four test databases — re-run after any db:generate
 ```
 
@@ -363,22 +361,22 @@ the live drivers in `tools/*-check.mts`, run by hand. Each drives a real server,
 docker compose up -d
 LOOM_USE_HOST_CLAUDE_AUTH=1 npx tsx tools/self-edit-check.mts
 
-set -a;../.env; set +a # sandboxed mode needs the egress control secret, or every run is
- # *refused* rather than sandboxed — and the refusal reads like a
- # broken feature
+set -a; . ./.env; set +a   # sandboxed mode needs the egress control secret, or every run is
+                           # *refused* rather than sandboxed — and the refusal reads like a
+                           # broken feature
 LOOM_USE_HOST_CLAUDE_AUTH=1 LOOM_SANDBOX_ENABLED=1 npx tsx tools/self-edit-check.mts
 ```
 
 Two things that otherwise cost you a pass:
 
 - **The API key in `.env.example` is a placeholder.** Without `LOOM_USE_HOST_CLAUDE_AUTH=1` a
- driver "passes" about nothing.
+  driver "passes" about nothing.
 - **After touching `apps/runner/src/`, rebuild the sandbox image.** The Runner refuses a stale
- one on purpose — an out-of-date image does not fail, it runs older agent-side code and the
- model is quietly never offered whatever the newer sources added:
- ```bash
- docker build -f apps/runner/Dockerfile.sandbox -t loom-agent-sandbox:latest.
- ```
+  one on purpose — an out-of-date image does not fail, it runs older agent-side code and the
+  model is quietly never offered whatever the newer sources added:
+  ```bash
+  docker build -f apps/runner/Dockerfile.sandbox -t loom-agent-sandbox:latest .
+  ```
 
 ## Configuration
 
@@ -404,8 +402,7 @@ reads are exactly what they would have been.
 ## Roadmap
 
 Loom is built in phases, and the phase boundaries are architectural rather than cosmetic —
-each one exists because the next depends on it. What is shipped, what is next, and the reasoning
-behind every decision live in the design notes; is a reference key.
+each one exists because the next depends on it.
 
 **Next:**
 
@@ -422,8 +419,8 @@ behind every decision live in the design notes; is a reference key.
 The dependency rule (`packages/domain` depends on nothing; outer layers depend on inner, never
 the reverse) is enforced by `eslint.config.js` and `tools/architecture.test.ts`, so a violation
 is a build failure rather than a review comment. Run `make check` before opening a pull request —
-it is exactly what CI runs. If a change needs a reason recorded, that reason belongs in
-next to the section it affects, and the code cites it.
+it is exactly what CI runs. If a change needs a reason recorded, that reason belongs in a
+comment next to the code it affects.
 
 ## License
 

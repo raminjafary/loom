@@ -11,6 +11,7 @@ graphify-out/
 .loom-blobs/
 
 # Session notes and review artifacts — kept on disk, deliberately not versioned.
+PLAN.md
 HANDOFF.md
 handoffs/
 plans/

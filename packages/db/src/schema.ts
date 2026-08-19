@@ -1,25 +1,25 @@
 import { sql } from 'drizzle-orm'
 import {
- bigint,
- bigserial,
- boolean,
- doublePrecision,
- index,
- integer,
- jsonb,
- pgTable,
- text,
- timestamp,
- uniqueIndex,
- uuid,
- type AnyPgColumn,
+  bigint,
+  bigserial,
+  boolean,
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core'
 import { user } from './auth-schema.js'
 import type {
- Envelope,
- VerificationCheck,
- VerificationCheckResult,
- VerificationStatus,
+  Envelope,
+  VerificationCheck,
+  VerificationCheckResult,
+  VerificationStatus,
 } from '@loom/domain'
 
 /**
@@ -30,180 +30,178 @@ import type {
  */
 
 export const workspace = pgTable(
- 'workspace',
- {
- id: uuid('id').primaryKey.defaultRandom,
- name: text('name').notNull,
- slug: text('slug').notNull,
- // Global kill switch. Persisted rather than
- // held in memory so a pause survives a server restart — an operator who
- // stopped everything must not have it silently undone by a redeploy.
- runsPaused: boolean('runs_paused').notNull.default(false),
- runsPausedAt: timestamp('runs_paused_at', { withTimezone: true }),
- // No hard FK, same reasoning as approvalRequest.resolvedByUserId: who hit
- // the switch is an audit fact that must survive the user being removed.
- runsPausedByUserId: text('runs_paused_by_user_id'),
- // When the platform *suggests* a handoff, and how often a tree may make one. Null means the platform's
- // default, which is deliberately not the same as a value that happens to equal it: an
- // operator who never chose should inherit a better default later.
- //
- // Neither of these ever swaps an agent. The rule is that the threshold nudges, the
- // agent asks and the cap refuses — so the first is when a notice is delivered, and the
- // second is the one bound the platform enforces on its own.
- handoffThreshold: doublePrecision('handoff_threshold'),
- handoffCapPerTree: integer('handoff_cap_per_tree'),
- /**
- * Whether a Planner's decomposition waits for a human before any worker starts
- *.
- *
- * **Default on, and that is the pair to the operator asks.** Making the teams
- * autonomous moved the human's job to two places — review the plan, merge the branch —
- * and a plan was the one expensive decision in the system with no gate at all: N runs
- * spawn the moment a model submits, and the steering only reaches them afterwards.
- * Off is a real state and belongs to the operator: a workspace running a tight loop on
- * a trusted repository does not want to arbitrate every decomposition.
- *
- * Travels with the kill switch and the handoff policy for the reason they do — the same
- * kind of thing (workspace policy an operator sets, persisted so a redeploy cannot undo
- * it), and read on a path that already reads this row.
- */
- planReviewRequired: boolean('plan_review_required').notNull.default(true),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [uniqueIndex('workspace_slug_idx').on(t.slug)],
+  'workspace',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    slug: text('slug').notNull(),
+    // Global kill switch. Persisted rather than
+    // held in memory so a pause survives a server restart — an operator who
+    // stopped everything must not have it silently undone by a redeploy.
+    runsPaused: boolean('runs_paused').notNull().default(false),
+    runsPausedAt: timestamp('runs_paused_at', { withTimezone: true }),
+    // No hard FK, same reasoning as approvalRequest.resolvedByUserId: who hit
+    // the switch is an audit fact that must survive the user being removed.
+    runsPausedByUserId: text('runs_paused_by_user_id'),
+    // When the platform *suggests* a handoff, and how often a tree may make one. Null means
+    // the platform's default, which is deliberately not the same as a value that happens to
+    // equal it: an operator who never chose should inherit a better default later.
+    //
+    // Neither of these ever swaps an agent. The rule is that the threshold nudges, the
+    // agent asks and the cap refuses — so the first is when a notice is delivered, and the
+    // second is the one bound the platform enforces on its own.
+    handoffThreshold: doublePrecision('handoff_threshold'),
+    handoffCapPerTree: integer('handoff_cap_per_tree'),
+    /**
+     * Whether a Planner's decomposition waits for a human before any worker starts.
+     *
+     * **Default on, and that is the pair to moving the human gate to the merge.** Making
+     * the teams autonomous moved the human's job to two places — review the plan, merge the
+     * branch — and a plan was the one expensive decision in the system with no gate at all:
+     * N runs spawn the moment a model submits, and the steering only reaches them
+     * afterwards. Off is a real state and belongs to the operator: a workspace running a
+     * tight loop on a trusted repository does not want to arbitrate every decomposition.
+     *
+     * Travels with the kill switch and the handoff policy for the reason they do — the same
+     * kind of thing (workspace policy an operator sets, persisted so a redeploy cannot undo
+     * it), and read on a path that already reads this row.
+     */
+    planReviewRequired: boolean('plan_review_required').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('workspace_slug_idx').on(t.slug)],
 )
 
 export const workspaceMember = pgTable(
- 'workspace_member',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- userId: text('user_id')
-.notNull
-.references( => user.id, { onDelete: 'cascade' }),
- role: text('role').notNull.default('member'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [uniqueIndex('workspace_member_unique_idx').on(t.workspaceId, t.userId)],
+  'workspace_member',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().default('member'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('workspace_member_unique_idx').on(t.workspaceId, t.userId)],
 )
 
 export const channel = pgTable(
- 'channel',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- name: text('name').notNull,
- topic: text('topic'),
- isPrivate: boolean('is_private').notNull.default(false),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [uniqueIndex('channel_workspace_name_idx').on(t.workspaceId, t.name)],
+  'channel',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    topic: text('topic'),
+    isPrivate: boolean('is_private').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('channel_workspace_name_idx').on(t.workspaceId, t.name)],
 )
 
 export const thread = pgTable(
- 'thread',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- channelId: uuid('channel_id')
-.notNull
-.references( => channel.id, { onDelete: 'cascade' }),
- parentMessageId: uuid('parent_message_id'),
- isRoot: boolean('is_root').notNull.default(false),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- index('thread_channel_idx').on(t.workspaceId, t.channelId),
- // At most one root thread per channel, enforced in the database.
- uniqueIndex('thread_root_per_channel_idx')
-.on(t.channelId)
-.where(sql`${t.isRoot}`),
- ],
+  'thread',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channel.id, { onDelete: 'cascade' }),
+    parentMessageId: uuid('parent_message_id'),
+    isRoot: boolean('is_root').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('thread_channel_idx').on(t.workspaceId, t.channelId),
+    // At most one root thread per channel, enforced in the database.
+    uniqueIndex('thread_root_per_channel_idx')
+      .on(t.channelId)
+      .where(sql`${t.isRoot}`),
+  ],
 )
 
 /** A paired local daemon. `allowedRoots` is Runner-declared, not server-managed. */
 export const runner = pgTable(
- 'runner',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- name: text('name').notNull,
- // Hashed, not raw — a leaked DB row must not itself be a usable pairing token.
- pairingTokenHash: text('pairing_token_hash').notNull,
- allowedRoots: jsonb('allowed_roots').$type<string[]>.notNull.default([]),
- connected: boolean('connected').notNull.default(false),
- lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- index('runner_workspace_idx').on(t.workspaceId),
- uniqueIndex('runner_pairing_token_hash_idx').on(t.pairingTokenHash),
- ],
+  'runner',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    // Hashed, not raw — a leaked DB row must not itself be a usable pairing token.
+    pairingTokenHash: text('pairing_token_hash').notNull(),
+    allowedRoots: jsonb('allowed_roots').$type<string[]>().notNull().default([]),
+    connected: boolean('connected').notNull().default(false),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('runner_workspace_idx').on(t.workspaceId),
+    uniqueIndex('runner_pairing_token_hash_idx').on(t.pairingTokenHash),
+  ],
 )
 
 /** Phase 1 scope cut: bound by absolute path, no directory picker or `git init` flow yet. */
 export const repository = pgTable(
- 'repository',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- runnerId: uuid('runner_id')
-.notNull
-.references( => runner.id, { onDelete: 'cascade' }),
- displayName: text('display_name').notNull,
- absolutePath: text('absolute_path').notNull,
- defaultBranch: text('default_branch').notNull,
- // What the merge queue runs against a rebased branch before merging it
- //. Null merges unverified — see
- // `planMergeVerification`, which also explains why this executes in the
- // sandbox: the command is the operator's, but the code it runs is the
- // agent's.
- verifyCommand: text('verify_command'),
- /**
- * This repository's definition of done: a named, ordered list of checks, run in order and stopped at the first
- * failure. One list, read by both callers — the merge queue against a rebased
- * branch, and a finished run against its own.
- *
- * `verifyCommand` above is not migrated into it and is not dead: it is every
- * pre-harness repository's whole definition of done, and `verificationChecksFor`
- * reads it as a single check named `tests` when this column is empty. Rewriting it
- * would be the platform editing an operator's configuration to say the same thing
- * in a newer shape.
- */
- verificationChecks: jsonb('verification_checks')
-.$type<VerificationCheck[]>
-.notNull
-.default([]),
- // What the platform runs to warm this repository's dependency cache.
- // Operator-authored and run with no agent involved — that is what makes the warmed
- // cache safe to hand to runs, since nothing a model produced ever wrote to it.
- installCommand: text('install_command'),
- /**
- * Whether an agent may attempt a conflicted branch here before the human sees it
- *.
- *
- * Per repository rather than per process: it was `LOOM_RECONCILER_ENABLED`, an
- * operator-wide env var, which meant a team's canvas could only have *drawn* it —
- * and the rule for that canvas is that it may not draw what the runtime does not
- * read. The env var stays as the machine-level off switch; this is the policy.
- *
- * Defaults to on, which is what every repository had before the column existed and
- * what the measurement argues for.
- */
- reconcilerEnabled: boolean('reconciler_enabled').notNull.default(true),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [index('repository_workspace_idx').on(t.workspaceId)],
+  'repository',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    runnerId: uuid('runner_id')
+      .notNull()
+      .references(() => runner.id, { onDelete: 'cascade' }),
+    displayName: text('display_name').notNull(),
+    absolutePath: text('absolute_path').notNull(),
+    defaultBranch: text('default_branch').notNull(),
+    // What the merge queue runs against a rebased branch before merging it
+    //. Null merges unverified — see
+    // `planMergeVerification`, which also explains why this executes in the
+    // sandbox: the command is the operator's, but the code it runs is the
+    // agent's.
+    verifyCommand: text('verify_command'),
+    /**
+     * This repository's definition of done: a named, ordered list of checks, run in order
+     * and stopped at the first failure. One list, read by both callers — the merge queue
+     * against a rebased branch, and a finished run against its own.
+     *
+     * `verifyCommand` above is not migrated into it and is not dead: it is every
+     * pre-harness repository's whole definition of done, and `verificationChecksFor`
+     * reads it as a single check named `tests` when this column is empty. Rewriting it
+     * would be the platform editing an operator's configuration to say the same thing
+     * in a newer shape.
+     */
+    verificationChecks: jsonb('verification_checks')
+      .$type<VerificationCheck[]>()
+      .notNull()
+      .default([]),
+    // What the platform runs to warm this repository's dependency cache.
+    // Operator-authored and run with no agent involved — that is what makes the warmed
+    // cache safe to hand to runs, since nothing a model produced ever wrote to it.
+    installCommand: text('install_command'),
+    /**
+     * Whether an agent may attempt a conflicted branch here before the human sees it.
+     *
+     * Per repository rather than per process: it was `LOOM_RECONCILER_ENABLED`, an
+     * operator-wide env var, which meant a team's canvas could only have *drawn* it —
+     * and the rule for that canvas is that it may not draw what the runtime does not
+     * read. The env var stays as the machine-level off switch; this is the policy.
+     *
+     * Defaults to on, which is what every repository had before the column existed and
+     * what the measurement argues for.
+     */
+    reconcilerEnabled: boolean('reconciler_enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('repository_workspace_idx').on(t.workspaceId)],
 )
 
 /**
@@ -211,99 +209,99 @@ export const repository = pgTable(
  * storage yet.
  */
 export const agentRun = pgTable(
- 'agent_run',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- threadId: uuid('thread_id')
-.notNull
-.references( => thread.id, { onDelete: 'cascade' }),
- repositoryId: uuid('repository_id')
-.notNull
-.references( => repository.id, { onDelete: 'cascade' }),
- runnerId: uuid('runner_id')
-.notNull
-.references( => runner.id, { onDelete: 'cascade' }),
- persona: jsonb('persona').notNull,
- // Swarm structure. Null for a run a human started.
- // `relation` distinguishes delegation from review/reconcile, which the data model is
- // explicit should not masquerade as delegation children. Self-referencing FK
- // declared via a callback because the table is still being defined here.
- parentRunId: uuid('parent_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'cascade',
- }),
- relation: text('relation'),
- // What this run was asked to do. Persisted
- // because a re-planning turn needs the original goal and the current plan, and
- // the task had until now only ever been dispatched to the Runner. Nullable: a run
- // started from the sidebar picker has no task, and every row written before this
- // column existed has none either.
- task: text('task'),
- status: text('status').notNull.default('pending'),
- totalCostUsd: doublePrecision('total_cost_usd'),
- errorMessage: text('error_message'),
- // Set once the Runner finishes cloning — null until then,
- // and for any run that fails before a workspace is ever prepared.
- clonePath: text('clone_path'),
- /**
- * The commit the clone opened at.
- *
- * Reported on the same frame as `clonePath`, where the mastery map already read it,
- * and stored here because a *replay* needs it: an item in a held-out set is
- * `(repository @ commit, task, observed outcome)`, and replaying at whatever the
- * repository's head happens to be later means two candidates were screened on
- * different problems. A control that drifts is not a control.
- *
- * Null for every run written before this column existed, and for any run that fails
- * before a clone. The "no silent truncation" is why those are *excluded and
- * counted* when a set is assembled rather than replayed at head.
- */
- baseCommitSha: text('base_commit_sha'),
- branchName: text('branch_name'),
- // Set by a human's end-of-run keep/discard decision on DiffView — null until then. `discarded` also implies the
- // clone on disk has been removed by the Runner.
- branchDisposition: text('branch_disposition'),
- // Dead-run reaper inputs — internal-only,
- // never exposed through the contract. `lastHeartbeatAt` is bumped only by
- // the Runner's periodic heartbeat frame (detects a dead connection);
- // `lastEventAt` is bumped by any agent_event (detects a hung-but-connected
- // run). Both null until first arrival — the reaper falls back to
- // `createdAt` so a run that never gets a first heartbeat/event is still
- // caught, not ignored forever.
- lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
- lastEventAt: timestamp('last_event_at', { withTimezone: true }),
- // Context-window occupancy, sampled by the Runner from the SDK and carried on the
- // heartbeat. Stored on
- // the run rather than as an event: only the *latest* figure means anything, and
- // keeping it here is what lets the board read it without a query of its own.
- // Both null until a Runner samples one — which never happens before the first turn.
- contextTokens: integer('context_tokens'),
- contextMaxTokens: integer('context_max_tokens'),
- // When the platform told this run its window was filling. A stamp rather than a boolean so the record says *when*, and claimed
- // conditionally like `aggregatedAt` above and for the same reason: heartbeats arrive
- // every few seconds, and a read-then-write would re-nudge on every one of them from
- // the moment the run crossed the threshold.
- handoffSuggestedAt: timestamp('handoff_suggested_at', { withTimezone: true }),
- // Claimed by whichever sibling reports this run's plan. The claim is the point, not the timestamp: "only the last sibling
- // reports" was a read-then-write with no claim, so two children reaching a
- // terminal status at the same moment both read "all terminal" and both posted.
- // Observed in the dev workspace as a byte-identical duplicate summary.
- aggregatedAt: timestamp('aggregated_at', { withTimezone: true }),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- completedAt: timestamp('completed_at', { withTimezone: true }),
- },
- (t) => [
- index('agent_run_thread_idx').on(t.workspaceId, t.threadId),
- // Backs the tree view's per-parent lookup.
- index('agent_run_parent_idx').on(t.workspaceId, t.parentRunId),
- ],
+  'agent_run',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => thread.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    runnerId: uuid('runner_id')
+      .notNull()
+      .references(() => runner.id, { onDelete: 'cascade' }),
+    persona: jsonb('persona').notNull(),
+    // Swarm structure. Null for a run a human started.
+    // `relation` distinguishes delegation from review/reconcile, which the data model is
+    // explicit should not masquerade as delegation children. Self-referencing FK
+    // declared via a callback because the table is still being defined here.
+    parentRunId: uuid('parent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'cascade',
+    }),
+    relation: text('relation'),
+    // What this run was asked to do. Persisted
+    // because a re-planning turn needs the original goal and the current plan, and
+    // the task had until now only ever been dispatched to the Runner. Nullable: a run
+    // started from the sidebar picker has no task, and every row written before this
+    // column existed has none either.
+    task: text('task'),
+    status: text('status').notNull().default('pending'),
+    totalCostUsd: doublePrecision('total_cost_usd'),
+    errorMessage: text('error_message'),
+    // Set once the Runner finishes cloning — null until then,
+    // and for any run that fails before a workspace is ever prepared.
+    clonePath: text('clone_path'),
+    /**
+     * The commit the clone opened at.
+     *
+     * Reported on the same frame as `clonePath`, where the mastery map already read it,
+     * and stored here because a *replay* needs it: an item in a held-out set is
+     * `(repository @ commit, task, observed outcome)`, and replaying at whatever the
+     * repository's head happens to be later means two candidates were screened on
+     * different problems. A control that drifts is not a control.
+     *
+     * Null for every run written before this column existed, and for any run that fails
+     * before a clone. The "no silent truncation" is why those are *excluded and
+     * counted* when a set is assembled rather than replayed at head.
+     */
+    baseCommitSha: text('base_commit_sha'),
+    branchName: text('branch_name'),
+    // Set by a human's end-of-run keep/discard decision on DiffView — null until then.
+    // `discarded` also implies the clone on disk has been removed by the Runner.
+    branchDisposition: text('branch_disposition'),
+    // Dead-run reaper inputs — internal-only,
+    // never exposed through the contract. `lastHeartbeatAt` is bumped only by
+    // the Runner's periodic heartbeat frame (detects a dead connection);
+    // `lastEventAt` is bumped by any agent_event (detects a hung-but-connected
+    // run). Both null until first arrival — the reaper falls back to
+    // `createdAt` so a run that never gets a first heartbeat/event is still
+    // caught, not ignored forever.
+    lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+    lastEventAt: timestamp('last_event_at', { withTimezone: true }),
+    // Context-window occupancy, sampled by the Runner from the SDK and carried on the
+    // heartbeat. Stored on
+    // the run rather than as an event: only the *latest* figure means anything, and
+    // keeping it here is what lets the board read it without a query of its own.
+    // Both null until a Runner samples one — which never happens before the first turn.
+    contextTokens: integer('context_tokens'),
+    contextMaxTokens: integer('context_max_tokens'),
+    // When the platform told this run its window was filling. A stamp rather than a boolean
+    // so the record says *when*, and claimed conditionally like `aggregatedAt` above and
+    // for the same reason: heartbeats arrive every few seconds, and a read-then-write would
+    // re-nudge on every one of them from the moment the run crossed the threshold.
+    handoffSuggestedAt: timestamp('handoff_suggested_at', { withTimezone: true }),
+    // Claimed by whichever sibling reports this run's plan. The claim is the point, not the
+    // timestamp: "only the last sibling reports" was a read-then-write with no claim, so
+    // two children reaching a terminal status at the same moment both read "all terminal"
+    // and both posted. Observed in the dev workspace as a byte-identical duplicate summary.
+    aggregatedAt: timestamp('aggregated_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('agent_run_thread_idx').on(t.workspaceId, t.threadId),
+    // Backs the tree view's per-parent lookup.
+    index('agent_run_parent_idx').on(t.workspaceId, t.parentRunId),
+  ],
 )
 
 /**
- * The structured event tier, doubling as the idempotency ledger for event ingest (the security model runtime
- * safety: "idempotency keys on run steps").
+ * The structured event tier, doubling as the idempotency ledger for event ingest (the
+ * security model runtime safety: "idempotency keys on run steps").
  *
  * `seq` is a per-run counter the Runner assigns. The unique index on
  * (agent_run_id, seq) is the whole mechanism: a retransmitted or replayed event
@@ -315,24 +313,24 @@ export const agentRun = pgTable(
  * blob-storage concern that is still deferred past Phase 1.
  */
 export const agentRunEvent = pgTable(
- 'agent_run_event',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id')
-.notNull
-.references( => agentRun.id, { onDelete: 'cascade' }),
- seq: integer('seq').notNull,
- kind: text('kind').notNull,
- payload: jsonb('payload').notNull,
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- uniqueIndex('agent_run_event_run_seq_idx').on(t.agentRunId, t.seq),
- index('agent_run_event_workspace_run_idx').on(t.workspaceId, t.agentRunId, t.seq),
- ],
+  'agent_run_event',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references(() => agentRun.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    kind: text('kind').notNull(),
+    payload: jsonb('payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('agent_run_event_run_seq_idx').on(t.agentRunId, t.seq),
+    index('agent_run_event_workspace_run_idx').on(t.workspaceId, t.agentRunId, t.seq),
+  ],
 )
 
 /**
@@ -342,57 +340,57 @@ export const agentRunEvent = pgTable(
  * Two indexes carry the invariants rather than leaving them to application code:
  *
  * - `merge_queue_active_per_repo_idx` — **at most one `merging` entry per
- * repository**. This is the serialization, and it is here rather than in the
- * sweep because two servers sweeping concurrently would both read the same
- * queued entry and both try to claim it. One insert wins; the other's claim
- * fails, which is exactly right.
+ *   repository**. This is the serialization, and it is here rather than in the
+ *   sweep because two servers sweeping concurrently would both read the same
+ *   queued entry and both try to claim it. One insert wins; the other's claim
+ *   fails, which is exactly right.
  * - `merge_queue_open_per_run_idx` — a run may have at most one *open* entry, so
- * double-clicking Merge cannot queue the same branch twice. Terminal entries are
- * exempt: a branch that failed and was re-queued is a second, legitimate attempt.
+ *   double-clicking Merge cannot queue the same branch twice. Terminal entries are
+ *   exempt: a branch that failed and was re-queued is a second, legitimate attempt.
  *
  * `position` is a bigserial for the reason `message.seq` is: a swarm's siblings are
  * queued in the same millisecond, so `created_at` cannot order them.
  */
 export const mergeQueueEntry = pgTable(
- 'merge_queue_entry',
- {
- id: uuid('id').primaryKey.defaultRandom,
- position: bigserial('position', { mode: 'bigint' }).notNull,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- repositoryId: uuid('repository_id')
-.notNull
-.references( => repository.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id')
-.notNull
-.references( => agentRun.id, { onDelete: 'cascade' }),
- // Snapshotted at enqueue time, so an entry still says which branch it was
- // about even after the run's own row changes underneath it.
- branchName: text('branch_name').notNull,
- status: text('status').notNull.default('queued'),
- failureReason: text('failure_reason'),
- detail: text('detail'),
- mergedCommitSha: text('merged_commit_sha'),
- // Whether a verification command actually ran and passed — not whether one was
- // configured. A repository with no command merges unverified, and this says so.
- verified: boolean('verified').notNull.default(false),
- // No hard FK, same convention as approvalRequest.resolvedByUserId: who queued a
- // merge is an audit fact that must survive the user being removed.
- enqueuedByUserId: text('enqueued_by_user_id'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- startedAt: timestamp('started_at', { withTimezone: true }),
- finishedAt: timestamp('finished_at', { withTimezone: true }),
- },
- (t) => [
- index('merge_queue_repo_idx').on(t.workspaceId, t.repositoryId, t.position),
- uniqueIndex('merge_queue_active_per_repo_idx')
-.on(t.repositoryId)
-.where(sql`${t.status} = 'merging'`),
- uniqueIndex('merge_queue_open_per_run_idx')
-.on(t.agentRunId)
-.where(sql`${t.status} in ('queued', 'merging')`),
- ],
+  'merge_queue_entry',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    position: bigserial('position', { mode: 'bigint' }).notNull(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references(() => agentRun.id, { onDelete: 'cascade' }),
+    // Snapshotted at enqueue time, so an entry still says which branch it was
+    // about even after the run's own row changes underneath it.
+    branchName: text('branch_name').notNull(),
+    status: text('status').notNull().default('queued'),
+    failureReason: text('failure_reason'),
+    detail: text('detail'),
+    mergedCommitSha: text('merged_commit_sha'),
+    // Whether a verification command actually ran and passed — not whether one was
+    // configured. A repository with no command merges unverified, and this says so.
+    verified: boolean('verified').notNull().default(false),
+    // No hard FK, same convention as approvalRequest.resolvedByUserId: who queued a
+    // merge is an audit fact that must survive the user being removed.
+    enqueuedByUserId: text('enqueued_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('merge_queue_repo_idx').on(t.workspaceId, t.repositoryId, t.position),
+    uniqueIndex('merge_queue_active_per_repo_idx')
+      .on(t.repositoryId)
+      .where(sql`${t.status} = 'merging'`),
+    uniqueIndex('merge_queue_open_per_run_idx')
+      .on(t.agentRunId)
+      .where(sql`${t.status} in ('queued', 'merging')`),
+  ],
 )
 
 /**
@@ -415,45 +413,45 @@ export const mergeQueueEntry = pgTable(
  * was producing broken work.
  */
 export const runVerification = pgTable(
- 'run_verification',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id')
-.notNull
-.references( => agentRun.id, { onDelete: 'cascade' }),
- repositoryId: uuid('repository_id')
-.notNull
-.references( => repository.id, { onDelete: 'cascade' }),
- // Snapshotted, like the merge queue's branch name: the row still says what it was
- // about after the run's own row changes underneath it.
- branchName: text('branch_name').notNull,
- status: text('status').$type<VerificationStatus>.notNull.default('pending'),
- // The commit that was actually verified. Null until the Runner reports one — and a
- // verdict attached to no commit is the same rumour mastery refuses in a map.
- commitSha: text('commit_sha'),
- checks: jsonb('checks').$type<VerificationCheckResult[]>.notNull.default([]),
- // Why it did not run, when it did not. Recorded, never implied.
- reason: text('reason'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- startedAt: timestamp('started_at', { withTimezone: true }),
- finishedAt: timestamp('finished_at', { withTimezone: true }),
- },
- (t) => [
- uniqueIndex('run_verification_run_idx').on(t.agentRunId),
- /**
- * At most one verification in flight per repository — the merge queue's own
- * serialization, for the same reason and enforced the same way. Verification is a
- * test suite: eight finished workers would otherwise start eight of them at once on
- * one machine, against one dependency cache, while a human waits for the merge.
- */
- uniqueIndex('run_verification_active_per_repo_idx')
-.on(t.repositoryId)
-.where(sql`${t.status} = 'pending' and ${t.startedAt} is not null`),
- index('run_verification_workspace_idx').on(t.workspaceId, t.createdAt),
- ],
+  'run_verification',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references(() => agentRun.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    // Snapshotted, like the merge queue's branch name: the row still says what it was
+    // about after the run's own row changes underneath it.
+    branchName: text('branch_name').notNull(),
+    status: text('status').$type<VerificationStatus>().notNull().default('pending'),
+    // The commit that was actually verified. Null until the Runner reports one — and a
+    // verdict attached to no commit is the same rumour mastery refuses in a map.
+    commitSha: text('commit_sha'),
+    checks: jsonb('checks').$type<VerificationCheckResult[]>().notNull().default([]),
+    // Why it did not run, when it did not. Recorded, never implied.
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('run_verification_run_idx').on(t.agentRunId),
+    /**
+     * At most one verification in flight per repository — the merge queue's own
+     * serialization, for the same reason and enforced the same way. Verification is a
+     * test suite: eight finished workers would otherwise start eight of them at once on
+     * one machine, against one dependency cache, while a human waits for the merge.
+     */
+    uniqueIndex('run_verification_active_per_repo_idx')
+      .on(t.repositoryId)
+      .where(sql`${t.status} = 'pending' and ${t.startedAt} is not null`),
+    index('run_verification_workspace_idx').on(t.workspaceId, t.createdAt),
+  ],
 )
 
 /**
@@ -462,79 +460,81 @@ export const runVerification = pgTable(
  * querying without re-parsing on every list/get.
  */
 export const agentPersona = pgTable(
- 'agent_persona',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- name: text('name').notNull,
- description: text('description').notNull,
- markdownSource: text('markdown_source').notNull,
- model: text('model').notNull,
- tools: jsonb('tools').$type<string[]>.notNull.default([]),
- harnessEffort: text('harness_effort'),
- harnessMaxTurns: doublePrecision('harness_max_turns'),
- /**
- * How much a run of this persona may do without asking. Replaces `harness_auto_approve`, whose
- * two states were this column's outer two — a boolean cannot express the middle
- * an operator actually wants, and three call sites compared it.
- */
- harnessApprovalMode: text('harness_approval_mode').notNull.default('ask'),
- // Phase 2. A planner persona gets the delegation tool and is
- // required to declare `tools: []` — enforced in the use-case, not here.
- harnessPlanner: boolean('harness_planner').notNull.default(false),
- // A planner's delegation envelope. Its own `tools` stay empty.
- harnessDelegates: jsonb('harness_delegates').$type<string[]>.notNull.default([]),
- // Enforced at the egress proxy, not advisory. Null = uncapped.
- harnessBudgetCapUsd: doublePrecision('harness_budget_cap_usd'),
- /**
- * The **self-modification envelope** — a human-set ceiling on what this
- * persona may become, distinct from `harness_delegates`, which is the ceiling on what
- * it may hand *down*.
- *
- * **Null is a refusal, not an absence of one.** A persona with no envelope may not
- * rewrite itself at all; to let it, a human first says how far. Read the other way —
- * null as "no ceiling" — every persona that predates this column becomes a
- * self-rewriting agent with no bound, which is the one thing continuity mode says must not exist.
- * `maySelfModify` is the single place that decides this, so no reader has to remember.
- *
- * Jsonb rather than six columns: the envelope is written and read as a whole, it is
- * checked by one function, and its shape follows the list rather than this schema's
- * conventions. Splitting it would put six nullable columns on a table where five of
- * them are meaningless whenever the sixth is.
- */
- envelope: jsonb('envelope').$type<Envelope>,
- /**
- * The markdown **the platform seeded**, verbatim, for a built-in.
- * Null on a hand-authored persona, and on a built-in seeded before this column
- * existed.
- *
- * The whole text rather than a digest, because it is a couple of kilobytes on a
- * table with tens of rows and it answers a question a hash cannot: *what* the
- * shipped version said, so a human deciding whether to take an update can be shown
- * the difference instead of a boolean.
- *
- * It exists because built-ins seed once per workspace as editable rows, which is
- * deliberate and had a consequence nobody had named: a change to a shipped persona
- * never reached a workspace that already had one. That is not cosmetic — the
- * `planner` built-in shipped with `tools: []`, the planner/worker trust boundary was later amended to give a
- * planner read-only tools precisely because the empty list made it stall on the
- * approval SLA, and every existing workspace kept the version that stalls.
- *
- * With this, "the human edited it" and "the platform shipped a new one" stop being
- * the same observation: a row whose markdown still hashes to what was seeded was
- * never touched, so it can be brought forward silently. Anything else is a human's
- * work and is left alone.
- */
- builtinSource: text('builtin_source'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- index('agent_persona_workspace_idx').on(t.workspaceId),
- uniqueIndex('agent_persona_workspace_name_idx').on(t.workspaceId, t.name),
- ],
+  'agent_persona',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    markdownSource: text('markdown_source').notNull(),
+    model: text('model').notNull(),
+    tools: jsonb('tools').$type<string[]>().notNull().default([]),
+    harnessEffort: text('harness_effort'),
+    harnessMaxTurns: doublePrecision('harness_max_turns'),
+    /**
+     * How much a run of this persona may do without asking. Replaces
+     * `harness_auto_approve`, whose two states were this column's outer two — a boolean
+     * cannot express the middle an operator actually wants, and three call sites compared
+     * it.
+     */
+    harnessApprovalMode: text('harness_approval_mode').notNull().default('ask'),
+    // A planner persona gets the delegation tool and is
+    // required to declare `tools: []` — enforced in the use-case, not here.
+    harnessPlanner: boolean('harness_planner').notNull().default(false),
+    // A planner's delegation envelope. Its own `tools` stay empty.
+    harnessDelegates: jsonb('harness_delegates').$type<string[]>().notNull().default([]),
+    // Enforced at the egress proxy, not advisory. Null = uncapped.
+    harnessBudgetCapUsd: doublePrecision('harness_budget_cap_usd'),
+    /**
+     * The **self-modification envelope** — a human-set ceiling on what this
+     * persona may become, distinct from `harness_delegates`, which is the ceiling on what
+     * it may hand *down*.
+     *
+     * **Null is a refusal, not an absence of one.** A persona with no envelope may not
+     * rewrite itself at all; to let it, a human first says how far. Read the other way —
+     * null as "no ceiling" — every persona that predates this column becomes a
+     * self-rewriting agent with no bound, which is the one thing continuity mode says must
+     * not exist. `maySelfModify` is the single place that decides this, so no reader has to
+     * remember.
+     *
+     * Jsonb rather than six columns: the envelope is written and read as a whole, it is
+     * checked by one function, and its shape follows the list rather than this schema's
+     * conventions. Splitting it would put six nullable columns on a table where five of
+     * them are meaningless whenever the sixth is.
+     */
+    envelope: jsonb('envelope').$type<Envelope>(),
+    /**
+     * The markdown **the platform seeded**, verbatim, for a built-in.
+     * Null on a hand-authored persona, and on a built-in seeded before this column
+     * existed.
+     *
+     * The whole text rather than a digest, because it is a couple of kilobytes on a
+     * table with tens of rows and it answers a question a hash cannot: *what* the
+     * shipped version said, so a human deciding whether to take an update can be shown
+     * the difference instead of a boolean.
+     *
+     * It exists because built-ins seed once per workspace as editable rows, which is
+     * deliberate and had a consequence nobody had named: a change to a shipped persona
+     * never reached a workspace that already had one. That is not cosmetic — the `planner`
+     * built-in shipped with `tools: []`, the planner/worker trust boundary was later
+     * amended to give a planner read-only tools precisely because the empty list made it
+     * stall on the approval SLA, and every existing workspace kept the version that stalls.
+     *
+     * With this, "the human edited it" and "the platform shipped a new one" stop being
+     * the same observation: a row whose markdown still hashes to what was seeded was
+     * never touched, so it can be brought forward silently. Anything else is a human's
+     * work and is left alone.
+     */
+    builtinSource: text('builtin_source'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('agent_persona_workspace_idx').on(t.workspaceId),
+    uniqueIndex('agent_persona_workspace_name_idx').on(t.workspaceId, t.name),
+  ],
 )
 
 /**
@@ -549,36 +549,37 @@ export const agentPersona = pgTable(
  *
  * Skills store their `content` here rather than on any run's disk, because with
  * `settingSources: []` a skill in the clone is content the agent can write — see
- * packages/domain/src/capabilities.ts for why that settles the roadmap vs the capability registry — capability attachment.
+ * packages/domain/src/capabilities.ts for why that settles the roadmap vs the capability
+ * registry — capability attachment.
  */
 export const capability = pgTable(
- 'capability',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- kind: text('kind').notNull,
- name: text('name').notNull,
- description: text('description').notNull.default(''),
- transport: text('transport'),
- command: text('command'),
- args: jsonb('args').$type<string[]>.notNull.default([]),
- url: text('url'),
- toolListHash: text('tool_list_hash'),
- content: text('content'),
- // Hosts a persona holding this capability may reach through the egress proxy
- //. Per capability rather than per deployment, so the allowlist
- // attenuates with the persona instead of opening a host for every run in the
- // workspace — which is what makes "off by default" true per agent.
- egressHosts: jsonb('egress_hosts').$type<string[]>.notNull.default([]),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- index('capability_workspace_idx').on(t.workspaceId),
- uniqueIndex('capability_workspace_name_idx').on(t.workspaceId, t.name),
- ],
+  'capability',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    transport: text('transport'),
+    command: text('command'),
+    args: jsonb('args').$type<string[]>().notNull().default([]),
+    url: text('url'),
+    toolListHash: text('tool_list_hash'),
+    content: text('content'),
+    // Hosts a persona holding this capability may reach through the egress proxy
+    //. Per capability rather than per deployment, so the allowlist
+    // attenuates with the persona instead of opening a host for every run in the
+    // workspace — which is what makes "off by default" true per agent.
+    egressHosts: jsonb('egress_hosts').$type<string[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('capability_workspace_idx').on(t.workspaceId),
+    uniqueIndex('capability_workspace_name_idx').on(t.workspaceId, t.name),
+  ],
 )
 
 /**
@@ -587,158 +588,158 @@ export const capability = pgTable(
  * `personaGroup.personaIds`.
  */
 export const personaCapability = pgTable(
- 'persona_capability',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- capabilityId: uuid('capability_id')
-.notNull
-.references( => capability.id, { onDelete: 'cascade' }),
- // Empty means "everything this capability offers". Narrowing here is what
- // makes attenuation on a child's scope meaningful.
- allowedTools: jsonb('allowed_tools').$type<string[]>.notNull.default([]),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- index('persona_capability_persona_idx').on(t.workspaceId, t.personaId),
- uniqueIndex('persona_capability_unique_idx').on(t.personaId, t.capabilityId),
- ],
+  'persona_capability',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    capabilityId: uuid('capability_id')
+      .notNull()
+      .references(() => capability.id, { onDelete: 'cascade' }),
+    // Empty means "everything this capability offers". Narrowing here is what
+    // makes attenuation on a child's scope meaningful.
+    allowedTools: jsonb('allowed_tools').$type<string[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('persona_capability_persona_idx').on(t.workspaceId, t.personaId),
+    uniqueIndex('persona_capability_unique_idx').on(t.personaId, t.capabilityId),
+  ],
 )
 
 /**
- * Organizational persona grouping — a jsonb array of member
- * persona ids, same convention as `agentPersona.tools`. No join table: there
- * is no per-attachment metadata, unlike `persona_capability`.
+ * Organizational persona grouping — a jsonb array of member persona ids, same convention as
+ * `agentPersona.tools`. No join table: there is no per-attachment metadata, unlike
+ * `persona_capability`.
  */
 export const personaGroup = pgTable(
- 'persona_group',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- name: text('name').notNull,
- /**
- * What this team is *for*, in one line.
- *
- * A team's name says what it does and a description says when to reach for it, which is
- * the question an operator actually has when the composer lists six of them. Empty for
- * every team authored before this column and for one a human never described — the same
- * state, and both read as "no description" rather than as a missing value.
- */
- description: text('description').notNull.default(''),
- personaIds: jsonb('persona_ids').$type<string[]>.notNull.default([]),
- /**
- * Where each member sits on the composition canvas, keyed by persona id.
- *
- * Persisted rather than laid out on open, because on an authoring canvas
- * **position is a fact**. A human who arranged a team around a lead
- * planner has recorded an intent; recomputing it on the next open would throw
- * that away every time.
- *
- * A member with no entry is placed by the client on first open and saved with the
- * next edit — so adding a persona through any other surface is not a broken row.
- */
- layout: jsonb('layout')
-.$type<Record<string, { x: number; y: number }>>
-.notNull
-.default({}),
- /**
- * How many of each member the team is sized to run at once — the fleet, keyed
- * by persona id like `layout`.
- *
- * A member with no entry is **unsized**, meaning the Planner decides, which is what
- * every team did before this column existed. Deliberately not defaulted to 1 per
- * member: that would have silently serialized every existing team on the migration
- * that added it.
- *
- * Unlike `layout`, this is *read by the runtime* — the roster a Planner is given, the
- * concurrency check at child start, and the plan-time warning. The caution about the
- * composition canvas is the reason it has to be: a number a human tunes and a swarm
- * ignores is worse than no number at all.
- */
- fleet: jsonb('fleet').$type<Record<string, number>>.notNull.default({}),
- /**
- * Who reviews whom on this team — the design-canvas half, keyed by *reviewer*
- * persona id because that is the direction the relation is named and drawn in.
- *
- * Read by the runtime, like `fleet` and unlike `layout`: it becomes a clause in the
- * Planner's roster and a warning when a plan gives work to a reviewed persona and
- * asks for no review of it. The rule for this canvas is that it may only draw what
- * the runtime executes.
- */
- reviewers: jsonb('reviewers').$type<Record<string, string[]>>.notNull.default({}),
- /**
- * Who reports to whom — the chain of command, keyed by the
- * **worker** and holding the planner it reports to.
- *
- * Keyed the opposite way from `reviewers`, and the asymmetry is a constraint rather
- * than an inconsistency: a worker reports to at most one planner, and one value per key
- * is what enforces that. Keyed by planner, the same worker could appear under two of
- * them — which is exactly the ambiguity that makes "whose work is this" unanswerable.
- *
- * Read by the runtime, like `fleet` and `reviewers`: it narrows the roster a planner is
- * given. It can only ever narrow — a worker assigned to a planner whose envelope
- * refuses it is still refused, because attenuation runs afterwards and is unchanged. A
- * reporting line says who *should* do the work, never that they *may*.
- *
- * Empty is every team today, and empty means no narrowing rather than nobody.
- */
- reportsTo: jsonb('reports_to').$type<Record<string, string>>.notNull.default({}),
- /**
- * Which member the work starts from — the root orchestrator, and the canvas's
- * vantage point for depth.
- *
- * Not a foreign key, deliberately, and for the same reason `personaIds` is not: a
- * persona removed from the workspace must leave a team that still opens, and the
- * canvas already falls back when the stored choice is no longer a planner on the
- * roster. A constraint here would turn a stale pointer into a failed load.
- */
- orchestratorId: uuid('orchestrator_id'),
- /**
- * Which repository this team's work lands in — the design canvas, and the fact
- * the other two policy items on it were blocked on.
- *
- * A real foreign key, unlike `personaIds` and `orchestratorId`, because the two cases
- * are not the same. Those hold ids the platform cannot constrain without turning a
- * stale pointer into a failed load; this one can say `set null`, which is the same
- * property — a team whose repository was removed still opens — while keeping the
- * database from holding a repository id that names nothing.
- *
- * Null is the state every team has today: no repository chosen, and the run launcher
- * defaults to nothing.
- */
- repositoryId: uuid('repository_id').references( => repository.id, { onDelete: 'set null' }),
- /**
- * The **other** repositories this team's work may land in.
- *
- * `repositoryId` is where a run *defaults*, and it stays singular for that reason: the
- * launcher fills one field, and a persona on two teams that disagree gets nothing
- * (`teamRepositoryFor`). This is the different question a cross-repository team asks —
- * which repositories a **subtask** may name — and it is a set because that is what the
- * answer is.
- *
- * Ids in jsonb rather than a join table, matching `personaIds`: it is a short list read
- * whole, and a join table would be a second place a team's shape lives. No foreign key
- * for the same reason `personaIds` has none — a repository unbound must leave a team that
- * still opens, and the resolver drops an id that names nothing.
- *
- * Empty is every team today, and empty means "this team works in one repository", which
- * is what every team has always done.
- */
- extraRepositoryIds: jsonb('extra_repository_ids').$type<string[]>.notNull.default([]),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- index('persona_group_workspace_idx').on(t.workspaceId),
- uniqueIndex('persona_group_workspace_name_idx').on(t.workspaceId, t.name),
- ],
+  'persona_group',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /**
+     * What this team is *for*, in one line.
+     *
+     * A team's name says what it does and a description says when to reach for it, which is
+     * the question an operator actually has when the composer lists six of them. Empty for
+     * every team authored before this column and for one a human never described — the same
+     * state, and both read as "no description" rather than as a missing value.
+     */
+    description: text('description').notNull().default(''),
+    personaIds: jsonb('persona_ids').$type<string[]>().notNull().default([]),
+    /**
+     * Where each member sits on the composition canvas, keyed by persona id.
+     *
+     * Persisted rather than laid out on open, because on an authoring canvas
+     * **position is a fact**. A human who arranged a team around a lead
+     * planner has recorded an intent; recomputing it on the next open would throw
+     * that away every time.
+     *
+     * A member with no entry is placed by the client on first open and saved with the
+     * next edit — so adding a persona through any other surface is not a broken row.
+     */
+    layout: jsonb('layout')
+      .$type<Record<string, { x: number; y: number }>>()
+      .notNull()
+      .default({}),
+    /**
+     * How many of each member the team is sized to run at once — the fleet, keyed
+     * by persona id like `layout`.
+     *
+     * A member with no entry is **unsized**, meaning the Planner decides, which is what
+     * every team did before this column existed. Deliberately not defaulted to 1 per
+     * member: that would have silently serialized every existing team on the migration
+     * that added it.
+     *
+     * Unlike `layout`, this is *read by the runtime* — the roster a Planner is given, the
+     * concurrency check at child start, and the plan-time warning. The caution about the
+     * composition canvas is the reason it has to be: a number a human tunes and a swarm
+     * ignores is worse than no number at all.
+     */
+    fleet: jsonb('fleet').$type<Record<string, number>>().notNull().default({}),
+    /**
+     * Who reviews whom on this team — the design-canvas half, keyed by *reviewer*
+     * persona id because that is the direction the relation is named and drawn in.
+     *
+     * Read by the runtime, like `fleet` and unlike `layout`: it becomes a clause in the
+     * Planner's roster and a warning when a plan gives work to a reviewed persona and
+     * asks for no review of it. The rule for this canvas is that it may only draw what
+     * the runtime executes.
+     */
+    reviewers: jsonb('reviewers').$type<Record<string, string[]>>().notNull().default({}),
+    /**
+     * Who reports to whom — the chain of command, keyed by the
+     * **worker** and holding the planner it reports to.
+     *
+     * Keyed the opposite way from `reviewers`, and the asymmetry is a constraint rather
+     * than an inconsistency: a worker reports to at most one planner, and one value per key
+     * is what enforces that. Keyed by planner, the same worker could appear under two of
+     * them — which is exactly the ambiguity that makes "whose work is this" unanswerable.
+     *
+     * Read by the runtime, like `fleet` and `reviewers`: it narrows the roster a planner is
+     * given. It can only ever narrow — a worker assigned to a planner whose envelope
+     * refuses it is still refused, because attenuation runs afterwards and is unchanged. A
+     * reporting line says who *should* do the work, never that they *may*.
+     *
+     * Empty is every team today, and empty means no narrowing rather than nobody.
+     */
+    reportsTo: jsonb('reports_to').$type<Record<string, string>>().notNull().default({}),
+    /**
+     * Which member the work starts from — the root orchestrator, and the canvas's
+     * vantage point for depth.
+     *
+     * Not a foreign key, deliberately, and for the same reason `personaIds` is not: a
+     * persona removed from the workspace must leave a team that still opens, and the
+     * canvas already falls back when the stored choice is no longer a planner on the
+     * roster. A constraint here would turn a stale pointer into a failed load.
+     */
+    orchestratorId: uuid('orchestrator_id'),
+    /**
+     * Which repository this team's work lands in — the design canvas, and the fact
+     * the other two policy items on it were blocked on.
+     *
+     * A real foreign key, unlike `personaIds` and `orchestratorId`, because the two cases
+     * are not the same. Those hold ids the platform cannot constrain without turning a
+     * stale pointer into a failed load; this one can say `set null`, which is the same
+     * property — a team whose repository was removed still opens — while keeping the
+     * database from holding a repository id that names nothing.
+     *
+     * Null is the state every team has today: no repository chosen, and the run launcher
+     * defaults to nothing.
+     */
+    repositoryId: uuid('repository_id').references(() => repository.id, { onDelete: 'set null' }),
+    /**
+     * The **other** repositories this team's work may land in.
+     *
+     * `repositoryId` is where a run *defaults*, and it stays singular for that reason: the
+     * launcher fills one field, and a persona on two teams that disagree gets nothing
+     * (`teamRepositoryFor`). This is the different question a cross-repository team asks —
+     * which repositories a **subtask** may name — and it is a set because that is what the
+     * answer is.
+     *
+     * Ids in jsonb rather than a join table, matching `personaIds`: it is a short list read
+     * whole, and a join table would be a second place a team's shape lives. No foreign key
+     * for the same reason `personaIds` has none — a repository unbound must leave a team
+     * that still opens, and the resolver drops an id that names nothing.
+     *
+     * Empty is every team today, and empty means "this team works in one repository", which
+     * is what every team has always done.
+     */
+    extraRepositoryIds: jsonb('extra_repository_ids').$type<string[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('persona_group_workspace_idx').on(t.workspaceId),
+    uniqueIndex('persona_group_workspace_name_idx').on(t.workspaceId, t.name),
+  ],
 )
 
 /**
@@ -747,46 +748,47 @@ export const personaGroup = pgTable(
  * actor; enforced in the use-case, not the schema.
  */
 export const approvalRequest = pgTable(
- 'approval_request',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id')
-.notNull
-.references( => agentRun.id, { onDelete: 'cascade' }),
- toolUseId: text('tool_use_id').notNull,
- toolName: text('tool_name').notNull,
- input: jsonb('input').notNull,
- status: text('status').notNull.default('pending'),
- // No hard FK, deliberately: same reasoning as the actor columns above —
- // devAuth-based tests use synthetic user ids never inserted into
- // Better Auth's `user` table, and a resolver's identity here is an audit
- // fact that must survive even if the referenced user is later removed.
- resolvedByUserId: text('resolved_by_user_id'),
- /**
- * A clarifying question, when this gate is one
- * rather than a tool call.
- *
- * Mid-flight steering: "a clarifying question is that same gate carrying a prompt and returning a
- * string. Reuse it rather than build a second blocking channel" — so this is two
- * nullable columns on the proven mechanism rather than a second table with its own
- * SLA, its own notification path and its own identity rules to get wrong.
- *
- * `question` is **model-authored**, so it is attacker-controllable text and must render inside the untrusted fence. `answer` is a human's
- * and is trusted input. Null on an ordinary tool gate, which is what distinguishes
- * the two kinds without a discriminator column that could disagree with them.
- */
- question: text('question'),
- answer: text('answer'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- resolvedAt: timestamp('resolved_at', { withTimezone: true }),
- },
- (t) => [
- index('approval_request_run_idx').on(t.agentRunId),
- uniqueIndex('approval_request_tool_use_idx').on(t.agentRunId, t.toolUseId),
- ],
+  'approval_request',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references(() => agentRun.id, { onDelete: 'cascade' }),
+    toolUseId: text('tool_use_id').notNull(),
+    toolName: text('tool_name').notNull(),
+    input: jsonb('input').notNull(),
+    status: text('status').notNull().default('pending'),
+    // No hard FK, deliberately: same reasoning as the actor columns above —
+    // devAuth-based tests use synthetic user ids never inserted into
+    // Better Auth's `user` table, and a resolver's identity here is an audit
+    // fact that must survive even if the referenced user is later removed.
+    resolvedByUserId: text('resolved_by_user_id'),
+    /**
+     * A clarifying question, when this gate is one
+     * rather than a tool call.
+     *
+     * Mid-flight steering: "a clarifying question is that same gate carrying a prompt and
+     * returning a string. Reuse it rather than build a second blocking channel" — so this
+     * is two nullable columns on the proven mechanism rather than a second table with its
+     * own SLA, its own notification path and its own identity rules to get wrong.
+     *
+     * `question` is **model-authored**, so it is attacker-controllable text and must render
+     * inside the untrusted fence. `answer` is a human's and is trusted input. Null on an
+     * ordinary tool gate, which is what distinguishes the two kinds without a discriminator
+     * column that could disagree with them.
+     */
+    question: text('question'),
+    answer: text('answer'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('approval_request_run_idx').on(t.agentRunId),
+    uniqueIndex('approval_request_tool_use_idx').on(t.agentRunId, t.toolUseId),
+  ],
 )
 
 /**
@@ -794,37 +796,37 @@ export const approvalRequest = pgTable(
  * inserts, so cursors must never be built from `created_at`.
  */
 export const message = pgTable(
- 'message',
- {
- id: uuid('id').primaryKey.defaultRandom,
- seq: bigserial('seq', { mode: 'bigint' }).notNull,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- threadId: uuid('thread_id')
-.notNull
-.references( => thread.id, { onDelete: 'cascade' }),
- // Polymorphic actor columns, deliberately without a hard FK on either side
- // (mirrors audit_event below): a cascade delete on `agent_run` or `user`
- // must not silently corrupt chat history. Consistency is enforced in the
- // mapper layer (packages/db/src/mappers.ts toActor/fromActor).
- actorKind: text('actor_kind').notNull,
- actorUserId: text('actor_user_id'),
- actorAgentRunId: uuid('actor_agent_run_id'),
- bodyKind: text('body_kind').notNull,
- bodyText: text('body_text').notNull,
- // The SDK's correlation id for a tool call and its result, so a reader can pair
- // them without guessing. Nullable and unindexed on purpose: it is null for every
- // other kind of message, and the only consumer holds one loaded page in memory
- // and joins on it there — a column, not a lookup key.
- toolUseId: text('tool_use_id'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- editedAt: timestamp('edited_at', { withTimezone: true }),
- },
- (t) => [
- index('message_thread_seq_idx').on(t.workspaceId, t.threadId, t.seq),
- uniqueIndex('message_seq_idx').on(t.seq),
- ],
+  'message',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    seq: bigserial('seq', { mode: 'bigint' }).notNull(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => thread.id, { onDelete: 'cascade' }),
+    // Polymorphic actor columns, deliberately without a hard FK on either side
+    // (mirrors audit_event below): a cascade delete on `agent_run` or `user`
+    // must not silently corrupt chat history. Consistency is enforced in the
+    // mapper layer (packages/db/src/mappers.ts toActor/fromActor).
+    actorKind: text('actor_kind').notNull(),
+    actorUserId: text('actor_user_id'),
+    actorAgentRunId: uuid('actor_agent_run_id'),
+    bodyKind: text('body_kind').notNull(),
+    bodyText: text('body_text').notNull(),
+    // The SDK's correlation id for a tool call and its result, so a reader can pair
+    // them without guessing. Nullable and unindexed on purpose: it is null for every
+    // other kind of message, and the only consumer holds one loaded page in memory
+    // and joins on it there — a column, not a lookup key.
+    toolUseId: text('tool_use_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    editedAt: timestamp('edited_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('message_thread_seq_idx').on(t.workspaceId, t.threadId, t.seq),
+    uniqueIndex('message_seq_idx').on(t.seq),
+  ],
 )
 
 /**
@@ -841,34 +843,34 @@ export const message = pgTable(
  * table.
  */
 export const notificationTarget = pgTable(
- 'notification_target',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- userId: text('user_id').notNull,
- transport: text('transport').notNull,
- endpoint: text('endpoint').notNull,
- // Transport-specific and opaque to everything but the adapter — for web
- // push, the subscription's p256dh/auth keys (RFC 8291).
- credentials: jsonb('credentials').$type<Record<string, string>>.notNull.default({}),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- index('notification_target_workspace_idx').on(t.workspaceId),
- uniqueIndex('notification_target_endpoint_idx').on(t.workspaceId, t.endpoint),
- ],
+  'notification_target',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull(),
+    transport: text('transport').notNull(),
+    endpoint: text('endpoint').notNull(),
+    // Transport-specific and opaque to everything but the adapter — for web
+    // push, the subscription's p256dh/auth keys (RFC 8291).
+    credentials: jsonb('credentials').$type<Record<string, string>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('notification_target_workspace_idx').on(t.workspaceId),
+    uniqueIndex('notification_target_endpoint_idx').on(t.workspaceId, t.endpoint),
+  ],
 )
 
 /**
  * The worker-notes ledger — the shared context a swarm's runs
  * read, and the same data the Phase 2 kanban is a board rendering of.
  *
- * **Not in the repository, and that is the design.** the worker-notes design: "If each run wrote
- * notes into its own clone, every note would become part of every diff and pass
- * through the merge queue — so note-writing would itself manufacture the conflicts
- * this is meant to reduce." Hence a table here, workspace-side.
+ * **Not in the repository, and that is the design.** The worker-notes design: "If each run
+ * wrote notes into its own clone, every note would become part of every diff and pass
+ * through the merge queue — so note-writing would itself manufacture the conflicts this is
+ * meant to reduce." Hence a table here, workspace-side.
  *
  * `treeRunId` is the key everything reads by: a Planner run, or a parentless run
  * being its own root. Denormalized onto the row rather than resolved by walking
@@ -885,55 +887,55 @@ export const notificationTarget = pgTable(
  * order them, and the render order of a ledger is what a worker reads as recency.
  */
 export const workerNote = pgTable(
- 'worker_note',
- {
- id: uuid('id').primaryKey.defaultRandom,
- seq: bigserial('seq', { mode: 'bigint' }).notNull,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- treeRunId: uuid('tree_run_id')
-.notNull
-.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- // 'platform' | 'human' | 'agent_run'. The only distinction that carries security
- // weight is agent_run versus the other two — see renderNotesForPrompt.
- authorKind: text('author_kind').notNull,
- kind: text('kind').notNull,
- title: text('title').notNull,
- body: text('body').notNull,
- paths: jsonb('paths').$type<string[]>.notNull.default([]),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- index('worker_note_tree_idx').on(t.workspaceId, t.treeRunId, t.seq),
- // Backs the per-run write cap, which is what stops a looping agent turning the
- // ledger into a denial of service against every sibling's context window.
- index('worker_note_run_idx').on(t.workspaceId, t.agentRunId),
- ],
+  'worker_note',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    seq: bigserial('seq', { mode: 'bigint' }).notNull(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    treeRunId: uuid('tree_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    // 'platform' | 'human' | 'agent_run'. The only distinction that carries security
+    // weight is agent_run versus the other two — see renderNotesForPrompt.
+    authorKind: text('author_kind').notNull(),
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    paths: jsonb('paths').$type<string[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('worker_note_tree_idx').on(t.workspaceId, t.treeRunId, t.seq),
+    // Backs the per-run write cap, which is what stops a looping agent turning the
+    // ledger into a denial of service against every sibling's context window.
+    index('worker_note_run_idx').on(t.workspaceId, t.agentRunId),
+  ],
 )
 
 /** Append-only. No update or delete path exists by design. */
 export const auditEvent = pgTable(
- 'audit_event',
- {
- id: uuid('id').primaryKey.defaultRandom,
- seq: bigserial('seq', { mode: 'bigint' }).notNull,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- actorKind: text('actor_kind').notNull,
- actorUserId: text('actor_user_id'),
- actorAgentRunId: uuid('actor_agent_run_id'),
- action: text('action').notNull,
- subjectType: text('subject_type').notNull,
- subjectId: text('subject_id').notNull,
- metadata: jsonb('metadata').notNull.default({}),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [index('audit_workspace_seq_idx').on(t.workspaceId, t.seq)],
+  'audit_event',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    seq: bigserial('seq', { mode: 'bigint' }).notNull(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    actorKind: text('actor_kind').notNull(),
+    actorUserId: text('actor_user_id'),
+    actorAgentRunId: uuid('actor_agent_run_id'),
+    action: text('action').notNull(),
+    subjectType: text('subject_type').notNull(),
+    subjectId: text('subject_id').notNull(),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('audit_workspace_seq_idx').on(t.workspaceId, t.seq)],
 )
 
 /**
@@ -955,73 +957,73 @@ export const auditEvent = pgTable(
  * skipped subtask again, so this doubles as the record of *why* a subtask never ran.
  */
 export const planSubtask = pgTable(
- 'plan_subtask',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- /** The planner run whose decomposition this came from. */
- plannerRunId: uuid('planner_run_id')
-.notNull
-.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
- /**
- * Index within that decomposition. `dependsOn` holds these same numbers, so the
- * edges stay meaningful without a second identifier the model would have to
- * reproduce.
- */
- position: integer('position').notNull,
- title: text('title').notNull,
- task: text('task').notNull,
- personaName: text('persona_name').notNull,
- paths: jsonb('paths').$type<string[]>.notNull.default([]),
- dependsOn: jsonb('depends_on').$type<number[]>.notNull.default([]),
- /**
- * Which sibling subtask this one reviews, by `position`.
- * Null for every ordinary subtask. The reviewed position is also present in
- * `dependsOn` — the scheduler reads that, and this says *why* the edge is there,
- * which is what decides the child's `relation`, its clone and its path ownership.
- */
- reviews: integer('reviews'),
- /**
- * Which repository this subtask lands in, by **name**, or null for the planner's own
- *.
- *
- * The name as submitted rather than a resolved id, and that is deliberate: resolution
- * checks the name against the *team's* declared repositories, and a plan held for review
- * or waiting on a dependency may be released long after it was submitted. Storing the id
- * would carry a permission granted at submission past a team edit that revoked it;
- * storing the name means the check runs again at the moment the run actually starts.
- */
- repository: text('repository'),
- /** 'waiting' | 'started' | 'skipped' | 'refused'. */
- status: text('status').notNull.default('waiting'),
- /** Set when `status` becomes 'started'. */
- agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- /** Why it was skipped or refused — shown to the human, never re-derived. */
- detail: text('detail'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- // One row per position per plan. This is also what makes recording a
- // decomposition idempotent: a replayed `plan_submitted` frame collides rather
- // than duplicating the whole pipeline.
- uniqueIndex('plan_subtask_position_idx').on(t.plannerRunId, t.position),
- index('plan_subtask_planner_idx').on(t.workspaceId, t.plannerRunId, t.status),
- ],
+  'plan_subtask',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    /** The planner run whose decomposition this came from. */
+    plannerRunId: uuid('planner_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    /**
+     * Index within that decomposition. `dependsOn` holds these same numbers, so the
+     * edges stay meaningful without a second identifier the model would have to
+     * reproduce.
+     */
+    position: integer('position').notNull(),
+    title: text('title').notNull(),
+    task: text('task').notNull(),
+    personaName: text('persona_name').notNull(),
+    paths: jsonb('paths').$type<string[]>().notNull().default([]),
+    dependsOn: jsonb('depends_on').$type<number[]>().notNull().default([]),
+    /**
+     * Which sibling subtask this one reviews, by `position`.
+     * Null for every ordinary subtask. The reviewed position is also present in
+     * `dependsOn` — the scheduler reads that, and this says *why* the edge is there,
+     * which is what decides the child's `relation`, its clone and its path ownership.
+     */
+    reviews: integer('reviews'),
+    /**
+     * Which repository this subtask lands in, by **name**, or null for the planner's own.
+     *
+     * The name as submitted rather than a resolved id, and that is deliberate: resolution
+     * checks the name against the *team's* declared repositories, and a plan held for
+     * review or waiting on a dependency may be released long after it was submitted.
+     * Storing the id
+     * would carry a permission granted at submission past a team edit that revoked it;
+     * storing the name means the check runs again at the moment the run actually starts.
+     */
+    repository: text('repository'),
+    /** 'waiting' | 'started' | 'skipped' | 'refused'. */
+    status: text('status').notNull().default('waiting'),
+    /** Set when `status` becomes 'started'. */
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    /** Why it was skipped or refused — shown to the human, never re-derived. */
+    detail: text('detail'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One row per position per plan. This is also what makes recording a
+    // decomposition idempotent: a replayed `plan_submitted` frame collides rather
+    // than duplicating the whole pipeline.
+    uniqueIndex('plan_subtask_position_idx').on(t.plannerRunId, t.position),
+    index('plan_subtask_planner_idx').on(t.workspaceId, t.plannerRunId, t.status),
+  ],
 )
 
 /**
  * A persona's expertise in one subject.
  *
- * **Keyed by persona, not by team, and that is the whole portability story.** portable expertise:
- * "a run carries a persona, not a team", so an expert persona carries its maps onto
- * every team a human puts it on. A `team_expertise` join table is the instinct and the
- * bug — it would make the same expert on two teams two different experts, the second
- * one starting from zero.
+ * **Keyed by persona, not by team, and that is the whole portability story.** portable
+ * expertise: "a run carries a persona, not a team", so an expert persona carries its maps
+ * onto every team a human puts it on. A `team_expertise` join table is the instinct and the
+ * bug — it would make the same expert on two teams two different experts, the second one
+ * starting from zero.
  *
  * `repositoryId` cascades rather than nulls: a map of a repository that no longer
  * exists is not a partial map, it is a set of claims about nothing, and leaving it
@@ -1032,125 +1034,124 @@ export const planSubtask = pgTable(
  * accumulating a new map per run and leaving retrieval to guess which is current.
  */
 export const subjectMap = pgTable(
- 'subject_map',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- // 'repository' | 'author' | 'corpus' — the three subjects.
- subjectKind: text('subject_kind').notNull,
- repositoryId: uuid('repository_id').references( => repository.id, { onDelete: 'cascade' }),
- subjectRef: text('subject_ref').notNull,
- // Mastery: "a map with no commit is a rumour."
- revision: text('revision').notNull,
- status: text('status').notNull.default('mastering'),
- /**
- * A human's standing answer about whether this map is used — `'on'`, `'off'`, or
- * null for "let the measurement decide".
- *
- * The *verdict* is deliberately not stored: it is recomputed from `expertise_use`
- * on every read, because a map re-mastered at a newer revision is a different
- * artifact and a flag written last month would keep answering for it. This column
- * holds only the part that is a human's, which domain expertise and mastery both insist is where
- * promotion lives.
- */
- retrievalOverride: text('retrieval_override'),
- masteryRunId: uuid('mastery_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- uniqueIndex('subject_map_unique_idx').on(t.workspaceId, t.personaId, t.subjectKind, t.subjectRef),
- index('subject_map_persona_idx').on(t.workspaceId, t.personaId),
- index('subject_map_repository_idx').on(t.workspaceId, t.repositoryId),
- ],
+  'subject_map',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    // 'repository' | 'author' | 'corpus' — the three subjects.
+    subjectKind: text('subject_kind').notNull(),
+    repositoryId: uuid('repository_id').references(() => repository.id, { onDelete: 'cascade' }),
+    subjectRef: text('subject_ref').notNull(),
+    // Mastery: "a map with no commit is a rumour."
+    revision: text('revision').notNull(),
+    status: text('status').notNull().default('mastering'),
+    /**
+     * A human's standing answer about whether this map is used — `'on'`, `'off'`, or
+     * null for "let the measurement decide".
+     *
+     * The *verdict* is deliberately not stored: it is recomputed from `expertise_use` on
+     * every read, because a map re-mastered at a newer revision is a different artifact and
+     * a flag written last month would keep answering for it. This column holds only the
+     * part that is a human's, which domain expertise and mastery both insist is where
+     * promotion lives.
+     */
+    retrievalOverride: text('retrieval_override'),
+    masteryRunId: uuid('mastery_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('subject_map_unique_idx').on(t.workspaceId, t.personaId, t.subjectKind, t.subjectRef),
+    index('subject_map_persona_idx').on(t.workspaceId, t.personaId),
+    index('subject_map_repository_idx').on(t.workspaceId, t.repositoryId),
+  ],
 )
 
 /**
  * One claim in a map.
  *
- * **The partial unique index is the bi-temporal model**: at most one
- * *live* node per key, and unlimited invalidated history behind it. A plain unique
- * index would have forced invalidation to be a delete, which costs the three things
- * Domain expertise names — a curation pass re-deriving what it already retired, a wrong belief with
- * no trail back to the run that acted on it, and the unsayable "this was true until
- * commit `abc`".
+ * **The partial unique index is the bi-temporal model**: at most one *live* node per key,
+ * and unlimited invalidated history behind it. A plain unique index would have forced
+ * invalidation to be a delete, which costs the three things domain expertise names — a
+ * curation pass re-deriving what it already retired, a wrong belief with no trail back to
+ * the run that acted on it, and the unsayable "this was true until commit `abc`".
  */
 export const subjectMapNode = pgTable(
- 'subject_map_node',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- mapId: uuid('map_id')
-.notNull
-.references( => subjectMap.id, { onDelete: 'cascade' }),
- key: text('key').notNull,
- kind: text('kind').notNull,
- label: text('label').notNull,
- summary: text('summary').notNull.default(''),
- // 'extracted' | 'inferred' | 'ambiguous'. The trust boundary inside the graph:
- // only the platform's parsers may write the first and third (see parseMapFragment).
- provenance: text('provenance').notNull,
- paths: jsonb('paths').$type<string[]>.notNull.default([]),
- observationCount: integer('observation_count').notNull.default(1),
- derivedAtRevision: text('derived_at_revision').notNull,
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
- invalidatedReason: text('invalidated_reason'),
- /**
- * A curation pass's intent to retire this claim.
- *
- * Deleting memory is the one self-modification with no diff to review, so a pass
- * writes down what it means to drop and drops it on the next pass unless something
- * contradicts it in between. Two columns rather than a side table because a proposal
- * is a property of the claim and is cleared by the same write that acts on it — a
- * table would let a proposal outlive the node it describes.
- */
- retirementProposedAt: timestamp('retirement_proposed_at', { withTimezone: true }),
- retirementReason: text('retirement_reason'),
- },
- (t) => [
- uniqueIndex('subject_map_node_live_key_idx')
-.on(t.mapId, t.key)
-.where(sql`${t.invalidatedAt} is null`),
- index('subject_map_node_map_idx').on(t.mapId, t.provenance),
- ],
+  'subject_map_node',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    mapId: uuid('map_id')
+      .notNull()
+      .references(() => subjectMap.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    kind: text('kind').notNull(),
+    label: text('label').notNull(),
+    summary: text('summary').notNull().default(''),
+    // 'extracted' | 'inferred' | 'ambiguous'. The trust boundary inside the graph:
+    // only the platform's parsers may write the first and third (see parseMapFragment).
+    provenance: text('provenance').notNull(),
+    paths: jsonb('paths').$type<string[]>().notNull().default([]),
+    observationCount: integer('observation_count').notNull().default(1),
+    derivedAtRevision: text('derived_at_revision').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+    invalidatedReason: text('invalidated_reason'),
+    /**
+     * A curation pass's intent to retire this claim.
+     *
+     * Deleting memory is the one self-modification with no diff to review, so a pass
+     * writes down what it means to drop and drops it on the next pass unless something
+     * contradicts it in between. Two columns rather than a side table because a proposal
+     * is a property of the claim and is cleared by the same write that acts on it — a
+     * table would let a proposal outlive the node it describes.
+     */
+    retirementProposedAt: timestamp('retirement_proposed_at', { withTimezone: true }),
+    retirementReason: text('retirement_reason'),
+  },
+  (t) => [
+    uniqueIndex('subject_map_node_live_key_idx')
+      .on(t.mapId, t.key)
+      .where(sql`${t.invalidatedAt} is null`),
+    index('subject_map_node_map_idx').on(t.mapId, t.provenance),
+  ],
 )
 
 /** An edge in a map. Same bi-temporal treatment as a node, for the same reason. */
 export const subjectMapEdge = pgTable(
- 'subject_map_edge',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- mapId: uuid('map_id')
-.notNull
-.references( => subjectMap.id, { onDelete: 'cascade' }),
- fromKey: text('from_key').notNull,
- toKey: text('to_key').notNull,
- kind: text('kind').notNull,
- provenance: text('provenance').notNull,
- derivedAtRevision: text('derived_at_revision').notNull,
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
- invalidatedReason: text('invalidated_reason'),
- },
- (t) => [
- uniqueIndex('subject_map_edge_live_idx')
-.on(t.mapId, t.fromKey, t.toKey, t.kind)
-.where(sql`${t.invalidatedAt} is null`),
- index('subject_map_edge_map_idx').on(t.mapId),
- ],
+  'subject_map_edge',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    mapId: uuid('map_id')
+      .notNull()
+      .references(() => subjectMap.id, { onDelete: 'cascade' }),
+    fromKey: text('from_key').notNull(),
+    toKey: text('to_key').notNull(),
+    kind: text('kind').notNull(),
+    provenance: text('provenance').notNull(),
+    derivedAtRevision: text('derived_at_revision').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+    invalidatedReason: text('invalidated_reason'),
+  },
+  (t) => [
+    uniqueIndex('subject_map_edge_live_idx')
+      .on(t.mapId, t.fromKey, t.toKey, t.kind)
+      .where(sql`${t.invalidatedAt} is null`),
+    index('subject_map_edge_map_idx').on(t.mapId),
+  ],
 )
 
 /**
@@ -1163,27 +1164,27 @@ export const subjectMapEdge = pgTable(
  * output, and may be a remark but never the number.
  */
 export const masteryCheckpoint = pgTable(
- 'mastery_checkpoint',
- {
- id: uuid('id').primaryKey.defaultRandom,
- seq: bigserial('seq', { mode: 'bigint' }).notNull,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- mapId: uuid('map_id')
-.notNull
-.references( => subjectMap.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- filesRead: integer('files_read').notNull.default(0),
- filesInScope: integer('files_in_scope').notNull.default(0),
- nodeCount: integer('node_count').notNull.default(0),
- edgeCount: integer('edge_count').notNull.default(0),
- spendUsd: doublePrecision('spend_usd').notNull.default(0),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [index('mastery_checkpoint_map_idx').on(t.workspaceId, t.mapId, t.seq)],
+  'mastery_checkpoint',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    seq: bigserial('seq', { mode: 'bigint' }).notNull(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    mapId: uuid('map_id')
+      .notNull()
+      .references(() => subjectMap.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    filesRead: integer('files_read').notNull().default(0),
+    filesInScope: integer('files_in_scope').notNull().default(0),
+    nodeCount: integer('node_count').notNull().default(0),
+    edgeCount: integer('edge_count').notNull().default(0),
+    spendUsd: doublePrecision('spend_usd').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('mastery_checkpoint_map_idx').on(t.workspaceId, t.mapId, t.seq)],
 )
 
 /**
@@ -1206,40 +1207,40 @@ export const masteryCheckpoint = pgTable(
  * different one.
  */
 export const expertiseUse = pgTable(
- 'expertise_use',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- mapId: uuid('map_id')
-.notNull
-.references( => subjectMap.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id')
-.notNull
-.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
- // 'retrieved' | 'withheld'.
- arm: text('arm').notNull,
- /** What the run was actually shown, so a thin retrieval is not read as a full one. */
- nodesShown: integer('nodes_shown').notNull.default(0),
- edgesShown: integer('edges_shown').notNull.default(0),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- // One decision per run per map: a run is on one arm, and a second row would count
- // one run twice in whichever arm it landed in.
- uniqueIndex('expertise_use_run_map_idx').on(t.workspaceId, t.agentRunId, t.mapId),
- index('expertise_use_map_idx').on(t.workspaceId, t.mapId, t.arm),
- ],
+  'expertise_use',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    mapId: uuid('map_id')
+      .notNull()
+      .references(() => subjectMap.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    // 'retrieved' | 'withheld'.
+    arm: text('arm').notNull(),
+    /** What the run was actually shown, so a thin retrieval is not read as a full one. */
+    nodesShown: integer('nodes_shown').notNull().default(0),
+    edgesShown: integer('edges_shown').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One decision per run per map: a run is on one arm, and a second row would count
+    // one run twice in whichever arm it landed in.
+    uniqueIndex('expertise_use_run_map_idx').on(t.workspaceId, t.agentRunId, t.mapId),
+    index('expertise_use_map_idx').on(t.workspaceId, t.mapId, t.arm),
+  ],
 )
 
 /**
  * Which claims a run was actually shown.
  *
- * Domain expertise wants a claim cited by runs that merged cleanly to outrank one from runs that were
- * discarded, and until this table the platform recorded retrieval per *map*: scoring every
- * claim in a map by the map's own record is not a ranking, and guessing which nodes a run
- * acted on would have been worse than not ranking at all.
+ * Domain expertise wants a claim cited by runs that merged cleanly to outrank one from runs
+ * that were discarded, and until this table the platform recorded retrieval per *map*:
+ * scoring every claim in a map by the map's own record is not a ranking, and guessing which
+ * nodes a run acted on would have been worse than not ranking at all.
  *
  * This is not a guess. `selectMapForContext` decides exactly which nodes are rendered into
  * a run's prompt and which are elided, so the rows here are the platform's own record of
@@ -1253,31 +1254,31 @@ export const expertiseUse = pgTable(
  * change what is believed without checking.
  */
 export const expertiseUseNode = pgTable(
- 'expertise_use_node',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- useId: uuid('use_id')
-.notNull
-.references( => expertiseUse.id, { onDelete: 'cascade' }),
- nodeId: uuid('node_id')
-.notNull
-.references( => subjectMapNode.id, { onDelete: 'cascade' }),
- /**
- * Denormalized from the use row so the tally can group by node without a third join,
- * and so an invalidated node's citations stay attributable to the map they were read
- * from. Both parents cascade, so this cannot outlive either.
- */
- mapId: uuid('map_id')
-.notNull
-.references( => subjectMap.id, { onDelete: 'cascade' }),
- },
- (t) => [
- uniqueIndex('expertise_use_node_unique_idx').on(t.useId, t.nodeId),
- index('expertise_use_node_map_idx').on(t.workspaceId, t.mapId, t.nodeId),
- ],
+  'expertise_use_node',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    useId: uuid('use_id')
+      .notNull()
+      .references(() => expertiseUse.id, { onDelete: 'cascade' }),
+    nodeId: uuid('node_id')
+      .notNull()
+      .references(() => subjectMapNode.id, { onDelete: 'cascade' }),
+    /**
+     * Denormalized from the use row so the tally can group by node without a third join,
+     * and so an invalidated node's citations stay attributable to the map they were read
+     * from. Both parents cascade, so this cannot outlive either.
+     */
+    mapId: uuid('map_id')
+      .notNull()
+      .references(() => subjectMap.id, { onDelete: 'cascade' }),
+  },
+  (t) => [
+    uniqueIndex('expertise_use_node_unique_idx').on(t.useId, t.nodeId),
+    index('expertise_use_node_map_idx').on(t.workspaceId, t.mapId, t.nodeId),
+  ],
 )
 
 /**
@@ -1290,54 +1291,55 @@ export const expertiseUseNode = pgTable(
  * being written once at convening and never added to.
  */
 export const colosseumSession = pgTable(
- 'colosseum_session',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- /** Where it is watched and where its transcript lands — a session is not a gap in the record. */
- threadId: uuid('thread_id')
-.notNull
-.references( => thread.id, { onDelete: 'cascade' }),
- repositoryId: uuid('repository_id').references( => repository.id, { onDelete: 'set null' }),
- // 'consultation' | 'contention' | 'crunching' | 'warm_up'.
- purpose: text('purpose').notNull,
- subject: text('subject').notNull,
- question: text('question').notNull,
- // 'convened' | 'running' | 'concluded' | 'abandoned'.
- status: text('status').notNull.default('convened'),
- turnCap: integer('turn_cap').notNull,
- spendCapUsd: doublePrecision('spend_cap_usd'),
- /**
- * Roster diversity, snapshotted at convening. Stored rather than recomputed because the personas can change
- * afterwards, and what matters is how different the roster was when it was fixed.
- */
- distinctSubjects: integer('distinct_subjects').notNull.default(0),
- distinctModels: integer('distinct_models').notNull.default(0),
- /**
- * The run taking a turn right now, and whose persona it speaks for.
- *
- * A session speaks one voice at a time, and this is what enforces that: a turn
- * requested while one is in flight is refused, and the completing run finds its
- * session through this column. `set null` on the run rather than cascade — a deleted
- * run must free the floor, not delete the session it was speaking in.
- */
- speakingRunId: uuid('speaking_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- speakingPersonaId: uuid('speaking_persona_id').references( => agentPersona.id, {
- onDelete: 'set null',
- }),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- concludedAt: timestamp('concluded_at', { withTimezone: true }),
- },
- (t) => [
- index('colosseum_session_workspace_idx').on(t.workspaceId, t.createdAt),
- // How a completing run finds the session it was speaking in — on the run's own
- // completion path, which is not a place to table-scan.
- index('colosseum_session_speaking_idx').on(t.workspaceId, t.speakingRunId),
- ],
+  'colosseum_session',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    /** Where it is watched and where its transcript lands — a session is not a gap in the record. */
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => thread.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id').references(() => repository.id, { onDelete: 'set null' }),
+    // 'consultation' | 'contention' | 'crunching' | 'warm_up'.
+    purpose: text('purpose').notNull(),
+    subject: text('subject').notNull(),
+    question: text('question').notNull(),
+    // 'convened' | 'running' | 'concluded' | 'abandoned'.
+    status: text('status').notNull().default('convened'),
+    turnCap: integer('turn_cap').notNull(),
+    spendCapUsd: doublePrecision('spend_cap_usd'),
+    /**
+     * Roster diversity, snapshotted at convening. Stored rather than recomputed because the
+     * personas can change afterwards, and what matters is how different the roster was when
+     * it was fixed.
+     */
+    distinctSubjects: integer('distinct_subjects').notNull().default(0),
+    distinctModels: integer('distinct_models').notNull().default(0),
+    /**
+     * The run taking a turn right now, and whose persona it speaks for.
+     *
+     * A session speaks one voice at a time, and this is what enforces that: a turn
+     * requested while one is in flight is refused, and the completing run finds its
+     * session through this column. `set null` on the run rather than cascade — a deleted
+     * run must free the floor, not delete the session it was speaking in.
+     */
+    speakingRunId: uuid('speaking_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    speakingPersonaId: uuid('speaking_persona_id').references(() => agentPersona.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    concludedAt: timestamp('concluded_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('colosseum_session_workspace_idx').on(t.workspaceId, t.createdAt),
+    // How a completing run finds the session it was speaking in — on the run's own
+    // completion path, which is not a place to table-scan.
+    index('colosseum_session_speaking_idx').on(t.workspaceId, t.speakingRunId),
+  ],
 )
 
 /**
@@ -1348,27 +1350,27 @@ export const colosseumSession = pgTable(
  * record of who argued with whom.
  */
 export const colosseumParticipant = pgTable(
- 'colosseum_participant',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- sessionId: uuid('session_id')
-.notNull
-.references( => colosseumSession.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- personaName: text('persona_name').notNull,
- mapId: uuid('map_id').references( => subjectMap.id, { onDelete: 'set null' }),
- model: text('model').notNull,
- subjectRef: text('subject_ref').notNull.default(''),
- },
- (t) => [
- uniqueIndex('colosseum_participant_unique_idx').on(t.sessionId, t.personaId),
- index('colosseum_participant_session_idx').on(t.workspaceId, t.sessionId),
- ],
+  'colosseum_participant',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => colosseumSession.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    personaName: text('persona_name').notNull(),
+    mapId: uuid('map_id').references(() => subjectMap.id, { onDelete: 'set null' }),
+    model: text('model').notNull(),
+    subjectRef: text('subject_ref').notNull().default(''),
+  },
+  (t) => [
+    uniqueIndex('colosseum_participant_unique_idx').on(t.sessionId, t.personaId),
+    index('colosseum_participant_session_idx').on(t.workspaceId, t.sessionId),
+  ],
 )
 
 /**
@@ -1383,26 +1385,26 @@ export const colosseumParticipant = pgTable(
  * conversation marking its own homework.
  */
 export const colosseumClaim = pgTable(
- 'colosseum_claim',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- sessionId: uuid('session_id')
-.notNull
-.references( => colosseumSession.id, { onDelete: 'cascade' }),
- statement: text('statement').notNull,
- originalHolderPersonaId: uuid('original_holder_persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- // 'unsettled' | 'upheld' | 'refuted'.
- verdict: text('verdict').notNull.default('unsettled'),
- citation: text('citation').notNull.default(''),
- droppedAt: timestamp('dropped_at', { withTimezone: true }),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [index('colosseum_claim_session_idx').on(t.workspaceId, t.sessionId)],
+  'colosseum_claim',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => colosseumSession.id, { onDelete: 'cascade' }),
+    statement: text('statement').notNull(),
+    originalHolderPersonaId: uuid('original_holder_persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    // 'unsettled' | 'upheld' | 'refuted'.
+    verdict: text('verdict').notNull().default('unsettled'),
+    citation: text('citation').notNull().default(''),
+    droppedAt: timestamp('dropped_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('colosseum_claim_session_idx').on(t.workspaceId, t.sessionId)],
 )
 
 /**
@@ -1413,33 +1415,34 @@ export const colosseumClaim = pgTable(
  * traceable to it. Null only for a turn the platform itself narrated.
  */
 export const colosseumTurn = pgTable(
- 'colosseum_turn',
- {
- id: uuid('id').primaryKey.defaultRandom,
- seq: integer('seq').notNull,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- sessionId: uuid('session_id')
-.notNull
-.references( => colosseumSession.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id').references( => agentPersona.id, { onDelete: 'set null' }),
- personaName: text('persona_name').notNull,
- agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- text: text('text').notNull,
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [uniqueIndex('colosseum_turn_seq_idx').on(t.sessionId, t.seq)],
+  'colosseum_turn',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    seq: integer('seq').notNull(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => colosseumSession.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id').references(() => agentPersona.id, { onDelete: 'set null' }),
+    personaName: text('persona_name').notNull(),
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    text: text('text').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('colosseum_turn_seq_idx').on(t.sessionId, t.seq)],
 )
 
 /**
  * Who read whose notes.
  *
- * Live swarm observability names this gap exactly: "The tree renders parentage; what it does not render is
- * *interaction* — who read whose notes, whose branch a reconciler is merging, which
- * cards claim colliding paths." Collisions became edges; this is the other half.
+ * Live swarm observability names this gap exactly: "The tree renders parentage; what it
+ * does not render is *interaction* — who read whose notes, whose branch a reconciler is
+ * merging, which cards claim colliding paths." Collisions became edges; this is the other
+ * half.
  *
  * **An edge per pair, not a row per read.** A worker calls `read_notes` repeatedly and a
  * ledger carries dozens of notes, so recording each read would produce thousands of rows
@@ -1452,29 +1455,29 @@ export const colosseumTurn = pgTable(
  * cannot be drawn and would only ever be filtered out at read time.
  */
 export const noteReadEdge = pgTable(
- 'note_read_edge',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- treeRunId: uuid('tree_run_id')
-.notNull
-.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
- readerRunId: uuid('reader_run_id')
-.notNull
-.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
- authorRunId: uuid('author_run_id')
-.notNull
-.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
- readCount: integer('read_count').notNull.default(1),
- firstReadAt: timestamp('first_read_at', { withTimezone: true }).notNull.defaultNow,
- lastReadAt: timestamp('last_read_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- uniqueIndex('note_read_edge_pair_idx').on(t.workspaceId, t.readerRunId, t.authorRunId),
- index('note_read_edge_tree_idx').on(t.workspaceId, t.treeRunId),
- ],
+  'note_read_edge',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    treeRunId: uuid('tree_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    readerRunId: uuid('reader_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    authorRunId: uuid('author_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    readCount: integer('read_count').notNull().default(1),
+    firstReadAt: timestamp('first_read_at', { withTimezone: true }).notNull().defaultNow(),
+    lastReadAt: timestamp('last_read_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('note_read_edge_pair_idx').on(t.workspaceId, t.readerRunId, t.authorRunId),
+    index('note_read_edge_tree_idx').on(t.workspaceId, t.treeRunId),
+  ],
 )
 
 /**
@@ -1500,54 +1503,54 @@ export const noteReadEdge = pgTable(
  * twice, each with its own human decision.
  */
 export const atlasEdge = pgTable(
- 'atlas_edge',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- fromNodeId: uuid('from_node_id')
-.notNull
-.references( => subjectMapNode.id, { onDelete: 'cascade' }),
- toNodeId: uuid('to_node_id')
-.notNull
-.references( => subjectMapNode.id, { onDelete: 'cascade' }),
- // 'same_concept' | 'analogous_to' | 'contradicts' — a closed set, see AtlasRelation.
- relation: text('relation').notNull,
- rationale: text('rationale').notNull,
- /** Who proposed it. Null once the persona is gone; the claim outlives its author. */
- proposedByPersonaId: uuid('proposed_by_persona_id').references( => agentPersona.id, {
- onDelete: 'set null',
- }),
- proposedByRunId: uuid('proposed_by_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- // 'proposed' | 'contended' | 'promoted' | 'rejected'.
- status: text('status').notNull.default('proposed'),
- /**
- * The session that argued over it, when one has.
- *
- * `set null` rather than cascade: a deleted session must not delete the relation it
- * discussed — losing the transcript is bad, losing the claim is worse.
- */
- sessionId: uuid('session_id').references( => colosseumSession.id, { onDelete: 'set null' }),
- /**
- * The human who decided, by name.
- *
- * `set null` on delete for the same reason the audit log keeps its rows: the decision
- * happened, and a departed employee does not un-confirm what they confirmed. The read
- * side then falls back to "a human" rather than dropping the relation.
- */
- decidedByUserId: text('decided_by_user_id').references( => user.id, { onDelete: 'set null' }),
- decidedByName: text('decided_by_name').notNull.default(''),
- decidedAt: timestamp('decided_at', { withTimezone: true }),
- decisionNote: text('decision_note').notNull.default(''),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- uniqueIndex('atlas_edge_pair_idx').on(t.workspaceId, t.fromNodeId, t.toNodeId, t.relation),
- index('atlas_edge_status_idx').on(t.workspaceId, t.status),
- ],
+  'atlas_edge',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    fromNodeId: uuid('from_node_id')
+      .notNull()
+      .references(() => subjectMapNode.id, { onDelete: 'cascade' }),
+    toNodeId: uuid('to_node_id')
+      .notNull()
+      .references(() => subjectMapNode.id, { onDelete: 'cascade' }),
+    // 'same_concept' | 'analogous_to' | 'contradicts' — a closed set, see AtlasRelation.
+    relation: text('relation').notNull(),
+    rationale: text('rationale').notNull(),
+    /** Who proposed it. Null once the persona is gone; the claim outlives its author. */
+    proposedByPersonaId: uuid('proposed_by_persona_id').references(() => agentPersona.id, {
+      onDelete: 'set null',
+    }),
+    proposedByRunId: uuid('proposed_by_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    // 'proposed' | 'contended' | 'promoted' | 'rejected'.
+    status: text('status').notNull().default('proposed'),
+    /**
+     * The session that argued over it, when one has.
+     *
+     * `set null` rather than cascade: a deleted session must not delete the relation it
+     * discussed — losing the transcript is bad, losing the claim is worse.
+     */
+    sessionId: uuid('session_id').references(() => colosseumSession.id, { onDelete: 'set null' }),
+    /**
+     * The human who decided, by name.
+     *
+     * `set null` on delete for the same reason the audit log keeps its rows: the decision
+     * happened, and a departed employee does not un-confirm what they confirmed. The read
+     * side then falls back to "a human" rather than dropping the relation.
+     */
+    decidedByUserId: text('decided_by_user_id').references(() => user.id, { onDelete: 'set null' }),
+    decidedByName: text('decided_by_name').notNull().default(''),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    decisionNote: text('decision_note').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('atlas_edge_pair_idx').on(t.workspaceId, t.fromNodeId, t.toNodeId, t.relation),
+    index('atlas_edge_status_idx').on(t.workspaceId, t.status),
+  ],
 )
 
 /**
@@ -1570,54 +1573,54 @@ export const atlasEdge = pgTable(
  * it, which is the shape of a log nobody trusts.
  */
 export const personaRevision = pgTable(
- 'persona_revision',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- /** The full markdown this persona had before the edit — frontmatter included. */
- markdownSource: text('markdown_source').notNull,
- /** 'human' | 'agent_run' | 'platform' — who replaced it, same vocabulary as a note's author. */
- replacedByKind: text('replaced_by_kind').notNull,
- /**
- * The run that rewrote it, when a run did.
- *
- * `set null` on delete, never cascade: the revision is the record that an agent
- * changed what every future run of this persona is told, and that record must outlive
- * the run's own row — the same reasoning the audit log keeps its rows under.
- */
- replacedByRunId: uuid('replaced_by_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- /**
- * The human who saved it, as plain text with **no foreign key** — the same shape
- * `audit_event.actor_user_id` uses, and for the same reason it does: this row is a
- * record of something that happened, and a departed employee does not un-write the
- * prompt they wrote. A key with `set null` would preserve the row and lose the one
- * fact it is being kept for. (Found by a test: the dev principal has no `user` row at
- * all, so the key made every revert a 500 before it made anything safe.)
- */
- replacedByUserId: text('replaced_by_user_id'),
- /** What the author said they were doing. Empty for a human edit, which has a diff instead. */
- rationale: text('rationale').notNull.default(''),
- /**
- * When a human settled the trial on this revision, or null while it
- * is still being measured.
- *
- * On the revision rather than in the trial table because it is a fact about the
- * *edit*, not about any run: "somebody looked at the evidence and decided" outlives
- * every run that produced the evidence. Null on every human edit too — a human's edit
- * is a decision rather than a hypothesis, so it never goes on trial and never needs
- * deciding.
- */
- trialDecidedAt: timestamp('trial_decided_at', { withTimezone: true }),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [index('persona_revision_persona_idx').on(t.workspaceId, t.personaId, t.createdAt)],
+  'persona_revision',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    /** The full markdown this persona had before the edit — frontmatter included. */
+    markdownSource: text('markdown_source').notNull(),
+    /** 'human' | 'agent_run' | 'platform' — who replaced it, same vocabulary as a note's author. */
+    replacedByKind: text('replaced_by_kind').notNull(),
+    /**
+     * The run that rewrote it, when a run did.
+     *
+     * `set null` on delete, never cascade: the revision is the record that an agent
+     * changed what every future run of this persona is told, and that record must outlive
+     * the run's own row — the same reasoning the audit log keeps its rows under.
+     */
+    replacedByRunId: uuid('replaced_by_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    /**
+     * The human who saved it, as plain text with **no foreign key** — the same shape
+     * `audit_event.actor_user_id` uses, and for the same reason it does: this row is a
+     * record of something that happened, and a departed employee does not un-write the
+     * prompt they wrote. A key with `set null` would preserve the row and lose the one
+     * fact it is being kept for. (Found by a test: the dev principal has no `user` row at
+     * all, so the key made every revert a 500 before it made anything safe.)
+     */
+    replacedByUserId: text('replaced_by_user_id'),
+    /** What the author said they were doing. Empty for a human edit, which has a diff instead. */
+    rationale: text('rationale').notNull().default(''),
+    /**
+     * When a human settled the trial on this revision, or null while it
+     * is still being measured.
+     *
+     * On the revision rather than in the trial table because it is a fact about the
+     * *edit*, not about any run: "somebody looked at the evidence and decided" outlives
+     * every run that produced the evidence. Null on every human edit too — a human's edit
+     * is a decision rather than a hypothesis, so it never goes on trial and never needs
+     * deciding.
+     */
+    trialDecidedAt: timestamp('trial_decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('persona_revision_persona_idx').on(t.workspaceId, t.personaId, t.createdAt)],
 )
 
 /**
@@ -1637,67 +1640,67 @@ export const personaRevision = pgTable(
  * worth the extra rows.
  */
 export const channelRead = pgTable(
- 'channel_read',
- {
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- channelId: uuid('channel_id')
-.notNull
-.references( => channel.id, { onDelete: 'cascade' }),
- /**
- * Plain text with no key to `user`, the same shape `audit_event.actor_user_id` uses.
- * A departed user's marker is meaningless rather than harmful, and the alternative —
- * a `set null` on a primary-key column — is not expressible.
- */
- userId: text('user_id').notNull,
- // `sql` rather than a literal `0n`: drizzle-kit serializes the snapshot as JSON and
- // cannot write a BigInt, so a bigint default has to be given as SQL.
- lastReadSeq: bigint('last_read_seq', { mode: 'bigint' }).notNull.default(sql`0`),
- updatedAt: timestamp('updated_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [uniqueIndex('channel_read_key_idx').on(t.workspaceId, t.channelId, t.userId)],
+  'channel_read',
+  {
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channel.id, { onDelete: 'cascade' }),
+    /**
+     * Plain text with no key to `user`, the same shape `audit_event.actor_user_id` uses.
+     * A departed user's marker is meaningless rather than harmful, and the alternative —
+     * a `set null` on a primary-key column — is not expressible.
+     */
+    userId: text('user_id').notNull(),
+    // `sql` rather than a literal `0n`: drizzle-kit serializes the snapshot as JSON and
+    // cannot write a BigInt, so a bigint default has to be given as SQL.
+    lastReadSeq: bigint('last_read_seq', { mode: 'bigint' }).notNull().default(sql`0`),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('channel_read_key_idx').on(t.workspaceId, t.channelId, t.userId)],
 )
 
 /**
  * Which prompt a run was given while an agent's revision is on trial.
  *
- * The self-improvement loop says the unit of variation is a **persona revision**, and this is the row that
- * makes that literal: one entry per run, naming the revision under test and which side of
- * it that run went on. Everything the verdict needs beyond this — disposition and metered
- * spend — already lives on `agent_run`, so this table deliberately stores neither. A
- * second copy of a run's cost would be a second answer to what a run cost.
+ * The self-improvement loop says the unit of variation is a **persona revision**, and this
+ * is the row that makes that literal: one entry per run, naming the revision under test and
+ * which side of it that run went on. Everything the verdict needs beyond this — disposition
+ * and metered spend — already lives on `agent_run`, so this table deliberately stores
+ * neither. A second copy of a run's cost would be a second answer to what a run cost.
  *
  * Its own table rather than a column on `agent_run`, for the reason `plan_subtask` is its
  * own table: `agent_run` is the row four different invariants already read, and a nullable
  * pair of trial columns on it would be two more fields every one of them has to ignore.
  */
 export const promptTrialUse = pgTable(
- 'prompt_trial_use',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- /** The agent-authored revision under test — the arms are it and what it replaced. */
- revisionId: uuid('revision_id')
-.notNull
-.references( => personaRevision.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id')
-.notNull
-.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
- /** 'revised' | 'previous' — see PromptArm. */
- arm: text('arm').notNull,
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- // One arm per run: a run is on one side of the comparison or it is not in it.
- uniqueIndex('prompt_trial_run_idx').on(t.agentRunId),
- index('prompt_trial_revision_idx').on(t.workspaceId, t.revisionId),
- ],
+  'prompt_trial_use',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    /** The agent-authored revision under test — the arms are it and what it replaced. */
+    revisionId: uuid('revision_id')
+      .notNull()
+      .references(() => personaRevision.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    /** 'revised' | 'previous' — see PromptArm. */
+    arm: text('arm').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One arm per run: a run is on one side of the comparison or it is not in it.
+    uniqueIndex('prompt_trial_run_idx').on(t.agentRunId),
+    index('prompt_trial_revision_idx').on(t.workspaceId, t.revisionId),
+  ],
 )
 
 /**
@@ -1709,60 +1712,60 @@ export const promptTrialUse = pgTable(
  *
  * **One open search per persona, by index rather than by discipline.** Two searches would
  * split one workspace's runs across five or six arms, and five decided runs an arm — which
- * Portable expertise already calls a compromise — would stop being reachable. The merge queue and the
- * verification harness serialize the same way and for the same reason: a partial unique
- * index holds under a race, and a sweep that believes it is alone does not.
+ * portable expertise already calls a compromise — would stop being reachable. The merge
+ * queue and the verification harness serialize the same way and for the same reason: a
+ * partial unique index holds under a race, and a sweep that believes it is alone does not.
  */
 export const personaVariantSet = pgTable(
- 'persona_variant_set',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- /**
- * The run that proposed it. `set null` on delete, never cascade: the search is the
- * record that an agent proposed changing what every future run of this persona is told,
- * and that record outlives the run — the same reasoning `persona_revision` keeps.
- */
- proposedByRunId: uuid('proposed_by_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- /** 'open' | 'settled'. A settled search is history; an open one is being measured. */
- status: text('status').notNull.default('open'),
- /** Which candidate a human promoted, or null when they discarded the search. */
- promotedVariantId: uuid('promoted_variant_id'),
- /**
- * The surrogate verifier's session and what it concluded.
- *
- * On the set rather than in a table of its own: there is exactly one verdict per search,
- * it is never read apart from the search, and it is not evidence — the self-improvement loop is explicit
- * that fitness is run disposition and never a model's assessment, so this is recorded
- * beside the measurement and enters nothing.
- *
- * `verifier_decided_at` is what says a verdict exists; `verifier_picked_variant_id` is
- * null both before a verdict and when the verifier chose the prompt already in use, and
- * those two states are not the same fact.
- */
- verifierRunId: uuid('verifier_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- verifierPickedVariantId: uuid('verifier_picked_variant_id'),
- verifierReason: text('verifier_reason'),
- verifierDecidedAt: timestamp('verifier_decided_at', { withTimezone: true }),
- settledAt: timestamp('settled_at', { withTimezone: true }),
- settledByUserId: text('settled_by_user_id'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- uniqueIndex('persona_variant_set_open_idx')
-.on(t.personaId)
-.where(sql`${t.status} = 'open'`),
- index('persona_variant_set_workspace_idx').on(t.workspaceId, t.createdAt),
- ],
+  'persona_variant_set',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    /**
+     * The run that proposed it. `set null` on delete, never cascade: the search is the
+     * record that an agent proposed changing what every future run of this persona is told,
+     * and that record outlives the run — the same reasoning `persona_revision` keeps.
+     */
+    proposedByRunId: uuid('proposed_by_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    /** 'open' | 'settled'. A settled search is history; an open one is being measured. */
+    status: text('status').notNull().default('open'),
+    /** Which candidate a human promoted, or null when they discarded the search. */
+    promotedVariantId: uuid('promoted_variant_id'),
+    /**
+     * The surrogate verifier's session and what it concluded.
+     *
+     * On the set rather than in a table of its own: there is exactly one verdict per
+     * search, it is never read apart from the search, and it is not evidence — the
+     * self-improvement loop is explicit that fitness is run disposition and never a model's
+     * assessment, so this is recorded beside the measurement and enters nothing.
+     *
+     * `verifier_decided_at` is what says a verdict exists; `verifier_picked_variant_id` is
+     * null both before a verdict and when the verifier chose the prompt already in use, and
+     * those two states are not the same fact.
+     */
+    verifierRunId: uuid('verifier_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    verifierPickedVariantId: uuid('verifier_picked_variant_id'),
+    verifierReason: text('verifier_reason'),
+    verifierDecidedAt: timestamp('verifier_decided_at', { withTimezone: true }),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+    settledByUserId: text('settled_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('persona_variant_set_open_idx')
+      .on(t.personaId)
+      .where(sql`${t.status} = 'open'`),
+    index('persona_variant_set_workspace_idx').on(t.workspaceId, t.createdAt),
+  ],
 )
 
 /**
@@ -1778,104 +1781,105 @@ export const personaVariantSet = pgTable(
  * re-proposing something this workspace already paid to reject.
  */
 export const personaVariant = pgTable(
- 'persona_variant',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- setId: uuid('set_id')
-.notNull
-.references( => personaVariantSet.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- markdownSource: text('markdown_source').notNull,
- /** What the agent said this candidate is *for* — read first by whoever decides. */
- rationale: text('rationale').notNull.default(''),
- /** Order proposed, so the arms are listed the way the agent wrote them. */
- position: doublePrecision('position').notNull.default(0),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [index('persona_variant_set_idx').on(t.workspaceId, t.setId)],
+  'persona_variant',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    setId: uuid('set_id')
+      .notNull()
+      .references(() => personaVariantSet.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    markdownSource: text('markdown_source').notNull(),
+    /** What the agent said this candidate is *for* — read first by whoever decides. */
+    rationale: text('rationale').notNull().default(''),
+    /** Order proposed, so the arms are listed the way the agent wrote them. */
+    position: doublePrecision('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('persona_variant_set_idx').on(t.workspaceId, t.setId)],
 )
 
 /**
  * A held-out set, versioned.
  *
- * One row per assembly. **Immutable, and the version is the whole point**: the generating side says a
- * screen whose tasks changed between two candidates has measured two different things and
- * will report it as a comparison, so a set is never edited — a newer history produces a new
- * version, and every score records which version it was taken against.
+ * One row per assembly. **Immutable, and the version is the whole point**: The generating
+ * side says a screen whose tasks changed between two candidates has measured two different
+ * things and will report it as a comparison, so a set is never edited — a newer history
+ * produces a new version, and every score records which version it was taken against.
  *
- * The counts are stored rather than recomputed because they are a claim about a history that
- * has since moved on: "8 items out of 49 decided runs considered, 33 of them arms of an
- * earlier measurement" is only checkable if it was written down when it was true. The * "no silent truncation" is exactly this — a bounded thing that reads as complete is worse
+ * The counts are stored rather than recomputed because they are a claim about a history
+ * that has since moved on: "8 items out of 49 decided runs considered, 33 of them arms of
+ * an earlier measurement" is only checkable if it was written down when it was true. The *
+ * "no silent truncation" is exactly this — a bounded thing that reads as complete is worse
  * than one that reports its bound.
  */
 export const replaySet = pgTable(
- 'replay_set',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- personaId: uuid('persona_id')
-.notNull
-.references( => agentPersona.id, { onDelete: 'cascade' }),
- /** Per persona, from 1. A screen's score is meaningless without it. */
- version: integer('version').notNull,
- /** Decided runs offered to the assembly, and how many were usable before the cap. */
- considered: integer('considered').notNull,
- eligible: integer('eligible').notNull,
- /** `describeReplaySet`'s sentence, stamped at assembly for the reason above. */
- detail: text('detail').notNull,
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- uniqueIndex('replay_set_version_idx').on(t.personaId, t.version),
- index('replay_set_workspace_idx').on(t.workspaceId, t.createdAt),
- ],
+  'replay_set',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    /** Per persona, from 1. A screen's score is meaningless without it. */
+    version: integer('version').notNull(),
+    /** Decided runs offered to the assembly, and how many were usable before the cap. */
+    considered: integer('considered').notNull(),
+    eligible: integer('eligible').notNull(),
+    /** `describeReplaySet`'s sentence, stamped at assembly for the reason above. */
+    detail: text('detail').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('replay_set_version_idx').on(t.personaId, t.version),
+    index('replay_set_workspace_idx').on(t.workspaceId, t.createdAt),
+  ],
 )
 
 /**
  * One replayable task: `(repository @ commit, task, observed outcome)`.
  *
- * The commit is **snapshotted from the source run**, not resolved when the screen runs, which
- * is the reason `agent_run.base_commit_sha` exists: replaying at whatever the repository's
- * head happens to be means two candidates screened a day apart were screened on different
- * problems, and a control that drifts is not a control.
+ * The commit is **snapshotted from the source run**, not resolved when the screen runs,
+ * which is the reason `agent_run.base_commit_sha` exists: replaying at whatever the
+ * repository's head happens to be means two candidates screened a day apart were screened
+ * on different problems, and a control that drifts is not a control.
  *
  * `observed_outcome` is carried and **never scored against**. A replay cannot reproduce the
- * human who merged; the screen scores the definition of done, which it can actually run. What
- * the outcome buys is a reader seeing what kind of tasks the set is made of.
+ * human who merged; the screen scores the definition of done, which it can actually run.
+ * What the outcome buys is a reader seeing what kind of tasks the set is made of.
  *
  * `source_run_id` is `set null` on delete: the item stands on its own once written, and the
  * point of pinning the commit and the text was to stop depending on a row that can move.
  */
 export const replayItem = pgTable(
- 'replay_item',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- replaySetId: uuid('replay_set_id')
-.notNull
-.references( => replaySet.id, { onDelete: 'cascade' }),
- /** The set's order, newest decided run first. Deterministic — see `assembleReplaySet`. */
- position: integer('position').notNull,
- sourceRunId: uuid('source_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- repositoryId: uuid('repository_id')
-.notNull
-.references( => repository.id, { onDelete: 'cascade' }),
- commitSha: text('commit_sha').notNull,
- task: text('task').notNull,
- observedOutcome: text('observed_outcome').notNull,
- },
- (t) => [uniqueIndex('replay_item_position_idx').on(t.replaySetId, t.position)],
+  'replay_item',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    replaySetId: uuid('replay_set_id')
+      .notNull()
+      .references(() => replaySet.id, { onDelete: 'cascade' }),
+    /** The set's order, newest decided run first. Deterministic — see `assembleReplaySet`. */
+    position: integer('position').notNull(),
+    sourceRunId: uuid('source_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    commitSha: text('commit_sha').notNull(),
+    task: text('task').notNull(),
+    observedOutcome: text('observed_outcome').notNull(),
+  },
+  (t) => [uniqueIndex('replay_item_position_idx').on(t.replaySetId, t.position)],
 )
 
 /**
@@ -1885,53 +1889,55 @@ export const replayItem = pgTable(
  * against the control screened on the same items and never against a threshold, because a
  * threshold would be a claim about how hard this workspace's tasks are.
  *
- * `decision` is null on the incumbent row *always*: the control is not gated, it is what the
- * gate compares to. On a candidate it is null until every screening run has reported, then
- * `admitted` or `rejected` — `screenGate` has two answers and no third, since a screen with a
- * third answer would be deciding something the self-improvement loop reserves for the arms.
+ * `decision` is null on the incumbent row *always*: the control is not gated, it is what
+ * the gate compares to. On a candidate it is null until every screening run has reported,
+ * then `admitted` or `rejected` — `screenGate` has two answers and no third, since a screen
+ * with a third answer would be deciding something the self-improvement loop reserves for
+ * the arms.
  *
- * `reason` is load-bearing rather than cosmetic: a rejected candidate is archived with it, and
- * The piece 3 hands that buffer to a proposer. "Rejected" is not something to generate
+ * `reason` is load-bearing rather than cosmetic: a rejected candidate is archived with it,
+ * and The piece 3 hands that buffer to a proposer. "Rejected" is not something to generate
  * from; "passed 2 of 6 where the prompt in use passed 5" is.
  */
 export const variantScreen = pgTable(
- 'variant_screen',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- setId: uuid('set_id')
-.notNull
-.references( => personaVariantSet.id, { onDelete: 'cascade' }),
- replaySetId: uuid('replay_set_id')
-.notNull
-.references( => replaySet.id, { onDelete: 'cascade' }),
- variantId: uuid('variant_id').references( => personaVariant.id, { onDelete: 'cascade' }),
- decision: text('decision'),
- reason: text('reason'),
- decidedAt: timestamp('decided_at', { withTimezone: true }),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- /**
- * One screening per arm per search. A second row for the same arm would be a second score
- * of the same prompt on the same items, and the gate would read whichever the query
- * happened to return — the merge queue's and the harness's pattern, enforced the same way.
- *
- * **Two indexes, because the incumbent's `variant_id` is null and Postgres treats nulls in
- * a unique index as distinct from each other.** A single `unique (set_id, variant_id)`
- * would have constrained every candidate and left the control — the one arm the gate
- * compares everything against — free to exist twice.
- */
- uniqueIndex('variant_screen_arm_idx')
-.on(t.setId, t.variantId)
-.where(sql`${t.variantId} is not null`),
- uniqueIndex('variant_screen_incumbent_idx')
-.on(t.setId)
-.where(sql`${t.variantId} is null`),
- index('variant_screen_workspace_idx').on(t.workspaceId, t.createdAt),
- ],
+  'variant_screen',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    setId: uuid('set_id')
+      .notNull()
+      .references(() => personaVariantSet.id, { onDelete: 'cascade' }),
+    replaySetId: uuid('replay_set_id')
+      .notNull()
+      .references(() => replaySet.id, { onDelete: 'cascade' }),
+    variantId: uuid('variant_id').references(() => personaVariant.id, { onDelete: 'cascade' }),
+    decision: text('decision'),
+    reason: text('reason'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /**
+     * One screening per arm per search. A second row for the same arm would be a second
+     * score of the same prompt on the same items, and the gate would read whichever the
+     * query happened to return — the merge queue's and the harness's pattern, enforced the
+     * same way.
+     *
+     * **Two indexes, because the incumbent's `variant_id` is null and Postgres treats nulls
+     * in a unique index as distinct from each other.** A single `unique (set_id,
+     * variant_id)` would have constrained every candidate and left the control — the one
+     * arm the gate compares everything against — free to exist twice.
+     */
+    uniqueIndex('variant_screen_arm_idx')
+      .on(t.setId, t.variantId)
+      .where(sql`${t.variantId} is not null`),
+    uniqueIndex('variant_screen_incumbent_idx')
+      .on(t.setId)
+      .where(sql`${t.variantId} is null`),
+    index('variant_screen_workspace_idx').on(t.workspaceId, t.createdAt),
+  ],
 )
 
 /**
@@ -1940,46 +1946,46 @@ export const variantScreen = pgTable(
  * `outcome` is `pending` until the screening run's branch has been through the repository's
  * definition of done, then the own vocabulary: `passed`, `failed`, or `not-scored`.
  * `not-scored` is deliberately not `failed` — the reason, that `skipped` and `refused` say
- * something about the operator's setup rather than about the branch, and folding them in would
- * make every unconfigured repository look like it produced broken work.
+ * something about the operator's setup rather than about the branch, and folding them in
+ * would make every unconfigured repository look like it produced broken work.
  */
 export const variantScreenRun = pgTable(
- 'variant_screen_run',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- screenId: uuid('screen_id')
-.notNull
-.references( => variantScreen.id, { onDelete: 'cascade' }),
- replayItemId: uuid('replay_item_id')
-.notNull
-.references( => replayItem.id, { onDelete: 'cascade' }),
- /**
- * Claimed *before* the run is started, and released if the start fails.
- *
- * The two-step exists because a run has to exist before its id can be written here, and
- * claiming afterwards would mean two sweeps could both start a run against one item — the
- * second overwriting the first's outcome. A row claimed by a server that then died is
- * swept into `not-scored` by the stuck check rather than left to block its screen forever,
- * which is the merge queue's stranded-`merging` problem and the same answer.
- */
- claimedAt: timestamp('claimed_at', { withTimezone: true }),
- /** Null until the run is started; `set null` if it is later deleted. */
- agentRunId: uuid('agent_run_id').references(: AnyPgColumn => agentRun.id, {
- onDelete: 'set null',
- }),
- outcome: text('outcome').notNull.default('pending'),
- /** Why it was not scored, when it was not. Recorded, never implied — the habit. */
- reason: text('reason'),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- finishedAt: timestamp('finished_at', { withTimezone: true }),
- },
- (t) => [
- uniqueIndex('variant_screen_run_item_idx').on(t.screenId, t.replayItemId),
- index('variant_screen_run_workspace_idx').on(t.workspaceId, t.createdAt),
- ],
+  'variant_screen_run',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    screenId: uuid('screen_id')
+      .notNull()
+      .references(() => variantScreen.id, { onDelete: 'cascade' }),
+    replayItemId: uuid('replay_item_id')
+      .notNull()
+      .references(() => replayItem.id, { onDelete: 'cascade' }),
+    /**
+     * Claimed *before* the run is started, and released if the start fails.
+     *
+     * The two-step exists because a run has to exist before its id can be written here, and
+     * claiming afterwards would mean two sweeps could both start a run against one item —
+     * the second overwriting the first's outcome. A row claimed by a server that then died
+     * is swept into `not-scored` by the stuck check rather than left to block its screen
+     * forever, which is the merge queue's stranded-`merging` problem and the same answer.
+     */
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    /** Null until the run is started; `set null` if it is later deleted. */
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    outcome: text('outcome').notNull().default('pending'),
+    /** Why it was not scored, when it was not. Recorded, never implied — the habit. */
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('variant_screen_run_item_idx').on(t.screenId, t.replayItemId),
+    index('variant_screen_run_workspace_idx').on(t.workspaceId, t.createdAt),
+  ],
 )
 
 /**
@@ -1990,23 +1996,23 @@ export const variantScreenRun = pgTable(
  * the unique index on the run, because a run is on one arm or it is not in the comparison.
  */
 export const variantUse = pgTable(
- 'variant_use',
- {
- id: uuid('id').primaryKey.defaultRandom,
- workspaceId: uuid('workspace_id')
-.notNull
-.references( => workspace.id, { onDelete: 'cascade' }),
- setId: uuid('set_id')
-.notNull
-.references( => personaVariantSet.id, { onDelete: 'cascade' }),
- variantId: uuid('variant_id').references( => personaVariant.id, { onDelete: 'cascade' }),
- agentRunId: uuid('agent_run_id')
-.notNull
-.references(: AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
- createdAt: timestamp('created_at', { withTimezone: true }).notNull.defaultNow,
- },
- (t) => [
- uniqueIndex('variant_use_run_idx').on(t.agentRunId),
- index('variant_use_set_idx').on(t.workspaceId, t.setId),
- ],
+  'variant_use',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    setId: uuid('set_id')
+      .notNull()
+      .references(() => personaVariantSet.id, { onDelete: 'cascade' }),
+    variantId: uuid('variant_id').references(() => personaVariant.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('variant_use_run_idx').on(t.agentRunId),
+    index('variant_use_set_idx').on(t.workspaceId, t.setId),
+  ],
 )

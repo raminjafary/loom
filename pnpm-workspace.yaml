@@ -1,23 +1,24 @@
 packages:
- - "apps/*"
- - "packages/*"
+  - "apps/*"
+  - "packages/*"
 allowBuilds:
- esbuild: true
- # Arrived under `@vue-flow/core` → `@vueuse/core` when the composition canvas landed
- # (the tech stack pins Vue Flow for it). Its postinstall is `vue-demi-switch`, which points the
- # package's entry at the installed Vue major — with the script skipped it can resolve
- # to the Vue 2 shim, and the failure is an import error deep inside a dependency
- # rather than anything that names vue-demi. This repository is Vue 3 only, so the
- # switch has exactly one outcome.
- vue-demi: true
+  esbuild: true
+  # Arrived under `@vue-flow/core` → `@vueuse/core` when the composition canvas landed (the
+  # tech stack pins Vue Flow for it). Its postinstall is `vue-demi-switch`, which points the
+  # package's entry at the installed Vue major — with the script skipped it can resolve to
+  # the Vue 2 shim, and the failure is an import error deep inside a dependency rather than
+  # anything that names vue-demi. This repository is Vue 3 only, so the switch has exactly
+  # one outcome.
+  vue-demi: true
 # Dependabot triage — 16 advisories (8 high) down to 1. Every entry is the smallest bump
 # that clears an advisory, and all of them are transitive: nothing here is a dependency
 # this repository chose. Ranges are keyed by major where two majors are installed.
 #
-# `@hono/node-server` is the one major bump, and it is here because it was *tested*
-# rather than reasoned about: it sits under the vendored Claude Agent SDK, whose HTTP
-# MCP transports this codebase never imports (the capability registry uses `createSdkMcpServer`, in-process).
-# The runner suite, an SDK import and a live sandboxed agent run all pass on 2.x.
+# `@hono/node-server` is the one major bump, and it is here because it was *tested* rather
+# than reasoned about: it sits under the vendored Claude Agent SDK, whose HTTP MCP
+# transports this codebase never imports (the capability registry uses `createSdkMcpServer`,
+# in-process). The runner suite, an SDK import and a live sandboxed agent run all pass on
+# 2.x.
 #
 # **esbuild 0.18 is now cleared too, and the note that said it could not be was wrong.**
 # It used to read "drizzle-kit is already at its latest published version and still
@@ -29,41 +30,41 @@ allowBuilds:
 # break the migration tooling") was reasoned rather than measured. Measured now:
 # `drizzle-kit generate` and `drizzle-kit migrate` both run, against four databases.
 overrides:
- "@esbuild-kit/core-utils>esbuild": ^0.25.12
- brace-expansion@^1: ^1.1.18
- brace-expansion@^5: ^5.0.9
- fast-uri@^3: ^3.1.5
- fast-uri@^4: ^4.1.2
- ip-address: ^10.3.1
- hono: ^4.12.34
- js-yaml@^4: ^4.3.1
- nanoid@^3: ^3.3.17
- "@hono/node-server": ^2.0.5
+  "@esbuild-kit/core-utils>esbuild": ^0.25.12
+  brace-expansion@^1: ^1.1.18
+  brace-expansion@^5: ^5.0.9
+  fast-uri@^3: ^3.1.5
+  fast-uri@^4: ^4.1.2
+  ip-address: ^10.3.1
+  hono: ^4.12.34
+  js-yaml@^4: ^4.3.1
+  nanoid@^3: ^3.3.17
+  "@hono/node-server": ^2.0.5
 minimumReleaseAgeExclude:
- - '@turbo/darwin-64@2.10.7'
- - '@turbo/darwin-arm64@2.10.7'
- - '@turbo/linux-64@2.10.7'
- - '@turbo/linux-arm64@2.10.7'
- - '@turbo/windows-64@2.10.7'
- - '@turbo/windows-arm64@2.10.7'
- - turbo@2.10.7
- - '@orpc/client@1.14.10'
- - '@orpc/contract@1.14.10'
- - '@orpc/shared@1.14.10'
- - '@orpc/standard-server-fetch@1.14.10'
- - '@orpc/standard-server-peer@1.14.10'
- - '@orpc/standard-server@1.14.10'
- - '@orpc/interop@1.14.10'
- - '@orpc/server@1.14.10'
- - '@orpc/standard-server-aws-lambda@1.14.10'
- - '@orpc/standard-server-fastify@1.14.10'
- - '@orpc/standard-server-node@1.14.10'
- - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.220'
- - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.220'
- - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.220'
- - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.220'
- - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.220'
- - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.220'
- - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.220'
- - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.220'
- - '@anthropic-ai/claude-agent-sdk@0.3.220'
+  - '@turbo/darwin-64@2.10.7'
+  - '@turbo/darwin-arm64@2.10.7'
+  - '@turbo/linux-64@2.10.7'
+  - '@turbo/linux-arm64@2.10.7'
+  - '@turbo/windows-64@2.10.7'
+  - '@turbo/windows-arm64@2.10.7'
+  - turbo@2.10.7
+  - '@orpc/client@1.14.10'
+  - '@orpc/contract@1.14.10'
+  - '@orpc/shared@1.14.10'
+  - '@orpc/standard-server-fetch@1.14.10'
+  - '@orpc/standard-server-peer@1.14.10'
+  - '@orpc/standard-server@1.14.10'
+  - '@orpc/interop@1.14.10'
+  - '@orpc/server@1.14.10'
+  - '@orpc/standard-server-aws-lambda@1.14.10'
+  - '@orpc/standard-server-fastify@1.14.10'
+  - '@orpc/standard-server-node@1.14.10'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.220'
+  - '@anthropic-ai/claude-agent-sdk@0.3.220'

@@ -1,49 +1,48 @@
 import {
- MAX_EDGES_IN_CONTEXT,
- MAX_EDGES_PER_MAP,
- MAX_NODES_IN_CONTEXT,
- MAX_NODES_PER_MAP,
- NotFoundError,
- ValidationError,
- asSubjectMapId,
- computeMasteryProgress,
- findHubNodes,
- proposeRetirements,
- splitProposals,
- retrievalStateFor,
- summarizeExpertiseEffect,
- trialAssignment,
- parseMapFragment,
- renderMapForPrompt,
- selectMapForContext,
- selectStaleNodeIds,
- type AgentPersonaId,
- type AgentRunId,
- type ClaimOutcomes,
- type MapEdge,
- type MapNode,
- type CurationReport,
- type ExpertiseEffect,
- type MapSubjectKind,
- type MasteryProgress,
- type RetrievalOverride,
- type RetrievalState,
- type RepositoryId,
- renderAtlasLeads,
- selectAtlasLeads,
- type SubjectMap,
- type SubjectMapId,
- type WorkspaceId,
+  MAX_EDGES_IN_CONTEXT,
+  MAX_EDGES_PER_MAP,
+  MAX_NODES_IN_CONTEXT,
+  MAX_NODES_PER_MAP,
+  NotFoundError,
+  ValidationError,
+  asSubjectMapId,
+  computeMasteryProgress,
+  findHubNodes,
+  proposeRetirements,
+  splitProposals,
+  retrievalStateFor,
+  summarizeExpertiseEffect,
+  trialAssignment,
+  parseMapFragment,
+  renderMapForPrompt,
+  selectMapForContext,
+  selectStaleNodeIds,
+  type AgentPersonaId,
+  type AgentRunId,
+  type ClaimOutcomes,
+  type MapEdge,
+  type MapNode,
+  type CurationReport,
+  type ExpertiseEffect,
+  type MapSubjectKind,
+  type MasteryProgress,
+  type RetrievalOverride,
+  type RetrievalState,
+  type RepositoryId,
+  renderAtlasLeads,
+  selectAtlasLeads,
+  type SubjectMap,
+  type SubjectMapId,
+  type WorkspaceId,
 } from '@loom/domain'
 import type {
- AgentRunRepositoryPort,
- SubjectMapRepositoryPort,
- WorkspaceRunControlRepositoryPort,
+  AgentRunRepositoryPort,
+  SubjectMapRepositoryPort,
+  WorkspaceRunControlRepositoryPort,
 } from './agent-ports.js'
 
 /**
- * Mastery — how a persona comes to know a subject, and what a later run gets for it
- *.
+ * Mastery — how a persona comes to know a subject, and what a later run gets for it.
  *
  * Split out of agent-use-cases.ts for the same reason note-use-cases.ts was: these are
  * the only callers that may write a map, and one small file is what makes "a model may
@@ -53,8 +52,8 @@ import type {
  */
 
 export interface MasteryDeps {
- readonly subjectMaps: SubjectMapRepositoryPort
- readonly agentRuns: AgentRunRepositoryPort
+  readonly subjectMaps: SubjectMapRepositoryPort
+  readonly agentRuns: AgentRunRepositoryPort
 }
 
 /**
@@ -80,43 +79,43 @@ export const PENDING_REVISION = 'pending'
  * stop early.
  */
 export const openMap = async (
- deps: MasteryDeps,
- input: {
- workspaceId: WorkspaceId
- personaId: AgentPersonaId
- subjectKind: MapSubjectKind
- repositoryId: RepositoryId | null
- subjectRef: string
- revision: string
- masteryRunId: AgentRunId | null
- },
+  deps: MasteryDeps,
+  input: {
+    workspaceId: WorkspaceId
+    personaId: AgentPersonaId
+    subjectKind: MapSubjectKind
+    repositoryId: RepositoryId | null
+    subjectRef: string
+    revision: string
+    masteryRunId: AgentRunId | null
+  },
 ): Promise<SubjectMap> => {
- const subjectRef = input.subjectRef.trim
- if (subjectRef.length === 0) throw new ValidationError('A subject needs a reference')
+  const subjectRef = input.subjectRef.trim()
+  if (subjectRef.length === 0) throw new ValidationError('A subject needs a reference')
 
- /**
- * Mastery: "A subject with no checkable revision cannot be mastered, only summarized, and
- * should be refused rather than quietly given a map that can never be invalidated."
- * A map whose claims can never go stale is the worst artifact in this design — it
- * keeps its authority forever while the repository moves underneath it.
- */
- const revision = input.revision.trim
- if (revision.length === 0) {
- throw new ValidationError(
- 'A map needs a revision to be derived at — a commit for a repository, a digest for a corpus. Without one, nothing can ever invalidate it.',
-)
- }
+  /**
+   * Mastery: "A subject with no checkable revision cannot be mastered, only summarized, and
+   * should be refused rather than quietly given a map that can never be invalidated."
+   * A map whose claims can never go stale is the worst artifact in this design — it
+   * keeps its authority forever while the repository moves underneath it.
+   */
+  const revision = input.revision.trim()
+  if (revision.length === 0) {
+    throw new ValidationError(
+      'A map needs a revision to be derived at — a commit for a repository, a digest for a corpus. Without one, nothing can ever invalidate it.',
+    )
+  }
 
- return deps.subjectMaps.upsertMap({
- workspaceId: input.workspaceId,
- personaId: input.personaId,
- subjectKind: input.subjectKind,
- repositoryId: input.repositoryId,
- subjectRef,
- revision,
- status: 'mastering',
- masteryRunId: input.masteryRunId,
- })
+  return deps.subjectMaps.upsertMap({
+    workspaceId: input.workspaceId,
+    personaId: input.personaId,
+    subjectKind: input.subjectKind,
+    repositoryId: input.repositoryId,
+    subjectRef,
+    revision,
+    status: 'mastering',
+    masteryRunId: input.masteryRunId,
+  })
 }
 
 /**
@@ -128,25 +127,25 @@ export const openMap = async (
  * arrives, `closeMap` refuses to call the map ready.
  */
 export const resolveMapRevision = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; revision: string },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; revision: string },
 ): Promise<void> => {
- const revision = input.revision.trim
- if (revision.length === 0 || revision === PENDING_REVISION) return
+  const revision = input.revision.trim()
+  if (revision.length === 0 || revision === PENDING_REVISION) return
 
- const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
- if (!map || map.revision === revision) return
+  const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
+  if (!map || map.revision === revision) return
 
- await deps.subjectMaps.upsertMap({
- workspaceId: map.workspaceId,
- personaId: map.personaId,
- subjectKind: map.subjectKind,
- repositoryId: map.repositoryId,
- subjectRef: map.subjectRef,
- revision,
- status: map.status,
- masteryRunId: map.masteryRunId,
- })
+  await deps.subjectMaps.upsertMap({
+    workspaceId: map.workspaceId,
+    personaId: map.personaId,
+    subjectKind: map.subjectKind,
+    repositoryId: map.repositoryId,
+    subjectRef: map.subjectRef,
+    revision,
+    status: map.status,
+    masteryRunId: map.masteryRunId,
+  })
 }
 
 /**
@@ -162,59 +161,59 @@ export const resolveMapRevision = async (
  * result: a refusal a model cannot see is a refusal it will earn again on the next call.
  */
 export const recordMapFragment = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; fragment: unknown },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; fragment: unknown },
 ): Promise<
- | { ok: true; nodesWritten: number; edgesWritten: number; superseded: number }
- | { ok: false; reason: string }
+  | { ok: true; nodesWritten: number; edgesWritten: number; superseded: number }
+  | { ok: false; reason: string }
 > => {
- const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
- if (!map) {
- return {
- ok: false,
- reason:
- 'This run is not a mastery run, so it has no map to write to. Record what you learned as a note instead.',
- }
- }
+  const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
+  if (!map) {
+    return {
+      ok: false,
+      reason:
+        'This run is not a mastery run, so it has no map to write to. Record what you learned as a note instead.',
+    }
+  }
 
- const verdict = parseMapFragment(input.fragment, {
- // The one call site in the system that passes this. Everything the platform's own
- // extractors write goes through `openMap`/`writeFragment` with 'platform', which is
- // what keeps `extracted` provenance out of a model's reach.
- authorKind: 'agent_run',
- subjectKind: map.subjectKind,
- })
- if (!verdict.ok) return { ok: false, reason: verdict.reason }
+  const verdict = parseMapFragment(input.fragment, {
+    // The one call site in the system that passes this. Everything the platform's own
+    // extractors write goes through `openMap`/`writeFragment` with 'platform', which is
+    // what keeps `extracted` provenance out of a model's reach.
+    authorKind: 'agent_run',
+    subjectKind: map.subjectKind,
+  })
+  if (!verdict.ok) return { ok: false, reason: verdict.reason }
 
- /**
- * The map's own bound (mastery, "bounded by construction"). Checked before the write and
- * against the *live* counts, so invalidated history never consumes the budget a live
- * map is allowed — otherwise a long-lived, frequently re-mastered subject would
- * eventually be unable to record anything new because of what it used to believe.
- */
- const live = await deps.subjectMaps.countLive(input.workspaceId, map.id)
- if (live.nodes + verdict.nodes.length > MAX_NODES_PER_MAP) {
- return {
- ok: false,
- reason: `This map already holds ${live.nodes} nodes, its maximum being ${MAX_NODES_PER_MAP}. Record only what a later worker could not derive from the code itself, and merge what you have already written rather than adding to it.`,
- }
- }
- if (live.edges + verdict.edges.length > MAX_EDGES_PER_MAP) {
- return {
- ok: false,
- reason: `This map already holds ${live.edges} edges, its maximum being ${MAX_EDGES_PER_MAP}.`,
- }
- }
+  /**
+   * The map's own bound (mastery, "bounded by construction"). Checked before the write and
+   * against the *live* counts, so invalidated history never consumes the budget a live
+   * map is allowed — otherwise a long-lived, frequently re-mastered subject would
+   * eventually be unable to record anything new because of what it used to believe.
+   */
+  const live = await deps.subjectMaps.countLive(input.workspaceId, map.id)
+  if (live.nodes + verdict.nodes.length > MAX_NODES_PER_MAP) {
+    return {
+      ok: false,
+      reason: `This map already holds ${live.nodes} nodes, its maximum being ${MAX_NODES_PER_MAP}. Record only what a later worker could not derive from the code itself, and merge what you have already written rather than adding to it.`,
+    }
+  }
+  if (live.edges + verdict.edges.length > MAX_EDGES_PER_MAP) {
+    return {
+      ok: false,
+      reason: `This map already holds ${live.edges} edges, its maximum being ${MAX_EDGES_PER_MAP}.`,
+    }
+  }
 
- const written = await deps.subjectMaps.writeFragment({
- workspaceId: input.workspaceId,
- mapId: map.id,
- revision: map.revision,
- nodes: verdict.nodes,
- edges: verdict.edges,
- })
+  const written = await deps.subjectMaps.writeFragment({
+    workspaceId: input.workspaceId,
+    mapId: map.id,
+    revision: map.revision,
+    nodes: verdict.nodes,
+    edges: verdict.edges,
+  })
 
- return { ok: true,...written }
+  return { ok: true, ...written }
 }
 
 /**
@@ -228,143 +227,143 @@ export const recordMapFragment = async (
  * number.
  */
 export const recordMasteryCheckpoint = async (
- deps: MasteryDeps,
- input: {
- workspaceId: WorkspaceId
- agentRunId: AgentRunId
- filesRead: number
- filesInScope: number
- },
+  deps: MasteryDeps,
+  input: {
+    workspaceId: WorkspaceId
+    agentRunId: AgentRunId
+    filesRead: number
+    filesInScope: number
+  },
 ): Promise<MasteryProgress | null> => {
- const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
- if (!map) return null
+  const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
+  if (!map) return null
 
- /**
- * Spend is read here rather than accepted as an argument, and the difference is a bug
- * this had: the one caller passed `0`, so the "spend against cap, shown next to
- * coverage" was a zero on every checkpoint of every run. The run row already carries
- * what the **egress proxy** metered — the number that is authoritative
- * precisely because it is not the model's account of itself — and a checkpoint that
- * takes it from its caller is a checkpoint whose caller can be wrong.
- */
- const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+  /**
+   * Spend is read here rather than accepted as an argument, and the difference is a bug
+   * this had: the one caller passed `0`, so the "spend against cap, shown next to
+   * coverage" was a zero on every checkpoint of every run. The run row already carries
+   * what the **egress proxy** metered — the number that is authoritative
+   * precisely because it is not the model's account of itself — and a checkpoint that
+   * takes it from its caller is a checkpoint whose caller can be wrong.
+   */
+  const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
 
- const live = await deps.subjectMaps.countLive(input.workspaceId, map.id)
- await deps.subjectMaps.appendCheckpoint({
- workspaceId: input.workspaceId,
- mapId: map.id,
- agentRunId: input.agentRunId,
- filesRead: input.filesRead,
- filesInScope: input.filesInScope,
- nodeCount: live.nodes,
- edgeCount: live.edges,
- spendUsd: run?.totalCostUsd ?? 0,
- })
+  const live = await deps.subjectMaps.countLive(input.workspaceId, map.id)
+  await deps.subjectMaps.appendCheckpoint({
+    workspaceId: input.workspaceId,
+    mapId: map.id,
+    agentRunId: input.agentRunId,
+    filesRead: input.filesRead,
+    filesInScope: input.filesInScope,
+    nodeCount: live.nodes,
+    edgeCount: live.edges,
+    spendUsd: run?.totalCostUsd ?? 0,
+  })
 
- return computeMasteryProgress(
- await deps.subjectMaps.listCheckpoints(input.workspaceId, map.id),
-)
+  return computeMasteryProgress(
+    await deps.subjectMaps.listCheckpoints(input.workspaceId, map.id),
+  )
 }
 
 /** Marks a mastery run's map finished. A failed run still leaves the map it built. */
 export const closeMap = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; ok: boolean },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; agentRunId: AgentRunId; ok: boolean },
 ): Promise<void> => {
- const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
- if (!map) return
+  const map = await deps.subjectMaps.findMapByRun(input.workspaceId, input.agentRunId)
+  if (!map) return
 
- /**
- * A run that failed after writing claims still leaves a `ready` map, and that is
- * deliberate. Mastery writes the map incrementally precisely so a killed run's partial
- * work survives; marking the map `failed` because the run was cancelled would throw
- * away claims that are individually true and individually checkable. `failed` is for
- * a map with nothing in it — a run that never learned anything.
- */
- const live = await deps.subjectMaps.countLive(input.workspaceId, map.id)
+  /**
+   * A run that failed after writing claims still leaves a `ready` map, and that is
+   * deliberate. Mastery writes the map incrementally precisely so a killed run's partial
+   * work survives; marking the map `failed` because the run was cancelled would throw
+   * away claims that are individually true and individually checkable. `failed` is for
+   * a map with nothing in it — a run that never learned anything.
+   */
+  const live = await deps.subjectMaps.countLive(input.workspaceId, map.id)
 
- /**
- * A map still on the sentinel never learned what it was derived at, so nothing can
- * ever invalidate its claims — see `PENDING_REVISION`. It is failed regardless of how
- * much it recorded, which is the one case where discarding real work is right.
- */
- const status =
- map.revision === PENDING_REVISION ? 'failed': live.nodes > 0 || input.ok ? 'ready': 'failed'
- await deps.subjectMaps.setStatus(input.workspaceId, map.id, status)
+  /**
+   * A map still on the sentinel never learned what it was derived at, so nothing can
+   * ever invalidate its claims — see `PENDING_REVISION`. It is failed regardless of how
+   * much it recorded, which is the one case where discarding real work is right.
+   */
+  const status =
+    map.revision === PENDING_REVISION ? 'failed' : live.nodes > 0 || input.ok ? 'ready' : 'failed'
+  await deps.subjectMaps.setStatus(input.workspaceId, map.id, status)
 }
 
 export interface MasteryView {
- readonly map: SubjectMap
- readonly nodes: MapNode[]
- readonly edges: MapEdge[]
- readonly progress: MasteryProgress | null
- /**
- * Whether reading this map has been shown to help, and what the
- * platform is currently doing about it. On the view rather than a separate procedure
- * because a human looking at a map is exactly the human who should see whether it has
- * earned its place — Phase 3b makes this the gate on everything after the map.
- */
- readonly effect: ExpertiseEffect
- readonly retrievalState: RetrievalState
- /** The god nodes — computed from the graph, never asked of a model. */
- readonly hubs: { readonly key: string; readonly degree: number }[]
- /**
- * What became of the runs each claim was shown to, by node id.
- *
- * On the view because a ranking nobody can see is a ranking nobody can argue with, and
- * this one decides which claims survive the context budget. The counts are here rather
- * than the score alone for the same reason `effect` carries its arms: "outranked" is a
- * conclusion, and the human should be able to check it against the runs it came from.
- */
- readonly claimOutcomes: Readonly<Record<string, ClaimOutcomes>>
+  readonly map: SubjectMap
+  readonly nodes: MapNode[]
+  readonly edges: MapEdge[]
+  readonly progress: MasteryProgress | null
+  /**
+   * Whether reading this map has been shown to help, and what the
+   * platform is currently doing about it. On the view rather than a separate procedure
+   * because a human looking at a map is exactly the human who should see whether it has
+   * earned its place — Phase 3b makes this the gate on everything after the map.
+   */
+  readonly effect: ExpertiseEffect
+  readonly retrievalState: RetrievalState
+  /** The god nodes — computed from the graph, never asked of a model. */
+  readonly hubs: { readonly key: string; readonly degree: number }[]
+  /**
+   * What became of the runs each claim was shown to, by node id.
+   *
+   * On the view because a ranking nobody can see is a ranking nobody can argue with, and
+   * this one decides which claims survive the context budget. The counts are here rather
+   * than the score alone for the same reason `effect` carries its arms: "outranked" is a
+   * conclusion, and the human should be able to check it against the runs it came from.
+   */
+  readonly claimOutcomes: Readonly<Record<string, ClaimOutcomes>>
 }
 
 export const getMastery = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; mapId: SubjectMapId },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; mapId: SubjectMapId },
 ): Promise<MasteryView> => {
- const map = await deps.subjectMaps.getMap(input.workspaceId, input.mapId)
- if (!map) throw new NotFoundError('SubjectMap')
+  const map = await deps.subjectMaps.getMap(input.workspaceId, input.mapId)
+  if (!map) throw new NotFoundError('SubjectMap')
 
- const [nodes, edges, checkpoints, trial, claimOutcomes, masteryRun] = await Promise.all([
- deps.subjectMaps.listNodes(input.workspaceId, map.id),
- deps.subjectMaps.listEdges(input.workspaceId, map.id),
- deps.subjectMaps.listCheckpoints(input.workspaceId, map.id),
- expertiseEffectFor(deps, { workspaceId: input.workspaceId, map }),
- deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, map.id),
- map.masteryRunId === null
- ? Promise.resolve(null)
-: deps.agentRuns.findById(input.workspaceId, map.masteryRunId),
- ])
+  const [nodes, edges, checkpoints, trial, claimOutcomes, masteryRun] = await Promise.all([
+    deps.subjectMaps.listNodes(input.workspaceId, map.id),
+    deps.subjectMaps.listEdges(input.workspaceId, map.id),
+    deps.subjectMaps.listCheckpoints(input.workspaceId, map.id),
+    expertiseEffectFor(deps, { workspaceId: input.workspaceId, map }),
+    deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, map.id),
+    map.masteryRunId === null
+      ? Promise.resolve(null)
+      : deps.agentRuns.findById(input.workspaceId, map.masteryRunId),
+  ])
 
- const progress = computeMasteryProgress(checkpoints)
+  const progress = computeMasteryProgress(checkpoints)
 
- return {
- map,
- nodes,
- edges,
- /**
- * The curve comes from the checkpoints; **the spend comes from the run**.
- *
- * A checkpoint's spend is a sample taken while the run was still going, and on the
- * unsandboxed path there is no egress proxy polling — the cost of the whole run
- * arrives once, with the result, after the last checkpoint has been written. So the
- * headline read $0.0000 on a run that had just cost real money, which a live driver
- * found and no test could: every test that exercises this injects the frames in an
- * order the runtime does not produce.
- *
- * The run row is the authority either way. Taking the figure from it here is not a second arithmetic; it is
- * reading the same number later, once it exists.
- */
- progress:
- progress === null
- ? null
-: {...progress, spendUsd: masteryRun?.totalCostUsd ?? progress.spendUsd },
- hubs: findHubNodes(nodes, edges),
- effect: trial.effect,
- retrievalState: trial.state,
- claimOutcomes,
- }
+  return {
+    map,
+    nodes,
+    edges,
+    /**
+     * The curve comes from the checkpoints; **the spend comes from the run**.
+     *
+     * A checkpoint's spend is a sample taken while the run was still going, and on the
+     * unsandboxed path there is no egress proxy polling — the cost of the whole run
+     * arrives once, with the result, after the last checkpoint has been written. So the
+     * headline read $0.0000 on a run that had just cost real money, which a live driver
+     * found and no test could: every test that exercises this injects the frames in an
+     * order the runtime does not produce.
+     *
+     * The run row is the authority either way. Taking the figure from it here is not a
+     * second arithmetic; it is reading the same number later, once it exists.
+     */
+    progress:
+      progress === null
+        ? null
+        : { ...progress, spendUsd: masteryRun?.totalCostUsd ?? progress.spendUsd },
+    hubs: findHubNodes(nodes, edges),
+    effect: trial.effect,
+    retrievalState: trial.state,
+    claimOutcomes,
+  }
 }
 
 /**
@@ -373,117 +372,119 @@ export const getMastery = async (
  * Phase 3b makes this the gate on everything after the map, so what it does and does
  * not do are both deliberate:
  *
- * - **Only maps for the repository this run is against.** portable expertise: an expert persona put
- * on a team bound to another repository is "an ordinary agent with a misleading name",
- * and handing it the flight map while it works on the hotel codebase would be worse
- * than handing it nothing — it would be handing it confidently irrelevant structure.
+ * - **Only maps for the repository this run is against.** Portable expertise: an expert
+ *   persona put on a team bound to another repository is "an ordinary agent with a
+ *   misleading name", and handing it the flight map while it works on the hotel codebase
+ *   would be worse than handing it nothing — it would be handing it confidently irrelevant
+ *   structure.
  * - **Bounded by `selectMapForContext`**, which keeps concepts and hubs and says how
- * much it dropped.
+ *   much it dropped.
  * - **Never the run's own mastery map mid-run**, because a run reading back its own
- * in-progress claims is a model re-reading its own output through the platform's
- * framing — the one case the untrusted fence cannot help with.
+ *   in-progress claims is a model re-reading its own output through the platform's
+ *   framing — the one case the untrusted fence cannot help with.
  */
 export const buildMapContext = async (
- deps: MasteryDeps,
- input: {
- workspaceId: WorkspaceId
- personaId: AgentPersonaId
- repositoryId: RepositoryId | null
- /**
- * The run being started. Named rather than optional now: it is both the map to skip
- * (a mastery run must not read back its own in-progress claims) **and** the subject
- * of the trial record, and a caller that omitted it would silently produce a run
- * nobody measured.
- */
- agentRunId: AgentRunId
- },
+  deps: MasteryDeps,
+  input: {
+    workspaceId: WorkspaceId
+    personaId: AgentPersonaId
+    repositoryId: RepositoryId | null
+    /**
+     * The run being started. Named rather than optional now: it is both the map to skip
+     * (a mastery run must not read back its own in-progress claims) **and** the subject
+     * of the trial record, and a caller that omitted it would silently produce a run
+     * nobody measured.
+     */
+    agentRunId: AgentRunId
+  },
 ): Promise<string> => {
- const maps = (await deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId))
-.filter((map) => map.status === 'ready')
-.filter((map) => map.masteryRunId === null || map.masteryRunId !== input.agentRunId)
-.filter((map) => map.repositoryId === null || map.repositoryId === input.repositoryId)
+  const maps = (await deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId))
+    .filter((map) => map.status === 'ready')
+    .filter((map) => map.masteryRunId === null || map.masteryRunId !== input.agentRunId)
+    .filter((map) => map.repositoryId === null || map.repositoryId === input.repositoryId)
 
- /**
- * The effective retrieval state per map. One aggregate query for
- * every candidate, rather than a query per map: this is on the dispatch path, and a
- * persona with four subjects would otherwise pay four round trips before a run starts.
- */
- const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(
- input.workspaceId,
- maps.map((map) => map.id),
-)
+  /**
+   * The effective retrieval state per map. One aggregate query for
+   * every candidate, rather than a query per map: this is on the dispatch path, and a
+   * persona with four subjects would otherwise pay four round trips before a run starts.
+   */
+  const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(
+    input.workspaceId,
+    maps.map((map) => map.id),
+  )
 
- const rendered: string[] = []
- for (const map of maps) {
- const effect = summarizeExpertiseEffect(tallies[map.id] ?? [])
- const state = retrievalStateFor(map.retrievalOverride, effect.verdict)
- const used = await deps.subjectMaps.countExpertiseUses(input.workspaceId, map.id)
- const arm = trialAssignment(state, used)
+  const rendered: string[] = []
+  for (const map of maps) {
+    const effect = summarizeExpertiseEffect(tallies[map.id] ?? [])
+    const state = retrievalStateFor(map.retrievalOverride, effect.verdict)
+    const used = await deps.subjectMaps.countExpertiseUses(input.workspaceId, map.id)
+    const arm = trialAssignment(state, used)
 
- // `off` — nothing offered and nothing recorded. See `trialAssignment`: writing
- // withheld rows for an off map would inflate the baseline it is judged against and
- // make the decision unreachable rather than reversible.
- if (arm === null) continue
+    // `off` — nothing offered and nothing recorded. See `trialAssignment`: writing
+    // withheld rows for an off map would inflate the baseline it is judged against and
+    // make the decision unreachable rather than reversible.
+    if (arm === null) continue
 
- /**
- * The claim scores come with the nodes. Fetched on the retrieved arm only: a withheld run is shown nothing, so
- * ordering what it will not see would be a query spent on a decision nobody reads.
- */
- const [nodes, edges, outcomes] = await Promise.all([
- deps.subjectMaps.listNodes(input.workspaceId, map.id),
- deps.subjectMaps.listEdges(input.workspaceId, map.id),
- arm === 'retrieved'
- ? deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, map.id)
-: Promise.resolve({}),
- ])
- const selected = selectMapForContext(
- nodes,
- edges,
- MAX_NODES_IN_CONTEXT,
- MAX_EDGES_IN_CONTEXT,
- outcomes,
-)
- const text =
- arm === 'withheld'
- ? ''
-: renderMapForPrompt(map, selected.nodes, selected.edges, {
- nodes: selected.elidedNodes,
- edges: selected.elidedEdges,
- })
+    /**
+     * The claim scores come with the nodes. Fetched on the retrieved arm only: a withheld
+     * run is shown nothing, so ordering what it will not see would be a query spent on a
+     * decision nobody reads.
+     */
+    const [nodes, edges, outcomes] = await Promise.all([
+      deps.subjectMaps.listNodes(input.workspaceId, map.id),
+      deps.subjectMaps.listEdges(input.workspaceId, map.id),
+      arm === 'retrieved'
+        ? deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, map.id)
+        : Promise.resolve({}),
+    ])
+    const selected = selectMapForContext(
+      nodes,
+      edges,
+      MAX_NODES_IN_CONTEXT,
+      MAX_EDGES_IN_CONTEXT,
+      outcomes,
+    )
+    const text =
+      arm === 'withheld'
+        ? ''
+        : renderMapForPrompt(map, selected.nodes, selected.edges, {
+            nodes: selected.elidedNodes,
+            edges: selected.elidedEdges,
+          })
 
- /**
- * Recorded for **both** arms, which is the whole measurement. A run deliberately
- * denied a map it was eligible for is the baseline; without a row saying so, the
- * comparison is against runs that were never candidates, which is not a baseline —
- * it is a different population.
- *
- * Best-effort, like the retrieval it describes: a run whose measurement could not be
- * written is worse recorded, not broken, and failing a start over a bookkeeping row
- * would tie throughput to the least important write in the system.
- */
- try {
- await deps.subjectMaps.recordExpertiseUse({
- workspaceId: input.workspaceId,
- mapId: map.id,
- agentRunId: input.agentRunId,
- arm,
- nodesShown: arm === 'retrieved' ? selected.nodes.length: 0,
- edgesShown: arm === 'retrieved' ? selected.edges.length: 0,
- /**
- * The per-claim citation domain expertise asks for, and the reason it is not a guess: these
- * are the exact nodes rendered above, not an inference about which ones a run
- * acted on. "Was shown" is the weaker claim and the honest one.
- */
- nodeIds: arm === 'retrieved' ? selected.nodes.map((node) => node.id): [],
- })
- } catch {
- // Deliberately swallowed — see above.
- }
+    /**
+     * Recorded for **both** arms, which is the whole measurement. A run deliberately
+     * denied a map it was eligible for is the baseline; without a row saying so, the
+     * comparison is against runs that were never candidates, which is not a baseline —
+     * it is a different population.
+     *
+     * Best-effort, like the retrieval it describes: a run whose measurement could not be
+     * written is worse recorded, not broken, and failing a start over a bookkeeping row
+     * would tie throughput to the least important write in the system.
+     */
+    try {
+      await deps.subjectMaps.recordExpertiseUse({
+        workspaceId: input.workspaceId,
+        mapId: map.id,
+        agentRunId: input.agentRunId,
+        arm,
+        nodesShown: arm === 'retrieved' ? selected.nodes.length : 0,
+        edgesShown: arm === 'retrieved' ? selected.edges.length : 0,
+        /**
+         * The per-claim citation domain expertise asks for, and the reason it is not a
+         * guess: these are the exact nodes rendered above, not an inference about which
+         * ones a run acted on. "Was shown" is the weaker claim and the honest one.
+         */
+        nodeIds: arm === 'retrieved' ? selected.nodes.map((node) => node.id) : [],
+      })
+    } catch {
+      // Deliberately swallowed — see above.
+    }
 
- if (text !== '') rendered.push(text)
- }
+    if (text !== '') rendered.push(text)
+  }
 
- return rendered.join('\n\n')
+  return rendered.join('\n\n')
 }
 
 /**
@@ -495,12 +496,12 @@ export const buildMapContext = async (
  * month would keep answering for it.
  */
 export const expertiseEffectFor = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; map: SubjectMap },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; map: SubjectMap },
 ): Promise<{ effect: ExpertiseEffect; state: RetrievalState }> => {
- const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(input.workspaceId, [input.map.id])
- const effect = summarizeExpertiseEffect(tallies[input.map.id] ?? [])
- return { effect, state: retrievalStateFor(input.map.retrievalOverride, effect.verdict) }
+  const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(input.workspaceId, [input.map.id])
+  const effect = summarizeExpertiseEffect(tallies[input.map.id] ?? [])
+  return { effect, state: retrievalStateFor(input.map.retrievalOverride, effect.verdict) }
 }
 
 /**
@@ -511,25 +512,26 @@ export const expertiseEffectFor = async (
  * the decision back to the measurement, which is a third act and not the same as `off`.
  */
 export const setRetrievalOverride = async (
- deps: MasteryDeps,
- input: {
- workspaceId: WorkspaceId
- mapId: SubjectMapId
- override: RetrievalOverride
- },
+  deps: MasteryDeps,
+  input: {
+    workspaceId: WorkspaceId
+    mapId: SubjectMapId
+    override: RetrievalOverride
+  },
 ): Promise<SubjectMap> => {
- const map = await deps.subjectMaps.setRetrievalOverride(
- input.workspaceId,
- input.mapId,
- input.override,
-)
- if (!map) throw new NotFoundError('SubjectMap')
- return map
+  const map = await deps.subjectMaps.setRetrievalOverride(
+    input.workspaceId,
+    input.mapId,
+    input.override,
+  )
+  if (!map) throw new NotFoundError('SubjectMap')
+  return map
 }
 
 /**
- * Invalidates what a merge made stale (domain expertise: "a claim about a file is invalidated by that
- * file changing — which this platform can detect, because it owns the merge queue").
+ * Invalidates what a merge made stale (domain expertise: "a claim about a file is
+ * invalidated by that file changing — which this platform can detect, because it owns the
+ * merge queue").
  *
  * Every map bound to the repository, across every persona: a merged change makes a claim
  * false for whoever holds it, and invalidating only the map of the persona that happened
@@ -540,48 +542,48 @@ export const setRetrievalOverride = async (
  * merge path, which is the one path a human is actively waiting on.
  */
 export const invalidateMapsForMerge = async (
- deps: MasteryDeps,
- input: {
- workspaceId: WorkspaceId
- repositoryId: RepositoryId
- changedPaths: readonly string[]
- revision: string
- },
+  deps: MasteryDeps,
+  input: {
+    workspaceId: WorkspaceId
+    repositoryId: RepositoryId
+    changedPaths: readonly string[]
+    revision: string
+  },
 ): Promise<{ invalidated: number; drifted: SubjectMap[] }> => {
- if (input.changedPaths.length === 0) return { invalidated: 0, drifted: [] }
+  if (input.changedPaths.length === 0) return { invalidated: 0, drifted: [] }
 
- const maps = await deps.subjectMaps.listMapsForRepository(input.workspaceId, input.repositoryId)
- let invalidated = 0
- /**
- * Which maps this merge actually made wrong, not which ones point at the repository.
- *
- * Returned because it is the platform's own signal that several agents' private
- * knowledge of one subsystem just went stale together — which is exactly the condition
- * Mastery convenes a **crunch** for. Computed here rather than re-derived by the caller:
- * `selectStaleNodeIds` is the thing that knows, and asking a second time would be a
- * second answer that could disagree with the invalidation actually performed.
- */
- const drifted: SubjectMap[] = []
- for (const map of maps) {
- const nodes = await deps.subjectMaps.listNodes(input.workspaceId, map.id)
- const stale = selectStaleNodeIds(nodes, input.changedPaths)
- if (stale.length === 0) continue
- invalidated += await deps.subjectMaps.invalidateNodes(
- input.workspaceId,
- stale,
- `changed at ${input.revision}`,
-)
- drifted.push(map)
- }
- return { invalidated, drifted }
+  const maps = await deps.subjectMaps.listMapsForRepository(input.workspaceId, input.repositoryId)
+  let invalidated = 0
+  /**
+   * Which maps this merge actually made wrong, not which ones point at the repository.
+   *
+   * Returned because it is the platform's own signal that several agents' private
+   * knowledge of one subsystem just went stale together — which is exactly the condition
+   * mastery convenes a **crunch** for. Computed here rather than re-derived by the caller:
+   * `selectStaleNodeIds` is the thing that knows, and asking a second time would be a
+   * second answer that could disagree with the invalidation actually performed.
+   */
+  const drifted: SubjectMap[] = []
+  for (const map of maps) {
+    const nodes = await deps.subjectMaps.listNodes(input.workspaceId, map.id)
+    const stale = selectStaleNodeIds(nodes, input.changedPaths)
+    if (stale.length === 0) continue
+    invalidated += await deps.subjectMaps.invalidateNodes(
+      input.workspaceId,
+      stale,
+      `changed at ${input.revision}`,
+    )
+    drifted.push(map)
+  }
+  return { invalidated, drifted }
 }
 
 export interface SubjectMapListing {
- readonly map: SubjectMap
- /** What the platform is doing with this map right now. */
- readonly retrievalState: RetrievalState
- /** How many decided runs are behind that, per arm — the evidence, in two numbers. */
- readonly decided: { readonly retrieved: number; readonly withheld: number }
+  readonly map: SubjectMap
+  /** What the platform is doing with this map right now. */
+  readonly retrievalState: RetrievalState
+  /** How many decided runs are behind that, per arm — the evidence, in two numbers. */
+  readonly decided: { readonly retrieved: number; readonly withheld: number }
 }
 
 /**
@@ -594,37 +596,37 @@ export interface SubjectMapListing {
  * refuses. One aggregate query serves the whole list.
  */
 const listingsFor = async (
- deps: MasteryDeps,
- workspaceId: WorkspaceId,
- maps: readonly SubjectMap[],
+  deps: MasteryDeps,
+  workspaceId: WorkspaceId,
+  maps: readonly SubjectMap[],
 ): Promise<SubjectMapListing[]> => {
- const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(
- workspaceId,
- maps.map((map) => map.id),
-)
- return maps.map((map) => {
- const arms = tallies[map.id] ?? []
- const effect = summarizeExpertiseEffect(arms)
- return {
- map,
- retrievalState: retrievalStateFor(map.retrievalOverride, effect.verdict),
- decided: {
- retrieved: effect.retrieved.decided,
- withheld: effect.withheld.decided,
- },
- }
- })
+  const tallies = await deps.subjectMaps.tallyExpertiseOutcomes(
+    workspaceId,
+    maps.map((map) => map.id),
+  )
+  return maps.map((map) => {
+    const arms = tallies[map.id] ?? []
+    const effect = summarizeExpertiseEffect(arms)
+    return {
+      map,
+      retrievalState: retrievalStateFor(map.retrievalOverride, effect.verdict),
+      decided: {
+        retrieved: effect.retrieved.decided,
+        withheld: effect.withheld.decided,
+      },
+    }
+  })
 }
 
 export const listPersonaMaps = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
 ): Promise<SubjectMapListing[]> =>
- listingsFor(
- deps,
- input.workspaceId,
- await deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId),
-)
+  listingsFor(
+    deps,
+    input.workspaceId,
+    await deps.subjectMaps.listMapsForPersona(input.workspaceId, input.personaId),
+  )
 
 /**
  * One curation pass over one map.
@@ -642,54 +644,54 @@ export const listPersonaMaps = async (
  * real rather than ceremonial.
  */
 export const curateMap = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; mapId: SubjectMapId },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; mapId: SubjectMapId },
 ): Promise<CurationReport> => {
- const map = await deps.subjectMaps.getMap(input.workspaceId, input.mapId)
- if (!map) throw new NotFoundError('SubjectMap')
+  const map = await deps.subjectMaps.getMap(input.workspaceId, input.mapId)
+  if (!map) throw new NotFoundError('SubjectMap')
 
- const [nodes, edges] = await Promise.all([
- deps.subjectMaps.listNodes(input.workspaceId, map.id),
- deps.subjectMaps.listEdges(input.workspaceId, map.id),
- ])
+  const [nodes, edges] = await Promise.all([
+    deps.subjectMaps.listNodes(input.workspaceId, map.id),
+    deps.subjectMaps.listEdges(input.workspaceId, map.id),
+  ])
 
- const live = nodes.filter((node) => node.invalidatedAt === null)
- const proposals = proposeRetirements(live, edges, map.revision)
- const alreadyProposed = new Set(
- live.filter((node) => node.retirementProposedAt !== null).map((node) => node.id),
-)
- const split = splitProposals(proposals, alreadyProposed)
+  const live = nodes.filter((node) => node.invalidatedAt === null)
+  const proposals = proposeRetirements(live, edges, map.revision)
+  const alreadyProposed = new Set(
+    live.filter((node) => node.retirementProposedAt !== null).map((node) => node.id),
+  )
+  const split = splitProposals(proposals, alreadyProposed)
 
- /**
- * Retired with the reason the *proposal* carried, not with a fresh one. The stored
- * reason is what a human had the chance to disagree with, and rewriting it at the
- * moment of the act would mean the observable window described something else.
- */
- for (const proposal of split.retire) {
- await deps.subjectMaps.invalidateNodes(
- input.workspaceId,
- [proposal.nodeId],
- proposal.detail,
-)
- }
- for (const proposal of split.propose) {
- await deps.subjectMaps.proposeRetirement(
- input.workspaceId,
- [proposal.nodeId],
- proposal.detail,
-)
- }
- if (split.withdraw.length > 0) {
- await deps.subjectMaps.proposeRetirement(input.workspaceId, split.withdraw, null)
- }
+  /**
+   * Retired with the reason the *proposal* carried, not with a fresh one. The stored
+   * reason is what a human had the chance to disagree with, and rewriting it at the
+   * moment of the act would mean the observable window described something else.
+   */
+  for (const proposal of split.retire) {
+    await deps.subjectMaps.invalidateNodes(
+      input.workspaceId,
+      [proposal.nodeId],
+      proposal.detail,
+    )
+  }
+  for (const proposal of split.propose) {
+    await deps.subjectMaps.proposeRetirement(
+      input.workspaceId,
+      [proposal.nodeId],
+      proposal.detail,
+    )
+  }
+  if (split.withdraw.length > 0) {
+    await deps.subjectMaps.proposeRetirement(input.workspaceId, split.withdraw, null)
+  }
 
- return {
- checked: live.length,
- kept: live.length - split.retire.length - split.propose.length,
- retired: split.retire.length,
- proposed: split.propose.length,
- withdrawn: split.withdraw.length,
- }
+  return {
+    checked: live.length,
+    kept: live.length - split.retire.length - split.propose.length,
+    retired: split.retire.length,
+    proposed: split.propose.length,
+    withdrawn: split.withdraw.length,
+  }
 }
 
 /**
@@ -705,32 +707,32 @@ export const curateMap = async (
  * twice.
  */
 export const curateIdleMaps = async (
- deps: MasteryDeps & { runControl: WorkspaceRunControlRepositoryPort },
- input: { workspaceId: WorkspaceId; activeRuns: number },
+  deps: MasteryDeps & { runControl: WorkspaceRunControlRepositoryPort },
+  input: { workspaceId: WorkspaceId; activeRuns: number },
 ): Promise<{ maps: number; report: CurationReport }> => {
- const empty: CurationReport = { checked: 0, kept: 0, retired: 0, proposed: 0, withdrawn: 0 }
+  const empty: CurationReport = { checked: 0, kept: 0, retired: 0, proposed: 0, withdrawn: 0 }
 
- // Idle means idle. A workspace with anything running is a workspace where a human is
- // waiting for something, and this pass is never that thing.
- if (input.activeRuns > 0) return { maps: 0, report: empty }
- if ((await deps.runControl.get(input.workspaceId)).paused) return { maps: 0, report: empty }
+  // Idle means idle. A workspace with anything running is a workspace where a human is
+  // waiting for something, and this pass is never that thing.
+  if (input.activeRuns > 0) return { maps: 0, report: empty }
+  if ((await deps.runControl.get(input.workspaceId)).paused) return { maps: 0, report: empty }
 
- const maps = (await deps.subjectMaps.listAllMaps(input.workspaceId)).filter(
- (map) => map.status === 'ready',
-)
+  const maps = (await deps.subjectMaps.listAllMaps(input.workspaceId)).filter(
+    (map) => map.status === 'ready',
+  )
 
- let total = {...empty }
- for (const map of maps) {
- const report = await curateMap(deps, { workspaceId: input.workspaceId, mapId: map.id })
- total = {
- checked: total.checked + report.checked,
- kept: total.kept + report.kept,
- retired: total.retired + report.retired,
- proposed: total.proposed + report.proposed,
- withdrawn: total.withdrawn + report.withdrawn,
- }
- }
- return { maps: maps.length, report: total }
+  let total = { ...empty }
+  for (const map of maps) {
+    const report = await curateMap(deps, { workspaceId: input.workspaceId, mapId: map.id })
+    total = {
+      checked: total.checked + report.checked,
+      kept: total.kept + report.kept,
+      retired: total.retired + report.retired,
+      proposed: total.proposed + report.proposed,
+      withdrawn: total.withdrawn + report.withdrawn,
+    }
+  }
+  return { maps: maps.length, report: total }
 }
 
 /**
@@ -741,37 +743,37 @@ export const curateIdleMaps = async (
  * workspace whose runs are competing for attention.
  */
 export const curateIdleWorkspaces = async (
- deps: MasteryDeps & { runControl: WorkspaceRunControlRepositoryPort },
+  deps: MasteryDeps & { runControl: WorkspaceRunControlRepositoryPort },
 ): Promise<{ workspaces: number; maps: number; retired: number; proposed: number }> => {
- const workspaces = await deps.subjectMaps.listWorkspacesWithMaps
- let maps = 0
- let retired = 0
- let proposed = 0
- for (const workspaceId of workspaces) {
- const active = await deps.agentRuns.listActiveByWorkspace(workspaceId)
- const result = await curateIdleMaps(deps, { workspaceId, activeRuns: active.length })
- maps += result.maps
- retired += result.report.retired
- proposed += result.report.proposed
- }
- return { workspaces: workspaces.length, maps, retired, proposed }
+  const workspaces = await deps.subjectMaps.listWorkspacesWithMaps()
+  let maps = 0
+  let retired = 0
+  let proposed = 0
+  for (const workspaceId of workspaces) {
+    const active = await deps.agentRuns.listActiveByWorkspace(workspaceId)
+    const result = await curateIdleMaps(deps, { workspaceId, activeRuns: active.length })
+    maps += result.maps
+    retired += result.report.retired
+    proposed += result.report.proposed
+  }
+  return { workspaces: workspaces.length, maps, retired, proposed }
 }
 
 export const listWorkspaceMaps = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId },
 ): Promise<SubjectMapListing[]> =>
- listingsFor(deps, input.workspaceId, await deps.subjectMaps.listAllMaps(input.workspaceId))
+  listingsFor(deps, input.workspaceId, await deps.subjectMaps.listAllMaps(input.workspaceId))
 
 export const listRepositoryMaps = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; repositoryId: RepositoryId },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; repositoryId: RepositoryId },
 ): Promise<SubjectMapListing[]> =>
- listingsFor(
- deps,
- input.workspaceId,
- await deps.subjectMaps.listMapsForRepository(input.workspaceId, input.repositoryId),
-)
+  listingsFor(
+    deps,
+    input.workspaceId,
+    await deps.subjectMaps.listMapsForRepository(input.workspaceId, input.repositoryId),
+  )
 
 /**
  * Which maps one run was handed, and which it was deliberately denied.
@@ -782,42 +784,42 @@ export const listRepositoryMaps = async (
  * actually read rather than what its persona happens to hold.
  */
 export const listExpertiseUsedByRuns = async (
- deps: MasteryDeps,
- input: { workspaceId: WorkspaceId; agentRunIds: readonly AgentRunId[] },
+  deps: MasteryDeps,
+  input: { workspaceId: WorkspaceId; agentRunIds: readonly AgentRunId[] },
 ): Promise<
- {
- readonly agentRunId: string
- readonly map: SubjectMap
- readonly arm: 'retrieved' | 'withheld'
- readonly nodesShown: number
- readonly edgesShown: number
- }[]
+  {
+    readonly agentRunId: string
+    readonly map: SubjectMap
+    readonly arm: 'retrieved' | 'withheld'
+    readonly nodesShown: number
+    readonly edgesShown: number
+  }[]
 > => {
- const uses = await deps.subjectMaps.listExpertiseUsesForRuns(
- input.workspaceId,
- input.agentRunIds,
-)
- // One read per distinct map rather than per use: a tree of twenty runs against one
- // repository names the same two or three maps over and over.
- const mapIds = [...new Set(uses.map((use) => use.mapId))]
- const maps = new Map<string, SubjectMap>
- for (const mapId of mapIds) {
- const map = await deps.subjectMaps.getMap(input.workspaceId, asSubjectMapId(mapId))
- if (map) maps.set(mapId, map)
- }
+  const uses = await deps.subjectMaps.listExpertiseUsesForRuns(
+    input.workspaceId,
+    input.agentRunIds,
+  )
+  // One read per distinct map rather than per use: a tree of twenty runs against one
+  // repository names the same two or three maps over and over.
+  const mapIds = [...new Set(uses.map((use) => use.mapId))]
+  const maps = new Map<string, SubjectMap>()
+  for (const mapId of mapIds) {
+    const map = await deps.subjectMaps.getMap(input.workspaceId, asSubjectMapId(mapId))
+    if (map) maps.set(mapId, map)
+  }
 
- return uses.flatMap((use) => {
- const map = maps.get(use.mapId)
- return map
- ? [
- {
- agentRunId: use.agentRunId,
- map,
- arm: use.arm,
- nodesShown: use.nodesShown,
- edgesShown: use.edgesShown,
- },
- ]
-: []
- })
+  return uses.flatMap((use) => {
+    const map = maps.get(use.mapId)
+    return map
+      ? [
+          {
+            agentRunId: use.agentRunId,
+            map,
+            arm: use.arm,
+            nodesShown: use.nodesShown,
+            edgesShown: use.edgesShown,
+          },
+        ]
+      : []
+  })
 }

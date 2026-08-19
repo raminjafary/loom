@@ -12,15 +12,15 @@ const CI_CONFIG_PATTERNS = [/^\.github\/workflows\//, /^\.gitlab-ci\.ya?ml$/, /^
 export type PushEffectVerdict = { readonly ok: true } | { readonly ok: false; readonly reason: string }
 
 export const classifyPushEffect = (
- changedPaths: readonly string[],
- acknowledgeCiChange: boolean,
+  changedPaths: readonly string[],
+  acknowledgeCiChange: boolean,
 ): PushEffectVerdict => {
- const ciTouched = changedPaths.filter((path) => CI_CONFIG_PATTERNS.some((pattern) => pattern.test(path)))
- if (ciTouched.length > 0 && !acknowledgeCiChange) {
- return {
- ok: false,
- reason: `Push blocked — changes touch CI config (${ciTouched.join(', ')}) and need explicit human review. Resubmit with acknowledgeCiChange to confirm.`,
- }
- }
- return { ok: true }
+  const ciTouched = changedPaths.filter((path) => CI_CONFIG_PATTERNS.some((pattern) => pattern.test(path)))
+  if (ciTouched.length > 0 && !acknowledgeCiChange) {
+    return {
+      ok: false,
+      reason: `Push blocked — changes touch CI config (${ciTouched.join(', ')}) and need explicit human review. Resubmit with acknowledgeCiChange to confirm.`,
+    }
+  }
+  return { ok: true }
 }

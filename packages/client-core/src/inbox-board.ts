@@ -25,64 +25,65 @@ import { attentionReason } from './attention.js'
 export type InboxLaneId = 'needs-you' | 'review' | 'stopped' | 'queued' | 'landed' | 'dropped'
 
 export interface InboxCard {
- readonly run: AgentRun
- /** One line, in the imperative where there is something to do. */
- readonly summary: string
- /** The queue entry holding this run's branch, when one does. */
- readonly queueEntry: MergeQueueEntry | null
- /**
- * What this branch did against its repository's definition of done, or null where nothing verified it.
- *
- * It deliberately does **not** move the card to another lane. A lane is what a human
- * does next, and the next action on a branch that failed its checks is the same one —
- * decide what to do with what the run left. What changed is what they will find when
- * they open it, which is a thing to *say* on the card rather than a different column.
- */
- readonly verification: RunVerification | null
+  readonly run: AgentRun
+  /** One line, in the imperative where there is something to do. */
+  readonly summary: string
+  /** The queue entry holding this run's branch, when one does. */
+  readonly queueEntry: MergeQueueEntry | null
+  /**
+   * What this branch did against its repository's definition of done, or null where nothing
+   * verified it.
+   *
+   * It deliberately does **not** move the card to another lane. A lane is what a human
+   * does next, and the next action on a branch that failed its checks is the same one —
+   * decide what to do with what the run left. What changed is what they will find when
+   * they open it, which is a thing to *say* on the card rather than a different column.
+   */
+  readonly verification: RunVerification | null
 }
 
 export interface InboxLane {
- readonly id: InboxLaneId
- readonly title: string
- /** What the lane means, for the empty state — an empty column should still say something. */
- readonly empty: string
- readonly cards: InboxCard[]
+  readonly id: InboxLaneId
+  readonly title: string
+  /** What the lane means, for the empty state — an empty column should still say something. */
+  readonly empty: string
+  readonly cards: InboxCard[]
 }
 
 const LANE_TITLES: Record<InboxLaneId, { title: string; empty: string }> = {
- 'needs-you': {
- title: 'Needs you',
- empty: 'No agent is blocked on a decision.',
- },
- review: {
- title: 'Ready to review',
- empty: 'No branch is waiting to be looked at.',
- },
- stopped: {
- title: 'Stopped early',
- empty: 'Nothing stopped part-way.',
- },
- queued: {
- title: 'In the merge queue',
- empty: 'Nothing is queued.',
- },
- landed: {
- title: 'Landed',
- empty: 'Nothing has merged or been pushed yet.',
- },
- dropped: {
- title: 'Dropped',
- empty: 'Nothing has been thrown away.',
- },
+  'needs-you': {
+    title: 'Needs you',
+    empty: 'No agent is blocked on a decision.',
+  },
+  review: {
+    title: 'Ready to review',
+    empty: 'No branch is waiting to be looked at.',
+  },
+  stopped: {
+    title: 'Stopped early',
+    empty: 'Nothing stopped part-way.',
+  },
+  queued: {
+    title: 'In the merge queue',
+    empty: 'Nothing is queued.',
+  },
+  landed: {
+    title: 'Landed',
+    empty: 'Nothing has merged or been pushed yet.',
+  },
+  dropped: {
+    title: 'Dropped',
+    empty: 'Nothing has been thrown away.',
+  },
 }
 
 const LANE_ORDER: readonly InboxLaneId[] = [
- 'needs-you',
- 'review',
- 'stopped',
- 'queued',
- 'landed',
- 'dropped',
+  'needs-you',
+  'review',
+  'stopped',
+  'queued',
+  'landed',
+  'dropped',
 ]
 
 /**
@@ -95,91 +96,91 @@ const LANE_ORDER: readonly InboxLaneId[] = [
  * that the platform already has it.
  */
 const laneFor = (run: AgentRun, entry: MergeQueueEntry | null): InboxLaneId => {
- if (entry && (entry.status === 'queued' || entry.status === 'merging')) return 'queued'
- if (run.branchDisposition === 'merged' || run.branchDisposition === 'pushed') return 'landed'
- if (run.branchDisposition === 'discarded') return 'dropped'
- if (run.branchDisposition === 'kept') return 'landed'
- if (run.status === 'awaiting_approval') return 'needs-you'
- if (run.status === 'failed' || run.status === 'cancelled') return 'stopped'
- return 'review'
+  if (entry && (entry.status === 'queued' || entry.status === 'merging')) return 'queued'
+  if (run.branchDisposition === 'merged' || run.branchDisposition === 'pushed') return 'landed'
+  if (run.branchDisposition === 'discarded') return 'dropped'
+  if (run.branchDisposition === 'kept') return 'landed'
+  if (run.status === 'awaiting_approval') return 'needs-you'
+  if (run.status === 'failed' || run.status === 'cancelled') return 'stopped'
+  return 'review'
 }
 
 const summaryFor = (run: AgentRun, lane: InboxLaneId, entry: MergeQueueEntry | null): string => {
- switch (lane) {
- case 'queued':
- return entry?.status === 'merging'
- ? 'merging now — rebasing and verifying'
-: 'waiting its turn in the queue'
- case 'landed':
- if (run.branchDisposition === 'merged') {
- // "Merged" and "merged with tests behind it" are different facts, and the queue
- // records which — claiming verification that did not run is the one lie a merge
- // surface can tell that costs something later.
- return entry?.verified === false ? 'merged, unverified': 'merged'
- }
- if (run.branchDisposition === 'pushed') return 'pushed to origin'
- return 'branch kept, not merged'
- case 'dropped':
- return 'branch thrown away'
- default:
- return attentionReason(run).summary
- }
+  switch (lane) {
+    case 'queued':
+      return entry?.status === 'merging'
+        ? 'merging now — rebasing and verifying'
+        : 'waiting its turn in the queue'
+    case 'landed':
+      if (run.branchDisposition === 'merged') {
+        // "Merged" and "merged with tests behind it" are different facts, and the queue
+        // records which — claiming verification that did not run is the one lie a merge
+        // surface can tell that costs something later.
+        return entry?.verified === false ? 'merged, unverified' : 'merged'
+      }
+      if (run.branchDisposition === 'pushed') return 'pushed to origin'
+      return 'branch kept, not merged'
+    case 'dropped':
+      return 'branch thrown away'
+    default:
+      return attentionReason(run).summary
+  }
 }
 
 /**
  * Builds the board from what the session already holds.
  *
- * Nothing here fetches. `needsAttention`, `settled` and the merge queue are three reads
- * the client already makes, and a board that fetched a fourth time would be a fourth
- * source of truth about what a run is doing — which is what the worker-notes design refuses.
+ * Nothing here fetches. `needsAttention`, `settled` and the merge queue are three reads the
+ * client already makes, and a board that fetched a fourth time would be a fourth source of
+ * truth about what a run is doing — which is what the worker-notes design refuses.
  *
  * Deduplicated by run id, because a run can legitimately appear in both input lists: it
  * is settled the moment a disposition lands, and the attention list is re-read on a
  * schedule that will sometimes still be carrying it.
  */
 export const buildInboxBoard = (input: {
- needsAttention: readonly AgentRun[]
- settled: readonly AgentRun[]
- mergeQueue: readonly MergeQueueEntry[]
- /** Optional: a board built before the verifications arrive is still a correct board. */
- verifications?: readonly RunVerification[]
+  needsAttention: readonly AgentRun[]
+  settled: readonly AgentRun[]
+  mergeQueue: readonly MergeQueueEntry[]
+  /** Optional: a board built before the verifications arrive is still a correct board. */
+  verifications?: readonly RunVerification[]
 }): InboxLane[] => {
- const verificationByRun = new Map<string, RunVerification>
- for (const record of input.verifications ?? []) verificationByRun.set(record.agentRunId, record)
+  const verificationByRun = new Map<string, RunVerification>()
+  for (const record of input.verifications ?? []) verificationByRun.set(record.agentRunId, record)
 
- const entryByRun = new Map<string, MergeQueueEntry>
- for (const entry of input.mergeQueue) {
- const existing = entryByRun.get(entry.agentRunId)
- // A branch can be queued more than once over its life — a conflict hands it back and
- // a human re-queues it. The open one is the one that describes where it is now.
- if (!existing || entry.status === 'queued' || entry.status === 'merging') {
- entryByRun.set(entry.agentRunId, entry)
- }
- }
+  const entryByRun = new Map<string, MergeQueueEntry>()
+  for (const entry of input.mergeQueue) {
+    const existing = entryByRun.get(entry.agentRunId)
+    // A branch can be queued more than once over its life — a conflict hands it back and
+    // a human re-queues it. The open one is the one that describes where it is now.
+    if (!existing || entry.status === 'queued' || entry.status === 'merging') {
+      entryByRun.set(entry.agentRunId, entry)
+    }
+  }
 
- const seen = new Set<string>
- const byLane = new Map<InboxLaneId, InboxCard[]>(LANE_ORDER.map((id) => [id, []]))
+  const seen = new Set<string>()
+  const byLane = new Map<InboxLaneId, InboxCard[]>(LANE_ORDER.map((id) => [id, []]))
 
- for (const run of [...input.needsAttention,...input.settled]) {
- if (seen.has(run.id)) continue
- seen.add(run.id)
+  for (const run of [...input.needsAttention, ...input.settled]) {
+    if (seen.has(run.id)) continue
+    seen.add(run.id)
 
- const queueEntry = entryByRun.get(run.id) ?? null
- const lane = laneFor(run, queueEntry)
- byLane.get(lane)?.push({
- run,
- summary: summaryFor(run, lane, queueEntry),
- queueEntry,
- verification: verificationByRun.get(run.id) ?? null,
- })
- }
+    const queueEntry = entryByRun.get(run.id) ?? null
+    const lane = laneFor(run, queueEntry)
+    byLane.get(lane)?.push({
+      run,
+      summary: summaryFor(run, lane, queueEntry),
+      queueEntry,
+      verification: verificationByRun.get(run.id) ?? null,
+    })
+  }
 
- return LANE_ORDER.map((id) => ({
- id,
- title: LANE_TITLES[id].title,
- empty: LANE_TITLES[id].empty,
- cards: byLane.get(id) ?? [],
- }))
+  return LANE_ORDER.map((id) => ({
+    id,
+    title: LANE_TITLES[id].title,
+    empty: LANE_TITLES[id].empty,
+    cards: byLane.get(id) ?? [],
+  }))
 }
 
 /**
@@ -189,6 +190,6 @@ export const buildInboxBoard = (input: {
  * everything the swarm ever produced would climb forever and stop meaning "look at this".
  */
 export const waitingCount = (lanes: readonly InboxLane[]): number =>
- lanes
-.filter((lane) => lane.id === 'needs-you' || lane.id === 'review' || lane.id === 'stopped')
-.reduce((total, lane) => total + lane.cards.length, 0)
+  lanes
+    .filter((lane) => lane.id === 'needs-you' || lane.id === 'review' || lane.id === 'stopped')
+    .reduce((total, lane) => total + lane.cards.length, 0)

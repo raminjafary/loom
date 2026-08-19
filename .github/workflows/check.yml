@@ -15,62 +15,62 @@
 name: check
 
 on:
- push:
- branches: [main]
- pull_request:
+  push:
+    branches: [main]
+  pull_request:
 
 # A superseded run tells you about a commit nobody is waiting for.
 concurrency:
- group: check-${{ github.ref }}
- cancel-in-progress: true
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
- check:
- runs-on: ubuntu-latest
- timeout-minutes: 25
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
 
- env:
- # Compose interpolates the whole file before it starts anything, so the egress proxy's
- # `${VAR:?}` variables have to be set even though this job never starts that service.
- # Placeholders on purpose: nothing here reaches a model API, and a real key in CI would
- # be a credential in a log-visible environment for no benefit.
- LOOM_EGRESS_CONTROL_SECRET: ci-placeholder-the-proxy-does-not-run-here
- ANTHROPIC_API_KEY: ci-placeholder-no-model-call-happens-in-this-job
+    env:
+      # Compose interpolates the whole file before it starts anything, so the egress proxy's
+      # `${VAR:?}` variables have to be set even though this job never starts that service.
+      # Placeholders on purpose: nothing here reaches a model API, and a real key in CI
+      # would be a credential in a log-visible environment for no benefit.
+      LOOM_EGRESS_CONTROL_SECRET: ci-placeholder-the-proxy-does-not-run-here
+      ANTHROPIC_API_KEY: ci-placeholder-no-model-call-happens-in-this-job
 
- steps:
- - uses: actions/checkout@v5
+    steps:
+      - uses: actions/checkout@v5
 
- - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
 
- # 22 is the declared floor in `engines`, and development happens on 24. Running the
- # floor is the point: a claim in package.json that nothing tests is a claim.
- - uses: actions/setup-node@v5
- with:
- node-version: 22
- cache: pnpm
+      # 22 is the declared floor in `engines`, and development happens on 24. Running the
+      # floor is the point: a claim in package.json that nothing tests is a claim.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
 
- - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
 
- # `--wait` honours the healthchecks already in the compose file, so the next step
- # cannot race a database that is listening but not ready.
- - name: Start Postgres and Valkey
- run: docker compose up -d --wait postgres valkey
+      # `--wait` honours the healthchecks already in the compose file, so the next step
+      # cannot race a database that is listening but not ready.
+      - name: Start Postgres and Valkey
+        run: docker compose up -d --wait postgres valkey
 
- - name: Create and migrate the test databases
- run: pnpm db:test:prepare
+      - name: Create and migrate the test databases
+        run: pnpm db:test:prepare
 
- - run: pnpm typecheck
+      - run: pnpm typecheck
 
- - run: pnpm lint
+      - run: pnpm lint
 
- - run: pnpm test
+      - run: pnpm test
 
- # Both are outside `turbo run test` on purpose and are part of `make check`'s
- # intent: the architecture test asserts the dependency rule holds, and the tools
- # typecheck covers a directory turbo never sees — where a driver rotted for months.
- - name: Layer boundaries
- run: npx vitest run tools/architecture.test.ts
+      # Both are outside `turbo run test` on purpose and are part of `make check`'s
+      # intent: the architecture test asserts the dependency rule holds, and the tools
+      # typecheck covers a directory turbo never sees — where a driver rotted for months.
+      - name: Layer boundaries
+        run: npx vitest run tools/architecture.test.ts
 
- - name: Diagnostics on failure
- if: failure
- run: docker compose logs --tail 50 postgres valkey
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose logs --tail 50 postgres valkey

@@ -11,16 +11,16 @@ export type LoomApi = ContractRouterClient<Contract>
  * URL or a fetch call.
  */
 export const createApi = (options: {
- rpcUrl: string
- headers?: Record<string, string>
+  rpcUrl: string
+  headers?: Record<string, string>
 }): LoomApi =>
- createORPCClient(
- new RPCLink({
- url: options.rpcUrl,
- headers: => options.headers ?? {},
- // The RPC server and the browser app are cross-origin by default (see
- // WEB_ORIGIN/RPC_URL in apps/web) — the session cookie only rides along
- // if every request explicitly asks for it.
- fetch: (request, init) => globalThis.fetch(request, {...init, credentials: 'include' }),
- }),
-)
+  createORPCClient(
+    new RPCLink({
+      url: options.rpcUrl,
+      headers: () => options.headers ?? {},
+      // The RPC server and the browser app are cross-origin by default (see
+      // WEB_ORIGIN/RPC_URL in apps/web) — the session cookie only rides along
+      // if every request explicitly asks for it.
+      fetch: (request, init) => globalThis.fetch(request, { ...init, credentials: 'include' }),
+    }),
+  )

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { MergeQueueEntry, SwarmBoard } from '@loom/api-contract'
 import {
- activityLabel,
- buildSwarmGraph,
- describeAge,
- shortBranchName,
- type SwarmEdgeKind,
- type SwarmGraphNode,
- type SwarmQueueNode,
+  activityLabel,
+  buildSwarmGraph,
+  describeAge,
+  shortBranchName,
+  type SwarmEdgeKind,
+  type SwarmGraphNode,
+  type SwarmQueueNode,
 } from '@loom/client-core'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
@@ -28,110 +28,110 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
  */
 
 const props = defineProps<{
- board: SwarmBoard | null
- /**
- * The workspace's merge queue, drawn as its own band below the runs.
- *
- * Passed in rather than fetched here because the queue is workspace-scoped and this
- * canvas is tree-scoped — `buildSwarmGraph` keeps only the entries whose run is on this
- * board, and it needs the whole queue to work out a branch's *place in line*, since a
- * branch from another tree ahead of this one really is ahead of it.
- */
- mergeQueue: readonly MergeQueueEntry[]
- /**
- * Maps held for this tree's repository, joined to persona names.
- *
- * Fetched by the parent when the canvas opens, not carried on the polled board:
- * expertise does not change between polls, and the rule is that watching a swarm
- * adds no per-tick query.
- */
- expertise?: readonly {
- mapId: string
- subjectRef: string
- subjectKind: string
- personaName: string
- retrievalState: 'trial' | 'on' | 'off'
- }[]
- /**
- * Which runs on this tree actually read which map, and which were denied it
- *. Fetched with `expertise`, in the same round.
- *
- * Separate from it because they are different facts: `expertise` is per persona and
- * says what an agent *holds*, and this is per run and says what a particular piece of
- * work was *given*. Only the second answers "which of these agents adopted it".
- */
- expertiseUses?: readonly { agentRunId: string; mapId: string; arm: 'retrieved' | 'withheld' }[]
- /**
- * The run currently being watched, so the canvas can say which node that is.
- *
- * Without it, clicking a node changed the app's state and the graph reflected
- * none of it — the one interaction the canvas offers was fire-and-forget, behind
- * a full-screen scrim, which reads as nothing having happened.
- */
- activeRunId: string | null
- /**
- * Bumped from outside to open the canvas — the same counter idiom `SidebarSection`
- * uses, and for the same reason: a boolean that stays true fires its watcher once.
- *
- * This exists because the canvas was unreachable in practice. It lives inside a
- * *collapsed* sidebar section, behind a panel, behind an Open button — three levels
- * down from anything a human looks at, on a surface the product shape names as one of the product's
- * defining views. Reported plainly by the operator as "canvas is not visible in the
- * UI at all", which was true.
- */
- openSignal?: number
- /**
- * Live-activity frames for this tree — see `AgentSnapshot.recentActivity`.
- *
- * The canvas already rendered live *facts*: the call in flight, idle time, cost
- * against cap. What it could not show was anything *happening*, because every one of
- * those facts arrives by refetch and a refetch lands after the moment it describes.
- * These frames are what make an edge light up while work is crossing it.
- */
- activity?: readonly {
- agentRunId: string
- parentRunId: string | null
- kind: string
- label: string | null
- at: number
- }[]
-}>
+  board: SwarmBoard | null
+  /**
+   * The workspace's merge queue, drawn as its own band below the runs.
+   *
+   * Passed in rather than fetched here because the queue is workspace-scoped and this
+   * canvas is tree-scoped — `buildSwarmGraph` keeps only the entries whose run is on this
+   * board, and it needs the whole queue to work out a branch's *place in line*, since a
+   * branch from another tree ahead of this one really is ahead of it.
+   */
+  mergeQueue: readonly MergeQueueEntry[]
+  /**
+   * Maps held for this tree's repository, joined to persona names.
+   *
+   * Fetched by the parent when the canvas opens, not carried on the polled board:
+   * expertise does not change between polls, and the rule is that watching a swarm
+   * adds no per-tick query.
+   */
+  expertise?: readonly {
+    mapId: string
+    subjectRef: string
+    subjectKind: string
+    personaName: string
+    retrievalState: 'trial' | 'on' | 'off'
+  }[]
+  /**
+   * Which runs on this tree actually read which map, and which were denied it
+   *. Fetched with `expertise`, in the same round.
+   *
+   * Separate from it because they are different facts: `expertise` is per persona and
+   * says what an agent *holds*, and this is per run and says what a particular piece of
+   * work was *given*. Only the second answers "which of these agents adopted it".
+   */
+  expertiseUses?: readonly { agentRunId: string; mapId: string; arm: 'retrieved' | 'withheld' }[]
+  /**
+   * The run currently being watched, so the canvas can say which node that is.
+   *
+   * Without it, clicking a node changed the app's state and the graph reflected
+   * none of it — the one interaction the canvas offers was fire-and-forget, behind
+   * a full-screen scrim, which reads as nothing having happened.
+   */
+  activeRunId: string | null
+  /**
+   * Bumped from outside to open the canvas — the same counter idiom `SidebarSection`
+   * uses, and for the same reason: a boolean that stays true fires its watcher once.
+   *
+   * This exists because the canvas was unreachable in practice. It lives inside a
+   * *collapsed* sidebar section, behind a panel, behind an Open button — three levels down
+   * from anything a human looks at, on a surface the product shape names as one of the
+   * product's defining views. Reported plainly by the operator as "canvas is not visible in
+   * the UI at all", which was true.
+   */
+  openSignal?: number
+  /**
+   * Live-activity frames for this tree — see `AgentSnapshot.recentActivity`.
+   *
+   * The canvas already rendered live *facts*: the call in flight, idle time, cost
+   * against cap. What it could not show was anything *happening*, because every one of
+   * those facts arrives by refetch and a refetch lands after the moment it describes.
+   * These frames are what make an edge light up while work is crossing it.
+   */
+  activity?: readonly {
+    agentRunId: string
+    parentRunId: string | null
+    kind: string
+    label: string | null
+    at: number
+  }[]
+}>()
 const emit = defineEmits<{
- /**
- * Renamed from `watch` because the footer has always said "click a run to watch
- * its thread" and watching was all it did: `watchRun` fetches the run, its
- * approvals and its board, and never opens the thread the label promises.
- * The product shape states the tree view's defining interaction as "click a node to open its
- * thread", so the handler does both and the overlay closes behind it.
- */
- open: [agentRunId: string]
- refresh: []
- /** Load and show the selected run's branch diff, without leaving the canvas. */
- review: [agentRunId: string]
- /** Re-enter a planner with a message. Only offered on planner nodes. */
- steer: [agentRunId: string]
-}>
+  /**
+   * Renamed from `watch` because the footer has always said "click a run to watch
+   * its thread" and watching was all it did: `watchRun` fetches the run, its
+   * approvals and its board, and never opens the thread the label promises. The tree
+   * view's defining interaction is "click a node to open its thread", so the handler does
+   * both and the overlay closes behind it.
+   */
+  open: [agentRunId: string]
+  refresh: []
+  /** Load and show the selected run's branch diff, without leaving the canvas. */
+  review: [agentRunId: string]
+  /** Re-enter a planner with a message. Only offered on planner nodes. */
+  steer: [agentRunId: string]
+}>()
 
 const open = ref(false)
 const stageEl = ref<HTMLElement | null>(null)
 const scrimEl = ref<HTMLElement | null>(null)
 
 watch(
- => props.openSignal,
- (next, previous) => {
- if (next === undefined || next === previous) return
- if (graph.value.nodes.length === 0) return
- open.value = true
- emit('refresh')
- nextTick(fit)
- },
+  () => props.openSignal,
+  (next, previous) => {
+    if (next === undefined || next === previous) return
+    if (graph.value.nodes.length === 0) return
+    open.value = true
+    emit('refresh')
+    nextTick(fit)
+  },
 )
 
 /**
  * Ages tick on their own — see the board panel. A canvas showing "quiet since 2m" must
  * keep counting while nothing arrives, because silence is the state no event announces.
  */
-const tick = ref(new Date)
+const tick = ref(new Date())
 let clock: ReturnType<typeof setInterval> | null = null
 
 /**
@@ -144,29 +144,29 @@ let clock: ReturnType<typeof setInterval> | null = null
  * there needs per-second accuracy.
  */
 const startClock = (ms: number) => {
- if (clock !== null) clearInterval(clock)
- clock = setInterval( => (tick.value = new Date), ms)
+  if (clock !== null) clearInterval(clock)
+  clock = setInterval(() => (tick.value = new Date()), ms)
 }
 startClock(5_000)
 watch(open, (isOpen) => {
- startClock(isOpen ? 1_000: 5_000)
- // Focused so the arrow keys reach `onKeydown` at all — the same lesson the Settings
- // overlay's Escape handler taught, which sat on an element nothing ever focused.
- if (isOpen) void nextTick( => scrimEl.value?.focus)
- else selectedId.value = null
+  startClock(isOpen ? 1_000 : 5_000)
+  // Focused so the arrow keys reach `onKeydown` at all — the same lesson the Settings
+  // overlay's Escape handler taught, which sat on an element nothing ever focused.
+  if (isOpen) void nextTick(() => scrimEl.value?.focus())
+  else selectedId.value = null
 })
-onUnmounted( => {
- if (clock !== null) clearInterval(clock)
+onUnmounted(() => {
+  if (clock !== null) clearInterval(clock)
 })
 
-const graph = computed( =>
- buildSwarmGraph(
- props.board,
- props.mergeQueue,
- props.expertise ?? [],
- tick.value,
- props.expertiseUses ?? [],
-),
+const graph = computed(() =>
+  buildSwarmGraph(
+    props.board,
+    props.mergeQueue,
+    props.expertise ?? [],
+    tick.value,
+    props.expertiseUses ?? [],
+  ),
 )
 
 /**
@@ -179,30 +179,30 @@ const graph = computed( =>
  */
 const PULSE_MS = 2_500
 
-const liveRuns = computed( => {
- const now = tick.value.getTime
- const map = new Map<string, string>
- for (const entry of props.activity ?? []) {
- if (now - entry.at > PULSE_MS) continue
- map.set(entry.agentRunId, entry.label ?? entry.kind)
- }
- return map
+const liveRuns = computed(() => {
+  const now = tick.value.getTime()
+  const map = new Map<string, string>()
+  for (const entry of props.activity ?? []) {
+    if (now - entry.at > PULSE_MS) continue
+    map.set(entry.agentRunId, entry.label ?? entry.kind)
+  }
+  return map
 })
 
 /** The lit edges themselves, for drawing a packet along each. */
-const liveEdgeList = computed( =>
- graph.value.edges.filter((edge) => liveEdges.value.has(`${edge.from}->${edge.to}`)),
+const liveEdgeList = computed(() =>
+  graph.value.edges.filter((edge) => liveEdges.value.has(`${edge.from}->${edge.to}`)),
 )
 
 /** Edges lit because work just crossed them — a delegation, or a child reporting up. */
-const liveEdges = computed( => {
- const now = tick.value.getTime
- const set = new Set<string>
- for (const entry of props.activity ?? []) {
- if (now - entry.at > PULSE_MS) continue
- if (entry.parentRunId) set.add(`${entry.parentRunId}->${entry.agentRunId}`)
- }
- return set
+const liveEdges = computed(() => {
+  const now = tick.value.getTime()
+  const set = new Set<string>()
+  for (const entry of props.activity ?? []) {
+    if (now - entry.at > PULSE_MS) continue
+    if (entry.parentRunId) set.add(`${entry.parentRunId}->${entry.agentRunId}`)
+  }
+  return set
 })
 
 // Node geometry, in SVG user units. One place, because the edge maths depends on it.
@@ -219,13 +219,13 @@ const GAP_Y = 92
 const QUEUE_H = 42
 
 interface Placed {
- readonly depth: number
- readonly order: number
+  readonly depth: number
+  readonly order: number
 }
 
 const centerX = (node: Placed) => node.order * (NODE_W + GAP_X) + NODE_W / 2
 const centerY = (node: Placed) =>
- knowledgeBandH.value + node.depth * (NODE_H + GAP_Y) + NODE_H / 2
+  knowledgeBandH.value + node.depth * (NODE_H + GAP_Y) + NODE_H / 2
 const left = (node: Placed) => centerX(node) - NODE_W / 2
 const top = (node: Placed) => centerY(node) - NODE_H / 2
 
@@ -234,8 +234,8 @@ const top = (node: Placed) => centerY(node) - NODE_H / 2
  * `graph.depth` counts the queue's own layers too, which is what the canvas needs and
  * not what this needs.
  */
-const runLayers = computed( =>
- graph.value.nodes.reduce((deepest, node) => Math.max(deepest, node.depth + 1), 0),
+const runLayers = computed(() =>
+  graph.value.nodes.reduce((deepest, node) => Math.max(deepest, node.depth + 1), 0),
 )
 
 /**
@@ -248,10 +248,10 @@ const runLayers = computed( =>
  * spacing is what makes `run → entry → verification` legible as a sequence.
  */
 const QUEUE_GAP_Y = 30
-const queueTop = computed( => knowledgeBandH.value + runLayers.value * (NODE_H + GAP_Y))
+const queueTop = computed(() => knowledgeBandH.value + runLayers.value * (NODE_H + GAP_Y))
 const queueBand = (node: SwarmQueueNode) => node.depth - runLayers.value
 const queueY = (node: SwarmQueueNode) =>
- queueTop.value + queueBand(node) * (QUEUE_H + QUEUE_GAP_Y) + QUEUE_H / 2
+  queueTop.value + queueBand(node) * (QUEUE_H + QUEUE_GAP_Y) + QUEUE_H / 2
 
 /**
  * The expertise band sits **above** the tree, in its own rhythm like the queue's below.
@@ -263,10 +263,10 @@ const queueY = (node: SwarmQueueNode) =>
  */
 const KNOWLEDGE_H = 38
 const KNOWLEDGE_GAP_Y = 26
-const knowledgeBandH = computed( =>
- graph.value.knowledge.length === 0 ? 0: KNOWLEDGE_H + KNOWLEDGE_GAP_Y,
+const knowledgeBandH = computed(() =>
+  graph.value.knowledge.length === 0 ? 0 : KNOWLEDGE_H + KNOWLEDGE_GAP_Y,
 )
-const knowledgeY = => KNOWLEDGE_H / 2
+const knowledgeY = () => KNOWLEDGE_H / 2
 const knowledgeLeft = (node: { order: number }) => node.order * (NODE_W + GAP_X)
 
 /**
@@ -280,19 +280,19 @@ const knowledgeLeft = (node: { order: number }) => node.order * (NODE_W + GAP_X)
 const NOTE_H = 34
 const NOTE_GAP_Y = 26
 const NOTE_PER_ROW = 4
-const noteTop = computed( => {
- const queueLayers = new Set(graph.value.queue.map((node) => node.depth)).size
- return (
- knowledgeBandH.value +
- runLayers.value * (NODE_H + GAP_Y) +
- queueLayers * (QUEUE_H + QUEUE_GAP_Y) +
- (graph.value.notes.length === 0 ? 0: NOTE_GAP_Y)
-)
+const noteTop = computed(() => {
+  const queueLayers = new Set(graph.value.queue.map((node) => node.depth)).size
+  return (
+    knowledgeBandH.value +
+    runLayers.value * (NODE_H + GAP_Y) +
+    queueLayers * (QUEUE_H + QUEUE_GAP_Y) +
+    (graph.value.notes.length === 0 ? 0 : NOTE_GAP_Y)
+  )
 })
 // Wrapped rather than one long row: a swarm's decisions are a set, not a sequence, and a
 // row of twenty would make the canvas wider than the tree it is about.
 const noteY = (node: { order: number }) =>
- noteTop.value + Math.floor(node.order / NOTE_PER_ROW) * (NOTE_H + NOTE_GAP_Y) + NOTE_H / 2
+  noteTop.value + Math.floor(node.order / NOTE_PER_ROW) * (NOTE_H + NOTE_GAP_Y) + NOTE_H / 2
 const noteLeft = (node: { order: number }) => (node.order % NOTE_PER_ROW) * (NODE_W + GAP_X)
 
 /**
@@ -305,29 +305,29 @@ const noteLeft = (node: { order: number }) => (node.order % NOTE_PER_ROW) * (NOD
  * in a browser and invisible to every test, which is the usual split.
  */
 const positions = computed(
- =>
- new Map<string, { cx: number; cy: number; h: number }>([
-...graph.value.nodes.map(
- (node) => [node.card.runId, { cx: centerX(node), cy: centerY(node), h: NODE_H }] as const,
-),
-...graph.value.queue.map(
- (node) => [node.id, { cx: centerX(node), cy: queueY(node), h: QUEUE_H }] as const,
-),
-...graph.value.knowledge.map(
- (node) =>
- [
- `map:${node.mapId}`,
- { cx: knowledgeLeft(node) + NODE_W / 2, cy: knowledgeY, h: KNOWLEDGE_H },
- ] as const,
-),
-...graph.value.notes.map(
- (node) =>
- [
- `note:${node.noteId}`,
- { cx: noteLeft(node) + NODE_W / 2, cy: noteY(node), h: NOTE_H },
- ] as const,
-),
- ]),
+  () =>
+    new Map<string, { cx: number; cy: number; h: number }>([
+      ...graph.value.nodes.map(
+        (node) => [node.card.runId, { cx: centerX(node), cy: centerY(node), h: NODE_H }] as const,
+      ),
+      ...graph.value.queue.map(
+        (node) => [node.id, { cx: centerX(node), cy: queueY(node), h: QUEUE_H }] as const,
+      ),
+      ...graph.value.knowledge.map(
+        (node) =>
+          [
+            `map:${node.mapId}`,
+            { cx: knowledgeLeft(node) + NODE_W / 2, cy: knowledgeY(), h: KNOWLEDGE_H },
+          ] as const,
+      ),
+      ...graph.value.notes.map(
+        (node) =>
+          [
+            `note:${node.noteId}`,
+            { cx: noteLeft(node) + NODE_W / 2, cy: noteY(node), h: NOTE_H },
+          ] as const,
+      ),
+    ]),
 )
 
 /**
@@ -336,36 +336,36 @@ const positions = computed(
  * distinguish: merged-and-tested is not the same as merged-with-no-tests-configured.
  */
 const verificationNote = (node: SwarmQueueNode): string => {
- switch (node.verification) {
- case 'passed':
- return "the repository's checks passed"
- case 'skipped':
- return 'merged unverified — no command configured'
- case 'refused':
- return 'not run — no sandbox available'
- case 'failed':
- return 'the checks failed'
- case 'pending':
- return node.status === 'merging' ? 'running…': 'not reached'
- }
+  switch (node.verification) {
+    case 'passed':
+      return "the repository's checks passed"
+    case 'skipped':
+      return 'merged unverified — no command configured'
+    case 'refused':
+      return 'not run — no sandbox available'
+    case 'failed':
+      return 'the checks failed'
+    case 'pending':
+      return node.status === 'merging' ? 'running…' : 'not reached'
+  }
 }
 
 const queueTitle = (node: SwarmQueueNode): string => {
- if (node.kind === 'verification') {
- return `Verification: ${node.verification}${node.detail ? ` — ${node.detail}`: ''}`
- }
- const place = node.place === null ? node.status: `${node.status}, #${node.place} in line`
- return `${node.branchName} — ${place}${node.detail ? ` — ${node.detail}`: ''}`
+  if (node.kind === 'verification') {
+    return `Verification: ${node.verification}${node.detail ? ` — ${node.detail}` : ''}`
+  }
+  const place = node.place === null ? node.status : `${node.status}, #${node.place} in line`
+  return `${node.branchName} — ${place}${node.detail ? ` — ${node.detail}` : ''}`
 }
 
-const canvas = computed( => ({
- width: Math.max(graph.value.width, 1) * (NODE_W + GAP_X),
- // The queue band's layers are shorter than a run's, so the height is the two bands
- // added rather than one grid multiplied — otherwise a tree with a queue reserves space
- // it does not use and `fit` zooms out past what there is to read.
- height:
- Math.max(runLayers.value, 1) * (NODE_H + GAP_Y) +
- new Set(graph.value.queue.map((node) => node.depth)).size * (QUEUE_H + QUEUE_GAP_Y),
+const canvas = computed(() => ({
+  width: Math.max(graph.value.width, 1) * (NODE_W + GAP_X),
+  // The queue band's layers are shorter than a run's, so the height is the two bands
+  // added rather than one grid multiplied — otherwise a tree with a queue reserves space
+  // it does not use and `fit` zooms out past what there is to read.
+  height:
+    Math.max(runLayers.value, 1) * (NODE_H + GAP_Y) +
+    new Set(graph.value.queue.map((node) => node.depth)).size * (QUEUE_H + QUEUE_GAP_Y),
 }))
 
 /**
@@ -377,36 +377,36 @@ const canvas = computed( => ({
  * a claim about structure but a warning about the future.
  */
 const edgePath = (fromId: string, toId: string, kind: SwarmEdgeKind): string => {
- const from = positions.value.get(fromId)
- const to = positions.value.get(toId)
- if (!from || !to) return ''
+  const from = positions.value.get(fromId)
+  const to = positions.value.get(toId)
+  if (!from || !to) return ''
 
- /**
- * A note-read edge is routed *above* the nodes, mirroring the collision arc below.
- *
- * Both join runs that are not parent and child, so both would cut through the layer if
- * drawn like a delegation — and putting them on opposite sides is what keeps them
- * distinguishable at a glance: what a swarm already shared is drawn over it, what it is
- * about to collide over is drawn under it.
- */
- if (kind === 'note_read') {
- const [a, b] = from.cx <= to.cx ? [from, to]: [to, from]
- const y = Math.min(a.cy - a.h / 2, b.cy - b.h / 2) - 22
- return `M ${a.cx} ${a.cy - a.h / 2} C ${a.cx} ${y}, ${b.cx} ${y}, ${b.cx} ${b.cy - b.h / 2}`
- }
+  /**
+   * A note-read edge is routed *above* the nodes, mirroring the collision arc below.
+   *
+   * Both join runs that are not parent and child, so both would cut through the layer if
+   * drawn like a delegation — and putting them on opposite sides is what keeps them
+   * distinguishable at a glance: what a swarm already shared is drawn over it, what it is
+   * about to collide over is drawn under it.
+   */
+  if (kind === 'note_read') {
+    const [a, b] = from.cx <= to.cx ? [from, to] : [to, from]
+    const y = Math.min(a.cy - a.h / 2, b.cy - b.h / 2) - 22
+    return `M ${a.cx} ${a.cy - a.h / 2} C ${a.cx} ${y}, ${b.cx} ${y}, ${b.cx} ${b.cy - b.h / 2}`
+  }
 
- if (kind === 'collision') {
- const [a, b] = from.cx <= to.cx ? [from, to]: [to, from]
- const y = Math.max(a.cy + a.h / 2, b.cy + b.h / 2) + 22
- return `M ${a.cx} ${a.cy + a.h / 2} C ${a.cx} ${y}, ${b.cx} ${y}, ${b.cx} ${b.cy + b.h / 2}`
- }
+  if (kind === 'collision') {
+    const [a, b] = from.cx <= to.cx ? [from, to] : [to, from]
+    const y = Math.max(a.cy + a.h / 2, b.cy + b.h / 2) + 22
+    return `M ${a.cx} ${a.cy + a.h / 2} C ${a.cx} ${y}, ${b.cx} ${y}, ${b.cx} ${b.cy + b.h / 2}`
+  }
 
- const x1 = from.cx
- const y1 = from.cy + from.h / 2
- const x2 = to.cx
- const y2 = to.cy - to.h / 2
- const mid = (y1 + y2) / 2
- return `M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`
+  const x1 = from.cx
+  const y1 = from.cy + from.h / 2
+  const x2 = to.cx
+  const y2 = to.cy - to.h / 2
+  const mid = (y1 + y2) / 2
+  return `M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`
 }
 
 // Pan and zoom, kept to the two gestures a reader actually needs on a canvas that is
@@ -417,17 +417,17 @@ const zoom = ref(1)
 let dragging: { x: number; y: number } | null = null
 
 const startPan = (event: PointerEvent) => {
- dragging = { x: event.clientX - pan.value.x, y: event.clientY - pan.value.y }
-;(event.currentTarget as Element).setPointerCapture(event.pointerId)
+  dragging = { x: event.clientX - pan.value.x, y: event.clientY - pan.value.y }
+  ;(event.currentTarget as Element).setPointerCapture(event.pointerId)
 }
 
 const movePan = (event: PointerEvent) => {
- if (!dragging) return
- pan.value = { x: event.clientX - dragging.x, y: event.clientY - dragging.y }
+  if (!dragging) return
+  pan.value = { x: event.clientX - dragging.x, y: event.clientY - dragging.y }
 }
 
-const endPan = => {
- dragging = null
+const endPan = () => {
+  dragging = null
 }
 
 /**
@@ -439,17 +439,17 @@ const endPan = => {
  * cursor's graph-space coordinate where it was.
  */
 const onWheel = (event: WheelEvent) => {
- event.preventDefault
- const next = Math.min(Math.max(zoom.value * (event.deltaY < 0 ? 1.1: 0.9), 0.4), 2.5)
- const stage = stageEl.value
- if (stage) {
- const rect = stage.getBoundingClientRect
- const cx = event.clientX - rect.left
- const cy = event.clientY - rect.top
- const ratio = next / zoom.value
- pan.value = { x: cx - (cx - pan.value.x) * ratio, y: cy - (cy - pan.value.y) * ratio }
- }
- zoom.value = next
+  event.preventDefault()
+  const next = Math.min(Math.max(zoom.value * (event.deltaY < 0 ? 1.1 : 0.9), 0.4), 2.5)
+  const stage = stageEl.value
+  if (stage) {
+    const rect = stage.getBoundingClientRect()
+    const cx = event.clientX - rect.left
+    const cy = event.clientY - rect.top
+    const ratio = next / zoom.value
+    pan.value = { x: cx - (cx - pan.value.x) * ratio, y: cy - (cy - pan.value.y) * ratio }
+  }
+  zoom.value = next
 }
 
 /**
@@ -459,38 +459,38 @@ const onWheel = (event: WheelEvent) => {
  * a wide one starts partly off-screen, and a "Reset view" that returns to the same
  * off-screen origin is not a way back to the content.
  */
-const fit = => {
- const stage = stageEl.value
- const nodes = graph.value.nodes
- if (!stage || nodes.length === 0) {
- pan.value = { x: 40, y: 40 }
- zoom.value = 1
- return
- }
- /**
- * Every band, not only the runs. Fitting to the tree alone left the queue below the
- * fold and, once notes became nodes, the decisions with them — a "Fit" that hides part
- * of the canvas is worse than none, because it looks like there is nothing there.
- */
- const maxX = Math.max(
-...nodes.map((node) => left(node) + NODE_W),
-...graph.value.notes.map((node) => noteLeft(node) + NODE_W),
-...graph.value.knowledge.map((node) => knowledgeLeft(node) + NODE_W),
-)
- const maxY = Math.max(
-...nodes.map((node) => top(node) + NODE_H),
-...graph.value.queue.map((node) => queueY(node) + QUEUE_H / 2),
-...graph.value.notes.map((node) => noteY(node) + NOTE_H / 2),
-)
- const { width, height } = stage.getBoundingClientRect
- const margin = 32
- const next = Math.min(
- (width - margin * 2) / Math.max(maxX, 1),
- (height - margin * 2) / Math.max(maxY, 1),
- 1,
-)
- zoom.value = Math.min(Math.max(next, 0.4), 2.5)
- pan.value = { x: margin, y: margin }
+const fit = () => {
+  const stage = stageEl.value
+  const nodes = graph.value.nodes
+  if (!stage || nodes.length === 0) {
+    pan.value = { x: 40, y: 40 }
+    zoom.value = 1
+    return
+  }
+  /**
+   * Every band, not only the runs. Fitting to the tree alone left the queue below the
+   * fold and, once notes became nodes, the decisions with them — a "Fit" that hides part
+   * of the canvas is worse than none, because it looks like there is nothing there.
+   */
+  const maxX = Math.max(
+    ...nodes.map((node) => left(node) + NODE_W),
+    ...graph.value.notes.map((node) => noteLeft(node) + NODE_W),
+    ...graph.value.knowledge.map((node) => knowledgeLeft(node) + NODE_W),
+  )
+  const maxY = Math.max(
+    ...nodes.map((node) => top(node) + NODE_H),
+    ...graph.value.queue.map((node) => queueY(node) + QUEUE_H / 2),
+    ...graph.value.notes.map((node) => noteY(node) + NOTE_H / 2),
+  )
+  const { width, height } = stage.getBoundingClientRect()
+  const margin = 32
+  const next = Math.min(
+    (width - margin * 2) / Math.max(maxX, 1),
+    (height - margin * 2) / Math.max(maxY, 1),
+    1,
+  )
+  zoom.value = Math.min(Math.max(next, 0.4), 2.5)
+  pan.value = { x: margin, y: margin }
 }
 
 /**
@@ -505,19 +505,19 @@ const fit = => {
 const selectedId = ref<string | null>(null)
 
 const selected = computed(
- => graph.value.nodes.find((node) => node.card.runId === selectedId.value) ?? null,
+  () => graph.value.nodes.find((node) => node.card.runId === selectedId.value) ?? null,
 )
 
 // A selection that outlived its node — the tree changed underneath it — is cleared
 // rather than left pointing at nothing.
 watch(graph, (next) => {
- if (selectedId.value && !next.nodes.some((node) => node.card.runId === selectedId.value)) {
- selectedId.value = null
- }
+  if (selectedId.value && !next.nodes.some((node) => node.card.runId === selectedId.value)) {
+    selectedId.value = null
+  }
 })
 
 const selectNode = (agentRunId: string) => {
- selectedId.value = selectedId.value === agentRunId ? null: agentRunId
+  selectedId.value = selectedId.value === agentRunId ? null : agentRunId
 }
 
 /**
@@ -525,17 +525,17 @@ const selectNode = (agentRunId: string) => {
  * It still closes the overlay, because the thread it opens is behind this scrim and
  * leaving it up would show the human the same picture they just acted on.
  */
-const openSelected = => {
- if (!selectedId.value) return
- emit('open', selectedId.value)
- open.value = false
+const openSelected = () => {
+  if (!selectedId.value) return
+  emit('open', selectedId.value)
+  open.value = false
 }
 
 /** Same reasoning as `openSelected`: the panel it reveals is behind this scrim. */
-const steerSelected = => {
- if (!selectedId.value) return
- emit('steer', selectedId.value)
- open.value = false
+const steerSelected = () => {
+  if (!selectedId.value) return
+  emit('steer', selectedId.value)
+  open.value = false
 }
 
 /**
@@ -544,32 +544,32 @@ const steerSelected = => {
  * reach one is not navigation.
  */
 const moveSelection = (delta: number) => {
- const nodes = graph.value.nodes
- if (nodes.length === 0) return
- const at = nodes.findIndex((node) => node.card.runId === selectedId.value)
- const next = at === -1 ? 0: (at + delta + nodes.length) % nodes.length
- selectedId.value = nodes[next]?.card.runId ?? null
+  const nodes = graph.value.nodes
+  if (nodes.length === 0) return
+  const at = nodes.findIndex((node) => node.card.runId === selectedId.value)
+  const next = at === -1 ? 0 : (at + delta + nodes.length) % nodes.length
+  selectedId.value = nodes[next]?.card.runId ?? null
 }
 
 const onKeydown = (event: KeyboardEvent) => {
- if (!open.value) return
- if (event.key === 'Escape') {
- if (selectedId.value) {
- selectedId.value = null
- event.preventDefault
- }
- return
- }
- const step =
- event.key === 'ArrowRight' || event.key === 'ArrowDown'
- ? 1
-: event.key === 'ArrowLeft' || event.key === 'ArrowUp'
- ? -1
-: 0
- if (step !== 0) {
- moveSelection(step)
- event.preventDefault
- }
+  if (!open.value) return
+  if (event.key === 'Escape') {
+    if (selectedId.value) {
+      selectedId.value = null
+      event.preventDefault()
+    }
+    return
+  }
+  const step =
+    event.key === 'ArrowRight' || event.key === 'ArrowDown'
+      ? 1
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+        ? -1
+        : 0
+  if (step !== 0) {
+    moveSelection(step)
+    event.preventDefault()
+  }
 }
 
 /**
@@ -583,1116 +583,1116 @@ const onKeydown = (event: KeyboardEvent) => {
 const ACTIVITY_BUDGET = 30
 
 const activityLine = (node: SwarmGraphNode): string => {
- const label = activityLabel(node.activity)
- const target = node.activity.target ?? ''
- const full = target ? `${label} ${target}`: label
- if (full.length <= ACTIVITY_BUDGET) return full
- // Trimmed from the *front* of a path, because the tail is the part that identifies
- // a file — `…/src/cart.js` is useful, `/work/very/long/pa…` is not.
- if (target && target.length > 8) {
- const room = Math.max(ACTIVITY_BUDGET - label.length - 2, 8)
- return `${label} …${target.slice(-room)}`
- }
- return `${full.slice(0, ACTIVITY_BUDGET - 1)}…`
+  const label = activityLabel(node.activity)
+  const target = node.activity.target ?? ''
+  const full = target ? `${label} ${target}` : label
+  if (full.length <= ACTIVITY_BUDGET) return full
+  // Trimmed from the *front* of a path, because the tail is the part that identifies
+  // a file — `…/src/cart.js` is useful, `/work/very/long/pa…` is not.
+  if (target && target.length > 8) {
+    const room = Math.max(ACTIVITY_BUDGET - label.length - 2, 8)
+    return `${label} …${target.slice(-room)}`
+  }
+  return `${full.slice(0, ACTIVITY_BUDGET - 1)}…`
 }
 
-const money = (usd: number | null) => (usd === null ? null: `$${usd.toFixed(4)}`)
+const money = (usd: number | null) => (usd === null ? null : `$${usd.toFixed(4)}`)
 
 const collisionCount = computed(
- => graph.value.edges.filter((edge) => edge.kind === 'collision').length,
+  () => graph.value.edges.filter((edge) => edge.kind === 'collision').length,
 )
 </script>
 
 <template>
- <section class="panel">
- <header>
- <h3>Graph</h3>
- <button
- type="button"
-:disabled="graph.nodes.length === 0"
- @click="
- => {
- open = true
- emit('refresh')
- // After paint, so the stage has a measurable size to fit against.
- nextTick(fit)
- }
- "
- >
- Open
- </button>
- </header>
- <p class="hint">
- <template v-if="graph.nodes.length === 0">Nothing to draw yet.</template>
- <template v-else>
- {{ graph.nodes.length }} run<span v-if="graph.nodes.length !== 1">s</span>,
- {{ graph.depth }} level<span v-if="graph.depth !== 1">s</span>
- <span v-if="collisionCount > 0" class="warn">
- · {{ collisionCount }} collision<span v-if="collisionCount !== 1">s</span>
- </span>
- </template>
- </p>
+  <section class="panel">
+    <header>
+      <h3>Graph</h3>
+      <button
+        type="button"
+        :disabled="graph.nodes.length === 0"
+        @click="
+          () => {
+            open = true
+            emit('refresh')
+            // After paint, so the stage has a measurable size to fit against.
+            nextTick(fit)
+          }
+        "
+      >
+        Open
+      </button>
+    </header>
+    <p class="hint">
+      <template v-if="graph.nodes.length === 0">Nothing to draw yet.</template>
+      <template v-else>
+        {{ graph.nodes.length }} run<span v-if="graph.nodes.length !== 1">s</span>,
+        {{ graph.depth }} level<span v-if="graph.depth !== 1">s</span>
+        <span v-if="collisionCount > 0" class="warn">
+          · {{ collisionCount }} collision<span v-if="collisionCount !== 1">s</span>
+        </span>
+      </template>
+    </p>
 
- <Teleport to="body">
- <div
- v-if="open"
- ref="scrimEl"
- class="scrim"
- tabindex="-1"
- @click.self="open = false"
- @keydown="onKeydown"
- >
- <section class="viewer" role="dialog" aria-label="Swarm graph">
- <header class="viewer-head">
- <h2>Swarm graph</h2>
- <ul class="legend">
- <li><span class="swatch delegation"></span>delegation</li>
- <li><span class="swatch review"></span>review</li>
- <li><span class="swatch reconcile"></span>reconcile</li>
- <li><span class="swatch steer"></span>steer</li>
- <!-- Only when one happened. A handoff is rare, and a legend entry for an
- edge that is not on the canvas is a promise it is not keeping. -->
- <li v-if="graph.edges.some((e) => e.kind === 'handoff')">
- <span class="swatch handoff"></span>handed over — replaced, not delegated
- </li>
- <li><span class="swatch collision"></span>path collision</li>
- <li><span class="swatch note_read"></span>read their notes</li>
- <!-- Only shown when there is a queue to explain: a legend entry for an
- absent band is a promise the canvas is not keeping. -->
- <li v-if="graph.queue.length > 0"><span class="swatch queue"></span>merge queue</li>
- <li v-if="graph.knowledge.length > 0">
- <span class="swatch knows"></span>read this map
- </li>
- <li v-if="graph.edges.some((e) => e.kind === 'withheld')">
- <span class="swatch withheld"></span>denied it — the baseline
- </li>
- <li v-if="graph.notes.length > 0">
- <span class="swatch wrote"></span>decisions &amp; blockers
- </li>
- </ul>
- <button type="button" @click="emit('refresh')">Refresh</button>
- <button type="button" @click="fit">Fit</button>
- <button type="button" class="close" aria-label="Close graph" @click="open = false">
- ✕
- </button>
- </header>
+    <Teleport to="body">
+      <div
+        v-if="open"
+        ref="scrimEl"
+        class="scrim"
+        tabindex="-1"
+        @click.self="open = false"
+        @keydown="onKeydown"
+      >
+        <section class="viewer" role="dialog" aria-label="Swarm graph">
+          <header class="viewer-head">
+            <h2>Swarm graph</h2>
+            <ul class="legend">
+              <li><span class="swatch delegation"></span>delegation</li>
+              <li><span class="swatch review"></span>review</li>
+              <li><span class="swatch reconcile"></span>reconcile</li>
+              <li><span class="swatch steer"></span>steer</li>
+              <!-- Only when one happened. A handoff is rare, and a legend entry for an
+                   edge that is not on the canvas is a promise it is not keeping. -->
+              <li v-if="graph.edges.some((e) => e.kind === 'handoff')">
+                <span class="swatch handoff"></span>handed over — replaced, not delegated
+              </li>
+              <li><span class="swatch collision"></span>path collision</li>
+              <li><span class="swatch note_read"></span>read their notes</li>
+              <!-- Only shown when there is a queue to explain: a legend entry for an
+                   absent band is a promise the canvas is not keeping. -->
+              <li v-if="graph.queue.length > 0"><span class="swatch queue"></span>merge queue</li>
+              <li v-if="graph.knowledge.length > 0">
+                <span class="swatch knows"></span>read this map
+              </li>
+              <li v-if="graph.edges.some((e) => e.kind === 'withheld')">
+                <span class="swatch withheld"></span>denied it — the baseline
+              </li>
+              <li v-if="graph.notes.length > 0">
+                <span class="swatch wrote"></span>decisions &amp; blockers
+              </li>
+            </ul>
+            <button type="button" @click="emit('refresh')">Refresh</button>
+            <button type="button" @click="fit">Fit</button>
+            <button type="button" class="close" aria-label="Close graph" @click="open = false">
+              ✕
+            </button>
+          </header>
 
- <div
- ref="stageEl"
- class="stage"
- @pointerdown="startPan"
- @pointermove="movePan"
- @pointerup="endPan"
- @pointercancel="endPan"
- @wheel="onWheel"
- >
- <svg:width="'100%'":height="'100%'" role="img" aria-label="Runs and their relationships">
- <defs>
- <!--
- Nothing may leave the box. The text budgets below are guesses about
- glyph width — a line of capitals is far wider than the same count of
- `i`s — so a tool line like `Bash +1 more git -C /work/branch -a`
- escaped the node and drew over its neighbour. A clip is a boundary
- rather than a guess, which is the same preference this codebase makes
- everywhere else; the budgets stay so text ends in an ellipsis rather
- than mid-glyph.
- -->
- <clipPath id="loom-node-clip" clipPathUnits="userSpaceOnUse">
- <rect x="0" y="0":width="NODE_W":height="NODE_H" rx="10" />
- </clipPath>
- <!-- The queue band's own boundary — same argument, shorter box. -->
- <clipPath id="loom-queue-clip" clipPathUnits="userSpaceOnUse">
- <rect x="0" y="0":width="NODE_W":height="QUEUE_H" rx="8" />
- </clipPath>
- </defs>
- <g:transform="`translate(${pan.x} ${pan.y}) scale(${zoom})`">
- <!-- Edges first, so a node always sits on top of the lines touching it. -->
- <path
- v-for="(edge, index) in graph.edges"
-:key="`e${index}`"
-:d="edgePath(edge.from, edge.to, edge.kind)"
- class="edge"
-:class="[edge.kind, { live: liveEdges.has(`${edge.from}->${edge.to}`) }]"
- >
- <title>{{ edge.kind }}: {{ edge.detail }}</title>
- </path>
+          <div
+            ref="stageEl"
+            class="stage"
+            @pointerdown="startPan"
+            @pointermove="movePan"
+            @pointerup="endPan"
+            @pointercancel="endPan"
+            @wheel="onWheel"
+          >
+            <svg :width="'100%'" :height="'100%'" role="img" aria-label="Runs and their relationships">
+              <defs>
+                <!--
+                  Nothing may leave the box. The text budgets below are guesses about
+                  glyph width — a line of capitals is far wider than the same count of
+                  `i`s — so a tool line like `Bash +1 more git -C /work/branch -a`
+                  escaped the node and drew over its neighbour. A clip is a boundary
+                  rather than a guess, which is the same preference this codebase makes
+                  everywhere else; the budgets stay so text ends in an ellipsis rather
+                  than mid-glyph.
+                -->
+                <clipPath id="loom-node-clip" clipPathUnits="userSpaceOnUse">
+                  <rect x="0" y="0" :width="NODE_W" :height="NODE_H" rx="10" />
+                </clipPath>
+                <!-- The queue band's own boundary — same argument, shorter box. -->
+                <clipPath id="loom-queue-clip" clipPathUnits="userSpaceOnUse">
+                  <rect x="0" y="0" :width="NODE_W" :height="QUEUE_H" rx="8" />
+                </clipPath>
+              </defs>
+              <g :transform="`translate(${pan.x} ${pan.y}) scale(${zoom})`">
+                <!-- Edges first, so a node always sits on top of the lines touching it. -->
+                <path
+                  v-for="(edge, index) in graph.edges"
+                  :key="`e${index}`"
+                  :d="edgePath(edge.from, edge.to, edge.kind)"
+                  class="edge"
+                  :class="[edge.kind, { live: liveEdges.has(`${edge.from}->${edge.to}`) }]"
+                >
+                  <title>{{ edge.kind }}: {{ edge.detail }}</title>
+                </path>
 
- <!--
- A packet, travelling. The dash flow on a live edge says "this edge is
- busy"; a thing moving along it says which way the work is going, which
- is the question a tree of agents actually raises. Rendered between the
- edges and the nodes so it passes under a node rather than over its text.
- -->
- <circle
- v-for="edge in liveEdgeList"
-:key="`p${edge.from}->${edge.to}`"
- class="packet"
- r="4"
- >
- <animateMotion
-:path="edgePath(edge.from, edge.to, edge.kind)"
- dur="1.1s"
- repeatCount="indefinite"
- />
- </circle>
+                <!--
+                  A packet, travelling. The dash flow on a live edge says "this edge is
+                  busy"; a thing moving along it says which way the work is going, which
+                  is the question a tree of agents actually raises. Rendered between the
+                  edges and the nodes so it passes under a node rather than over its text.
+                -->
+                <circle
+                  v-for="edge in liveEdgeList"
+                  :key="`p${edge.from}->${edge.to}`"
+                  class="packet"
+                  r="4"
+                >
+                  <animateMotion
+                    :path="edgePath(edge.from, edge.to, edge.kind)"
+                    dur="1.1s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
 
- <g
- v-for="node in graph.nodes"
-:key="node.card.runId"
- class="node"
-:class="[
- node.activity.kind,
- node.role,
- {
- blocked: node.card.blockerCount > 0,
- live: liveRuns.has(node.card.runId),
- selected: node.card.runId === selectedId,
- },
- ]"
-:transform="`translate(${left(node)} ${top(node)})`"
- clip-path="url(#loom-node-clip)"
- role="button"
- tabindex="0"
-:aria-current="node.card.runId === props.activeRunId ? 'true': undefined"
- @click="selectNode(node.card.runId)"
- @keydown.enter.prevent="selectNode(node.card.runId)"
- @keydown.space.prevent="selectNode(node.card.runId)"
- >
- <rect:width="NODE_W":height="NODE_H" rx="10" class="box" />
- <!--
- A planner reads as a different kind of thing, not a differently
- coloured one: with sub-planners, half the middle
- nodes of a tree decompose and half write code, and every one of them
- is an ordinary delegation child. The rail is on the leading edge so
- it survives the node being clipped at the canvas boundary.
- -->
- <rect v-if="node.role === 'planner'":height="NODE_H" width="4" rx="2" class="rail" />
- <!--
- Every string below is interpolated as SVG text, never markup: a title
- comes from a run's task and is model-adjacent.
- -->
- <text class="persona" x="12" y="20">{{ node.card.personaName }}</text>
- <text class="status":x="NODE_W - 12" y="20" text-anchor="end">
- {{ node.card.status }}
- </text>
- <text class="title" x="12" y="38">
- {{ node.card.title.length > 28 ? `${node.card.title.slice(0, 27)}…`: node.card.title }}
- </text>
- <text v-if="node.activity.kind !== 'finished'" class="activity" x="12" y="55">
- {{ activityLine(node) }}
- </text>
- <text v-else-if="node.card.branchName" class="activity" x="12" y="55">
- {{ shortBranchName(node.card.branchName) }}
- </text>
- <text class="cost" x="12" y="70">
- {{ money(node.card.totalCostUsd) ?? 'not metered' }}
- <template v-if="node.activity.kind === 'quiet' && node.card.lastEventAt">
- · quiet since {{ describeAge(node.card.lastEventAt, tick) }}
- </template>
- </text>
- <!--
- Context pressure as a bar across the node's foot. Drawn only
- once past half, so an early-turn node carries no chrome, and turning
- warm near the ceiling — the point at which the worker is about to
- compact and get worse.
- -->
- <template v-if="(node.activity.contextUsedRatio ?? 0) >= 0.5">
- <rect
- class="ctx-track"
- x="12"
-:y="NODE_H - 8"
-:width="NODE_W - 24"
- height="3"
- rx="1.5"
- />
- <rect
- class="ctx-fill"
-:class="{ warn: (node.activity.contextUsedRatio ?? 0) >= 0.85 }"
- x="12"
-:y="NODE_H - 8"
-:width="(NODE_W - 24) * Math.min(node.activity.contextUsedRatio ?? 0, 1)"
- height="3"
- rx="1.5"
- />
- </template>
+                <g
+                  v-for="node in graph.nodes"
+                  :key="node.card.runId"
+                  class="node"
+                  :class="[
+                    node.activity.kind,
+                    node.role,
+                    {
+                      blocked: node.card.blockerCount > 0,
+                      live: liveRuns.has(node.card.runId),
+                      selected: node.card.runId === selectedId,
+                    },
+                  ]"
+                  :transform="`translate(${left(node)} ${top(node)})`"
+                  clip-path="url(#loom-node-clip)"
+                  role="button"
+                  tabindex="0"
+                  :aria-current="node.card.runId === props.activeRunId ? 'true' : undefined"
+                  @click="selectNode(node.card.runId)"
+                  @keydown.enter.prevent="selectNode(node.card.runId)"
+                  @keydown.space.prevent="selectNode(node.card.runId)"
+                >
+                  <rect :width="NODE_W" :height="NODE_H" rx="10" class="box" />
+                  <!--
+                    A planner reads as a different kind of thing, not a differently
+                    coloured one: with sub-planners, half the middle
+                    nodes of a tree decompose and half write code, and every one of them
+                    is an ordinary delegation child. The rail is on the leading edge so
+                    it survives the node being clipped at the canvas boundary.
+                  -->
+                  <rect v-if="node.role === 'planner'" :height="NODE_H" width="4" rx="2" class="rail" />
+                  <!--
+                    Every string below is interpolated as SVG text, never markup: a title
+                    comes from a run's task and is model-adjacent.
+                  -->
+                  <text class="persona" x="12" y="20">{{ node.card.personaName }}</text>
+                  <text class="status" :x="NODE_W - 12" y="20" text-anchor="end">
+                    {{ node.card.status }}
+                  </text>
+                  <text class="title" x="12" y="38">
+                    {{ node.card.title.length > 28 ? `${node.card.title.slice(0, 27)}…` : node.card.title }}
+                  </text>
+                  <text v-if="node.activity.kind !== 'finished'" class="activity" x="12" y="55">
+                    {{ activityLine(node) }}
+                  </text>
+                  <text v-else-if="node.card.branchName" class="activity" x="12" y="55">
+                    {{ shortBranchName(node.card.branchName) }}
+                  </text>
+                  <text class="cost" x="12" y="70">
+                    {{ money(node.card.totalCostUsd) ?? 'not metered' }}
+                    <template v-if="node.activity.kind === 'quiet' && node.card.lastEventAt">
+                      · quiet since {{ describeAge(node.card.lastEventAt, tick) }}
+                    </template>
+                  </text>
+                  <!--
+                    Context pressure as a bar across the node's foot. Drawn only
+                    once past half, so an early-turn node carries no chrome, and turning
+                    warm near the ceiling — the point at which the worker is about to
+                    compact and get worse.
+                  -->
+                  <template v-if="(node.activity.contextUsedRatio ?? 0) >= 0.5">
+                    <rect
+                      class="ctx-track"
+                      x="12"
+                      :y="NODE_H - 8"
+                      :width="NODE_W - 24"
+                      height="3"
+                      rx="1.5"
+                    />
+                    <rect
+                      class="ctx-fill"
+                      :class="{ warn: (node.activity.contextUsedRatio ?? 0) >= 0.85 }"
+                      x="12"
+                      :y="NODE_H - 8"
+                      :width="(NODE_W - 24) * Math.min(node.activity.contextUsedRatio ?? 0, 1)"
+                      height="3"
+                      rx="1.5"
+                    />
+                  </template>
 
- <!-- A dot rather than a pulse: one mark that means "this is the one moving". -->
- <circle
- v-if="node.activity.kind === 'working'"
- class="live-dot"
-:cx="NODE_W - 16"
- cy="52"
- r="4"
- />
- <title>
- {{ node.card.title }} — {{ node.card.personaName }},
- {{ node.card.status }}{{ node.card.blockerCount > 0 ? `, ${node.card.blockerCount} blocker(s)`: '' }}
- </title>
- </g>
+                  <!-- A dot rather than a pulse: one mark that means "this is the one moving". -->
+                  <circle
+                    v-if="node.activity.kind === 'working'"
+                    class="live-dot"
+                    :cx="NODE_W - 16"
+                    cy="52"
+                    r="4"
+                  />
+                  <title>
+                    {{ node.card.title }} — {{ node.card.personaName }},
+                    {{ node.card.status }}{{ node.card.blockerCount > 0 ? `, ${node.card.blockerCount} blocker(s)` : '' }}
+                  </title>
+                </g>
 
- <!--
- The merge-queue band. Deliberately narrower and
- quieter than a run: a queue entry is bookkeeping about a branch, not an
- agent doing something, and drawing it at equal weight would make the
- pipeline compete with the work for attention.
+                <!--
+                  The merge-queue band. Deliberately narrower and
+                  quieter than a run: a queue entry is bookkeeping about a branch, not an
+                  agent doing something, and drawing it at equal weight would make the
+                  pipeline compete with the work for attention.
 
- Not clickable, unlike a run. Every action on an entry — cancel, requeue
- — belongs to the merge-queue panel that owns the queue, and a second
- place to act on it would be a second place to keep correct. This band
- answers "what is happening to my branches", which is the question the canvas design
- says a human currently has to assemble from four surfaces.
- -->
- <!--
- The expertise band — the join live swarm observability left missing
- between a run-level graph and a persona-level artifact.
+                  Not clickable, unlike a run. Every action on an entry — cancel, requeue
+                  — belongs to the merge-queue panel that owns the queue, and a second
+                  place to act on it would be a second place to keep correct. This band
+                  answers "what is happening to my branches", which is the question the canvas design
+                  says a human currently has to assemble from four surfaces.
+                -->
+                <!--
+                  The expertise band — the join live swarm observability left missing
+                  between a run-level graph and a persona-level artifact.
 
- Not clickable, like the queue band and for the same reason: the map has
- its own surface with the graph, the progress and the provenance on it,
- and a second place to open it would be a second place to keep correct.
- What this band answers is narrower and is the question a human watching a
- swarm actually has — which of these workers already knows this codebase.
- -->
- <g
- v-for="knode in graph.knowledge"
-:key="knode.mapId"
- class="knode"
-:transform="`translate(${knowledgeLeft(knode)} ${knowledgeY - KNOWLEDGE_H / 2})`"
- >
- <rect:width="NODE_W":height="KNOWLEDGE_H" rx="8" class="box" />
- <text class="ksubject" x="10" y="16">
- {{ knode.subjectRef }}
- <!--
- Portable expertise: what the platform is *doing* with this map. A band reading
- "expertise in play" over a map being withheld would claim an
- expertise nobody here is carrying.
- -->
- <tspan:class="['kstate', knode.retrievalState]">{{
- knode.retrievalState === 'on'
- ? '· in use'
-: knode.retrievalState === 'trial'
- ? '· on trial'
-: '· withheld'
- }}</tspan>
- </text>
- <text class="kmeta" x="10" y="30">
- {{ knode.personaName }} ·
- {{
- knode.readByRunIds.length > 0
- ? `read by ${knode.readByRunIds.length} of ${knode.runIds.length} run(s)`
-: `knows this ${knode.subjectKind}`
- }}
- </text>
- <title>
- {{ knode.personaName }} holds a map of {{ knode.subjectRef }}, carried by
- {{ knode.runIds.length }} run(s) on this tree, of which
- {{ knode.readByRunIds.length }} were handed it. A run drawn with a faint
- edge was deliberately denied it — that run is the baseline this map is
- measured against.
- </title>
- </g>
+                  Not clickable, like the queue band and for the same reason: the map has
+                  its own surface with the graph, the progress and the provenance on it,
+                  and a second place to open it would be a second place to keep correct.
+                  What this band answers is narrower and is the question a human watching a
+                  swarm actually has — which of these workers already knows this codebase.
+                -->
+                <g
+                  v-for="knode in graph.knowledge"
+                  :key="knode.mapId"
+                  class="knode"
+                  :transform="`translate(${knowledgeLeft(knode)} ${knowledgeY() - KNOWLEDGE_H / 2})`"
+                >
+                  <rect :width="NODE_W" :height="KNOWLEDGE_H" rx="8" class="box" />
+                  <text class="ksubject" x="10" y="16">
+                    {{ knode.subjectRef }}
+                    <!--
+                      portable expertise: what the platform is *doing* with this map. A band reading
+                      "expertise in play" over a map being withheld would claim an
+                      expertise nobody here is carrying.
+                    -->
+                    <tspan :class="['kstate', knode.retrievalState]">{{
+                      knode.retrievalState === 'on'
+                        ? '· in use'
+                        : knode.retrievalState === 'trial'
+                          ? '· on trial'
+                          : '· withheld'
+                    }}</tspan>
+                  </text>
+                  <text class="kmeta" x="10" y="30">
+                    {{ knode.personaName }} ·
+                    {{
+                      knode.readByRunIds.length > 0
+                        ? `read by ${knode.readByRunIds.length} of ${knode.runIds.length} run(s)`
+                        : `knows this ${knode.subjectKind}`
+                    }}
+                  </text>
+                  <title>
+                    {{ knode.personaName }} holds a map of {{ knode.subjectRef }}, carried by
+                    {{ knode.runIds.length }} run(s) on this tree, of which
+                    {{ knode.readByRunIds.length }} were handed it. A run drawn with a faint
+                    edge was deliberately denied it — that run is the baseline this map is
+                    measured against.
+                  </title>
+                </g>
 
- <!--
- Notes as objects. Bounded to decisions and blockers:
- a decision governs everyone after it and a blocker is asking for help,
- while a finding is one run's experience of its own work — a busy swarm
- writes dozens, and drawing them would bury the tree they hang off.
+                <!--
+                  Notes as objects. Bounded to decisions and blockers:
+                  a decision governs everyone after it and a blocker is asking for help,
+                  while a finding is one run's experience of its own work — a busy swarm
+                  writes dozens, and drawing them would bury the tree they hang off.
 
- Every title is interpolated, never `v-html`: it is model-authored in the
- general case.
- -->
- <g
- v-for="nnode in graph.notes"
-:key="nnode.noteId"
-:class="['nnode', nnode.kind, nnode.authorKind === 'user' ? 'human': 'agent']"
-:transform="`translate(${noteLeft(nnode)} ${noteY(nnode) - NOTE_H / 2})`"
- >
- <rect:width="NODE_W":height="NOTE_H" rx="6" class="box" />
- <text class="nkind" x="9" y="14">
- {{ nnode.kind }}<tspan v-if="nnode.authorKind === 'user'"> · human</tspan>
- </text>
- <text class="ntitle" x="9" y="27">
- {{ nnode.title.length > 30 ? `${nnode.title.slice(0, 29)}…`: nnode.title }}
- </text>
- <title>{{ nnode.kind }}: {{ nnode.title }}</title>
- </g>
+                  Every title is interpolated, never `v-html`: it is model-authored in the
+                  general case.
+                -->
+                <g
+                  v-for="nnode in graph.notes"
+                  :key="nnode.noteId"
+                  :class="['nnode', nnode.kind, nnode.authorKind === 'user' ? 'human' : 'agent']"
+                  :transform="`translate(${noteLeft(nnode)} ${noteY(nnode) - NOTE_H / 2})`"
+                >
+                  <rect :width="NODE_W" :height="NOTE_H" rx="6" class="box" />
+                  <text class="nkind" x="9" y="14">
+                    {{ nnode.kind }}<tspan v-if="nnode.authorKind === 'user'"> · human</tspan>
+                  </text>
+                  <text class="ntitle" x="9" y="27">
+                    {{ nnode.title.length > 30 ? `${nnode.title.slice(0, 29)}…` : nnode.title }}
+                  </text>
+                  <title>{{ nnode.kind }}: {{ nnode.title }}</title>
+                </g>
 
- <g
- v-for="qnode in graph.queue"
-:key="qnode.id"
- class="qnode"
-:class="[qnode.kind, qnode.kind === 'verification' ? qnode.verification: qnode.status]"
-:transform="`translate(${left(qnode)} ${queueY(qnode) - QUEUE_H / 2})`"
- clip-path="url(#loom-queue-clip)"
- >
- <rect:width="NODE_W":height="QUEUE_H" rx="8" class="box" />
- <template v-if="qnode.kind === 'entry'">
- <!--
- Place in line leads, because order is the merge queue's whole
- semantics — and it is the one thing a list renders badly.
- -->
- <text class="qplace" x="10" y="17">
- {{ qnode.place === null ? 'merge': `#${qnode.place} in line` }}
- </text>
- <text class="qstatus":x="NODE_W - 10" y="17" text-anchor="end">
- {{ qnode.status }}
- </text>
- <!--
- The reason replaces the branch name when it failed. The branch is
- already on the run node directly above — repeating it costs the one
- line the node has, and a browser showed the cost plainly: a failed
- entry said only "failed", with why it failed reachable by hovering.
- -->
- <text class="qbranch" x="10" y="32">
- {{
- qnode.status === 'failed' && qnode.detail
- ? qnode.detail.length > 30
- ? `${qnode.detail.slice(0, 29)}…`
-: qnode.detail
-: shortBranchName(qnode.branchName)
- }}
- </text>
- </template>
- <template v-else>
- <text class="qplace" x="10" y="17">verification</text>
- <text class="qstatus":x="NODE_W - 10" y="17" text-anchor="end">
- {{ qnode.verification }}
- </text>
- <!--
- The canvas design: a failed verification's own output "is the most useful
- thing on the screen when it fails", so it is on the node rather than
- only in a tooltip. Interpolated, never markup — it is a command's
- stdout.
- -->
- <text v-if="qnode.detail" class="qbranch" x="10" y="32">
- {{ qnode.detail.length > 30 ? `${qnode.detail.slice(0, 29)}…`: qnode.detail }}
- </text>
- <text v-else class="qbranch" x="10" y="32">
- {{ verificationNote(qnode) }}
- </text>
- </template>
- <title>{{ queueTitle(qnode) }}</title>
- </g>
- </g>
- </svg>
- </div>
+                <g
+                  v-for="qnode in graph.queue"
+                  :key="qnode.id"
+                  class="qnode"
+                  :class="[qnode.kind, qnode.kind === 'verification' ? qnode.verification : qnode.status]"
+                  :transform="`translate(${left(qnode)} ${queueY(qnode) - QUEUE_H / 2})`"
+                  clip-path="url(#loom-queue-clip)"
+                >
+                  <rect :width="NODE_W" :height="QUEUE_H" rx="8" class="box" />
+                  <template v-if="qnode.kind === 'entry'">
+                    <!--
+                      Place in line leads, because order is the merge queue's whole
+                      semantics — and it is the one thing a list renders badly.
+                    -->
+                    <text class="qplace" x="10" y="17">
+                      {{ qnode.place === null ? 'merge' : `#${qnode.place} in line` }}
+                    </text>
+                    <text class="qstatus" :x="NODE_W - 10" y="17" text-anchor="end">
+                      {{ qnode.status }}
+                    </text>
+                    <!--
+                      The reason replaces the branch name when it failed. The branch is
+                      already on the run node directly above — repeating it costs the one
+                      line the node has, and a browser showed the cost plainly: a failed
+                      entry said only "failed", with why it failed reachable by hovering.
+                    -->
+                    <text class="qbranch" x="10" y="32">
+                      {{
+                        qnode.status === 'failed' && qnode.detail
+                          ? qnode.detail.length > 30
+                            ? `${qnode.detail.slice(0, 29)}…`
+                            : qnode.detail
+                          : shortBranchName(qnode.branchName)
+                      }}
+                    </text>
+                  </template>
+                  <template v-else>
+                    <text class="qplace" x="10" y="17">verification</text>
+                    <text class="qstatus" :x="NODE_W - 10" y="17" text-anchor="end">
+                      {{ qnode.verification }}
+                    </text>
+                    <!--
+                      The canvas design: a failed verification's own output "is the most useful
+                      thing on the screen when it fails", so it is on the node rather than
+                      only in a tooltip. Interpolated, never markup — it is a command's
+                      stdout.
+                    -->
+                    <text v-if="qnode.detail" class="qbranch" x="10" y="32">
+                      {{ qnode.detail.length > 30 ? `${qnode.detail.slice(0, 29)}…` : qnode.detail }}
+                    </text>
+                    <text v-else class="qbranch" x="10" y="32">
+                      {{ verificationNote(qnode) }}
+                    </text>
+                  </template>
+                  <title>{{ queueTitle(qnode) }}</title>
+                </g>
+              </g>
+            </svg>
+          </div>
 
- <!--
- The inspector. Everything here is already on the board payload — this panel
- exists because none of it was reachable *from the node*, which is what made
- a canvas full of live detail something you could only look at.
- -->
- <aside v-if="selected" class="inspector">
- <header>
- <div>
- <strong>{{ selected.card.personaName }}</strong>
- <span class="chip">{{ selected.card.status }}</span>
- </div>
- <button type="button" class="close" aria-label="Clear selection" @click="selectedId = null">
- ✕
- </button>
- </header>
- <!-- Plain interpolation: a title is a run's task, which is model-adjacent. -->
- <p class="task">{{ selected.card.title }}</p>
- <dl>
- <div><dt>Cost</dt><dd>{{ money(selected.card.totalCostUsd) ?? 'not metered' }}</dd></div>
- <div v-if="selected.card.branchName">
- <dt>Branch</dt><dd>{{ shortBranchName(selected.card.branchName) }}</dd>
- </div>
- <div v-if="selected.card.ownedPaths.length > 0">
- <dt>Owns</dt><dd>{{ selected.card.ownedPaths.join(', ') }}</dd>
- </div>
- <div v-if="selected.card.blockerCount > 0" class="warn">
- <dt>Blockers</dt><dd>{{ selected.card.blockerCount }}</dd>
- </div>
- </dl>
- <div class="actions">
- <button type="button" @click="openSelected">Open thread</button>
- <button
- v-if="selected.card.branchName"
- type="button"
- @click="emit('review', selected.card.runId)"
- >
- Review diff
- </button>
- <button
- v-if="selected.card.planner"
- type="button"
- @click="steerSelected"
- >
- Re-plan this
- </button>
- </div>
- </aside>
+          <!--
+            The inspector. Everything here is already on the board payload — this panel
+            exists because none of it was reachable *from the node*, which is what made
+            a canvas full of live detail something you could only look at.
+          -->
+          <aside v-if="selected" class="inspector">
+            <header>
+              <div>
+                <strong>{{ selected.card.personaName }}</strong>
+                <span class="chip">{{ selected.card.status }}</span>
+              </div>
+              <button type="button" class="close" aria-label="Clear selection" @click="selectedId = null">
+                ✕
+              </button>
+            </header>
+            <!-- Plain interpolation: a title is a run's task, which is model-adjacent. -->
+            <p class="task">{{ selected.card.title }}</p>
+            <dl>
+              <div><dt>Cost</dt><dd>{{ money(selected.card.totalCostUsd) ?? 'not metered' }}</dd></div>
+              <div v-if="selected.card.branchName">
+                <dt>Branch</dt><dd>{{ shortBranchName(selected.card.branchName) }}</dd>
+              </div>
+              <div v-if="selected.card.ownedPaths.length > 0">
+                <dt>Owns</dt><dd>{{ selected.card.ownedPaths.join(', ') }}</dd>
+              </div>
+              <div v-if="selected.card.blockerCount > 0" class="warn">
+                <dt>Blockers</dt><dd>{{ selected.card.blockerCount }}</dd>
+              </div>
+            </dl>
+            <div class="actions">
+              <button type="button" @click="openSelected">Open thread</button>
+              <button
+                v-if="selected.card.branchName"
+                type="button"
+                @click="emit('review', selected.card.runId)"
+              >
+                Review diff
+              </button>
+              <button
+                v-if="selected.card.planner"
+                type="button"
+                @click="steerSelected"
+              >
+                Re-plan this
+              </button>
+            </div>
+          </aside>
 
- <footer class="viewer-foot">
- <span>
- Drag to pan, scroll to zoom, click a run to inspect it, arrow keys to walk
- the tree.
- </span>
- <span v-if="collisionCount > 0" class="warn">
- {{ collisionCount }} pair<span v-if="collisionCount !== 1">s</span> claim overlapping
- paths — expect a rebase.
- </span>
- </footer>
- </section>
- </div>
- </Teleport>
- </section>
+          <footer class="viewer-foot">
+            <span>
+              Drag to pan, scroll to zoom, click a run to inspect it, arrow keys to walk
+              the tree.
+            </span>
+            <span v-if="collisionCount > 0" class="warn">
+              {{ collisionCount }} pair<span v-if="collisionCount !== 1">s</span> claim overlapping
+              paths — expect a rebase.
+            </span>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
+  </section>
 </template>
 
 <style scoped>
 .panel {
- border: 1px solid var(--border);
- border-radius: 0.5rem;
- padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.7rem;
 }
 
 header {
- display: flex;
- align-items: center;
- justify-content: space-between;
- gap: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 h3 {
- margin: 0;
- font-size: 0.7rem;
- text-transform: uppercase;
- letter-spacing: 0.06em;
- color: var(--text-faint);
+  margin: 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
 }
 
 header button {
- padding: 0.15rem 0.5rem;
- border: 1px solid var(--border);
- border-radius: 0.3rem;
- background: var(--surface-hover);
- color: var(--text);
- font: inherit;
- font-size: 0.7rem;
- cursor: pointer;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--surface-hover);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
 }
 
 header button:disabled {
- opacity: 0.5;
- cursor: default;
+  opacity: 0.5;
+  cursor: default;
 }
 
 .hint {
- margin: 0.35rem 0 0;
- font-size: 0.72rem;
- color: var(--text-faint);
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-faint);
 }
 
 .warn {
- color: var(--warn);
+  color: var(--warn);
 }
 
 .scrim {
- position: fixed;
- inset: 0;
- z-index: 60;
- display: flex;
- align-items: center;
- justify-content: center;
- padding: 1.5rem;
- background: rgb(0 0 0 / 55%);
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgb(0 0 0 / 55%);
 }
 
 .viewer {
- display: flex;
- flex-direction: column;
- width: min(96vw, 1400px);
- height: min(92vh, 900px);
- border: 1px solid var(--border);
- border-radius: 0.7rem;
- background: var(--bg);
- overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  width: min(96vw, 1400px);
+  height: min(92vh, 900px);
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--bg);
+  overflow: hidden;
 }
 
 .viewer-head,
 .viewer-foot {
- display: flex;
- align-items: center;
- gap: 0.6rem;
- padding: 0.6rem 0.9rem;
- border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--border);
 }
 
 .viewer-foot {
- border-bottom: 0;
- border-top: 1px solid var(--border);
- font-size: 0.72rem;
- color: var(--text-faint);
- justify-content: space-between;
+  border-bottom: 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  justify-content: space-between;
 }
 
 .viewer-head h2 {
- margin: 0;
- font-size: 0.95rem;
+  margin: 0;
+  font-size: 0.95rem;
 }
 
 .legend {
- display: flex;
- gap: 0.75rem;
- margin: 0 auto 0 0.5rem;
- padding: 0;
- list-style: none;
- font-size: 0.7rem;
- color: var(--text-faint);
+  display: flex;
+  gap: 0.75rem;
+  margin: 0 auto 0 0.5rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.7rem;
+  color: var(--text-faint);
 }
 
 .legend li {
- display: flex;
- align-items: center;
- gap: 0.3rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .swatch {
- width: 1rem;
- height: 0;
- border-top: 2px solid var(--text-faint);
+  width: 1rem;
+  height: 0;
+  border-top: 2px solid var(--text-faint);
 }
 
 .swatch.delegation {
- border-color: var(--text-muted);
+  border-color: var(--text-muted);
 }
 
 .swatch.review {
- border-color: var(--accent);
+  border-color: var(--accent);
 }
 
 .swatch.reconcile {
- border-color: var(--ok);
+  border-color: var(--ok);
 }
 
 .swatch.steer {
- border-color: var(--warn, var(--accent));
- border-top-style: dotted;
+  border-color: var(--warn, var(--accent));
+  border-top-style: dotted;
 }
 
 /* Thicker and solid, in the accent: a handoff is the one edge where the child is not
- new work but a *replacement*, and it has to be the thing a human notices on a tree
- they are scanning for delegations. */
+   new work but a *replacement*, and it has to be the thing a human notices on a tree
+   they are scanning for delegations. */
 .swatch.handoff {
- border-color: var(--warn, var(--accent));
- border-top-width: 3px;
+  border-color: var(--warn, var(--accent));
+  border-top-width: 3px;
 }
 
 .swatch.collision {
- border-top-style: dashed;
- border-color: var(--danger);
+  border-top-style: dashed;
+  border-color: var(--danger);
 }
 
 .swatch.note_read {
- border-top-style: dashed;
- border-color: var(--ok, var(--text-faint));
+  border-top-style: dashed;
+  border-color: var(--ok, var(--text-faint));
 }
 
 .swatch.queue {
- border-color: var(--text-faint);
+  border-color: var(--text-faint);
 }
 
 .viewer-head button {
- padding: 0.25rem 0.5rem;
- border: 1px solid var(--border);
- border-radius: 0.35rem;
- background: var(--surface-hover);
- color: var(--text);
- font: inherit;
- font-size: 0.75rem;
- cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--surface-hover);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
 }
 
 .stage {
- flex: 1;
- min-height: 0;
- cursor: grab;
- touch-action: none;
- background:
- radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0 / 24px 24px;
+  flex: 1;
+  min-height: 0;
+  cursor: grab;
+  touch-action: none;
+  background:
+    radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0 / 24px 24px;
 }
 
 .stage:active {
- cursor: grabbing;
+  cursor: grabbing;
 }
 
 .edge {
- fill: none;
- stroke: var(--text-muted);
- stroke-width: 1.5;
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
 }
 
 .edge.review {
- stroke: var(--accent);
+  stroke: var(--accent);
 }
 
 .edge.reconcile {
- stroke: var(--ok);
+  stroke: var(--ok);
 }
 
 /* Dotted: a re-planning turn is a human's intervention on the tree, not work
- the Planner handed down — the one edge that points at a run nobody delegated. */
+   the Planner handed down — the one edge that points at a run nobody delegated. */
 .edge.steer {
- stroke: var(--warn, var(--accent));
- stroke-dasharray: 2 3;
+  stroke: var(--warn, var(--accent));
+  stroke-dasharray: 2 3;
 }
 
 /* A warm handoff. Solid and heavier than a delegation, because the successor is
- not work the predecessor asked for — it is the predecessor's replacement, on the same
- task and the same branch. Mastery: "a silent identity swap mid-task is precisely the kind
- of thing that destroys trust in a system that is otherwise doing the right thing." */
+   not work the predecessor asked for — it is the predecessor's replacement, on the same
+   task and the same branch. Mastery: "a silent identity swap mid-task is precisely the kind
+   of thing that destroys trust in a system that is otherwise doing the right thing." */
 .edge.handoff {
- stroke: var(--warn, var(--accent));
- stroke-width: 3;
+  stroke: var(--warn, var(--accent));
+  stroke-width: 3;
 }
 
 /* The expertise band and its edges. Dotted and quiet: a map is context a run
- brought with it, not an action anyone took, and it must not compete with the tree. */
+   brought with it, not an action anyone took, and it must not compete with the tree. */
 .edge.knows {
- stroke: var(--accent);
- stroke-dasharray: 1 4;
- stroke-width: 1.25;
- opacity: 0.6;
+  stroke: var(--accent);
+  stroke-dasharray: 1 4;
+  stroke-width: 1.25;
+  opacity: 0.6;
 }
 
 /* A run deliberately denied a map its persona holds. Drawn rather than
- omitted, because the absence *is* the measurement — but at the faintest weight on the
- canvas, since nothing happened along it. */
+   omitted, because the absence *is* the measurement — but at the faintest weight on the
+   canvas, since nothing happened along it. */
 .edge.withheld {
- stroke: var(--text-faint);
- stroke-dasharray: 1 6;
- stroke-width: 1;
- opacity: 0.4;
+  stroke: var(--text-faint);
+  stroke-dasharray: 1 6;
+  stroke-width: 1;
+  opacity: 0.4;
 }
 
-.knode.kstate {
- font-size: 9px;
- font-weight: 400;
- letter-spacing: 0.03em;
+.knode .kstate {
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.03em;
 }
 
-.knode.kstate.on {
- fill: var(--ok);
+.knode .kstate.on {
+  fill: var(--ok);
 }
 
-.knode.kstate.trial {
- fill: var(--text-muted);
+.knode .kstate.trial {
+  fill: var(--text-muted);
 }
 
-.knode.kstate.off {
- fill: var(--text-faint);
+.knode .kstate.off {
+  fill: var(--text-faint);
 }
 
-.knode.box {
- fill: var(--surface-2, transparent);
- stroke: var(--accent);
- stroke-dasharray: 3 3;
- opacity: 0.9;
+.knode .box {
+  fill: var(--surface-2, transparent);
+  stroke: var(--accent);
+  stroke-dasharray: 3 3;
+  opacity: 0.9;
 }
 
-.knode.ksubject {
- font-size: 12px;
- font-weight: 600;
- fill: var(--text);
+.knode .ksubject {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--text);
 }
 
-.knode.kmeta {
- font-size: 10px;
- fill: var(--text-faint);
+.knode .kmeta {
+  font-size: 10px;
+  fill: var(--text-faint);
 }
 
 .swatch.knows {
- border-top-style: dotted;
- border-color: var(--accent);
+  border-top-style: dotted;
+  border-color: var(--accent);
 }
 
 .swatch.withheld {
- border-top-style: dotted;
- border-color: var(--text-faint);
+  border-top-style: dotted;
+  border-color: var(--text-faint);
 }
 
 /* Faint and dashed: a note-read says what a swarm already shared. It is deliberately
- the quietest edge on the canvas — it is the most numerous once a swarm gets going, and
- the tree's own shape has to stay the loudest thing here. */
+   the quietest edge on the canvas — it is the most numerous once a swarm gets going, and
+   the tree's own shape has to stay the loudest thing here. */
 .edge.note_read {
- stroke: var(--ok, var(--text-faint));
- stroke-dasharray: 3 4;
- stroke-width: 1.25;
- opacity: 0.65;
+  stroke: var(--ok, var(--text-faint));
+  stroke-dasharray: 3 4;
+  stroke-width: 1.25;
+  opacity: 0.65;
 }
 
 /* Dashed and red: the one edge that is a warning rather than a fact about structure. */
 .edge.collision {
- stroke: var(--danger);
- stroke-dasharray: 5 4;
- stroke-width: 1.75;
+  stroke: var(--danger);
+  stroke-dasharray: 5 4;
+  stroke-width: 1.75;
 }
 
 /* The merge-queue edges. Thinner than a delegation on purpose: these describe
- what is happening to a branch, not who asked whom for work, and the tree's own shape
- should stay the loudest thing on the canvas. */
+   what is happening to a branch, not who asked whom for work, and the tree's own shape
+   should stay the loudest thing on the canvas. */
 .edge.queue,
 .edge.verify {
- stroke: var(--text-faint);
- stroke-width: 1.25;
+  stroke: var(--text-faint);
+  stroke-width: 1.25;
 }
 
 .edge.verify {
- stroke-dasharray: 3 3;
+  stroke-dasharray: 3 3;
 }
 
 .node {
- cursor: pointer;
+  cursor: pointer;
 }
 
 /* The merge-queue band — quieter than a run, and not interactive: every action
- on an entry belongs to the panel that owns the queue. */
-.qnode.box {
- fill: var(--bg);
- stroke: var(--border);
- stroke-dasharray: 3 2;
+   on an entry belongs to the panel that owns the queue. */
+.qnode .box {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-dasharray: 3 2;
 }
 
 /* The accent means "this is in flight", and it belongs to the entry that is merging —
- not to a verification whose state is `pending`, which means the opposite: nothing is
- known yet. Drawn in the accent, a pending verification read as selected or running, and
- sat under a *failed* entry claiming attention it had not earned. It stays dashed and
- quiet; the entry above it is what lights up while the merge is actually running. */
-.qnode.merging.box {
- stroke: var(--accent);
- stroke-dasharray: none;
+   not to a verification whose state is `pending`, which means the opposite: nothing is
+   known yet. Drawn in the accent, a pending verification read as selected or running, and
+   sat under a *failed* entry claiming attention it had not earned. It stays dashed and
+   quiet; the entry above it is what lights up while the merge is actually running. */
+.qnode.merging .box {
+  stroke: var(--accent);
+  stroke-dasharray: none;
 }
 
-.qnode.merged.box,
-.qnode.passed.box {
- stroke: var(--ok);
- stroke-dasharray: none;
+.qnode.merged .box,
+.qnode.passed .box {
+  stroke: var(--ok);
+  stroke-dasharray: none;
 }
 
-.qnode.failed.box,
-.qnode.refused.box {
- stroke: var(--danger);
- stroke-dasharray: none;
+.qnode.failed .box,
+.qnode.refused .box {
+  stroke: var(--danger);
+  stroke-dasharray: none;
 }
 
 /* Skipped is neither good nor bad — it merged, and nothing vouched for it. Left dashed,
- because that is exactly the "no claim was made" state the dashes mean here. */
-.qnode.skipped.box {
- stroke: var(--warn, var(--border));
+   because that is exactly the "no claim was made" state the dashes mean here. */
+.qnode.skipped .box {
+  stroke: var(--warn, var(--border));
 }
 
 .qplace {
- font-size: 10px;
- font-weight: 600;
- fill: var(--text);
- text-transform: uppercase;
- letter-spacing: 0.04em;
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .qstatus {
- font-size: 10px;
- fill: var(--text-faint);
+  font-size: 10px;
+  fill: var(--text-faint);
 }
 
 .qbranch {
- font-size: 10.5px;
- fill: var(--text-muted);
- font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+  fill: var(--text-muted);
+  font-family: ui-monospace, monospace;
 }
 
 .box {
- fill: var(--surface);
- stroke: var(--border);
- stroke-width: 1;
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1;
 }
 
-.node:hover.box {
- stroke: var(--accent);
+.node:hover .box {
+  stroke: var(--accent);
 }
 
 /*
- Work crossing a node, right now. A halo rather than a fill change: fill on this
- canvas already means activity state (working / quiet / blocked), and a second
- meaning on the same channel would make both unreadable — the same reasoning that
- made a planner a different *shape* rather than a different colour.
+  Work crossing a node, right now. A halo rather than a fill change: fill on this
+  canvas already means activity state (working / quiet / blocked), and a second
+  meaning on the same channel would make both unreadable — the same reasoning that
+  made a planner a different *shape* rather than a different colour.
 */
-.node.live.box {
- stroke: var(--accent);
- stroke-width: 2;
- filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 70%, transparent));
+.node.live .box {
+  stroke: var(--accent);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 70%, transparent));
 }
 
 /*
- An edge with something on it. The dash *moves*, which is the only property here
- that says "in flight" rather than "recently true" — a brighter static line would be
- indistinguishable from the selected state.
+  An edge with something on it. The dash *moves*, which is the only property here
+  that says "in flight" rather than "recently true" — a brighter static line would be
+  indistinguishable from the selected state.
 */
 .edge.live {
- stroke: var(--accent);
- stroke-width: 2.5;
- stroke-dasharray: 6 6;
- animation: flow 0.7s linear infinite;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 6;
+  animation: flow 0.7s linear infinite;
 }
 
 @keyframes flow {
- to {
- stroke-dashoffset: -12;
- }
+  to {
+    stroke-dashoffset: -12;
+  }
 }
 
 .packet {
- fill: var(--accent);
- filter: drop-shadow(0 0 4px color-mix(in oklab, var(--accent) 80%, transparent));
+  fill: var(--accent);
+  filter: drop-shadow(0 0 4px color-mix(in oklab, var(--accent) 80%, transparent));
 }
 
 /*
- A node that is executing, breathing. Distinct from `.live`, which is a *pulse* on an
- event: this is the continuous state, so a human scanning a wide tree can see where
- work is without waiting for the next frame to arrive.
+  A node that is executing, breathing. Distinct from `.live`, which is a *pulse* on an
+  event: this is the continuous state, so a human scanning a wide tree can see where
+  work is without waiting for the next frame to arrive.
 */
-.node.working.box {
- animation: breathe 2.2s ease-in-out infinite;
+.node.working .box {
+  animation: breathe 2.2s ease-in-out infinite;
 }
 
 @keyframes breathe {
- 0%,
- 100% {
- filter: none;
- }
- 50% {
- filter: drop-shadow(0 0 5px color-mix(in oklab, var(--accent) 45%, transparent));
- }
+  0%,
+  100% {
+    filter: none;
+  }
+  50% {
+    filter: drop-shadow(0 0 5px color-mix(in oklab, var(--accent) 45%, transparent));
+  }
 }
 
 /*
- Motion is the whole point of the three rules above, so honouring this preference has
- to remove the motion without removing the *information*: the live edge keeps its
- colour and weight, the packet stops travelling but stays visible at the source, and a
- working node keeps a static halo.
+  Motion is the whole point of the three rules above, so honouring this preference has
+  to remove the motion without removing the *information*: the live edge keeps its
+  colour and weight, the packet stops travelling but stays visible at the source, and a
+  working node keeps a static halo.
 */
 @media (prefers-reduced-motion: reduce) {
-.edge.live {
- animation: none;
- }
+  .edge.live {
+    animation: none;
+  }
 
-.packet {
- display: none;
- }
+  .packet {
+    display: none;
+  }
 
-.node.working.box {
- animation: none;
- filter: drop-shadow(0 0 5px color-mix(in oklab, var(--accent) 45%, transparent));
- }
+  .node.working .box {
+    animation: none;
+    filter: drop-shadow(0 0 5px color-mix(in oklab, var(--accent) 45%, transparent));
+  }
 }
 
-.node:focus-visible.box {
- stroke: var(--accent);
- stroke-width: 2;
+.node:focus-visible .box {
+  stroke: var(--accent);
+  stroke-width: 2;
 }
 
 /* Which node the app is actually watching. Without it the canvas showed no trace of
- the one action it offers. */
-.node[aria-current='true'].box {
- stroke: var(--accent);
- stroke-width: 2.5;
+   the one action it offers. */
+.node[aria-current='true'] .box {
+  stroke: var(--accent);
+  stroke-width: 2.5;
 }
 
 /* The selection, distinct from the watched run: one is what you are inspecting, the
- other is what the rest of the app is pointed at, and they are often not the same. */
-.node.selected.box {
- stroke: var(--text);
- stroke-width: 2.5;
+   other is what the rest of the app is pointed at, and they are often not the same. */
+.node.selected .box {
+  stroke: var(--text);
+  stroke-width: 2.5;
 }
 
 .inspector {
- position: absolute;
- right: 1rem;
- bottom: 3.4rem;
- width: 19rem;
- padding: 0.7rem 0.8rem;
- border: 1px solid var(--border);
- border-radius: 0.6rem;
- background: var(--surface);
- box-shadow: 0 8px 30px rgb(0 0 0 / 45%);
- font-size: 0.8rem;
+  position: absolute;
+  right: 1rem;
+  bottom: 3.4rem;
+  width: 19rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 45%);
+  font-size: 0.8rem;
 }
 
 .inspector header {
- display: flex;
- align-items: baseline;
- justify-content: space-between;
- gap: 0.5rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
-.inspector.chip {
- margin-left: 0.4rem;
- color: var(--text-faint);
- font-size: 0.7rem;
+.inspector .chip {
+  margin-left: 0.4rem;
+  color: var(--text-faint);
+  font-size: 0.7rem;
 }
 
-.inspector.task {
- margin: 0.35rem 0 0.5rem;
- color: var(--text-muted);
- line-height: 1.4;
+.inspector .task {
+  margin: 0.35rem 0 0.5rem;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .inspector dl {
- display: grid;
- gap: 0.15rem;
- margin: 0 0 0.6rem;
+  display: grid;
+  gap: 0.15rem;
+  margin: 0 0 0.6rem;
 }
 
 .inspector dl > div {
- display: flex;
- gap: 0.4rem;
+  display: flex;
+  gap: 0.4rem;
 }
 
 .inspector dt {
- min-width: 4rem;
- color: var(--text-faint);
+  min-width: 4rem;
+  color: var(--text-faint);
 }
 
 .inspector dd {
- margin: 0;
- overflow-wrap: anywhere;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
-.inspector.warn dd {
- color: var(--danger, #b4443a);
+.inspector .warn dd {
+  color: var(--danger, #b4443a);
 }
 
-.inspector.actions {
- display: flex;
- flex-wrap: wrap;
- gap: 0.35rem;
+.inspector .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
-.inspector.actions button {
- padding: 0.28rem 0.5rem;
- font-size: 0.75rem;
+.inspector .actions button {
+  padding: 0.28rem 0.5rem;
+  font-size: 0.75rem;
 }
 
 /*
- Deliberately not a colour: colour on this canvas already means activity (working,
- quiet, blocked), and a second meaning on the same channel would make both unreadable.
- A planner is a different shape of thing, so it gets a shape.
+  Deliberately not a colour: colour on this canvas already means activity (working,
+  quiet, blocked), and a second meaning on the same channel would make both unreadable.
+  A planner is a different shape of thing, so it gets a shape.
 */
-.node.planner.box {
- stroke-dasharray: none;
- stroke-width: 1.5;
+.node.planner .box {
+  stroke-dasharray: none;
+  stroke-width: 1.5;
 }
 
-.node.planner.rail {
- fill: var(--muted);
+.node.planner .rail {
+  fill: var(--muted);
 }
 
-.node.planner:hover.rail,
-.node.planner.working.rail {
- fill: var(--accent);
+.node.planner:hover .rail,
+.node.planner.working .rail {
+  fill: var(--accent);
 }
 
-.node.working.box {
- stroke: var(--accent);
+.node.working .box {
+  stroke: var(--accent);
 }
 
-.node.quiet.box {
- stroke: var(--warn);
+.node.quiet .box {
+  stroke: var(--warn);
 }
 
-.node.blocked.box {
- stroke: var(--danger);
- stroke-width: 1.75;
+.node.blocked .box {
+  stroke: var(--danger);
+  stroke-width: 1.75;
 }
 
 text {
- fill: var(--text);
- font-family: inherit;
+  fill: var(--text);
+  font-family: inherit;
 }
 
 .persona {
- font-size: 12px;
- font-weight: 600;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .status,
 .cost {
- font-size: 10px;
- fill: var(--text-faint);
+  font-size: 10px;
+  fill: var(--text-faint);
 }
 
 .title {
- font-size: 11px;
- fill: var(--text-muted);
+  font-size: 11px;
+  fill: var(--text-muted);
 }
 
 .activity {
- font-size: 10px;
- fill: var(--text-muted);
- font-family: ui-monospace, monospace;
+  font-size: 10px;
+  fill: var(--text-muted);
+  font-family: ui-monospace, monospace;
 }
 
-.node.working.activity {
- fill: var(--accent);
+.node.working .activity {
+  fill: var(--accent);
 }
 
-.node.quiet.activity {
- fill: var(--warn);
+.node.quiet .activity {
+  fill: var(--warn);
 }
 
 .live-dot {
- fill: var(--accent);
+  fill: var(--accent);
 }
 
 .ctx-track {
- fill: var(--surface-hover);
+  fill: var(--surface-hover);
 }
 
 .ctx-fill {
- fill: var(--text-faint);
+  fill: var(--text-faint);
 }
 
 .ctx-fill.warn {
- fill: var(--warn);
+  fill: var(--warn);
 }
 
 /* The note band (live swarm observability gap 3). Solid, unlike the expertise band's dashes: a decision is
- something that happened, not context a run arrived carrying. */
+   something that happened, not context a run arrived carrying. */
 .edge.wrote {
- stroke: var(--text-faint);
- stroke-dasharray: 2 3;
- stroke-width: 1.25;
- opacity: 0.55;
+  stroke: var(--text-faint);
+  stroke-dasharray: 2 3;
+  stroke-width: 1.25;
+  opacity: 0.55;
 }
 
 .swatch.wrote {
- border-top-style: dashed;
- border-color: var(--text-faint);
+  border-top-style: dashed;
+  border-color: var(--text-faint);
 }
 
-.nnode.box {
- fill: var(--surface-2, transparent);
- stroke: var(--border);
+.nnode .box {
+  fill: var(--surface-2, transparent);
+  stroke: var(--border);
 }
 
 /* A blocker is a run asking for help — the one note kind that is a call to action. */
-.nnode.blocker.box {
- stroke: var(--danger, #b42318);
+.nnode.blocker .box {
+  stroke: var(--danger, #b42318);
 }
 
-.nnode.decision.box {
- stroke: var(--text-muted);
+.nnode.decision .box {
+  stroke: var(--text-muted);
 }
 
-.nnode.nkind {
- font-size: 9px;
- fill: var(--text-faint);
- text-transform: uppercase;
- letter-spacing: 0.04em;
+.nnode .nkind {
+  font-size: 9px;
+  fill: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
-.nnode.ntitle {
- font-size: 11px;
- fill: var(--text);
+.nnode .ntitle {
+  font-size: 11px;
+  fill: var(--text);
 }
 </style>

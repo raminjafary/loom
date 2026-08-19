@@ -20,8 +20,8 @@ import type { PersonaRevision } from '@loom/api-contract'
 
 /** Who wrote the prompt a persona currently has, or null if nobody has replaced it. */
 export const currentPromptAuthor = (
- revisions: PersonaRevision[],
- personaId: string,
+  revisions: PersonaRevision[],
+  personaId: string,
 ): PersonaRevision['replacedByKind'] | null => newestRevision(revisions, personaId)?.replacedByKind ?? null
 
 /**
@@ -31,20 +31,20 @@ export const currentPromptAuthor = (
  * the whole workspace in one call rather than one call per row.
  */
 export const promptWrittenByAgent = (revisions: PersonaRevision[], personaId: string): boolean =>
- currentPromptAuthor(revisions, personaId) === 'agent_run'
+  currentPromptAuthor(revisions, personaId) === 'agent_run'
 
 /** This persona's revisions, newest first. Assumes nothing about the input's order. */
 export const personaHistory = (
- revisions: PersonaRevision[],
- personaId: string,
+  revisions: PersonaRevision[],
+  personaId: string,
 ): PersonaRevision[] =>
- revisions
-.filter((revision) => revision.personaId === personaId)
-.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  revisions
+    .filter((revision) => revision.personaId === personaId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
 const newestRevision = (
- revisions: PersonaRevision[],
- personaId: string,
+  revisions: PersonaRevision[],
+  personaId: string,
 ): PersonaRevision | null => personaHistory(revisions, personaId)[0] ?? null
 
 /**
@@ -57,8 +57,8 @@ const newestRevision = (
  * distinguishes tier 1 from an ordinary save.
  */
 export const describeRevision = (revision: PersonaRevision): string => {
- const when = revision.createdAt.slice(0, 16).replace('T', ' ')
- if (revision.replacedByKind === 'agent_run') return `Replaced by an agent, ${when}`
- if (revision.replacedByKind === 'human') return `Replaced by a person, ${when}`
- return `Replaced by the platform, ${when}`
+  const when = revision.createdAt.slice(0, 16).replace('T', ' ')
+  if (revision.replacedByKind === 'agent_run') return `Replaced by an agent, ${when}`
+  if (revision.replacedByKind === 'human') return `Replaced by a person, ${when}`
+  return `Replaced by the platform, ${when}`
 }

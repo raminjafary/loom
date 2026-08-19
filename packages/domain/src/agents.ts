@@ -5,21 +5,21 @@ import type { ResponseStyle } from './response-styles.js'
 import type { VerificationCheck } from './verification.js'
 import type { ReplayCheckOutcome, ReplayOutcome, ScreenDecision } from './replay-set.js'
 import type {
- AgentPersonaId,
- AgentRunId,
- ApprovalRequestId,
- PersonaGroupId,
- PersonaRevisionId,
- PersonaVariantId,
- PersonaVariantSetId,
- ReplayItemId,
- ReplaySetId,
- RepositoryId,
- RunnerId,
- ThreadId,
- UserId,
- VariantScreenId,
- WorkspaceId,
+  AgentPersonaId,
+  AgentRunId,
+  ApprovalRequestId,
+  PersonaGroupId,
+  PersonaRevisionId,
+  PersonaVariantId,
+  PersonaVariantSetId,
+  ReplayItemId,
+  ReplaySetId,
+  RepositoryId,
+  RunnerId,
+  ThreadId,
+  UserId,
+  VariantScreenId,
+  WorkspaceId,
 } from './ids.js'
 
 /**
@@ -30,13 +30,13 @@ import type {
  * with.
  */
 export interface Runner {
- readonly id: RunnerId
- readonly workspaceId: WorkspaceId
- readonly name: string
- readonly allowedRoots: readonly string[]
- readonly connected: boolean
- readonly lastSeenAt: Date | null
- readonly createdAt: Date
+  readonly id: RunnerId
+  readonly workspaceId: WorkspaceId
+  readonly name: string
+  readonly allowedRoots: readonly string[]
+  readonly connected: boolean
+  readonly lastSeenAt: Date | null
+  readonly createdAt: Date
 }
 
 /**
@@ -45,42 +45,43 @@ export interface Runner {
  * both are real follow-up work, not half-built here.
  */
 export interface Repository {
- readonly id: RepositoryId
- readonly workspaceId: WorkspaceId
- readonly runnerId: RunnerId
- readonly displayName: string
- readonly absolutePath: string
- readonly defaultBranch: string
- /**
- * What the merge queue ran against a rebased branch before the harness existed
- *. Superseded by `verificationChecks` and still
- * read: `verificationChecksFor` treats it as a single check named `tests`, which is
- * what keeps the harness from being a feature only new repositories have.
- */
- readonly verifyCommand: string | null
- /**
- * This repository's definition of done: named checks, in dependency order, stopped at the first failure. Empty
- * falls back to `verifyCommand`; empty with no command is a repository with no
- * definition of done, which is recorded as `skipped` and never as a pass.
- */
- readonly verificationChecks: VerificationCheck[]
- /**
- * What the platform runs to warm this repository's dependency cache.
- * Operator-authored, run with no agent in the loop — which is the whole reason a
- * warmed cache can be shared with runs at all.
- */
- readonly installCommand: string | null
- /**
- * Whether a reconciler may attempt a conflicted branch here before the human sees it
- *.
- *
- * On by default, for the reason the roadmap gives: the parallel-branch measurement measured a third of parallel branches
- * needing ~50 seconds of human attention each, on conflicts requiring no judgement.
- * Per repository because that is the only form in which a team's canvas can show it —
- * an operator-wide env var drawn as team policy would be a decoration.
- */
- readonly reconcilerEnabled: boolean
- readonly createdAt: Date
+  readonly id: RepositoryId
+  readonly workspaceId: WorkspaceId
+  readonly runnerId: RunnerId
+  readonly displayName: string
+  readonly absolutePath: string
+  readonly defaultBranch: string
+  /**
+   * What the merge queue ran against a rebased branch before the harness existed
+   *. Superseded by `verificationChecks` and still
+   * read: `verificationChecksFor` treats it as a single check named `tests`, which is
+   * what keeps the harness from being a feature only new repositories have.
+   */
+  readonly verifyCommand: string | null
+  /**
+   * This repository's definition of done: named checks, in dependency order, stopped at the
+   * first failure. Empty falls back to `verifyCommand`; empty with no command is a
+   * repository with no definition of done, which is recorded as `skipped` and never as a
+   * pass.
+   */
+  readonly verificationChecks: VerificationCheck[]
+  /**
+   * What the platform runs to warm this repository's dependency cache.
+   * Operator-authored, run with no agent in the loop — which is the whole reason a
+   * warmed cache can be shared with runs at all.
+   */
+  readonly installCommand: string | null
+  /**
+   * Whether a reconciler may attempt a conflicted branch here before the human sees it.
+   *
+   * On by default, for the reason the roadmap gives: the parallel-branch measurement
+   * measured a third of parallel branches needing ~50 seconds of human attention each, on
+   * conflicts requiring no judgement. Per repository because that is the only form in which
+   * a team's canvas can show it — an operator-wide env var drawn as team policy would be a
+   * decoration.
+   */
+  readonly reconcilerEnabled: boolean
+  readonly createdAt: Date
 }
 
 /**
@@ -89,92 +90,92 @@ export interface Repository {
  * minimum needed to actually drive AgentExecutionPort.
  */
 export interface PersonaSpec {
- readonly name: string
- readonly systemPrompt: string
- readonly model: string
- // Mutable, not `readonly string[]`: this crosses the wire (Zod's array
- // output type) and into the Runner protocol verbatim — a readonly type
- // here just forces spreads at every boundary for no safety benefit, since
- // nothing in this codebase mutates a persona's tool list in place.
- readonly tools: string[]
- /**
- * How much this run may do without asking.
- *
- * The path-scoped write boundary and the denied Bash effects apply
- * unconditionally in every mode — those are boundaries, not judgment calls, and
- * no mode touches them.
- */
- readonly approvalMode: ApprovalMode
- /**
- * Enforced spend ceiling in USD, or null for uncapped. Snapshotted onto the run like the rest of this
- * spec, so editing the persona mid-run cannot raise the ceiling of a run already
- * in flight.
- */
- readonly budgetCapUsd: number | null
- /**
- * Registry capabilities attached to this persona, resolved and
- * snapshotted at run start like everything else here — so revoking a capability
- * does not change what a run already in flight is using, and attaching one does
- * not silently widen it.
- *
- * Optional in the type because runs that predate the registry have stored
- * persona JSON without it; the mapper defaults it rather than failing to read a
- * completed run's row.
- */
- readonly capabilities?: CapabilitySpec[]
- /**
- * Marks this persona as a Planner. A Planner gets one
- * extra channel — the delegation tool it submits a decomposition through — and
- * is required to declare `tools: []`, which is what makes the "no filesystem,
- * no shell" trust boundary a boundary rather than a description.
- *
- * Optional for the same reason `capabilities` is: runs that predate it have
- * stored persona JSON without it.
- */
- readonly planner?: boolean
- /**
- * The **envelope** a Planner's children are attenuated against.
- *
- * This exists because the roadmap and the data model contradict each other as written. The roadmap says a
- * Planner declares `tools: []`; the data model says "a child run can never request tools …
- * exceeding its parent's". Taken together a Planner can only delegate to
- * workers that also have no tools, which makes it useless — the boundary would
- * be real and the feature would not exist.
- *
- * The resolution is to separate two things the data model conflates: what a run may do
- * *itself*, and what it may hand down. A Planner still has `tools: []`, so it
- * cannot read, write or execute anything; `delegates` is the separate,
- * human-set ceiling on what its children may hold. A Planner can never widen
- * it, and everything else — budget, model tier, capabilities — still attenuates
- * against the parent's own values.
- *
- * Only meaningful on a planner; enforced at authoring time.
- */
- readonly delegates?: string[]
- /**
- * The **self-modification envelope** this run's persona carries.
- *
- * On the snapshot rather than read live from the persona row, for the reason every other
- * field here is: a run is what it was launched as, and an envelope widened mid-run must
- * not change what a child started five minutes ago may hold. It is also what makes
- * `attenuateEnvelope` checkable at a child start — the parent's ceiling has to be a fact
- * about the parent *run*, not about the row its persona has since become.
- *
- * Optional for the reason `capabilities` is: runs that predate it have stored persona
- * JSON without it, and null there means the same thing it means everywhere — no
- * permission to rewrite anything.
- */
- readonly envelope?: Envelope | null
- /**
- * The response style this run was launched with.
- *
- * Recorded on the snapshot rather than only folded into `systemPrompt` for two
- * reasons: a UI has to be able to say which style a finished run used, and a
- * delegated child has to be able to inherit its parent's so one swarm speaks in
- * one voice. Optional for the same reason `capabilities` is — runs that predate
- * it have stored persona JSON without it.
- */
- readonly responseStyle?: ResponseStyle
+  readonly name: string
+  readonly systemPrompt: string
+  readonly model: string
+  // Mutable, not `readonly string[]`: this crosses the wire (Zod's array
+  // output type) and into the Runner protocol verbatim — a readonly type
+  // here just forces spreads at every boundary for no safety benefit, since
+  // nothing in this codebase mutates a persona's tool list in place.
+  readonly tools: string[]
+  /**
+   * How much this run may do without asking.
+   *
+   * The path-scoped write boundary and the denied Bash effects apply
+   * unconditionally in every mode — those are boundaries, not judgment calls, and
+   * no mode touches them.
+   */
+  readonly approvalMode: ApprovalMode
+  /**
+   * Enforced spend ceiling in USD, or null for uncapped. Snapshotted onto the run like the
+   * rest of this spec, so editing the persona mid-run cannot raise the ceiling of a run
+   * already in flight.
+   */
+  readonly budgetCapUsd: number | null
+  /**
+   * Registry capabilities attached to this persona, resolved and
+   * snapshotted at run start like everything else here — so revoking a capability
+   * does not change what a run already in flight is using, and attaching one does
+   * not silently widen it.
+   *
+   * Optional in the type because runs that predate the registry have stored
+   * persona JSON without it; the mapper defaults it rather than failing to read a
+   * completed run's row.
+   */
+  readonly capabilities?: CapabilitySpec[]
+  /**
+   * Marks this persona as a Planner. A Planner gets one
+   * extra channel — the delegation tool it submits a decomposition through — and
+   * is required to declare `tools: []`, which is what makes the "no filesystem,
+   * no shell" trust boundary a boundary rather than a description.
+   *
+   * Optional for the same reason `capabilities` is: runs that predate it have
+   * stored persona JSON without it.
+   */
+  readonly planner?: boolean
+  /**
+   * The **envelope** a Planner's children are attenuated against.
+   *
+   * This exists because the roadmap and the data model contradict each other as written.
+   * The roadmap says a Planner declares `tools: []`; the data model says "a child run can
+   * never request tools … exceeding its parent's". Taken together a Planner can only
+   * delegate to workers that also have no tools, which makes it useless — the boundary
+   * would be real and the feature would not exist.
+   *
+   * The resolution is to separate two things the data model conflates: what a run may do
+   * *itself*, and what it may hand down. A Planner still has `tools: []`, so it
+   * cannot read, write or execute anything; `delegates` is the separate,
+   * human-set ceiling on what its children may hold. A Planner can never widen
+   * it, and everything else — budget, model tier, capabilities — still attenuates
+   * against the parent's own values.
+   *
+   * Only meaningful on a planner; enforced at authoring time.
+   */
+  readonly delegates?: string[]
+  /**
+   * The **self-modification envelope** this run's persona carries.
+   *
+   * On the snapshot rather than read live from the persona row, for the reason every other
+   * field here is: a run is what it was launched as, and an envelope widened mid-run must
+   * not change what a child started five minutes ago may hold. It is also what makes
+   * `attenuateEnvelope` checkable at a child start — the parent's ceiling has to be a fact
+   * about the parent *run*, not about the row its persona has since become.
+   *
+   * Optional for the reason `capabilities` is: runs that predate it have stored persona
+   * JSON without it, and null there means the same thing it means everywhere — no
+   * permission to rewrite anything.
+   */
+  readonly envelope?: Envelope | null
+  /**
+   * The response style this run was launched with.
+   *
+   * Recorded on the snapshot rather than only folded into `systemPrompt` for two
+   * reasons: a UI has to be able to say which style a finished run used, and a
+   * delegated child has to be able to inherit its parent's so one swarm speaks in
+   * one voice. Optional for the same reason `capabilities` is — runs that predate
+   * it have stored persona JSON without it.
+   */
+  readonly responseStyle?: ResponseStyle
 }
 
 /**
@@ -183,36 +184,36 @@ export interface PersonaSpec {
  * for querying without re-parsing on every list/get.
  */
 export interface AgentPersona {
- readonly id: AgentPersonaId
- readonly workspaceId: WorkspaceId
- readonly name: string
- readonly description: string
- readonly markdownSource: string
- readonly model: string
- readonly tools: string[]
- readonly harnessEffort: string | null
- readonly harnessMaxTurns: number | null
- readonly harnessApprovalMode: ApprovalMode
- /** Phase 2 — see PersonaSpec.planner. */
- readonly harnessPlanner: boolean
- readonly harnessDelegates: string[]
- readonly harnessBudgetCapUsd: number | null
- /**
- * The self-modification ceiling. Null means this persona may not rewrite
- * itself — `maySelfModify` is the one place that reads absence, so nothing else has to
- * remember which way it falls.
- */
- readonly envelope: Envelope | null
- /**
- * The markdown the platform seeded, for a built-in, or null for a
- * hand-authored persona and for a built-in seeded before this was recorded.
- *
- * It exists so "the human edited this" and "the platform shipped a new one" stop
- * being the same observation — see `seedBuiltinPersonas` for what that cost.
- */
- readonly builtinSource: string | null
- readonly createdAt: Date
- readonly updatedAt: Date
+  readonly id: AgentPersonaId
+  readonly workspaceId: WorkspaceId
+  readonly name: string
+  readonly description: string
+  readonly markdownSource: string
+  readonly model: string
+  readonly tools: string[]
+  readonly harnessEffort: string | null
+  readonly harnessMaxTurns: number | null
+  readonly harnessApprovalMode: ApprovalMode
+  /** See PersonaSpec.planner. */
+  readonly harnessPlanner: boolean
+  readonly harnessDelegates: string[]
+  readonly harnessBudgetCapUsd: number | null
+  /**
+   * The self-modification ceiling. Null means this persona may not rewrite
+   * itself — `maySelfModify` is the one place that reads absence, so nothing else has to
+   * remember which way it falls.
+   */
+  readonly envelope: Envelope | null
+  /**
+   * The markdown the platform seeded, for a built-in, or null for a
+   * hand-authored persona and for a built-in seeded before this was recorded.
+   *
+   * It exists so "the human edited this" and "the platform shipped a new one" stop
+   * being the same observation — see `seedBuiltinPersonas` for what that cost.
+   */
+  readonly builtinSource: string | null
+  readonly createdAt: Date
+  readonly updatedAt: Date
 }
 
 /** Who replaced a persona's markdown. Same vocabulary as a worker note's author. */
@@ -227,17 +228,17 @@ export type PersonaRevisionAuthorKind = 'human' | 'agent_run' | 'platform'
  * and restoring one is a revert.
  */
 export interface PersonaRevision {
- readonly id: PersonaRevisionId
- readonly workspaceId: WorkspaceId
- readonly personaId: AgentPersonaId
- readonly markdownSource: string
- readonly replacedByKind: PersonaRevisionAuthorKind
- /** The run that rewrote it, if an agent did. Null once that run is deleted. */
- readonly replacedByRunId: AgentRunId | null
- readonly replacedByUserId: UserId | null
- /** What the author said they were doing. Empty for a human's edit, which has a diff. */
- readonly rationale: string
- readonly createdAt: Date
+  readonly id: PersonaRevisionId
+  readonly workspaceId: WorkspaceId
+  readonly personaId: AgentPersonaId
+  readonly markdownSource: string
+  readonly replacedByKind: PersonaRevisionAuthorKind
+  /** The run that rewrote it, if an agent did. Null once that run is deleted. */
+  readonly replacedByRunId: AgentRunId | null
+  readonly replacedByUserId: UserId | null
+  /** What the author said they were doing. Empty for a human's edit, which has a diff. */
+  readonly rationale: string
+  readonly createdAt: Date
 }
 
 /**
@@ -249,27 +250,27 @@ export interface PersonaRevision {
  * never swaps a prompt on anybody's behalf.
  */
 export interface PersonaVariantSet {
- readonly id: PersonaVariantSetId
- readonly workspaceId: WorkspaceId
- readonly personaId: AgentPersonaId
- /** The run that proposed it. Null once that run is deleted; the search still stands. */
- readonly proposedByRunId: AgentRunId | null
- readonly status: 'open' | 'settled'
- readonly promotedVariantId: PersonaVariantId | null
- readonly settledAt: Date | null
- readonly settledByUserId: UserId | null
- /**
- * The surrogate verifier's session and verdict — a second opinion,
- * recorded beside the measurement and entering nothing.
- *
- * `verifierDecidedAt` is what says a verdict exists. `verifierPickedVariantId` null means
- * the prompt already in use *when there is a verdict*, and means nothing before there is.
- */
- readonly verifierRunId: AgentRunId | null
- readonly verifierPickedVariantId: PersonaVariantId | null
- readonly verifierReason: string | null
- readonly verifierDecidedAt: Date | null
- readonly createdAt: Date
+  readonly id: PersonaVariantSetId
+  readonly workspaceId: WorkspaceId
+  readonly personaId: AgentPersonaId
+  /** The run that proposed it. Null once that run is deleted; the search still stands. */
+  readonly proposedByRunId: AgentRunId | null
+  readonly status: 'open' | 'settled'
+  readonly promotedVariantId: PersonaVariantId | null
+  readonly settledAt: Date | null
+  readonly settledByUserId: UserId | null
+  /**
+   * The surrogate verifier's session and verdict — a second opinion,
+   * recorded beside the measurement and entering nothing.
+   *
+   * `verifierDecidedAt` is what says a verdict exists. `verifierPickedVariantId` null means
+   * the prompt already in use *when there is a verdict*, and means nothing before there is.
+   */
+  readonly verifierRunId: AgentRunId | null
+  readonly verifierPickedVariantId: PersonaVariantId | null
+  readonly verifierReason: string | null
+  readonly verifierDecidedAt: Date | null
+  readonly createdAt: Date
 }
 
 /**
@@ -280,44 +281,44 @@ export interface PersonaVariantSet {
  * checked rather than a re-derivation at the moment somebody clicks.
  */
 export interface PersonaVariant {
- readonly id: PersonaVariantId
- readonly workspaceId: WorkspaceId
- readonly setId: PersonaVariantSetId
- readonly personaId: AgentPersonaId
- readonly markdownSource: string
- /** What the agent said this candidate is for. Read first by whoever decides. */
- readonly rationale: string
- readonly position: number
- readonly createdAt: Date
+  readonly id: PersonaVariantId
+  readonly workspaceId: WorkspaceId
+  readonly setId: PersonaVariantSetId
+  readonly personaId: AgentPersonaId
+  readonly markdownSource: string
+  /** What the agent said this candidate is for. Read first by whoever decides. */
+  readonly rationale: string
+  readonly position: number
+  readonly createdAt: Date
 }
 
 /**
  * A versioned held-out set.
  *
- * The counts and the sentence are stamped at assembly rather than recomputed, because they are
- * a claim about a run history that has since moved on. The "no silent truncation" only
+ * The counts and the sentence are stamped at assembly rather than recomputed, because they
+ * are a claim about a run history that has since moved on. The "no silent truncation" only
  * means anything if what was left out was written down when it was true.
  */
 export interface ReplaySetRecord {
- readonly id: ReplaySetId
- readonly workspaceId: WorkspaceId
- readonly personaId: AgentPersonaId
- readonly version: number
- readonly considered: number
- readonly eligible: number
- readonly detail: string
- readonly createdAt: Date
+  readonly id: ReplaySetId
+  readonly workspaceId: WorkspaceId
+  readonly personaId: AgentPersonaId
+  readonly version: number
+  readonly considered: number
+  readonly eligible: number
+  readonly detail: string
+  readonly createdAt: Date
 }
 
 export interface ReplayItemRecord {
- readonly id: ReplayItemId
- readonly replaySetId: ReplaySetId
- readonly position: number
- readonly sourceRunId: AgentRunId | null
- readonly repositoryId: RepositoryId
- readonly commitSha: string
- readonly task: string
- readonly observedOutcome: ReplayOutcome
+  readonly id: ReplayItemId
+  readonly replaySetId: ReplaySetId
+  readonly position: number
+  readonly sourceRunId: AgentRunId | null
+  readonly repositoryId: RepositoryId
+  readonly commitSha: string
+  readonly task: string
+  readonly observedOutcome: ReplayOutcome
 }
 
 /**
@@ -328,30 +329,30 @@ export interface ReplayItemRecord {
  * the incumbent: the control is what the gate compares to, not something it decides about.
  */
 export interface VariantScreenRecord {
- readonly id: VariantScreenId
- readonly workspaceId: WorkspaceId
- readonly setId: PersonaVariantSetId
- readonly replaySetId: ReplaySetId
- readonly variantId: PersonaVariantId | null
- readonly decision: ScreenDecision | null
- readonly reason: string | null
- readonly decidedAt: Date | null
- readonly createdAt: Date
+  readonly id: VariantScreenId
+  readonly workspaceId: WorkspaceId
+  readonly setId: PersonaVariantSetId
+  readonly replaySetId: ReplaySetId
+  readonly variantId: PersonaVariantId | null
+  readonly decision: ScreenDecision | null
+  readonly reason: string | null
+  readonly decidedAt: Date | null
+  readonly createdAt: Date
 }
 
 /** `pending` until the branch has been through the definition of done; then the vocabulary. */
 export type ScreenRunOutcome = 'pending' | ReplayCheckOutcome
 
 export interface VariantScreenRunRecord {
- readonly id: string
- readonly screenId: VariantScreenId
- readonly replayItemId: ReplayItemId
- /** Claimed before the run exists, released if the start fails. See the table's comment. */
- readonly claimedAt: Date | null
- readonly agentRunId: AgentRunId | null
- readonly outcome: ScreenRunOutcome
- readonly reason: string | null
- readonly finishedAt: Date | null
+  readonly id: string
+  readonly screenId: VariantScreenId
+  readonly replayItemId: ReplayItemId
+  /** Claimed before the run exists, released if the start fails. See the table's comment. */
+  readonly claimedAt: Date | null
+  readonly agentRunId: AgentRunId | null
+  readonly outcome: ScreenRunOutcome
+  readonly reason: string | null
+  readonly finishedAt: Date | null
 }
 
 /**
@@ -359,88 +360,88 @@ export interface VariantScreenRunRecord {
  * not bind to a channel or a Planner.
  */
 export interface PersonaGroup {
- readonly id: PersonaGroupId
- readonly workspaceId: WorkspaceId
- readonly name: string
- /**
- * What this team is for, in one line. The name says what it does;
- * this says when to reach for it, which is the question a human has when the composer
- * lists six of them. Empty means undescribed, which is not a missing value.
- */
- readonly description: string
- readonly personaIds: string[]
- /**
- * Where each member sits on the composition canvas, keyed by persona id.
- *
- * Persisted because on an authoring canvas **position is a fact** a human recorded
- * — which is the line between this canvas and the
- * observability graph, whose positions are computed and worth nothing.
- */
- readonly layout: Record<string, { x: number; y: number }>
- /**
- * How many of each member this team runs at once — the fleet, keyed by persona
- * id. A member with no entry is unsized, which means the Planner decides.
- *
- * Unlike `layout`, the runtime reads this: the roster a Planner is given, the
- * concurrency check at child start, and the plan-time warning. See `fleets.ts` — a
- * width the runtime ignored would be worse than not offering one.
- */
- readonly fleet: Record<string, number>
- /**
- * Who reviews whom on this team, keyed by reviewer persona id. Read by the
- * runtime: a clause in the Planner's roster, and a plan-time warning. See
- * `review-policy.ts`.
- */
- readonly reviewers: Record<string, string[]>
- /**
- * The chain of command, keyed by the **worker** and holding the
- * planner it reports to.
- *
- * Keyed the opposite way from `reviewers`, and see `reporting-lines.ts` for why that is a
- * constraint rather than an inconsistency: a worker reports to at most one planner.
- *
- * Read by the runtime — it narrows the roster a planner is given — and it can only
- * narrow. Attenuation still decides what a child may hold, so a line to a worker the
- * envelope refuses grants nothing. Empty means no narrowing rather than nobody.
- */
- readonly reportsTo: Record<string, string>
- /**
- * Which member the work starts from — the root orchestrator, and the canvas's
- * vantage point for depth. Null when nobody has chosen.
- *
- * Not read by the runtime, and that is not the same as decorative: the delegation
- * matrix a canvas draws is computed from a root because a workspace-wide matrix has
- * nowhere else to stand, so without a chosen root the canvas draws chains no run tree
- * can have. This says where to stand.
- */
- readonly orchestratorId: string | null
- /**
- * Which repository this team's work lands in.
- *
- * The fact the rest of that canvas was blocked on: `verifyCommand` and reconciliation
- * are fields on a *repository*, so a team's canvas could not say whose policy it was
- * showing. Read by the run launcher, which defaults to it — a repository a human chose
- * for a team and every start then ignored would be the decoration the roadmap forbids here.
- *
- * Null means nobody has chosen, which is what every team had before this existed.
- */
- readonly repositoryId: string | null
- /**
- * The other repositories this team's subtasks may name.
- *
- * `repositoryId` is where a run *defaults*, and stays singular for that reason. This is the
- * different question a cross-repository team asks — which repositories a **subtask** may
- * name — and it is a set because that is what the answer is. Empty means the team works in
- * one repository, which is what every team has always done.
- */
- readonly extraRepositoryIds: string[]
- readonly createdAt: Date
- readonly updatedAt: Date
+  readonly id: PersonaGroupId
+  readonly workspaceId: WorkspaceId
+  readonly name: string
+  /**
+   * What this team is for, in one line. The name says what it does;
+   * this says when to reach for it, which is the question a human has when the composer
+   * lists six of them. Empty means undescribed, which is not a missing value.
+   */
+  readonly description: string
+  readonly personaIds: string[]
+  /**
+   * Where each member sits on the composition canvas, keyed by persona id.
+   *
+   * Persisted because on an authoring canvas **position is a fact** a human recorded
+   * — which is the line between this canvas and the
+   * observability graph, whose positions are computed and worth nothing.
+   */
+  readonly layout: Record<string, { x: number; y: number }>
+  /**
+   * How many of each member this team runs at once — the fleet, keyed by persona
+   * id. A member with no entry is unsized, which means the Planner decides.
+   *
+   * Unlike `layout`, the runtime reads this: the roster a Planner is given, the
+   * concurrency check at child start, and the plan-time warning. See `fleets.ts` — a
+   * width the runtime ignored would be worse than not offering one.
+   */
+  readonly fleet: Record<string, number>
+  /**
+   * Who reviews whom on this team, keyed by reviewer persona id. Read by the
+   * runtime: a clause in the Planner's roster, and a plan-time warning. See
+   * `review-policy.ts`.
+   */
+  readonly reviewers: Record<string, string[]>
+  /**
+   * The chain of command, keyed by the **worker** and holding the
+   * planner it reports to.
+   *
+   * Keyed the opposite way from `reviewers`, and see `reporting-lines.ts` for why that is a
+   * constraint rather than an inconsistency: a worker reports to at most one planner.
+   *
+   * Read by the runtime — it narrows the roster a planner is given — and it can only
+   * narrow. Attenuation still decides what a child may hold, so a line to a worker the
+   * envelope refuses grants nothing. Empty means no narrowing rather than nobody.
+   */
+  readonly reportsTo: Record<string, string>
+  /**
+   * Which member the work starts from — the root orchestrator, and the canvas's
+   * vantage point for depth. Null when nobody has chosen.
+   *
+   * Not read by the runtime, and that is not the same as decorative: the delegation
+   * matrix a canvas draws is computed from a root because a workspace-wide matrix has
+   * nowhere else to stand, so without a chosen root the canvas draws chains no run tree
+   * can have. This says where to stand.
+   */
+  readonly orchestratorId: string | null
+  /**
+   * Which repository this team's work lands in.
+   *
+   * The fact the rest of that canvas was blocked on: `verifyCommand` and reconciliation are
+   * fields on a *repository*, so a team's canvas could not say whose policy it was showing.
+   * Read by the run launcher, which defaults to it — a repository a human chose for a team
+   * and every start then ignored would be the decoration the roadmap forbids here.
+   *
+   * Null means nobody has chosen, which is what every team had before this existed.
+   */
+  readonly repositoryId: string | null
+  /**
+   * The other repositories this team's subtasks may name.
+   *
+   * `repositoryId` is where a run *defaults*, and stays singular for that reason. This is
+   * the different question a cross-repository team asks — which repositories a **subtask**
+   * may name — and it is a set because that is what the answer is. Empty means the team
+   * works in one repository, which is what every team has always done.
+   */
+  readonly extraRepositoryIds: string[]
+  readonly createdAt: Date
+  readonly updatedAt: Date
 }
 
 /**
- * The global kill switch. Workspace-scoped rather than process-global: a pause must survive a
- * server restart, so it lives in the database, not in memory.
+ * The global kill switch. Workspace-scoped rather than process-global: a pause must survive
+ * a server restart, so it lives in the database, not in memory.
  *
  * Pausing is deliberately asymmetric with resuming. Pausing cancels every
  * in-flight run; resuming only lifts the block on *starting* new ones and never
@@ -448,35 +449,34 @@ export interface PersonaGroup {
  * and silently reviving killed runs would be the opposite of that.
  */
 export interface WorkspaceRunControl {
- readonly workspaceId: WorkspaceId
- readonly paused: boolean
- readonly pausedAt: Date | null
- readonly pausedByUserId: string | null
- /**
- * When the platform *suggests* a handoff, and how many times a tree may do it.
- *
- * Travels with the kill switch rather than in a settings table of its own for two
- * reasons. It is the same kind of thing — workspace policy an operator sets, persisted
- * so a redeploy cannot silently undo it — and the heartbeat needs the threshold on a
- * path that already reads this row and cannot afford a second query.
- *
- * Null means "the platform's default", which is deliberately distinct from a value that
- * happens to equal it: an operator who has not chosen should inherit a better default
- * later, and one who chose 0.8 should keep 0.8.
- */
- /**
- * Whether a Planner's decomposition waits for a human before any worker starts
- *.
- *
- * The pair to autonomous teams: with the tool gates off, the human's job is to review the
- * plan and to merge, and a plan was the one expensive decision with no gate — N runs spawn
- * the moment a model submits, and the steering only reaches them afterwards.
- */
- readonly planReviewRequired: boolean
- readonly handoff: {
- readonly threshold: number | null
- readonly capPerTree: number | null
- }
+  readonly workspaceId: WorkspaceId
+  readonly paused: boolean
+  readonly pausedAt: Date | null
+  readonly pausedByUserId: string | null
+  /**
+   * When the platform *suggests* a handoff, and how many times a tree may do it.
+   *
+   * Travels with the kill switch rather than in a settings table of its own for two
+   * reasons. It is the same kind of thing — workspace policy an operator sets, persisted
+   * so a redeploy cannot silently undo it — and the heartbeat needs the threshold on a
+   * path that already reads this row and cannot afford a second query.
+   *
+   * Null means "the platform's default", which is deliberately distinct from a value that
+   * happens to equal it: an operator who has not chosen should inherit a better default
+   * later, and one who chose 0.8 should keep 0.8.
+   */
+  /**
+   * Whether a Planner's decomposition waits for a human before any worker starts.
+   *
+   * The pair to autonomous teams: with the tool gates off, the human's job is to review the
+   * plan and to merge, and a plan was the one expensive decision with no gate — N runs
+   * spawn the moment a model submits, and the steering only reaches them afterwards.
+   */
+  readonly planReviewRequired: boolean
+  readonly handoff: {
+    readonly threshold: number | null
+    readonly capPerTree: number | null
+  }
 }
 
 /**
@@ -493,8 +493,8 @@ export const MAX_HANDOFF_THRESHOLD = 0.95
 export const MAX_HANDOFF_CAP_PER_TREE = 5
 
 export type HandoffPolicyVerdict =
- | { readonly ok: true; readonly threshold: number | null; readonly capPerTree: number | null }
- | { readonly ok: false; readonly reason: string }
+  | { readonly ok: true; readonly threshold: number | null; readonly capPerTree: number | null }
+  | { readonly ok: false; readonly reason: string }
 
 /**
  * Validates what an operator typed, and refuses with the reason rather than clamping.
@@ -504,53 +504,53 @@ export type HandoffPolicyVerdict =
  * twice.
  */
 export const parseHandoffPolicy = (input: {
- threshold: number | null
- capPerTree: number | null
+  threshold: number | null
+  capPerTree: number | null
 }): HandoffPolicyVerdict => {
- if (input.threshold !== null) {
- if (!Number.isFinite(input.threshold)) {
- return { ok: false, reason: 'A threshold is a fraction of the window, like 0.8' }
- }
- if (input.threshold < MIN_HANDOFF_THRESHOLD || input.threshold > MAX_HANDOFF_THRESHOLD) {
- return {
- ok: false,
- reason:
- `A handoff threshold sits between ${MIN_HANDOFF_THRESHOLD} and ${MAX_HANDOFF_THRESHOLD}. ` +
- 'Lower and the platform interrupts an agent that has barely started; higher and it ' +
- 'asks one to write a handover with no room left to write it in.',
- }
- }
- }
- if (input.capPerTree !== null) {
- if (!Number.isInteger(input.capPerTree) || input.capPerTree < 1) {
- return { ok: false, reason: 'A tree may hand off at least once, or the setting means nothing' }
- }
- if (input.capPerTree > MAX_HANDOFF_CAP_PER_TREE) {
- return {
- ok: false,
- reason:
- `At most ${MAX_HANDOFF_CAP_PER_TREE} handoffs per tree. Past that the failure mode is ` +
- 'thrash — agents passing work back and forth, each briefing the other, spending the ' +
- 'budget on continuity rather than on the work.',
- }
- }
- }
- return { ok: true, threshold: input.threshold, capPerTree: input.capPerTree }
+  if (input.threshold !== null) {
+    if (!Number.isFinite(input.threshold)) {
+      return { ok: false, reason: 'A threshold is a fraction of the window, like 0.8' }
+    }
+    if (input.threshold < MIN_HANDOFF_THRESHOLD || input.threshold > MAX_HANDOFF_THRESHOLD) {
+      return {
+        ok: false,
+        reason:
+          `A handoff threshold sits between ${MIN_HANDOFF_THRESHOLD} and ${MAX_HANDOFF_THRESHOLD}. ` +
+          'Lower and the platform interrupts an agent that has barely started; higher and it ' +
+          'asks one to write a handover with no room left to write it in.',
+      }
+    }
+  }
+  if (input.capPerTree !== null) {
+    if (!Number.isInteger(input.capPerTree) || input.capPerTree < 1) {
+      return { ok: false, reason: 'A tree may hand off at least once, or the setting means nothing' }
+    }
+    if (input.capPerTree > MAX_HANDOFF_CAP_PER_TREE) {
+      return {
+        ok: false,
+        reason:
+          `At most ${MAX_HANDOFF_CAP_PER_TREE} handoffs per tree. Past that the failure mode is ` +
+          'thrash — agents passing work back and forth, each briefing the other, spending the ' +
+          'budget on continuity rather than on the work.',
+      }
+    }
+  }
+  return { ok: true, threshold: input.threshold, capPerTree: input.capPerTree }
 }
 
 export type AgentRunStatus =
- | 'pending'
- | 'running'
- | 'awaiting_approval'
- | 'completed'
- | 'failed'
- | 'cancelled'
+  | 'pending'
+  | 'running'
+  | 'awaiting_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
 
 /**
  * `merged` is set by the merge queue on success, never by a
  * human directly — queueing is the human action, and until the queue reaches the
  * entry the branch is still undecided. A failed merge leaves the disposition unset
- * on purpose: the "hand the branch back to its owning run" means it is actionable
+ * on purpose: The "hand the branch back to its owning run" means it is actionable
  * again, not that it has been dealt with.
  */
 export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed' | 'merged'
@@ -562,9 +562,10 @@ export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed' | 'merge
  * delegation children" — the tree view renders delegation, while a review or a
  * reconcile is something done *to* a run's output, not work handed down.
  *
- * `steer` is the same distinction for a re-planning turn: the run hangs off the Planner it re-enters, because that is what it is
- * *about*, but it is not work that Planner delegated and it must not be summed into
- * the aggregation, counted as delegation depth, or drawn as another worker.
+ * `steer` is the same distinction for a re-planning turn: the run hangs off the Planner it
+ * re-enters, because that is what it is *about*, but it is not work that Planner delegated
+ * and it must not be summed into the aggregation, counted as delegation depth, or drawn as
+ * another worker.
  */
 /**
  * `handoff` is the warm successor: a new run in the *same tree*, on the same branch,
@@ -576,91 +577,91 @@ export type AgentRunBranchDisposition = 'kept' | 'discarded' | 'pushed' | 'merge
 /**
  * How a child run attaches to its parent.
  *
- * `verify` is the surrogate verifier: platform-started over a variant search, and
- * distinct for the reason the data model gives about a reconciler — a run the parent did not ask for and
- * does not shape must not masquerade as delegation.
+ * `verify` is the surrogate verifier: platform-started over a variant search, and distinct
+ * for the reason the data model gives about a reconciler — a run the parent did not ask for
+ * and does not shape must not masquerade as delegation.
  */
 export type AgentRunRelation =
- | 'delegation'
- | 'review'
- | 'reconcile'
- | 'steer'
- | 'handoff'
- | 'verify'
- /**
- * One held-out item, screened against one arm.
- *
- * Its own relation rather than `delegation`, for the reason and the one `verify` already
- * cites: a run the parent did not ask for must not masquerade as delegation, and the tree
- * is where a human watching a search will look for what it is spending.
- */
- | 'screen'
+  | 'delegation'
+  | 'review'
+  | 'reconcile'
+  | 'steer'
+  | 'handoff'
+  | 'verify'
+  /**
+   * One held-out item, screened against one arm.
+   *
+   * Its own relation rather than `delegation`, for the reason and the one `verify` already
+   * cites: a run the parent did not ask for must not masquerade as delegation, and the tree
+   * is where a human watching a search will look for what it is spending.
+   */
+  | 'screen'
 
 export interface AgentRun {
- readonly id: AgentRunId
- readonly workspaceId: WorkspaceId
- readonly threadId: ThreadId
- readonly repositoryId: RepositoryId
- readonly runnerId: RunnerId
- readonly persona: PersonaSpec
- /**
- * The run that spawned this one — null for a run a human started.
- * Renders the swarm tree, and carries the capability attenuation rule: see
- * `attenuateChildPersona`.
- */
- readonly parentRunId: AgentRunId | null
- /** Null exactly when `parentRunId` is null. */
- readonly relation: AgentRunRelation | null
- /**
- * What this run was asked to do — a human's `@mention`, or the subtask text its
- * Planner wrote. Null for a run started from the sidebar picker with no task.
- *
- * Recorded because a re-planning turn needs
- * "its original goal, its current plan" and neither existed anywhere queryable: the
- * task was dispatched to the Runner and never persisted, so the closest thing on
- * record was a `run_started` note title truncated to 120 characters.
- *
- * **Internal-only, and absent from `AgentRunSchema` by the same rule as the reaper's
- * timestamps.** For a delegated child this string is model-authored, so exposing it
- * through the contract would put untrusted prose into a client that has no fence
- * around it. The steering brief is assembled server-side, which is where it
- * needs to be read.
- */
- readonly task: string | null
- readonly status: AgentRunStatus
- readonly totalCostUsd: number | null
- readonly errorMessage: string | null
- // Set once the Runner finishes cloning — null until then.
- readonly clonePath: string | null
- /**
- * The commit the clone opened at. Null before the Runner reports a
- * workspace, and for every run older than the column.
- */
- readonly baseCommitSha: string | null
- readonly branchName: string | null
- // A human's end-of-run keep/discard decision on DiffView — null until made.
- readonly branchDisposition: AgentRunBranchDisposition | null
- // Dead-run reaper inputs — internal-only, deliberately absent
- // from AgentRunSchema (packages/api-contract) so they never reach the browser.
- readonly lastHeartbeatAt: Date | null
- readonly lastEventAt: Date | null
- /**
- * How full this run's context window was when the Runner last sampled it.
- * Both null until a sample arrives — and they move together, since a token count with
- * no window to measure against is not a ratio.
- */
- readonly contextTokens: number | null
- readonly contextMaxTokens: number | null
- /**
- * When the platform told this run its window was filling, or null.
- *
- * On the run rather than derived from the thread, because it is the only way to tell a
- * *declined* nudge from one that never fired — and those send a watcher to different
- * places. It never means the run handed over; a handoff is a second run in the tree.
- */
- readonly handoffSuggestedAt: Date | null
- readonly createdAt: Date
- readonly completedAt: Date | null
+  readonly id: AgentRunId
+  readonly workspaceId: WorkspaceId
+  readonly threadId: ThreadId
+  readonly repositoryId: RepositoryId
+  readonly runnerId: RunnerId
+  readonly persona: PersonaSpec
+  /**
+   * The run that spawned this one — null for a run a human started.
+   * Renders the swarm tree, and carries the capability attenuation rule: see
+   * `attenuateChildPersona`.
+   */
+  readonly parentRunId: AgentRunId | null
+  /** Null exactly when `parentRunId` is null. */
+  readonly relation: AgentRunRelation | null
+  /**
+   * What this run was asked to do — a human's `@mention`, or the subtask text its
+   * Planner wrote. Null for a run started from the sidebar picker with no task.
+   *
+   * Recorded because a re-planning turn needs
+   * "its original goal, its current plan" and neither existed anywhere queryable: the
+   * task was dispatched to the Runner and never persisted, so the closest thing on
+   * record was a `run_started` note title truncated to 120 characters.
+   *
+   * **Internal-only, and absent from `AgentRunSchema` by the same rule as the reaper's
+   * timestamps.** For a delegated child this string is model-authored, so exposing it
+   * through the contract would put untrusted prose into a client that has no fence
+   * around it. The steering brief is assembled server-side, which is where it
+   * needs to be read.
+   */
+  readonly task: string | null
+  readonly status: AgentRunStatus
+  readonly totalCostUsd: number | null
+  readonly errorMessage: string | null
+  // Set once the Runner finishes cloning — null until then.
+  readonly clonePath: string | null
+  /**
+   * The commit the clone opened at. Null before the Runner reports a
+   * workspace, and for every run older than the column.
+   */
+  readonly baseCommitSha: string | null
+  readonly branchName: string | null
+  // A human's end-of-run keep/discard decision on DiffView — null until made.
+  readonly branchDisposition: AgentRunBranchDisposition | null
+  // Dead-run reaper inputs — internal-only, deliberately absent
+  // from AgentRunSchema (packages/api-contract) so they never reach the browser.
+  readonly lastHeartbeatAt: Date | null
+  readonly lastEventAt: Date | null
+  /**
+   * How full this run's context window was when the Runner last sampled it.
+   * Both null until a sample arrives — and they move together, since a token count with
+   * no window to measure against is not a ratio.
+   */
+  readonly contextTokens: number | null
+  readonly contextMaxTokens: number | null
+  /**
+   * When the platform told this run its window was filling, or null.
+   *
+   * On the run rather than derived from the thread, because it is the only way to tell a
+   * *declined* nudge from one that never fired — and those send a watcher to different
+   * places. It never means the run handed over; a handoff is a second run in the tree.
+   */
+  readonly handoffSuggestedAt: Date | null
+  readonly createdAt: Date
+  readonly completedAt: Date | null
 }
 
 /**
@@ -669,25 +670,25 @@ export interface AgentRun {
  * not-yet-built blob-storage concern (the tech stack SeaweedFS, deferred past Phase 1).
  */
 export type AgentEvent =
- | { readonly kind: 'assistant_text'; readonly text: string }
- | {
- readonly kind: 'tool_call'
- readonly toolUseId: string
- readonly toolName: string
- readonly input: Readonly<Record<string, unknown>>
- }
- | {
- readonly kind: 'tool_result'
- readonly toolUseId: string
- readonly isError: boolean
- readonly summary: string
- }
- | {
- readonly kind: 'run_completed'
- readonly totalCostUsd: number
- readonly result: string
- }
- | { readonly kind: 'run_failed'; readonly message: string }
+  | { readonly kind: 'assistant_text'; readonly text: string }
+  | {
+      readonly kind: 'tool_call'
+      readonly toolUseId: string
+      readonly toolName: string
+      readonly input: Readonly<Record<string, unknown>>
+    }
+  | {
+      readonly kind: 'tool_result'
+      readonly toolUseId: string
+      readonly isError: boolean
+      readonly summary: string
+    }
+  | {
+      readonly kind: 'run_completed'
+      readonly totalCostUsd: number
+      readonly result: string
+    }
+  | { readonly kind: 'run_failed'; readonly message: string }
 
 /**
  * A run in a terminal status will never emit another event, which is what makes it safe
@@ -697,42 +698,42 @@ export type AgentEvent =
 export const TERMINAL_RUN_STATUSES: readonly AgentRunStatus[] = ['completed', 'failed', 'cancelled']
 
 export const isTerminalRunStatus = (status: string): boolean =>
- (TERMINAL_RUN_STATUSES as readonly string[]).includes(status)
+  (TERMINAL_RUN_STATUSES as readonly string[]).includes(status)
 
 export type ApprovalStatus = 'pending' | 'approved' | 'denied'
 
 /**
- * Anti-forgery surface, identity-bound approval: `toolName`/`input` are the exact
+ * Anti-forgery surface: `toolName`/`input` are the exact
  * argv the SDK is about to execute, never a model-authored summary, and
  * `resolvedBy` must be a human actor (enforced in the use-case, not here).
  */
 export interface ApprovalRequest {
- readonly id: ApprovalRequestId
- readonly workspaceId: WorkspaceId
- readonly agentRunId: AgentRunId
- readonly toolUseId: string
- readonly toolName: string
- readonly input: Readonly<Record<string, unknown>>
- readonly status: ApprovalStatus
- /**
- * A clarifying question this gate is carrying,
- * or null when it is an ordinary tool gate.
- *
- * **Model-authored, therefore untrusted**: a question is composed
- * by an agent, so it renders inside the untrusted fence like any other agent prose.
- * An agent that could ask "paste your token here" in a box that looks like the
- * platform's own is the risk wearing a different hat.
- */
- readonly question: string | null
- /** The human's reply. Trusted input — a person is not the threat model here. */
- readonly answer: string | null
- readonly createdAt: Date
- readonly resolvedAt: Date | null
+  readonly id: ApprovalRequestId
+  readonly workspaceId: WorkspaceId
+  readonly agentRunId: AgentRunId
+  readonly toolUseId: string
+  readonly toolName: string
+  readonly input: Readonly<Record<string, unknown>>
+  readonly status: ApprovalStatus
+  /**
+   * A clarifying question this gate is carrying,
+   * or null when it is an ordinary tool gate.
+   *
+   * **Model-authored, therefore untrusted**: a question is composed
+   * by an agent, so it renders inside the untrusted fence like any other agent prose.
+   * An agent that could ask "paste your token here" in a box that looks like the
+   * platform's own is the risk wearing a different hat.
+   */
+  readonly question: string | null
+  /** The human's reply. Trusted input — a person is not the threat model here. */
+  readonly answer: string | null
+  readonly createdAt: Date
+  readonly resolvedAt: Date | null
 }
 
 /** A gate carrying a question rather than a tool call, and what to do with it. */
 export const isClarifyingQuestion = (request: {
- readonly question: string | null
+  readonly question: string | null
 }): boolean => request.question !== null
 
 /**
@@ -748,22 +749,22 @@ export const isClarifyingQuestion = (request: {
  *. This is only what makes a one-line summary scannable.
  */
 export const PRIMARY_ARG_FIELDS = [
- 'command',
- 'file_path',
- 'notebook_path',
- 'pattern',
- 'path',
- 'url',
- 'query',
+  'command',
+  'file_path',
+  'notebook_path',
+  'pattern',
+  'path',
+  'url',
+  'query',
 ] as const
 
 export const primaryToolArgument = (
- input: Readonly<Record<string, unknown>> | null | undefined,
+  input: Readonly<Record<string, unknown>> | null | undefined,
 ): string | null => {
- if (!input) return null
- for (const field of PRIMARY_ARG_FIELDS) {
- const value = input[field]
- if (typeof value === 'string') return value
- }
- return null
+  if (!input) return null
+  for (const field of PRIMARY_ARG_FIELDS) {
+    const value = input[field]
+    if (typeof value === 'string') return value
+  }
+  return null
 }

@@ -9,26 +9,26 @@ const execFileAsync = promisify(execFile)
 /**
  * The dependency cache a sandboxed run gets.
  *
- * Repository binding: "a fresh clone plus `npm install`/build is minutes and gigabytes each — a real
- * throughput ceiling for swarms", and the risk register lists it as required before swarms are
- * useful. A run's HOME is created per run, so without this every worker in a swarm
- * re-downloads the same tree from an empty cache; N workers on one repository pay it N
- * times.
+ * Repository binding: "a fresh clone plus `npm install`/build is minutes and gigabytes each
+ * — a real throughput ceiling for swarms", and the risk register lists it as required
+ * before swarms are useful. A run's HOME is created per run, so without this every worker
+ * in a swarm re-downloads the same tree from an empty cache; N workers on one repository
+ * pay it N times.
  *
  * **Two modes, and the difference is a security boundary, not a performance knob.**
  *
  * - `copy` (the default when the cache is enabled) — the run gets its *own* copy of the
- * warmed cache, writable, discarded with the run. Nothing a run writes is ever seen by
- * another run, so the cache is not a channel between sandboxes. On APFS and on
- * reflink-capable Linux filesystems the copy is metadata-only, so this costs
- * milliseconds and no extra disk for the shared blocks — which is the entire reason
- * the safe mode is also the practical one.
+ *   warmed cache, writable, discarded with the run. Nothing a run writes is ever seen by
+ *   another run, so the cache is not a channel between sandboxes. On APFS and on
+ *   reflink-capable Linux filesystems the copy is metadata-only, so this costs
+ *   milliseconds and no extra disk for the shared blocks — which is the entire reason
+ *   the safe mode is also the practical one.
  * - `shared` — one directory bind-mounted into every run, read-write. Faster to warm
- * (runs fill it as they go) and **unsound**: npm's cacache stores registry HTTP
- * responses keyed by URL, so a malicious run can plant a response advertising a
- * version whose integrity hash it also controls, and a later run resolving that
- * package without a lockfile pin installs it. Content hashes do not save you here —
- * the attacker chose the hash. Opt-in, and named `shared` so choosing it is explicit.
+ *   (runs fill it as they go) and **unsound**: npm's cacache stores registry HTTP
+ *   responses keyed by URL, so a malicious run can plant a response advertising a
+ *   version whose integrity hash it also controls, and a later run resolving that
+ *   package without a lockfile pin installs it. Content hashes do not save you here —
+ *   the attacker chose the hash. Opt-in, and named `shared` so choosing it is explicit.
  *
  * In `copy` mode the shared root is only ever written by `warmDepCache`, which runs an
  * operator-authored install command with no agent in the loop. That is the whole safety
@@ -38,19 +38,19 @@ const execFileAsync = promisify(execFile)
 export type DepCacheMode = 'copy' | 'shared'
 
 export interface DepCacheConfig {
- /** Host directory holding the warmed cache. */
- readonly root: string
- readonly mode: DepCacheMode
+  /** Host directory holding the warmed cache. */
+  readonly root: string
+  readonly mode: DepCacheMode
 }
 
 export const depCacheFromEnv = (env: NodeJS.ProcessEnv = process.env): DepCacheConfig | null => {
- if (env.LOOM_DEP_CACHE_ENABLED !== '1') return null
- return {
- root: env.LOOM_DEP_CACHE_ROOT ?? join(tmpdir, 'loom-dep-cache'),
- // Anything other than an explicit `shared` is `copy`. A typo must fall to the safe
- // mode, never out of it.
- mode: env.LOOM_DEP_CACHE_MODE === 'shared' ? 'shared': 'copy',
- }
+  if (env.LOOM_DEP_CACHE_ENABLED !== '1') return null
+  return {
+    root: env.LOOM_DEP_CACHE_ROOT ?? join(tmpdir(), 'loom-dep-cache'),
+    // Anything other than an explicit `shared` is `copy`. A typo must fall to the safe
+    // mode, never out of it.
+    mode: env.LOOM_DEP_CACHE_MODE === 'shared' ? 'shared' : 'copy',
+  }
 }
 
 /**
@@ -69,21 +69,21 @@ export const depCacheFromEnv = (env: NodeJS.ProcessEnv = process.env): DepCacheC
  * second place for the fallback to be forgotten.
  */
 export const cloneDirectory = async (source: string, destination: string): Promise<void> => {
- const attempts =
- process.platform === 'darwin'
- ? [['-Rc', `${source}/.`, destination], ['-R', `${source}/.`, destination]]
-: [['-a', '--reflink=auto', `${source}/.`, destination], ['-a', `${source}/.`, destination]]
+  const attempts =
+    process.platform === 'darwin'
+      ? [['-Rc', `${source}/.`, destination], ['-R', `${source}/.`, destination]]
+      : [['-a', '--reflink=auto', `${source}/.`, destination], ['-a', `${source}/.`, destination]]
 
- let lastError: unknown
- for (const args of attempts) {
- try {
- await execFileAsync('cp', args)
- return
- } catch (error) {
- lastError = error
- }
- }
- throw lastError
+  let lastError: unknown
+  for (const args of attempts) {
+    try {
+      await execFileAsync('cp', args)
+      return
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError
 }
 
 /**
@@ -93,33 +93,33 @@ export const cloneDirectory = async (source: string, destination: string): Promi
  * throw away every other run's cache.
  */
 export interface DepCacheMount {
- readonly path: string
- readonly release: => Promise<void>
+  readonly path: string
+  readonly release: () => Promise<void>
 }
 
 export const prepareDepCache = async (
- config: DepCacheConfig,
- runId: string,
+  config: DepCacheConfig,
+  runId: string,
 ): Promise<DepCacheMount> => {
- // Created here rather than left to the container runtime: docker would create a
- // missing bind-mount source as root, which the non-root agent cannot write, so the
- // cache would silently stay empty while looking configured.
- await mkdir(config.root, { recursive: true })
+  // Created here rather than left to the container runtime: docker would create a
+  // missing bind-mount source as root, which the non-root agent cannot write, so the
+  // cache would silently stay empty while looking configured.
+  await mkdir(config.root, { recursive: true })
 
- if (config.mode === 'shared') {
- return { path: config.root, release: async => {} }
- }
+  if (config.mode === 'shared') {
+    return { path: config.root, release: async () => {} }
+  }
 
- const copyPath = await mkdtemp(
- join(process.env.LOOM_RUN_SCRATCH_ROOT ?? tmpdir, `loom-deps-${runId}-`),
-)
- await cloneDirectory(config.root, copyPath)
- return {
- path: copyPath,
- release: async => {
- await rm(copyPath, { recursive: true, force: true })
- },
- }
+  const copyPath = await mkdtemp(
+    join(process.env.LOOM_RUN_SCRATCH_ROOT ?? tmpdir(), `loom-deps-${runId}-`),
+  )
+  await cloneDirectory(config.root, copyPath)
+  return {
+    path: copyPath,
+    release: async () => {
+      await rm(copyPath, { recursive: true, force: true })
+    },
+  }
 }
 
 /**
@@ -139,78 +139,78 @@ export const prepareDepCache = async (
  * every warm failed with `ENOENT: mkdir '/work/node_modules'`, found by the live check.
  */
 export interface WarmDepCacheInput {
- readonly runtime: string
- readonly image: string
- readonly network: string
- readonly cacheRoot: string
- readonly clonePath: string
- readonly command: string
- readonly env: Record<string, string>
- readonly timeoutMs: number
+  readonly runtime: string
+  readonly image: string
+  readonly network: string
+  readonly cacheRoot: string
+  readonly clonePath: string
+  readonly command: string
+  readonly env: Record<string, string>
+  readonly timeoutMs: number
 }
 
 export const warmDepCache = async (
- input: WarmDepCacheInput,
+  input: WarmDepCacheInput,
 ): Promise<{ ok: true } | { ok: false; detail: string }> => {
- await mkdir(input.cacheRoot, { recursive: true })
- const args = buildWarmArgs(input)
- return new Promise((resolve) => {
- const child = spawn(input.runtime, args, { stdio: ['ignore', 'pipe', 'pipe'] })
- let output = ''
- const capture = (chunk: Buffer) => {
- // Bounded: a chatty installer must not be able to exhaust the Runner's memory
- // through its log, and only the tail is ever reported.
- if (output.length < 1_000_000) output += chunk.toString
- }
- child.stdout.on('data', capture)
- child.stderr.on('data', capture)
+  await mkdir(input.cacheRoot, { recursive: true })
+  const args = buildWarmArgs(input)
+  return new Promise((resolve) => {
+    const child = spawn(input.runtime, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    const capture = (chunk: Buffer) => {
+      // Bounded: a chatty installer must not be able to exhaust the Runner's memory
+      // through its log, and only the tail is ever reported.
+      if (output.length < 1_000_000) output += chunk.toString()
+    }
+    child.stdout.on('data', capture)
+    child.stderr.on('data', capture)
 
- const timer = setTimeout( => {
- child.kill('SIGKILL')
- resolve({ ok: false, detail: `the install command exceeded its timeout\n${tail(output)}` })
- }, input.timeoutMs)
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      resolve({ ok: false, detail: `the install command exceeded its timeout\n${tail(output)}` })
+    }, input.timeoutMs)
 
- child.once('error', (error) => {
- clearTimeout(timer)
- resolve({ ok: false, detail: error.message })
- })
- child.once('close', (code) => {
- clearTimeout(timer)
- resolve(code === 0 ? { ok: true }: { ok: false, detail: tail(output) })
- })
- })
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      resolve({ ok: false, detail: error.message })
+    })
+    child.once('close', (code) => {
+      clearTimeout(timer)
+      resolve(code === 0 ? { ok: true } : { ok: false, detail: tail(output) })
+    })
+  })
 }
 
 /** Last few lines only — a thread message is not the place for a full install log. */
 const tail = (text: string, lines = 12): string =>
- text.trim.split('\n').slice(-lines).join('\n').slice(0, 4_000)
+  text.trim().split('\n').slice(-lines).join('\n').slice(0, 4_000)
 
 export const buildWarmArgs = (input: WarmDepCacheInput): string[] => [
- 'run',
- '--rm',
- '--network',
- input.network,
- '--cap-drop=ALL',
- '--security-opt=no-new-privileges',
- '--user',
- '1000:1000',
- '--read-only',
- '--tmpfs',
- '/tmp:rw,noexec,nosuid,size=1g',
- // Writable, because installers write into the project. This is a throwaway clone,
- // not the bound repository — see the note above.
- '-v',
- `${input.clonePath}:/work:rw`,
- '-v',
- `${input.cacheRoot}:${DEP_CACHE_DIR}:rw`,
- '-w',
- '/work',
-...Object.entries(input.env).flatMap(([key, value]) => ['-e', `${key}=${value}`]),
- '--entrypoint',
- 'sh',
- input.image,
- '-c',
- input.command,
+  'run',
+  '--rm',
+  '--network',
+  input.network,
+  '--cap-drop=ALL',
+  '--security-opt=no-new-privileges',
+  '--user',
+  '1000:1000',
+  '--read-only',
+  '--tmpfs',
+  '/tmp:rw,noexec,nosuid,size=1g',
+  // Writable, because installers write into the project. This is a throwaway clone,
+  // not the bound repository — see the note above.
+  '-v',
+  `${input.clonePath}:/work:rw`,
+  '-v',
+  `${input.cacheRoot}:${DEP_CACHE_DIR}:rw`,
+  '-w',
+  '/work',
+  ...Object.entries(input.env).flatMap(([key, value]) => ['-e', `${key}=${value}`]),
+  '--entrypoint',
+  'sh',
+  input.image,
+  '-c',
+  input.command,
 ]
 
 /** Where the cache is mounted inside the sandbox. */
@@ -225,13 +225,13 @@ export const DEP_CACHE_DIR = '/deps'
  * safe to share when it *is* a cache.**
  *
  * `root` defaults to the in-container mount point. Merge verification can also run
- * unsandboxed (with the acknowledgement the roadmap requires), and there the cache is a host
- * directory — the paths have to name where the process will actually look.
+ * unsandboxed (with the acknowledgement the roadmap requires), and there the cache is a
+ * host directory — the paths have to name where the process will actually look.
  */
 export const depCacheEnv = (root: string = DEP_CACHE_DIR): Record<string, string> => ({
- npm_config_cache: `${root}/npm`,
- npm_config_store_dir: `${root}/pnpm`,
- YARN_CACHE_FOLDER: `${root}/yarn`,
- PIP_CACHE_DIR: `${root}/pip`,
- GOMODCACHE: `${root}/go`,
+  npm_config_cache: `${root}/npm`,
+  npm_config_store_dir: `${root}/pnpm`,
+  YARN_CACHE_FOLDER: `${root}/yarn`,
+  PIP_CACHE_DIR: `${root}/pip`,
+  GOMODCACHE: `${root}/go`,
 })

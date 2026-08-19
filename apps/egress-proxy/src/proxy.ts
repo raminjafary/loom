@@ -1,9 +1,9 @@
 import {
- classifyEgress,
- parseUsage,
- truncateEgressHost,
- type EgressDecision,
- type TokenUsage,
+  classifyEgress,
+  parseUsage,
+  truncateEgressHost,
+  type EgressDecision,
+  type TokenUsage,
 } from '@loom/domain'
 import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -16,14 +16,14 @@ import type { LeaseRegistry } from './leases.js'
  * from the sandbox network:
  *
  * 1. **Credential-injecting reverse proxy** for the model API, under
- * `/anthropic/*`. The sandbox presents its opaque per-run lease token; this
- * swaps in the real key, which never enters the sandbox. Being on the request
- * path is also what makes cost metering *authoritative* rather than
- * self-reported.
+ *    `/anthropic/*`. The sandbox presents its opaque per-run lease token; this
+ *    swaps in the real key, which never enters the sandbox. Being on the request
+ *    path is also what makes cost metering *authoritative* rather than
+ *    self-reported.
  *
  * 2. **Allowlisting forward proxy** via CONNECT, for everything else a run
- * legitimately needs (package registries). Tunnels are not decrypted — see
- * egress-policy.ts for why that is the honest boundary.
+ *    legitimately needs (package registries). Tunnels are not decrypted — see
+ *    egress-policy.ts for why that is the honest boundary.
  *
  * Anything else is refused. That is the "deny-by-default" half of the sandbox spec: the
  * sandbox sits on a Docker network with no route off the host, so this process
@@ -41,37 +41,37 @@ import type { LeaseRegistry } from './leases.js'
  * host's keychain where a container cannot reach it.
  */
 export interface UpstreamAuth {
- /** Current bearer token, or null when the Runner has not supplied one yet. */
- oauthToken: string | null
- /** Fallback when no OAuth token is configured. */
- readonly apiKey: string | null
+  /** Current bearer token, or null when the Runner has not supplied one yet. */
+  oauthToken: string | null
+  /** Fallback when no OAuth token is configured. */
+  readonly apiKey: string | null
 }
 
 export interface ProxyOptions {
- readonly leases: LeaseRegistry
- readonly upstream: UpstreamAuth
- readonly anthropicBaseUrl: string
- readonly allowedHosts: readonly string[]
- /**
- * Called when a run exceeds its budget cap. Refusing the request is only
- * half of enforcement — something has to stop the run, and the proxy cannot
- * reach a Runner directly.
- */
- readonly onBudgetExhausted?: (runId: string) => void
- readonly log?: (message: string) => void
- /**
- * Every CONNECT decision, allowed or refused.
- *
- * Called rather than written, so this file keeps owning the socket and nothing else. The
- * queue it feeds is drained by the Runner over the control plane and forwarded on the
- * socket the server already trusts — deliberately the same path metered spend takes, since
- * the alternative is the proxy growing a second authenticated surface.
- *
- * Only CONNECT: that is where the allowlist decides. A model-endpoint refusal is an
- * authentication or budget event and is already visible as an API failure to the run
- * itself, where a refused host is visible to nobody.
- */
- readonly onEgressDecision?: (decision: EgressDecision) => void
+  readonly leases: LeaseRegistry
+  readonly upstream: UpstreamAuth
+  readonly anthropicBaseUrl: string
+  readonly allowedHosts: readonly string[]
+  /**
+   * Called when a run exceeds its budget cap. Refusing the request is only
+   * half of enforcement — something has to stop the run, and the proxy cannot
+   * reach a Runner directly.
+   */
+  readonly onBudgetExhausted?: (runId: string) => void
+  readonly log?: (message: string) => void
+  /**
+   * Every CONNECT decision, allowed or refused.
+   *
+   * Called rather than written, so this file keeps owning the socket and nothing else. The
+   * queue it feeds is drained by the Runner over the control plane and forwarded on the
+   * socket the server already trusts — deliberately the same path metered spend takes,
+   * since the alternative is the proxy growing a second authenticated surface.
+   *
+   * Only CONNECT: that is where the allowlist decides. A model-endpoint refusal is an
+   * authentication or budget event and is already visible as an API failure to the run
+   * itself, where a refused host is visible to nobody.
+   */
+  readonly onEgressDecision?: (decision: EgressDecision) => void
 }
 
 /**
@@ -82,22 +82,22 @@ export interface ProxyOptions {
  * only way to give them a proxy credential at all.
  */
 const authToken = (header: string | undefined): string | null => {
- if (!header) return null
- const trimmed = header.trim
+  if (!header) return null
+  const trimmed = header.trim()
 
- const bearerMatch = /^Bearer\s+(.+)$/i.exec(trimmed)
- if (bearerMatch?.[1]) return bearerMatch[1]
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(trimmed)
+  if (bearerMatch?.[1]) return bearerMatch[1]
 
- const basicMatch = /^Basic\s+(.+)$/i.exec(trimmed)
- if (basicMatch?.[1]) {
- const decoded = Buffer.from(basicMatch[1], 'base64').toString('utf8')
- // The username is ignored: only the password carries the token, so callers
- // are free to use any placeholder user.
- const colon = decoded.indexOf(':')
- return colon === -1 ? decoded: decoded.slice(colon + 1)
- }
+  const basicMatch = /^Basic\s+(.+)$/i.exec(trimmed)
+  if (basicMatch?.[1]) {
+    const decoded = Buffer.from(basicMatch[1], 'base64').toString('utf8')
+    // The username is ignored: only the password carries the token, so callers
+    // are free to use any placeholder user.
+    const colon = decoded.indexOf(':')
+    return colon === -1 ? decoded : decoded.slice(colon + 1)
+  }
 
- return trimmed
+  return trimmed
 }
 
 /**
@@ -105,19 +105,19 @@ const authToken = (header: string | undefined): string | null => {
  * comparable against what was issued without becoming a place credentials leak.
  */
 const fingerprint = (token: string | null): string =>
- token === null ? 'none': createHash('sha256').update(token).digest('hex').slice(0, 10)
+  token === null ? 'none' : createHash('sha256').update(token).digest('hex').slice(0, 10)
 
 const readBody = async (request: IncomingMessage): Promise<Buffer> => {
- const chunks: Buffer[] = []
- for await (const chunk of request) chunks.push(chunk as Buffer)
- return Buffer.concat(chunks)
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks)
 }
 
 const deny = (response: ServerResponse, status: number, message: string): void => {
- response.writeHead(status, { 'content-type': 'application/json' })
- // Shaped like a provider error so the agent SDK surfaces it as an API failure
- // it already knows how to report, rather than as unparseable garbage.
- response.end(JSON.stringify({ type: 'error', error: { type: 'proxy_denied', message } }))
+  response.writeHead(status, { 'content-type': 'application/json' })
+  // Shaped like a provider error so the agent SDK surfaces it as an API failure
+  // it already knows how to report, rather than as unparseable garbage.
+  response.end(JSON.stringify({ type: 'error', error: { type: 'proxy_denied', message } }))
 }
 
 /**
@@ -130,16 +130,16 @@ const deny = (response: ServerResponse, status: number, message: string): void =
 export const LEASE_HEADER = 'x-loom-lease'
 
 const STRIPPED_REQUEST_HEADERS = new Set([
- 'authorization',
- 'x-api-key',
- LEASE_HEADER,
- 'host',
- 'connection',
- 'proxy-authorization',
- 'content-length',
- 'transfer-encoding',
- 'keep-alive',
- 'upgrade',
+  'authorization',
+  'x-api-key',
+  LEASE_HEADER,
+  'host',
+  'connection',
+  'proxy-authorization',
+  'content-length',
+  'transfer-encoding',
+  'keep-alive',
+  'upgrade',
 ])
 
 /**
@@ -158,272 +158,272 @@ const STRIPPED_REQUEST_HEADERS = new Set([
  * cannot round-trip into an allowed decision.
  */
 const splitAuthority = (authority: string): { host: string; port: number } => {
- const lastColon = authority.lastIndexOf(':')
- if (lastColon <= 0) return { host: authority, port: 0 }
- const port = Number(authority.slice(lastColon + 1))
- return {
- host: authority.slice(0, lastColon).toLowerCase,
- port: Number.isInteger(port) && port > 0 ? port: 0,
- }
+  const lastColon = authority.lastIndexOf(':')
+  if (lastColon <= 0) return { host: authority, port: 0 }
+  const port = Number(authority.slice(lastColon + 1))
+  return {
+    host: authority.slice(0, lastColon).toLowerCase(),
+    port: Number.isInteger(port) && port > 0 ? port : 0,
+  }
 }
 
 const normalizePath = (target: string): string => {
- if (!/^https?:\/\//i.test(target)) return target
- try {
- const parsed = new URL(target)
- return `${parsed.pathname}${parsed.search}`
- } catch {
- return target
- }
+  if (!/^https?:\/\//i.test(target)) return target
+  try {
+    const parsed = new URL(target)
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return target
+  }
 }
 
 export const createEgressProxy = (options: ProxyOptions): Server => {
- const log = options.log ?? ( => {})
+  const log = options.log ?? (() => {})
 
- const handleModelRequest = async (
- request: IncomingMessage,
- response: ServerResponse,
- path: string,
-): Promise<void> => {
- // `x-loom-lease` first, and it is the channel that actually matters. The Agent
- // SDK's bundled CLI validates ANTHROPIC_API_KEY's shape locally — apparently
- // including a checksum, since a 109-character token passed and a 108-character
- // one did not — and mangles what it forwards. Carrying the lease in a header of
- // our own means authentication never depends on surviving that validator.
- // authorization/x-api-key remain accepted for plain HTTP clients (see the tests).
- const token =
- (typeof request.headers[LEASE_HEADER] === 'string' ? request.headers[LEASE_HEADER]: null) ??
- authToken(request.headers.authorization) ??
- (typeof request.headers['x-api-key'] === 'string' ? request.headers['x-api-key']: null)
- const lease = options.leases.resolve(token)
- if (!lease) {
- // Logged with the shape of what arrived, never the value. An authenticating
- // proxy that does not record its own refusals is undebuggable: a rejected
- // agent reports only "invalid API key", which says nothing about why.
- log(
- `model request refused: no valid lease. path=${path} auth=${
- request.headers.authorization ? 'authorization': 'none'
- } x-api-key=${request.headers['x-api-key'] ? 'present': 'absent'} tokenLen=${
- token?.length ?? 0
- } presented=${fingerprint(token)} known=[${options.leases.fingerprints.join(', ')}]`,
-)
- deny(response, 401, 'no valid run lease presented')
- return
- }
+  const handleModelRequest = async (
+    request: IncomingMessage,
+    response: ServerResponse,
+    path: string,
+  ): Promise<void> => {
+    // `x-loom-lease` first, and it is the channel that actually matters. The Agent
+    // SDK's bundled CLI validates ANTHROPIC_API_KEY's shape locally — apparently
+    // including a checksum, since a 109-character token passed and a 108-character
+    // one did not — and mangles what it forwards. Carrying the lease in a header of
+    // our own means authentication never depends on surviving that validator.
+    // authorization/x-api-key remain accepted for plain HTTP clients (see the tests).
+    const token =
+      (typeof request.headers[LEASE_HEADER] === 'string' ? request.headers[LEASE_HEADER] : null) ??
+      authToken(request.headers.authorization) ??
+      (typeof request.headers['x-api-key'] === 'string' ? request.headers['x-api-key'] : null)
+    const lease = options.leases.resolve(token)
+    if (!lease) {
+      // Logged with the shape of what arrived, never the value. An authenticating
+      // proxy that does not record its own refusals is undebuggable: a rejected
+      // agent reports only "invalid API key", which says nothing about why.
+      log(
+        `model request refused: no valid lease. path=${path} auth=${
+          request.headers.authorization ? 'authorization' : 'none'
+        } x-api-key=${request.headers['x-api-key'] ? 'present' : 'absent'} tokenLen=${
+          token?.length ?? 0
+        } presented=${fingerprint(token)} known=[${options.leases.fingerprints().join(', ')}]`,
+      )
+      deny(response, 401, 'no valid run lease presented')
+      return
+    }
 
- // Checked before forwarding, not just after metering: a run whose cap is
- // already blown must not get one more turn's worth of spend in while its
- // abort propagates.
- if (lease.exhausted) {
- deny(
- response,
- 402,
- `run ${lease.runId} has reached its budget cap of $${lease.budgetCapUsd?.toFixed(2) ?? '0'}`,
-)
- return
- }
+    // Checked before forwarding, not just after metering: a run whose cap is
+    // already blown must not get one more turn's worth of spend in while its
+    // abort propagates.
+    if (lease.exhausted) {
+      deny(
+        response,
+        402,
+        `run ${lease.runId} has reached its budget cap of $${lease.budgetCapUsd?.toFixed(2) ?? '0'}`,
+      )
+      return
+    }
 
- const body = await readBody(request)
- const headers: Record<string, string> = {}
- for (const [key, value] of Object.entries(request.headers)) {
- if (STRIPPED_REQUEST_HEADERS.has(key.toLowerCase)) continue
- if (typeof value === 'string') headers[key] = value
- }
- // The sandbox's lease is replaced with the real upstream credential here, and only
- // here. OAuth is preferred: it is what the sandbox's fake credentials file
- // makes the CLI send, and it expires in hours rather than never.
- if (options.upstream.oauthToken) {
- headers.authorization = `Bearer ${options.upstream.oauthToken}`
- } else if (options.upstream.apiKey) {
- headers['x-api-key'] = options.upstream.apiKey
- // The sandbox always presents an OAuth-shaped credentials file (it is the only
- // channel the CLI forwards intact), so the CLI declares `oauth-2025-04-20` in
- // anthropic-beta. Forwarding that alongside an API key asks the provider to honour
- // two contradictory auth modes at once. The rest of the beta list is unrelated to
- // auth and is kept — dropping it wholesale would silently disable prompt caching
- // and change what the run costs.
- const beta = headers['anthropic-beta']
- if (typeof beta === 'string') {
- const kept = beta
-.split(',')
-.map((flag) => flag.trim)
-.filter((flag) => flag.length > 0 && !flag.startsWith('oauth-'))
- if (kept.length > 0) headers['anthropic-beta'] = kept.join(',')
- else delete headers['anthropic-beta']
- }
- } else {
- log('model request refused: proxy has no upstream credential configured')
- deny(response, 503, 'the egress proxy has no upstream credential configured')
- return
- }
+    const body = await readBody(request)
+    const headers: Record<string, string> = {}
+    for (const [key, value] of Object.entries(request.headers)) {
+      if (STRIPPED_REQUEST_HEADERS.has(key.toLowerCase())) continue
+      if (typeof value === 'string') headers[key] = value
+    }
+    // The sandbox's lease is replaced with the real upstream credential here, and only
+    // here. OAuth is preferred: it is what the sandbox's fake credentials file
+    // makes the CLI send, and it expires in hours rather than never.
+    if (options.upstream.oauthToken) {
+      headers.authorization = `Bearer ${options.upstream.oauthToken}`
+    } else if (options.upstream.apiKey) {
+      headers['x-api-key'] = options.upstream.apiKey
+      // The sandbox always presents an OAuth-shaped credentials file (it is the only
+      // channel the CLI forwards intact), so the CLI declares `oauth-2025-04-20` in
+      // anthropic-beta. Forwarding that alongside an API key asks the provider to honour
+      // two contradictory auth modes at once. The rest of the beta list is unrelated to
+      // auth and is kept — dropping it wholesale would silently disable prompt caching
+      // and change what the run costs.
+      const beta = headers['anthropic-beta']
+      if (typeof beta === 'string') {
+        const kept = beta
+          .split(',')
+          .map((flag) => flag.trim())
+          .filter((flag) => flag.length > 0 && !flag.startsWith('oauth-'))
+        if (kept.length > 0) headers['anthropic-beta'] = kept.join(',')
+        else delete headers['anthropic-beta']
+      }
+    } else {
+      log('model request refused: proxy has no upstream credential configured')
+      deny(response, 503, 'the egress proxy has no upstream credential configured')
+      return
+    }
 
- if (process.env.LOOM_EGRESS_TRACE_HEADERS === '1') {
- log(`upstream headers: ${JSON.stringify(Object.keys(headers).sort)}`)
- log(`anthropic-beta: ${headers['anthropic-beta'] ?? '(none)'}`)
- }
+    if (process.env.LOOM_EGRESS_TRACE_HEADERS === '1') {
+      log(`upstream headers: ${JSON.stringify(Object.keys(headers).sort())}`)
+      log(`anthropic-beta: ${headers['anthropic-beta'] ?? '(none)'}`)
+    }
 
- let upstream: Response
- try {
- upstream = await fetch(`${options.anthropicBaseUrl}${path}`, {
- method: request.method ?? 'POST',
- headers,
-...(body.length > 0 ? { body: new Uint8Array(body) }: {}),
- })
- } catch (error) {
- deny(response, 502, `upstream request failed: ${error instanceof Error ? error.message: String(error)}`)
- return
- }
+    let upstream: Response
+    try {
+      upstream = await fetch(`${options.anthropicBaseUrl}${path}`, {
+        method: request.method ?? 'POST',
+        headers,
+        ...(body.length > 0 ? { body: new Uint8Array(body) } : {}),
+      })
+    } catch (error) {
+      deny(response, 502, `upstream request failed: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
 
- const upstreamBody = Buffer.from(await upstream.arrayBuffer)
+    const upstreamBody = Buffer.from(await upstream.arrayBuffer())
 
- // Metering reads the response the provider actually returned, which is the
- // point of doing it here. A streaming response (SSE) carries its
- // usage in a terminal `message_delta` event rather than a JSON body; that is
- // parsed out of the raw text below rather than by buffering a parsed stream.
- const meterable = extractUsagePayload(upstreamBody, upstream.headers.get('content-type'))
- if (meterable) {
- const record = options.leases.meter(lease, meterable.model, meterable.usage)
- log(
- `run ${lease.runId} +$${(record.costUsd ?? 0).toFixed(6)} (total $${record.spentUsd.toFixed(4)}${
- record.capUsd === null ? '': ` of $${record.capUsd.toFixed(2)}`
- })`,
-)
- if (record.exhausted) {
- log(`run ${lease.runId} exhausted its budget cap — signalling a kill`)
- options.onBudgetExhausted?.(lease.runId)
- }
- }
+    // Metering reads the response the provider actually returned, which is the
+    // point of doing it here. A streaming response (SSE) carries its
+    // usage in a terminal `message_delta` event rather than a JSON body; that is
+    // parsed out of the raw text below rather than by buffering a parsed stream.
+    const meterable = extractUsagePayload(upstreamBody, upstream.headers.get('content-type'))
+    if (meterable) {
+      const record = options.leases.meter(lease, meterable.model, meterable.usage)
+      log(
+        `run ${lease.runId} +$${(record.costUsd ?? 0).toFixed(6)} (total $${record.spentUsd.toFixed(4)}${
+          record.capUsd === null ? '' : ` of $${record.capUsd.toFixed(2)}`
+        })`,
+      )
+      if (record.exhausted) {
+        log(`run ${lease.runId} exhausted its budget cap — signalling a kill`)
+        options.onBudgetExhausted?.(lease.runId)
+      }
+    }
 
- const outHeaders: Record<string, string> = {}
- upstream.headers.forEach((value, key) => {
- if (key === 'content-encoding' || key === 'content-length' || key === 'transfer-encoding') return
- outHeaders[key] = value
- })
- response.writeHead(upstream.status, outHeaders)
- response.end(upstreamBody)
- }
+    const outHeaders: Record<string, string> = {}
+    upstream.headers.forEach((value, key) => {
+      if (key === 'content-encoding' || key === 'content-length' || key === 'transfer-encoding') return
+      outHeaders[key] = value
+    })
+    response.writeHead(upstream.status, outHeaders)
+    response.end(upstreamBody)
+  }
 
- const server = createServer((request, response) => {
- // A client configured with HTTP_PROXY sends the absolute form
- // (`http://host/path`) rather than a bare path. Normalized here so the model
- // endpoint is reachable either way — the alternative is a confusing "must use
- // CONNECT" refusal for a request that was aimed at this proxy correctly.
- const url = normalizePath(request.url ?? '/')
+  const server = createServer((request, response) => {
+    // A client configured with HTTP_PROXY sends the absolute form
+    // (`http://host/path`) rather than a bare path. Normalized here so the model
+    // endpoint is reachable either way — the alternative is a confusing "must use
+    // CONNECT" refusal for a request that was aimed at this proxy correctly.
+    const url = normalizePath(request.url ?? '/')
 
- if (url === '/healthz') {
- response.writeHead(200, { 'content-type': 'application/json' })
- response.end(JSON.stringify({ status: 'ok' }))
- return
- }
+    if (url === '/healthz') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status: 'ok' }))
+      return
+    }
 
- // Both spellings reach the model endpoint. `/anthropic/*` is the explicit one;
- // `/v1/*` exists because the Agent SDK's bundled CLI discards any path in
- // ANTHROPIC_BASE_URL and requests `/v1/messages` off the bare origin — so the
- // sandbox points at the origin and this is what it actually asks for. Learned by
- // watching it CONNECT straight to api.anthropic.com instead.
- const modelPath = url.startsWith('/anthropic/')
- ? url.slice('/anthropic'.length)
-: url.startsWith('/v1/')
- ? url
-: null
+    // Both spellings reach the model endpoint. `/anthropic/*` is the explicit one;
+    // `/v1/*` exists because the Agent SDK's bundled CLI discards any path in
+    // ANTHROPIC_BASE_URL and requests `/v1/messages` off the bare origin — so the
+    // sandbox points at the origin and this is what it actually asks for. Learned by
+    // watching it CONNECT straight to api.anthropic.com instead.
+    const modelPath = url.startsWith('/anthropic/')
+      ? url.slice('/anthropic'.length)
+      : url.startsWith('/v1/')
+        ? url
+        : null
 
- if (modelPath !== null) {
- void handleModelRequest(request, response, modelPath).catch((error) => {
- deny(response, 500, error instanceof Error ? error.message: String(error))
- })
- return
- }
+    if (modelPath !== null) {
+      void handleModelRequest(request, response, modelPath).catch((error) => {
+        deny(response, 500, error instanceof Error ? error.message : String(error))
+      })
+      return
+    }
 
- // A plain (non-CONNECT) request for anything else is an attempt to use this
- // as an open forward proxy. Refused rather than tunnelled: allowlisting is
- // done on CONNECT, where the target is explicit.
- deny(response, 403, 'egress must use CONNECT, or the /anthropic model endpoint')
- })
+    // A plain (non-CONNECT) request for anything else is an attempt to use this
+    // as an open forward proxy. Refused rather than tunnelled: allowlisting is
+    // done on CONNECT, where the target is explicit.
+    deny(response, 403, 'egress must use CONNECT, or the /anthropic model endpoint')
+  })
 
- server.on('connect', (request: IncomingMessage, clientSocket: Duplex, head: Buffer) => {
- // Attached first, before any refusal path. A Duplex with no 'error' listener
- // throws, and an unhandled throw here takes the whole proxy down — which wipes
- // every in-memory lease and cascades into "no valid run lease" for runs that
- // were perfectly valid a moment earlier. That is exactly what happened: a
- // client whose refused CONNECT socket then errored restarted the process
- // mid-run, and the resulting failure looked like an auth bug several layers away.
- clientSocket.on('error', => clientSocket.destroy)
+  server.on('connect', (request: IncomingMessage, clientSocket: Duplex, head: Buffer) => {
+    // Attached first, before any refusal path. A Duplex with no 'error' listener
+    // throws, and an unhandled throw here takes the whole proxy down — which wipes
+    // every in-memory lease and cascades into "no valid run lease" for runs that
+    // were perfectly valid a moment earlier. That is exactly what happened: a
+    // client whose refused CONNECT socket then errored restarted the process
+    // mid-run, and the resulting failure looked like an auth bug several layers away.
+    clientSocket.on('error', () => clientSocket.destroy())
 
- const refuse = (status: string, reason: string) => {
- log(`CONNECT ${request.url ?? '?'} refused: ${reason}`)
- clientSocket.write(`HTTP/1.1 ${status}\r\n\r\n`)
- clientSocket.end
- }
+    const refuse = (status: string, reason: string) => {
+      log(`CONNECT ${request.url ?? '?'} refused: ${reason}`)
+      clientSocket.write(`HTTP/1.1 ${status}\r\n\r\n`)
+      clientSocket.end()
+    }
 
- // Even an allowlisted host requires a valid lease: the allowlist bounds
- // *where* a run may talk, the lease is what says a run exists at all.
- const lease = options.leases.resolve(authToken(request.headers['proxy-authorization']))
- if (!lease) {
- refuse('407 Proxy Authentication Required', 'no valid run lease presented')
- return
- }
+    // Even an allowlisted host requires a valid lease: the allowlist bounds
+    // *where* a run may talk, the lease is what says a run exists at all.
+    const lease = options.leases.resolve(authToken(request.headers['proxy-authorization']))
+    if (!lease) {
+      refuse('407 Proxy Authentication Required', 'no valid run lease presented')
+      return
+    }
 
- /**
- * The deployment's allowlist **plus** whatever this run's lease was granted
- *.
- *
- * The lease's hosts come from the run's frozen persona snapshot, by way of a
- * capability an operator attached — so reaching the open web is a property of a
- * named agent rather than of the deployment. That is the whole difference between
- * "web access is off by default" meaning something per agent and meaning nothing.
- *
- * Unioned, never substituted: a lease can only *add*, so no run can talk its way out
- * of the base allowlist, and a lease with no grant behaves exactly as before.
- */
- const authority = request.url ?? ''
- const verdict = classifyEgress(authority, [...options.allowedHosts,...lease.egressHosts])
+    /**
+     * The deployment's allowlist **plus** whatever this run's lease was granted.
+     *
+     * The lease's hosts come from the run's frozen persona snapshot, by way of a
+     * capability an operator attached — so reaching the open web is a property of a
+     * named agent rather than of the deployment. That is the whole difference between
+     * "web access is off by default" meaning something per agent and meaning nothing.
+     *
+     * Unioned, never substituted: a lease can only *add*, so no run can talk its way out
+     * of the base allowlist, and a lease with no grant behaves exactly as before.
+     */
+    const authority = request.url ?? ''
+    const verdict = classifyEgress(authority, [...options.allowedHosts, ...lease.egressHosts])
 
- /**
- * Recorded before the socket is answered either way.
- *
- * `splitAuthority` rather than the verdict's own fields, because a refused verdict carries
- * no host — it carries a sentence — and "what did this run ask for" is the whole question
- * the record exists to answer. A malformed authority is kept as it arrived (bounded), since
- * a run asking for something that is not a host is exactly the kind of thing to preserve.
- */
- const asked = splitAuthority(authority)
- options.onEgressDecision?.({
- runId: lease.runId,
- host: truncateEgressHost(asked.host),
- port: asked.port,
- allowed: verdict.allowed,
- reason: verdict.allowed ? '': verdict.reason,
- at: new Date,
- })
+    /**
+     * Recorded before the socket is answered either way.
+     *
+     * `splitAuthority` rather than the verdict's own fields, because a refused verdict
+     * carries no host — it carries a sentence — and "what did this run ask for" is the
+     * whole question the record exists to answer. A malformed authority is kept as it
+     * arrived (bounded), since a run asking for something that is not a host is exactly the
+     * kind of thing to preserve.
+     */
+    const asked = splitAuthority(authority)
+    options.onEgressDecision?.({
+      runId: lease.runId,
+      host: truncateEgressHost(asked.host),
+      port: asked.port,
+      allowed: verdict.allowed,
+      reason: verdict.allowed ? '' : verdict.reason,
+      at: new Date(),
+    })
 
- if (!verdict.allowed) {
- refuse('403 Forbidden', verdict.reason)
- return
- }
+    if (!verdict.allowed) {
+      refuse('403 Forbidden', verdict.reason)
+      return
+    }
 
- // Plain TCP, deliberately not a TLS connection. The client performs its own
- // TLS handshake end-to-end *through* this tunnel, so the proxy must forward
- // opaque bytes; terminating TLS here would wrap the client's own handshake in
- // a second one and the upstream would see nothing it could parse.
- //
- // It is also what makes the "no decryption" claim in egress-policy.ts true:
- // the proxy never holds a session key for this traffic.
- const upstream = netConnect({ host: verdict.host, port: verdict.port }, => {
- clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
- if (head.length > 0) upstream.write(head)
- upstream.pipe(clientSocket)
- clientSocket.pipe(upstream)
- })
+    // Plain TCP, deliberately not a TLS connection. The client performs its own
+    // TLS handshake end-to-end *through* this tunnel, so the proxy must forward
+    // opaque bytes; terminating TLS here would wrap the client's own handshake in
+    // a second one and the upstream would see nothing it could parse.
+    //
+    // It is also what makes the "no decryption" claim in egress-policy.ts true:
+    // the proxy never holds a session key for this traffic.
+    const upstream = netConnect({ host: verdict.host, port: verdict.port }, () => {
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+      if (head.length > 0) upstream.write(head)
+      upstream.pipe(clientSocket)
+      clientSocket.pipe(upstream)
+    })
 
- const teardown = => {
- upstream.destroy
- clientSocket.destroy
- }
- upstream.on('error', teardown)
- clientSocket.on('close', teardown)
- })
+    const teardown = () => {
+      upstream.destroy()
+      clientSocket.destroy()
+    }
+    upstream.on('error', teardown)
+    clientSocket.on('close', teardown)
+  })
 
- return server
+  return server
 }
 
 /**
@@ -437,60 +437,60 @@ export const createEgressProxy = (options: ProxyOptions): Server => {
  * (output count), so both are collected before pricing.
  */
 const extractUsagePayload = (
- body: Buffer,
- contentType: string | null,
+  body: Buffer,
+  contentType: string | null,
 ): { model: string; usage: TokenUsage } | null => {
- const text = body.toString('utf8')
+  const text = body.toString('utf8')
 
- if (contentType?.includes('text/event-stream')) {
- let model: string | null = null
- let inputTokens = 0
- let cacheReadTokens = 0
- let cacheWriteTokens = 0
- let outputTokens = 0
+  if (contentType?.includes('text/event-stream')) {
+    let model: string | null = null
+    let inputTokens = 0
+    let cacheReadTokens = 0
+    let cacheWriteTokens = 0
+    let outputTokens = 0
 
- for (const line of text.split('\n')) {
- if (!line.startsWith('data:')) continue
- let parsed: unknown
- try {
- parsed = JSON.parse(line.slice(5).trim)
- } catch {
- continue
- }
- const event = parsed as {
- type?: string
- message?: { model?: string; usage?: unknown }
- usage?: unknown
- }
- if (event.type === 'message_start' && event.message) {
- if (typeof event.message.model === 'string') model = event.message.model
- const usage = parseUsage(event.message)
- if (usage) {
- inputTokens = usage.inputTokens
- cacheReadTokens = usage.cacheReadTokens
- cacheWriteTokens = usage.cacheWriteTokens
- // message_start also reports output_tokens, but only the handful
- // generated so far; message_delta carries the final count.
- }
- }
- if (event.type === 'message_delta') {
- const usage = parseUsage(event)
- if (usage && usage.outputTokens > 0) outputTokens = usage.outputTokens
- }
- }
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('data:')) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line.slice(5).trim())
+      } catch {
+        continue
+      }
+      const event = parsed as {
+        type?: string
+        message?: { model?: string; usage?: unknown }
+        usage?: unknown
+      }
+      if (event.type === 'message_start' && event.message) {
+        if (typeof event.message.model === 'string') model = event.message.model
+        const usage = parseUsage(event.message)
+        if (usage) {
+          inputTokens = usage.inputTokens
+          cacheReadTokens = usage.cacheReadTokens
+          cacheWriteTokens = usage.cacheWriteTokens
+          // message_start also reports output_tokens, but only the handful
+          // generated so far; message_delta carries the final count.
+        }
+      }
+      if (event.type === 'message_delta') {
+        const usage = parseUsage(event)
+        if (usage && usage.outputTokens > 0) outputTokens = usage.outputTokens
+      }
+    }
 
- if (!model) return null
- return { model, usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } }
- }
+    if (!model) return null
+    return { model, usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } }
+  }
 
- let parsed: unknown
- try {
- parsed = JSON.parse(text)
- } catch {
- return null
- }
- const usage = parseUsage(parsed)
- const model = (parsed as { model?: unknown }).model
- if (!usage || typeof model !== 'string') return null
- return { model, usage }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  const usage = parseUsage(parsed)
+  const model = (parsed as { model?: unknown }).model
+  if (!usage || typeof model !== 'string') return null
+  return { model, usage }
 }

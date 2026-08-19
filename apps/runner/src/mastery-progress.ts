@@ -16,12 +16,12 @@ const execFileAsync = promisify(execFile)
  * here rather than on the server:
  *
  * - The **numerator** is the files the run actually opened, observed from the tool calls
- * the Runner is already relaying. Not a figure the agent reports: mastery is explicit that
- * an agent's own estimate of its progress is model output, and may be a remark but
- * never the number.
+ *   the Runner is already relaying. Not a figure the agent reports: mastery is explicit
+ *   that an agent's own estimate of its progress is model output, and may be a remark but
+ *   never the number.
  * - The **denominator** is the tree at the mastered revision, which exists only on the
- * Runner's machine — the same reason the revision itself has to be reported rather
- * than resolved server-side.
+ *   Runner's machine — the same reason the revision itself has to be reported rather
+ *   than resolved server-side.
  */
 
 /**
@@ -40,10 +40,10 @@ const execFileAsync = promisify(execFile)
  * than a path that carries traffic.
  */
 const FILE_ARGUMENT_BY_TOOL: Readonly<Record<string, readonly string[]>> = {
- Read: ['file_path'],
- Write: ['file_path'],
- Edit: ['file_path'],
- NotebookEdit: ['notebook_path'],
+  Read: ['file_path'],
+  Write: ['file_path'],
+  Edit: ['file_path'],
+  NotebookEdit: ['notebook_path'],
 }
 
 /**
@@ -57,24 +57,24 @@ const FILE_ARGUMENT_BY_TOOL: Readonly<Record<string, readonly string[]>> = {
  * repository by reading its own scratch directory.
  */
 export const fileReadByToolCall = (
- toolName: string,
- input: Readonly<Record<string, unknown>>,
- clonePath: string,
+  toolName: string,
+  input: Readonly<Record<string, unknown>>,
+  clonePath: string,
 ): string | null => {
- const fields = FILE_ARGUMENT_BY_TOOL[toolName]
- if (!fields) return null
+  const fields = FILE_ARGUMENT_BY_TOOL[toolName]
+  if (!fields) return null
 
- for (const field of fields) {
- const value = input[field]
- if (typeof value !== 'string' || value.trim.length === 0) continue
- const raw = value.trim
- const rel = isAbsolute(raw) ? relative(clonePath, raw): raw
- // `..` means it climbed out of the clone; an absolute result means `relative` gave up
- // because the two paths share no root.
- if (rel === '' || rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) continue
- return rel.split(sep).join('/')
- }
- return null
+  for (const field of fields) {
+    const value = input[field]
+    if (typeof value !== 'string' || value.trim().length === 0) continue
+    const raw = value.trim()
+    const rel = isAbsolute(raw) ? relative(clonePath, raw) : raw
+    // `..` means it climbed out of the clone; an absolute result means `relative` gave up
+    // because the two paths share no root.
+    if (rel === '' || rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) continue
+    return rel.split(sep).join('/')
+  }
+  return null
 }
 
 /**
@@ -87,40 +87,40 @@ export const fileReadByToolCall = (
  * human can read and one that is asymptotically zero on any real repository.
  */
 export const countFilesInScope = async (clonePath: string): Promise<number> => {
- try {
- const { stdout } = await execFileAsync('git', ['-C', clonePath, 'ls-files'], {
- // A large monorepo's file list is megabytes; the default 1MB buffer would reject it
- // and the run would report a denominator of zero, which reads as "not measured".
- maxBuffer: 64 * 1024 * 1024,
- })
- return stdout.split('\n').filter((line) => line.trim.length > 0).length
- } catch {
- // A tree git cannot list still runs, and its map is still worth having. Zero is the
- // honest answer, and `computeMasteryProgress` renders it as no coverage rather than
- // as a percentage of nothing.
- return 0
- }
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', clonePath, 'ls-files'], {
+      // A large monorepo's file list is megabytes; the default 1MB buffer would reject it
+      // and the run would report a denominator of zero, which reads as "not measured".
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    return stdout.split('\n').filter((line) => line.trim().length > 0).length
+  } catch {
+    // A tree git cannot list still runs, and its map is still worth having. Zero is the
+    // honest answer, and `computeMasteryProgress` renders it as no coverage rather than
+    // as a percentage of nothing.
+    return 0
+  }
 }
 
 export interface CoverageTracker {
- /** Records a tool call; true when it opened a file this run had not opened before. */
- observe(toolName: string, input: Readonly<Record<string, unknown>>): boolean
- readonly filesRead: number
+  /** Records a tool call; true when it opened a file this run had not opened before. */
+  observe(toolName: string, input: Readonly<Record<string, unknown>>): boolean
+  readonly filesRead: number
 }
 
 export const createCoverageTracker = (clonePath: string): CoverageTracker => {
- const seen = new Set<string>
- return {
- observe(toolName, input) {
- const path = fileReadByToolCall(toolName, input, clonePath)
- if (path === null || seen.has(path)) return false
- seen.add(path)
- return true
- },
- get filesRead {
- return seen.size
- },
- }
+  const seen = new Set<string>()
+  return {
+    observe(toolName, input) {
+      const path = fileReadByToolCall(toolName, input, clonePath)
+      if (path === null || seen.has(path)) return false
+      seen.add(path)
+      return true
+    },
+    get filesRead() {
+      return seen.size
+    },
+  }
 }
 
 /**
@@ -149,8 +149,8 @@ export const CHECKPOINT_INTERVAL_MS = 10_000
  * interval is what keeps a curve readable on a run that opens four hundred files.
  */
 export const shouldCheckpoint = (input: {
- openedSomethingNew: boolean
- now: number
- lastCheckpointAt: number
+  openedSomethingNew: boolean
+  now: number
+  lastCheckpointAt: number
 }): boolean =>
- input.openedSomethingNew && input.now - input.lastCheckpointAt >= CHECKPOINT_INTERVAL_MS
+  input.openedSomethingNew && input.now - input.lastCheckpointAt >= CHECKPOINT_INTERVAL_MS

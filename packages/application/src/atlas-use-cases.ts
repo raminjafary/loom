@@ -1,35 +1,35 @@
 import {
- ATLAS_RELATIONS,
- ForbiddenError,
- MAX_OPEN_ATLAS_PROPOSALS,
- NotFoundError,
- ValidationError,
- atlasContentionQuestion,
- isHuman,
- proposeAtlasEdge,
- renderAtlasLeads,
- selectAtlasLeads,
- type Actor,
- type AgentRunId,
- type AtlasEdgeStatus,
- type AtlasEndpoint,
- type ClaimOutcomes,
- type ColosseumParticipant,
- type ColosseumSession,
- type ConfirmedRelation,
- type RepositoryId,
- type SubjectMapId,
- type ThreadId,
- type WorkspaceId,
- conveneRoster,
+  ATLAS_RELATIONS,
+  ForbiddenError,
+  MAX_OPEN_ATLAS_PROPOSALS,
+  NotFoundError,
+  ValidationError,
+  atlasContentionQuestion,
+  isHuman,
+  proposeAtlasEdge,
+  renderAtlasLeads,
+  selectAtlasLeads,
+  type Actor,
+  type AgentRunId,
+  type AtlasEdgeStatus,
+  type AtlasEndpoint,
+  type ClaimOutcomes,
+  type ColosseumParticipant,
+  type ColosseumSession,
+  type ConfirmedRelation,
+  type RepositoryId,
+  type SubjectMapId,
+  type ThreadId,
+  type WorkspaceId,
+  conveneRoster,
 } from '@loom/domain'
 import type {
- AgentRunRepositoryPort,
- AtlasEdge,
- AtlasRepositoryPort,
- ColosseumRepositoryPort,
- PersonaRepositoryPort,
- SubjectMapRepositoryPort,
+  AgentRunRepositoryPort,
+  AtlasEdge,
+  AtlasRepositoryPort,
+  ColosseumRepositoryPort,
+  PersonaRepositoryPort,
+  SubjectMapRepositoryPort,
 } from './agent-ports.js'
 
 /**
@@ -51,14 +51,14 @@ import type {
  */
 
 export interface AtlasDeps {
- readonly atlas: AtlasRepositoryPort
- readonly subjectMaps: SubjectMapRepositoryPort
- readonly personas: PersonaRepositoryPort
- readonly agentRuns: AgentRunRepositoryPort
+  readonly atlas: AtlasRepositoryPort
+  readonly subjectMaps: SubjectMapRepositoryPort
+  readonly personas: PersonaRepositoryPort
+  readonly agentRuns: AgentRunRepositoryPort
 }
 
 export interface AtlasContentionDeps extends AtlasDeps {
- readonly colosseum: ColosseumRepositoryPort
+  readonly colosseum: ColosseumRepositoryPort
 }
 
 /**
@@ -69,8 +69,8 @@ export interface AtlasContentionDeps extends AtlasDeps {
  * from doing something on that path that is not a read.
  */
 export interface AtlasReadDeps {
- readonly atlas: AtlasRepositoryPort
- readonly subjectMaps: SubjectMapRepositoryPort
+  readonly atlas: AtlasRepositoryPort
+  readonly subjectMaps: SubjectMapRepositoryPort
 }
 
 /**
@@ -81,68 +81,68 @@ export interface AtlasReadDeps {
  * wrongly — and the tool's job is to say which.
  */
 const resolveEnd = async (
- deps: AtlasDeps,
- input: {
- workspaceId: WorkspaceId
- label: string
- repositoryId?: RepositoryId
- subjectRef?: string
- side: string
- },
+  deps: AtlasDeps,
+  input: {
+    workspaceId: WorkspaceId
+    label: string
+    repositoryId?: RepositoryId
+    subjectRef?: string
+    side: string
+  },
 ): Promise<{ ok: true; end: AtlasEndpoint } | { ok: false; reason: string }> => {
- const label = input.label.trim
- if (label.length === 0) return { ok: false, reason: `Name the ${input.side} concept` }
+  const label = input.label.trim()
+  if (label.length === 0) return { ok: false, reason: `Name the ${input.side} concept` }
 
- const candidates = await deps.subjectMaps.findConceptsByLabel(input.workspaceId, {
- label,
-...(input.repositoryId === undefined ? {}: { repositoryId: input.repositoryId }),
-...(input.subjectRef === undefined ? {}: { subjectRef: input.subjectRef }),
- })
+  const candidates = await deps.subjectMaps.findConceptsByLabel(input.workspaceId, {
+    label,
+    ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
+    ...(input.subjectRef === undefined ? {} : { subjectRef: input.subjectRef }),
+  })
 
- if (candidates.length === 0) {
- return {
- ok: false,
- reason:
- `No subject here has recorded a concept called "${label}"${
- input.subjectRef === undefined ? '': ` in ${input.subjectRef}`
- }. Use the label exactly as it was shown to you — a relation between something ` +
- 'you were told about and something you named yourself is a relation to nothing.',
- }
- }
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      reason:
+        `No subject here has recorded a concept called "${label}"${
+          input.subjectRef === undefined ? '' : ` in ${input.subjectRef}`
+        }. Use the label exactly as it was shown to you — a relation between something ` +
+        'you were told about and something you named yourself is a relation to nothing.',
+    }
+  }
 
- /**
- * Several subjects using one label is the *interesting* case and cannot be resolved
- * here: picking the first would decide which two things the relation is between, which
- * is the whole content of the proposal. The model is asked which, and the subjects are
- * listed so it can answer without guessing.
- */
- const subjects = [...new Set(candidates.map((candidate) => candidate.subjectRef))]
- if (subjects.length > 1) {
- return {
- ok: false,
- reason:
- `"${label}" is recorded in more than one subject here (${subjects.join(', ')}). ` +
- 'Say which one you mean.',
- }
- }
+  /**
+   * Several subjects using one label is the *interesting* case and cannot be resolved
+   * here: picking the first would decide which two things the relation is between, which
+   * is the whole content of the proposal. The model is asked which, and the subjects are
+   * listed so it can answer without guessing.
+   */
+  const subjects = [...new Set(candidates.map((candidate) => candidate.subjectRef))]
+  if (subjects.length > 1) {
+    return {
+      ok: false,
+      reason:
+        `"${label}" is recorded in more than one subject here (${subjects.join(', ')}). ` +
+        'Say which one you mean.',
+    }
+  }
 
- const chosen = candidates[0]
- if (!chosen) return { ok: false, reason: `No concept called "${label}"` }
- return {
- ok: true,
- end: {
- nodeId: chosen.nodeId,
- mapId: chosen.mapId as string,
- kind: chosen.kind,
- subjectRef: chosen.subjectRef,
- label: chosen.label,
- },
- }
+  const chosen = candidates[0]
+  if (!chosen) return { ok: false, reason: `No concept called "${label}"` }
+  return {
+    ok: true,
+    end: {
+      nodeId: chosen.nodeId,
+      mapId: chosen.mapId as string,
+      kind: chosen.kind,
+      subjectRef: chosen.subjectRef,
+      label: chosen.label,
+    },
+  }
 }
 
 export type AtlasProposalResult =
- | { readonly ok: true; readonly edge: AtlasEdge; readonly created: boolean }
- | { readonly ok: false; readonly reason: string }
+  | { readonly ok: true; readonly edge: AtlasEdge; readonly created: boolean }
+  | { readonly ok: false; readonly reason: string }
 
 /**
  * An agent proposing a relation between its own subject and another's.
@@ -159,103 +159,103 @@ export type AtlasProposalResult =
  * which no reader treats as a fact. Mastery: "nothing in the system promotes itself."
  */
 export const proposeCrossSubjectRelation = async (
- deps: AtlasDeps,
- input: {
- workspaceId: WorkspaceId
- agentRunId: AgentRunId
- /** A concept in this run's own subject, named as its map named it. */
- mine: string
- /** A concept in another subject — the one a lead pointed at. */
- theirs: string
- /** Which subject `theirs` is in. Optional, and the tie-break when a label is shared. */
- theirSubject?: string
- relation: string
- rationale: string
- },
+  deps: AtlasDeps,
+  input: {
+    workspaceId: WorkspaceId
+    agentRunId: AgentRunId
+    /** A concept in this run's own subject, named as its map named it. */
+    mine: string
+    /** A concept in another subject — the one a lead pointed at. */
+    theirs: string
+    /** Which subject `theirs` is in. Optional, and the tie-break when a label is shared. */
+    theirSubject?: string
+    relation: string
+    rationale: string
+  },
 ): Promise<AtlasProposalResult> => {
- const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
- if (!run) throw new NotFoundError('AgentRun')
+  const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+  if (!run) throw new NotFoundError('AgentRun')
 
- /**
- * A cap on *open* proposals, not on proposals ever made.
- *
- * The queue is worked through by a human, and an agent that can extend it without
- * bound turns somebody's review list into a denial of service — the same reasoning
- * `MAX_NOTES_PER_RUN` applies to a sibling's context window. Decided rows do not
- * count, because a workspace that keeps promoting and rejecting is one where the
- * mechanism is working.
- */
- const open = await deps.atlas.countByStatus(input.workspaceId, ['proposed', 'contended'])
- if (open >= MAX_OPEN_ATLAS_PROPOSALS) {
- return {
- ok: false,
- reason:
- `There are already ${open} cross-project relations here waiting on a human. ` +
- 'Adding to that queue does not get any of them read — carry on with your task.',
- }
- }
+  /**
+   * A cap on *open* proposals, not on proposals ever made.
+   *
+   * The queue is worked through by a human, and an agent that can extend it without
+   * bound turns somebody's review list into a denial of service — the same reasoning
+   * `MAX_NOTES_PER_RUN` applies to a sibling's context window. Decided rows do not
+   * count, because a workspace that keeps promoting and rejecting is one where the
+   * mechanism is working.
+   */
+  const open = await deps.atlas.countByStatus(input.workspaceId, ['proposed', 'contended'])
+  if (open >= MAX_OPEN_ATLAS_PROPOSALS) {
+    return {
+      ok: false,
+      reason:
+        `There are already ${open} cross-project relations here waiting on a human. ` +
+        'Adding to that queue does not get any of them read — carry on with your task.',
+    }
+  }
 
- /**
- * The run's own side is scoped to its repository, and that scope is what gives the
- * proposal standing. A run relating two concepts in somebody *else's* two subjects
- * would be asserting something about two codebases it can open neither of — which is
- * a lead dressed as a finding, and the whole thing the fence exists to prevent.
- */
- const mine = await resolveEnd(deps, {
- workspaceId: input.workspaceId,
- label: input.mine,
- repositoryId: run.repositoryId,
- side: 'your own',
- })
- if (!mine.ok) {
- return {
- ok: false,
- reason:
- mine.reason +
- ' (Looking in your own subject — if nobody has mastered this repository, there ' +
- 'is nothing here yet to relate.)',
- }
- }
+  /**
+   * The run's own side is scoped to its repository, and that scope is what gives the
+   * proposal standing. A run relating two concepts in somebody *else's* two subjects
+   * would be asserting something about two codebases it can open neither of — which is
+   * a lead dressed as a finding, and the whole thing the fence exists to prevent.
+   */
+  const mine = await resolveEnd(deps, {
+    workspaceId: input.workspaceId,
+    label: input.mine,
+    repositoryId: run.repositoryId,
+    side: 'your own',
+  })
+  if (!mine.ok) {
+    return {
+      ok: false,
+      reason:
+        mine.reason +
+        ' (Looking in your own subject — if nobody has mastered this repository, there ' +
+        'is nothing here yet to relate.)',
+    }
+  }
 
- const theirs = await resolveEnd(deps, {
- workspaceId: input.workspaceId,
- label: input.theirs,
-...(input.theirSubject === undefined ? {}: { subjectRef: input.theirSubject }),
- side: 'other',
- })
- if (!theirs.ok) return { ok: false, reason: theirs.reason }
+  const theirs = await resolveEnd(deps, {
+    workspaceId: input.workspaceId,
+    label: input.theirs,
+    ...(input.theirSubject === undefined ? {} : { subjectRef: input.theirSubject }),
+    side: 'other',
+  })
+  if (!theirs.ok) return { ok: false, reason: theirs.reason }
 
- const verdict = proposeAtlasEdge({
- from: mine.end,
- to: theirs.end,
- relation: input.relation,
- rationale: input.rationale,
- })
- if (!verdict.ok) return { ok: false, reason: verdict.reason }
+  const verdict = proposeAtlasEdge({
+    from: mine.end,
+    to: theirs.end,
+    relation: input.relation,
+    rationale: input.rationale,
+  })
+  if (!verdict.ok) return { ok: false, reason: verdict.reason }
 
- /**
- * Who proposed it, resolved from the run's persona *snapshot* by name.
- *
- * A run carries a snapshot rather than a persona id — that is deliberate everywhere
- * else, because a persona edited mid-run must not change what the run is — and names
- * are unique per workspace, so this is exact. A persona renamed since the run started
- * resolves to null, and the row keeps the relation without an author, which is the
- * right trade: the claim outlives whoever made it.
- */
- const personas = await deps.personas.listByWorkspace(input.workspaceId)
- const proposer = personas.find((entry) => entry.name === run.persona.name)
+  /**
+   * Who proposed it, resolved from the run's persona *snapshot* by name.
+   *
+   * A run carries a snapshot rather than a persona id — that is deliberate everywhere
+   * else, because a persona edited mid-run must not change what the run is — and names
+   * are unique per workspace, so this is exact. A persona renamed since the run started
+   * resolves to null, and the row keeps the relation without an author, which is the
+   * right trade: the claim outlives whoever made it.
+   */
+  const personas = await deps.personas.listByWorkspace(input.workspaceId)
+  const proposer = personas.find((entry) => entry.name === run.persona.name)
 
- const stored = await deps.atlas.propose({
- workspaceId: input.workspaceId,
- fromNodeId: verdict.fromNodeId,
- toNodeId: verdict.toNodeId,
- relation: verdict.relation,
- rationale: verdict.rationale,
- proposedByPersonaId: proposer?.id ?? null,
- proposedByRunId: input.agentRunId,
- })
+  const stored = await deps.atlas.propose({
+    workspaceId: input.workspaceId,
+    fromNodeId: verdict.fromNodeId,
+    toNodeId: verdict.toNodeId,
+    relation: verdict.relation,
+    rationale: verdict.rationale,
+    proposedByPersonaId: proposer?.id ?? null,
+    proposedByRunId: input.agentRunId,
+  })
 
- return { ok: true, edge: stored.edge, created: stored.created }
+  return { ok: true, edge: stored.edge, created: stored.created }
 }
 
 /**
@@ -267,26 +267,26 @@ export const proposeCrossSubjectRelation = async (
  * in front of it is the same work.
  */
 export const renderProposalOutcome = (result: AtlasProposalResult): string => {
- if (!result.ok) return result.reason
- const { edge } = result
- const where =
- `${edge.from.subjectRef} — ${edge.from.label} ↔ ${edge.to.subjectRef} — ${edge.to.label}`
- if (!result.created) {
- const state =
- edge.status === 'promoted'
- ? `a human has already confirmed it${edge.decidedByName === '' ? '': ` (${edge.decidedByName})`}`
-: edge.status === 'rejected'
- ? 'a human has already looked at it and said no'
-: edge.status === 'contended'
- ? 'it is being argued over now'
-: 'it is already waiting for a human'
- return `That relation was already proposed — ${state}. (${where})`
- }
- return (
- `Proposed: ${where}. It is a proposal, not a finding: a human decides whether it ` +
- 'holds, and nothing else in the system treats it as true until they do. Nothing about ' +
- 'your own task has changed — carry on.'
-)
+  if (!result.ok) return result.reason
+  const { edge } = result
+  const where =
+    `${edge.from.subjectRef} — ${edge.from.label} ↔ ${edge.to.subjectRef} — ${edge.to.label}`
+  if (!result.created) {
+    const state =
+      edge.status === 'promoted'
+        ? `a human has already confirmed it${edge.decidedByName === '' ? '' : ` (${edge.decidedByName})`}`
+        : edge.status === 'rejected'
+          ? 'a human has already looked at it and said no'
+          : edge.status === 'contended'
+            ? 'it is being argued over now'
+            : 'it is already waiting for a human'
+  return `That relation was already proposed — ${state}. (${where})`
+  }
+  return (
+    `Proposed: ${where}. It is a proposal, not a finding: a human decides whether it ` +
+    'holds, and nothing else in the system treats it as true until they do. Nothing about ' +
+    'your own task has changed — carry on.'
+  )
 }
 
 /**
@@ -294,13 +294,13 @@ export const renderProposalOutcome = (result: AtlasProposalResult): string => {
  *
  * **The roster is not a choice.** A contention session convened for anything else has to
  * decide who should be in the room; here the two participants are determined by the claim
- * itself — whoever mastered each side. That is also why this is the case mastery names as the
- * one where the Colosseum "earns its existence": the two personas hold different subjects
- * by construction, so the roster passes the diversity check for the right reason rather
- * than by arrangement.
+ * itself — whoever mastered each side. That is also why this is the case mastery names as
+ * the one where the Colosseum "earns its existence": the two personas hold different
+ * subjects by construction, so the roster passes the diversity check for the right reason
+ * rather than by arrangement.
  *
- * Convening spends nothing, as everywhere else in mastery: this creates the room and records
- * the proposal as an opening claim. The turns are ordinary runs somebody asks for.
+ * Convening spends nothing, as everywhere else in mastery: this creates the room and
+ * records the proposal as an opening claim. The turns are ordinary runs somebody asks for.
  *
  * One persona on both ends returns null rather than convening. It is not a failure — one
  * expert who mastered both subjects noticing a relation between them is a perfectly good
@@ -308,92 +308,92 @@ export const renderProposalOutcome = (result: AtlasProposalResult): string => {
  * means nothing and cost real money to produce.
  */
 export const contendAtlasProposal = async (
- deps: AtlasContentionDeps,
- input: {
- workspaceId: WorkspaceId
- threadId: ThreadId
- edgeId: string
- },
+  deps: AtlasContentionDeps,
+  input: {
+    workspaceId: WorkspaceId
+    threadId: ThreadId
+    edgeId: string
+  },
 ): Promise<{ session: ColosseumSession; edge: AtlasEdge } | null> => {
- const edge = await deps.atlas.get(input.workspaceId, input.edgeId)
- if (!edge) throw new NotFoundError('AtlasEdge')
- if (edge.status !== 'proposed') {
- throw new ValidationError(
- 'Only an undecided proposal goes to the venue. A relation a human has already ' +
- 'decided on is not made truer by being argued over afterwards.',
-)
- }
+  const edge = await deps.atlas.get(input.workspaceId, input.edgeId)
+  if (!edge) throw new NotFoundError('AtlasEdge')
+  if (edge.status !== 'proposed') {
+    throw new ValidationError(
+      'Only an undecided proposal goes to the venue. A relation a human has already ' +
+        'decided on is not made truer by being argued over afterwards.',
+    )
+  }
 
- const personas = await deps.personas.listByWorkspace(input.workspaceId)
- const maps = await Promise.all([
- deps.subjectMaps.getMap(input.workspaceId, edge.from.mapId),
- deps.subjectMaps.getMap(input.workspaceId, edge.to.mapId),
- ])
- const participants: ColosseumParticipant[] = []
- for (const [index, map] of maps.entries) {
- if (!map) continue
- const persona = personas.find((entry) => entry.id === map.personaId)
- if (!persona) continue
- if (participants.some((entry) => entry.personaId === persona.id)) continue
- participants.push({
- personaId: persona.id,
- personaName: persona.name,
- mapId: map.id,
- model: persona.model,
- subjectRef: index === 0 ? edge.from.subjectRef: edge.to.subjectRef,
- })
- }
+  const personas = await deps.personas.listByWorkspace(input.workspaceId)
+  const maps = await Promise.all([
+    deps.subjectMaps.getMap(input.workspaceId, edge.from.mapId),
+    deps.subjectMaps.getMap(input.workspaceId, edge.to.mapId),
+  ])
+  const participants: ColosseumParticipant[] = []
+  for (const [index, map] of maps.entries()) {
+    if (!map) continue
+    const persona = personas.find((entry) => entry.id === map.personaId)
+    if (!persona) continue
+    if (participants.some((entry) => entry.personaId === persona.id)) continue
+    participants.push({
+      personaId: persona.id,
+      personaName: persona.name,
+      mapId: map.id,
+      model: persona.model,
+      subjectRef: index === 0 ? edge.from.subjectRef : edge.to.subjectRef,
+    })
+  }
 
- const verdict = conveneRoster(participants, 'contention')
- if (!verdict.ok) return null
+  const verdict = conveneRoster(participants, 'contention')
+  if (!verdict.ok) return null
 
- const session = await deps.colosseum.convene({
- workspaceId: input.workspaceId,
- threadId: input.threadId,
- /**
- * No repository. A session about a relation between two subjects belongs to neither,
- * and naming one of them would make the crunch sweep and every per-repository view
- * treat this room as being about that repository.
- */
- repositoryId: null,
- purpose: 'contention',
- subject: `${edge.from.subjectRef} ↔ ${edge.to.subjectRef}`,
- question: atlasContentionQuestion({
- relation: edge.relation,
- fromLabel: edge.from.label,
- fromSubjectRef: edge.from.subjectRef,
- toLabel: edge.to.label,
- toSubjectRef: edge.to.subjectRef,
- rationale: edge.rationale,
- }),
- turnCap: participants.length,
- spendCapUsd: null,
- diversity: verdict.diversity,
- participants,
- })
+  const session = await deps.colosseum.convene({
+    workspaceId: input.workspaceId,
+    threadId: input.threadId,
+    /**
+     * No repository. A session about a relation between two subjects belongs to neither,
+     * and naming one of them would make the crunch sweep and every per-repository view
+     * treat this room as being about that repository.
+     */
+    repositoryId: null,
+    purpose: 'contention',
+    subject: `${edge.from.subjectRef} ↔ ${edge.to.subjectRef}`,
+    question: atlasContentionQuestion({
+      relation: edge.relation,
+      fromLabel: edge.from.label,
+      fromSubjectRef: edge.from.subjectRef,
+      toLabel: edge.to.label,
+      toSubjectRef: edge.to.subjectRef,
+      rationale: edge.rationale,
+    }),
+    turnCap: participants.length,
+    spendCapUsd: null,
+    diversity: verdict.diversity,
+    participants,
+  })
 
- /**
- * The proposal, recorded as an opening claim before anybody speaks.
- *
- * This is what makes the session measurable in the same way every other session is:
- * The attrition check compares what was held at the start against what survived, and
- * the claim under test here is the proposal itself. Attributed to the persona on the
- * proposing side, because that is who is asserting it.
- */
- const holder = participants[0]
- if (holder) {
- await deps.colosseum.recordClaim({
- workspaceId: input.workspaceId,
- sessionId: session.id,
- statement:
- `${edge.from.subjectRef}'s "${edge.from.label}" ${edge.relation} ` +
- `${edge.to.subjectRef}'s "${edge.to.label}"`,
- originalHolderPersonaId: holder.personaId,
- })
- }
+  /**
+   * The proposal, recorded as an opening claim before anybody speaks.
+   *
+   * This is what makes the session measurable in the same way every other session is:
+   * The attrition check compares what was held at the start against what survived, and
+   * the claim under test here is the proposal itself. Attributed to the persona on the
+   * proposing side, because that is who is asserting it.
+   */
+  const holder = participants[0]
+  if (holder) {
+    await deps.colosseum.recordClaim({
+      workspaceId: input.workspaceId,
+      sessionId: session.id,
+      statement:
+        `${edge.from.subjectRef}'s "${edge.from.label}" ${edge.relation} ` +
+        `${edge.to.subjectRef}'s "${edge.to.label}"`,
+      originalHolderPersonaId: holder.personaId,
+    })
+  }
 
- const attached = await deps.atlas.attachSession(input.workspaceId, edge.id, session.id)
- return { session, edge: attached ?? edge }
+  const attached = await deps.atlas.attachSession(input.workspaceId, edge.id, session.id)
+  return { session, edge: attached ?? edge }
 }
 
 /**
@@ -411,50 +411,50 @@ export const contendAtlasProposal = async (
  * reason a plausible relation is wrong ever gets written down.
  */
 export const decideAtlasProposal = async (
- deps: AtlasDeps,
- input: {
- workspaceId: WorkspaceId
- actor: Actor
- edgeId: string
- decision: Extract<AtlasEdgeStatus, 'promoted' | 'rejected'>
- note?: string
- /** The human's display name, resolved server-side from the session — never sent. */
- decidedByName: string
- },
+  deps: AtlasDeps,
+  input: {
+    workspaceId: WorkspaceId
+    actor: Actor
+    edgeId: string
+    decision: Extract<AtlasEdgeStatus, 'promoted' | 'rejected'>
+    note?: string
+    /** The human's display name, resolved server-side from the session — never sent. */
+    decidedByName: string
+  },
 ): Promise<AtlasEdge> => {
- if (!isHuman(input.actor) || input.actor.kind !== 'user') {
- throw new ForbiddenError(
- 'Only a human promotes a cross-project relation. An agent confirming another ' +
- 'agent’s claim is the loop this venue exists to break.',
-)
- }
- const edge = await deps.atlas.get(input.workspaceId, input.edgeId)
- if (!edge) throw new NotFoundError('AtlasEdge')
+  if (!isHuman(input.actor) || input.actor.kind !== 'user') {
+    throw new ForbiddenError(
+      'Only a human promotes a cross-project relation. An agent confirming another ' +
+        'agent’s claim is the loop this venue exists to break.',
+    )
+  }
+  const edge = await deps.atlas.get(input.workspaceId, input.edgeId)
+  if (!edge) throw new NotFoundError('AtlasEdge')
 
- const decided = await deps.atlas.decide({
- workspaceId: input.workspaceId,
- edgeId: input.edgeId,
- status: input.decision,
- decidedByUserId: input.actor.userId,
- decidedByName: input.decidedByName,
- note: (input.note ?? '').trim,
- })
- if (!decided) {
- throw new ValidationError(
- 'That relation has already been decided. The first decision stands — a second one ' +
- 'would rewrite whose name is on it.',
-)
- }
- return decided
+  const decided = await deps.atlas.decide({
+    workspaceId: input.workspaceId,
+    edgeId: input.edgeId,
+    status: input.decision,
+    decidedByUserId: input.actor.userId,
+    decidedByName: input.decidedByName,
+    note: (input.note ?? '').trim(),
+  })
+  if (!decided) {
+    throw new ValidationError(
+      'That relation has already been decided. The first decision stands — a second one ' +
+        'would rewrite whose name is on it.',
+    )
+  }
+  return decided
 }
 
 export const listAtlasProposals = async (
- deps: AtlasDeps,
- input: { workspaceId: WorkspaceId; statuses?: readonly AtlasEdgeStatus[] },
+  deps: AtlasDeps,
+  input: { workspaceId: WorkspaceId; statuses?: readonly AtlasEdgeStatus[] },
 ): Promise<AtlasEdge[]> =>
- deps.atlas.list(input.workspaceId, {
-...(input.statuses === undefined ? {}: { statuses: input.statuses }),
- })
+  deps.atlas.list(input.workspaceId, {
+    ...(input.statuses === undefined ? {} : { statuses: input.statuses }),
+  })
 
 export { ATLAS_RELATIONS }
 /**
@@ -487,80 +487,80 @@ export const MAX_ATLAS_CANDIDATES = 400
  * hundred nodes to rank eight would be the expensive half of a cheap operation.
  */
 export const findAtlasLeads = async (
- deps: AtlasReadDeps,
- input: {
- workspaceId: WorkspaceId
- /** The run asking, so its own subject can be left out. */
- repositoryId: RepositoryId | null
- topic: string
- },
+  deps: AtlasReadDeps,
+  input: {
+    workspaceId: WorkspaceId
+    /** The run asking, so its own subject can be left out. */
+    repositoryId: RepositoryId | null
+    topic: string
+  },
 ): Promise<string> => {
- const topic = input.topic.trim
- if (topic.length === 0) {
- return 'Ask about something: a concept, a mechanism, a problem you think another project here has already had.'
- }
+  const topic = input.topic.trim()
+  if (topic.length === 0) {
+    return 'Ask about something: a concept, a mechanism, a problem you think another project here has already had.'
+  }
 
- const rows = await deps.subjectMaps.listConceptsAcrossSubjects(input.workspaceId, {
-...(input.repositoryId === null ? {}: { excludeRepositoryId: input.repositoryId }),
- limit: MAX_ATLAS_CANDIDATES,
- })
+  const rows = await deps.subjectMaps.listConceptsAcrossSubjects(input.workspaceId, {
+    ...(input.repositoryId === null ? {} : { excludeRepositoryId: input.repositoryId }),
+    limit: MAX_ATLAS_CANDIDATES,
+  })
 
- const matched = selectAtlasLeads(
- rows.map((row) => ({
- nodeId: row.nodeId,
- label: row.label,
- summary: row.summary,
- subjectRef: row.subjectRef,
- personaName: row.personaName,
- createdAt: row.createdAt,
- })),
- topic,
-)
+  const matched = selectAtlasLeads(
+    rows.map((row) => ({
+      nodeId: row.nodeId,
+      label: row.label,
+      summary: row.summary,
+      subjectRef: row.subjectRef,
+      personaName: row.personaName,
+      createdAt: row.createdAt,
+    })),
+    topic,
+  )
 
- /**
- * The confirmed half, and it is looked up from the concepts the topic **matched**
- * rather than from the whole table.
- *
- * That ordering is what keeps promotion from quietly becoming a second injection
- * channel: a workspace with two hundred confirmed relations would otherwise render
- * every one of them into every atlas answer, which is the failure this section spends
- * its whole length avoiding — a window filled with confidently irrelevant structure.
- * A confirmed relation earns its place in *this* answer by touching a concept this
- * topic matched, exactly as a lead does.
- */
- const confirmed = await confirmedRelationsFor(deps, {
- workspaceId: input.workspaceId,
- nodeIds: matched.leads.map((lead) => lead.nodeId),
- })
+  /**
+   * The confirmed half, and it is looked up from the concepts the topic **matched**
+   * rather than from the whole table.
+   *
+   * That ordering is what keeps promotion from quietly becoming a second injection
+   * channel: a workspace with two hundred confirmed relations would otherwise render
+   * every one of them into every atlas answer, which is the failure this section spends
+   * its whole length avoiding — a window filled with confidently irrelevant structure.
+   * A confirmed relation earns its place in *this* answer by touching a concept this
+   * topic matched, exactly as a lead does.
+   */
+  const confirmed = await confirmedRelationsFor(deps, {
+    workspaceId: input.workspaceId,
+    nodeIds: matched.leads.map((lead) => lead.nodeId),
+  })
 
- if (matched.leads.length === 0) return renderAtlasLeads(topic, matched, confirmed)
+  if (matched.leads.length === 0) return renderAtlasLeads(topic, matched, confirmed)
 
- /**
- * The "scored by outcome, not recency", applied to the leads that are going to be
- * shown. Grouped by map because that is how the tally is keyed, and a workspace-wide
- * tally would be a second query shape for the same answer.
- */
- const byMap = new Map<string, SubjectMapId>
- for (const row of rows) byMap.set(row.nodeId, row.mapId)
- const mapIds = [...new Set(matched.leads.map((lead) => byMap.get(lead.nodeId)))].filter(
- (id): id is SubjectMapId => id !== undefined,
-)
- const outcomes: Record<string, ClaimOutcomes> = {}
- for (const mapId of mapIds) {
- Object.assign(outcomes, await deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, mapId))
- }
+  /**
+   * The "scored by outcome, not recency", applied to the leads that are going to be
+   * shown. Grouped by map because that is how the tally is keyed, and a workspace-wide
+   * tally would be a second query shape for the same answer.
+   */
+  const byMap = new Map<string, SubjectMapId>()
+  for (const row of rows) byMap.set(row.nodeId, row.mapId)
+  const mapIds = [...new Set(matched.leads.map((lead) => byMap.get(lead.nodeId)))].filter(
+    (id): id is SubjectMapId => id !== undefined,
+  )
+  const outcomes: Record<string, ClaimOutcomes> = {}
+  for (const mapId of mapIds) {
+    Object.assign(outcomes, await deps.subjectMaps.tallyNodeOutcomes(input.workspaceId, mapId))
+  }
 
- return renderAtlasLeads(
- topic,
- selectAtlasLeads(
- matched.leads.map((lead) => ({
-...lead,
-...(outcomes[lead.nodeId] === undefined ? {}: { outcomes: outcomes[lead.nodeId] }),
- })),
- topic,
-),
- confirmed,
-)
+  return renderAtlasLeads(
+    topic,
+    selectAtlasLeads(
+      matched.leads.map((lead) => ({
+        ...lead,
+        ...(outcomes[lead.nodeId] === undefined ? {} : { outcomes: outcomes[lead.nodeId] }),
+      })),
+      topic,
+    ),
+    confirmed,
+  )
 }
 
 /**
@@ -577,32 +577,32 @@ export const findAtlasLeads = async (
  * something its own source has withdrawn.
  */
 const confirmedRelationsFor = async (
- deps: AtlasReadDeps,
- input: { workspaceId: WorkspaceId; nodeIds: readonly string[] },
+  deps: AtlasReadDeps,
+  input: { workspaceId: WorkspaceId; nodeIds: readonly string[] },
 ): Promise<ConfirmedRelation[]> => {
- if (input.nodeIds.length === 0) return []
- const matchedIds = new Set(input.nodeIds)
- const edges = await deps.atlas.listPromotedTouching(input.workspaceId, input.nodeIds)
- return edges
-.filter((edge) => edge.from.live && edge.to.live)
-.map((edge) => {
- const matchedIsFrom = matchedIds.has(edge.from.nodeId)
- const near = matchedIsFrom ? edge.from: edge.to
- const far = matchedIsFrom ? edge.to: edge.from
- return {
- relation: edge.relation,
- fromLabel: near.label,
- fromSubjectRef: near.subjectRef,
- toLabel: far.label,
- toSubjectRef: far.subjectRef,
- rationale: edge.rationale,
- // Falls back rather than dropping the relation: a departed employee does not
- // un-confirm what they confirmed.
- confirmedBy: edge.decidedByName === '' ? 'a human here': edge.decidedByName,
- confirmedAt: edge.decidedAt ?? edge.createdAt,
- }
- })
-.slice(0, MAX_CONFIRMED_RELATIONS)
+  if (input.nodeIds.length === 0) return []
+  const matchedIds = new Set(input.nodeIds)
+  const edges = await deps.atlas.listPromotedTouching(input.workspaceId, input.nodeIds)
+  return edges
+    .filter((edge) => edge.from.live && edge.to.live)
+    .map((edge) => {
+      const matchedIsFrom = matchedIds.has(edge.from.nodeId)
+      const near = matchedIsFrom ? edge.from : edge.to
+      const far = matchedIsFrom ? edge.to : edge.from
+      return {
+        relation: edge.relation,
+        fromLabel: near.label,
+        fromSubjectRef: near.subjectRef,
+        toLabel: far.label,
+        toSubjectRef: far.subjectRef,
+        rationale: edge.rationale,
+        // Falls back rather than dropping the relation: a departed employee does not
+        // un-confirm what they confirmed.
+        confirmedBy: edge.decidedByName === '' ? 'a human here' : edge.decidedByName,
+        confirmedAt: edge.decidedAt ?? edge.createdAt,
+      }
+    })
+    .slice(0, MAX_CONFIRMED_RELATIONS)
 }
 
 /**

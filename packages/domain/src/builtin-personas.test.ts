@@ -7,202 +7,202 @@ import type { PersonaSpec } from './agents.js'
 
 /** The spec `startAgentRun` snapshots onto a run, built from the seeded row. */
 const asSpec = (persona: BuiltinPersona): PersonaSpec => ({
- name: persona.name,
- systemPrompt: persona.systemPrompt,
- model: persona.model,
- tools: persona.tools,
- approvalMode: persona.harnessApprovalMode,
- budgetCapUsd: persona.harnessBudgetCapUsd,
- planner: persona.harnessPlanner,
- delegates: persona.harnessDelegates,
- capabilities: [],
+  name: persona.name,
+  systemPrompt: persona.systemPrompt,
+  model: persona.model,
+  tools: persona.tools,
+  approvalMode: persona.harnessApprovalMode,
+  budgetCapUsd: persona.harnessBudgetCapUsd,
+  planner: persona.harnessPlanner,
+  delegates: persona.harnessDelegates,
+  capabilities: [],
 })
 
-describe('BUILTIN_PERSONAS', => {
- it('has exactly eleven roles with unique names', => {
- expect(BUILTIN_PERSONAS).toHaveLength(11)
- expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(11)
- })
+describe('BUILTIN_PERSONAS', () => {
+  it('has exactly eleven roles with unique names', () => {
+    expect(BUILTIN_PERSONAS).toHaveLength(11)
+    expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(11)
+  })
 
- /**
- * The answer to "several planners" is several planner *personas*, so a workspace
- * that ships one planner ships no depth at all — an operator had to author the second
- * before the corporation was visible anywhere.
- */
- it('ships a sub-planner whose envelope reaches the workers its parent could', => {
- const root = BUILTIN_PERSONAS.find((p) => p.name === 'planner')
- const area = BUILTIN_PERSONAS.find((p) => p.name === 'area-planner')
- expect(area?.harnessPlanner).toBe(true)
- // Narrower than its parent's and every refusal lands two hops from the mistake;
- // attenuation intersects the two, so equal is the only workable default.
- expect([...(area?.harnessDelegates ?? [])].sort).toEqual(
- [...(root?.harnessDelegates ?? [])].sort,
-)
- // And it cannot act, for the same reason the root cannot.
- expect(area?.tools).not.toContain('Bash')
- expect(area?.tools).not.toContain('Write')
- })
+  /**
+   * The answer to "several planners" is several planner *personas*, so a workspace
+   * that ships one planner ships no depth at all — an operator had to author the second
+   * before the corporation was visible anywhere.
+   */
+  it('ships a sub-planner whose envelope reaches the workers its parent could', () => {
+    const root = BUILTIN_PERSONAS.find((p) => p.name === 'planner')
+    const area = BUILTIN_PERSONAS.find((p) => p.name === 'area-planner')
+    expect(area?.harnessPlanner).toBe(true)
+    // Narrower than its parent's and every refusal lands two hops from the mistake;
+    // attenuation intersects the two, so equal is the only workable default.
+    expect([...(area?.harnessDelegates ?? [])].sort()).toEqual(
+      [...(root?.harnessDelegates ?? [])].sort(),
+    )
+    // And it cannot act, for the same reason the root cannot.
+    expect(area?.tools).not.toContain('Bash')
+    expect(area?.tools).not.toContain('Write')
+  })
 
- /**
- * The planner/worker trust boundary is the Planner's trust boundary, and the boundary is *acting*,
- * not tooling — the attenuation measures every child against what the parent
- * holds, so a Planner that could write or run a shell would make every check
- * below it meaningless. It reads because the corporation hands a sub-planner an area of
- * a repository to decompose; see `planner-tools.ts`.
- */
- it('ships the planner able to read and unable to act', => {
- const planner = BUILTIN_PERSONAS.find((p) => p.name === 'planner')
- expect(planner?.harnessPlanner).toBe(true)
- expect(actingTools(planner?.tools ?? [])).toEqual([])
- // Stated as a positive too: a planner that could not read is the stall this
- // change exists to fix, and an empty list would pass the assertion above.
- expect(canPlannerRead(planner?.tools ?? [])).toBe(true)
- })
+  /**
+   * The Planner's trust boundary is *acting*,
+   * not tooling — the attenuation measures every child against what the parent
+   * holds, so a Planner that could write or run a shell would make every check
+   * below it meaningless. It reads because the corporation hands a sub-planner an area of
+   * a repository to decompose; see `planner-tools.ts`.
+   */
+  it('ships the planner able to read and unable to act', () => {
+    const planner = BUILTIN_PERSONAS.find((p) => p.name === 'planner')
+    expect(planner?.harnessPlanner).toBe(true)
+    expect(actingTools(planner?.tools ?? [])).toEqual([])
+    // Stated as a positive too: a planner that could not read is the stall this
+    // change exists to fix, and an empty list would pass the assertion above.
+    expect(canPlannerRead(planner?.tools ?? [])).toBe(true)
+  })
 
- /**
- * The named tools, not just "some read tool". `Bash` is the one that would make
- * attenuation meaningless, and it is worth failing by name if it ever appears.
- */
- it('never ships a planner holding Bash, Write or Edit', => {
- for (const persona of BUILTIN_PERSONAS.filter((p) => p.harnessPlanner)) {
- expect(persona.tools).not.toContain('Bash')
- expect(persona.tools).not.toContain('Write')
- expect(persona.tools).not.toContain('Edit')
- expect(persona.tools).not.toContain('NotebookEdit')
- }
- })
+  /**
+   * The named tools, not just "some read tool". `Bash` is the one that would make
+   * attenuation meaningless, and it is worth failing by name if it ever appears.
+   */
+  it('never ships a planner holding Bash, Write or Edit', () => {
+    for (const persona of BUILTIN_PERSONAS.filter((p) => p.harnessPlanner)) {
+      expect(persona.tools).not.toContain('Bash')
+      expect(persona.tools).not.toContain('Write')
+      expect(persona.tools).not.toContain('Edit')
+      expect(persona.tools).not.toContain('NotebookEdit')
+    }
+  })
 
- it.each(BUILTIN_PERSONAS.map((p) => [p.name, p] as const))(
- '%s: markdownSource round-trips through parsePersonaMarkdown',
- (_name, persona) => {
- const parsed = parsePersonaMarkdown(persona.markdownSource)
- expect(parsed).toEqual({
- name: persona.name,
- description: persona.description,
- model: persona.model,
- tools: persona.tools,
- harnessEffort: persona.harnessEffort,
- harnessMaxTurns: persona.harnessMaxTurns,
- harnessApprovalMode: persona.harnessApprovalMode,
- harnessPlanner: persona.harnessPlanner,
- harnessDelegates: persona.harnessDelegates,
- harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
- envelope: persona.envelope,
- systemPrompt: persona.systemPrompt,
- })
- },
-)
+  it.each(BUILTIN_PERSONAS.map((p) => [p.name, p] as const))(
+    '%s: markdownSource round-trips through parsePersonaMarkdown',
+    (_name, persona) => {
+      const parsed = parsePersonaMarkdown(persona.markdownSource)
+      expect(parsed).toEqual({
+        name: persona.name,
+        description: persona.description,
+        model: persona.model,
+        tools: persona.tools,
+        harnessEffort: persona.harnessEffort,
+        harnessMaxTurns: persona.harnessMaxTurns,
+        harnessApprovalMode: persona.harnessApprovalMode,
+        harnessPlanner: persona.harnessPlanner,
+    harnessDelegates: persona.harnessDelegates,
+        harnessBudgetCapUsd: persona.harnessBudgetCapUsd,
+        envelope: persona.envelope,
+        systemPrompt: persona.systemPrompt,
+      })
+    },
+  )
 
- it('ships every built-in with an enforced budget cap', => {
- // The seeded personas are the ones most likely to be @mentioned before anyone
- // has thought about spend, so an uncapped built-in would make the
- // out-of-the-box path the only uncapped one.
- for (const persona of BUILTIN_PERSONAS) {
- expect(persona.harnessBudgetCapUsd).toBeGreaterThan(0)
- }
- })
+  it('ships every built-in with an enforced budget cap', () => {
+    // The seeded personas are the ones most likely to be @mentioned before anyone
+    // has thought about spend, so an uncapped built-in would make the
+    // out-of-the-box path the only uncapped one.
+    for (const persona of BUILTIN_PERSONAS) {
+      expect(persona.harnessBudgetCapUsd).toBeGreaterThan(0)
+    }
+  })
 
- /**
- * The shipped defaults must compose into a swarm that can actually do the job.
- *
- * Three refusals, each individually correct, once combined into a Planner that
- * could delegate only to read-only reviewers: the envelope excluded `Bash`, which
- * is carried by every built-in that implements or verifies anything. Nothing failed
- * — `attenuation.test.ts` proved the rule on personas it invented, and this file
- * proved the seed one persona at a time. Neither asked whether the seed satisfies
- * the rule, which is the only question a user hits on their first run.
- */
- it('lets the built-in planner delegate to every built-in worker', => {
- const planner = asSpec(BUILTIN_PERSONAS.find((p) => p.name === 'planner')!)
- const refusals = BUILTIN_PERSONAS.filter(
- // The reconciler is exempt by design, not by oversight: it is platform-initiated
- // from the merge queue, and `startAgentRun` skips attenuation for
- // `relation: 'reconcile'` precisely so a narrow worker's branch stays fixable.
- // A Planner cannot ask for one — `reconcile` is not reachable from the contract.
- (persona) => persona.name !== 'planner' && persona.name !== 'reconciler',
-)
-.map((persona) => [persona.name, attenuateChildPersona(planner, asSpec(persona))] as const)
-.filter(([, verdict]) => !verdict.ok)
-.map(([name, verdict]) => `${name}: ${verdict.ok ? '': verdict.reason}`)
+  /**
+   * The shipped defaults must compose into a swarm that can actually do the job.
+   *
+   * Three refusals, each individually correct, once combined into a Planner that
+   * could delegate only to read-only reviewers: the envelope excluded `Bash`, which
+   * is carried by every built-in that implements or verifies anything. Nothing failed
+   * — `attenuation.test.ts` proved the rule on personas it invented, and this file
+   * proved the seed one persona at a time. Neither asked whether the seed satisfies
+   * the rule, which is the only question a user hits on their first run.
+   */
+  it('lets the built-in planner delegate to every built-in worker', () => {
+    const planner = asSpec(BUILTIN_PERSONAS.find((p) => p.name === 'planner')!)
+    const refusals = BUILTIN_PERSONAS.filter(
+      // The reconciler is exempt by design, not by oversight: it is platform-initiated
+      // from the merge queue, and `startAgentRun` skips attenuation for
+      // `relation: 'reconcile'` precisely so a narrow worker's branch stays fixable.
+      // A Planner cannot ask for one — `reconcile` is not reachable from the contract.
+      (persona) => persona.name !== 'planner' && persona.name !== 'reconciler',
+    )
+      .map((persona) => [persona.name, attenuateChildPersona(planner, asSpec(persona))] as const)
+      .filter(([, verdict]) => !verdict.ok)
+      .map(([name, verdict]) => `${name}: ${verdict.ok ? '' : verdict.reason}`)
 
- expect(refusals).toEqual([])
- })
+    expect(refusals).toEqual([])
+  })
 
- it('keeps the planner envelope to exactly what the built-in workers hold', => {
- // The other half of the check above, and the one that catches the opposite drift:
- // an envelope wider than any shipped worker is granting reach nothing asked for.
- const planner = BUILTIN_PERSONAS.find((p) => p.name === 'planner')!
- const held = new Set(
- BUILTIN_PERSONAS.filter((p) => p.name !== 'planner').flatMap((p) => p.tools),
-)
- expect([...planner.harnessDelegates].sort).toEqual([...held].sort)
- })
+  it('keeps the planner envelope to exactly what the built-in workers hold', () => {
+    // The other half of the check above, and the one that catches the opposite drift:
+    // an envelope wider than any shipped worker is granting reach nothing asked for.
+    const planner = BUILTIN_PERSONAS.find((p) => p.name === 'planner')!
+    const held = new Set(
+      BUILTIN_PERSONAS.filter((p) => p.name !== 'planner').flatMap((p) => p.tools),
+    )
+    expect([...planner.harnessDelegates].sort()).toEqual([...held].sort())
+  })
 
- it('security-reviewer is read-only', => {
- const reviewer = BUILTIN_PERSONAS.find((p) => p.name === 'security-reviewer')
- expect(reviewer?.tools).toEqual(['Read', 'Grep', 'Glob'])
- })
+  it('security-reviewer is read-only', () => {
+    const reviewer = BUILTIN_PERSONAS.find((p) => p.name === 'security-reviewer')
+    expect(reviewer?.tools).toEqual(['Read', 'Grep', 'Glob'])
+  })
 
- /**
- * The reconciler runs on the merge path, where a plausible-looking wrong answer is
- * worse than a refusal. A shell is the specific danger: `git
- * rebase --skip`, `checkout --theirs` and `reset` all make the conflict disappear by
- * discarding a worker's work, and all of them look like success to the queue.
- */
- it('gives the reconciler no shell', => {
- const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
- expect(reconciler?.tools).toEqual(['Read', 'Edit', 'Grep', 'Glob'])
- expect(reconciler?.tools).not.toContain('Bash')
- })
+  /**
+   * The reconciler runs on the merge path, where a plausible-looking wrong answer is
+   * worse than a refusal. A shell is the specific danger: `git
+   * rebase --skip`, `checkout --theirs` and `reset` all make the conflict disappear by
+   * discarding a worker's work, and all of them look like success to the queue.
+   */
+  it('gives the reconciler no shell', () => {
+    const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
+    expect(reconciler?.tools).toEqual(['Read', 'Edit', 'Grep', 'Glob'])
+    expect(reconciler?.tools).not.toContain('Bash')
+  })
 
- it('runs what acts unattended, and leaves a read-only persona asking', => {
- // Started by the merge queue rather than a human, so an approval gate leaves it in
- // `awaiting_approval` until the SLA auto-denies — found by a live run stalling
- // there. Every other built-in is @mentioned by someone who is present.
- for (const persona of BUILTIN_PERSONAS) {
- /**
- * **[AMENDED — the operator asks moved the gate to the merge.]** The reconciler was
- * the only autonomous built-in because it is the only one nobody watches; now every
- * persona that *acts* is autonomous, and every planner is too — not for its own sake
- * but because the data model refuses a child wider than its parent, so an `ask` planner cannot
- * start an `auto` worker at all. A read-only persona stays at `ask`, where the mode
- * gates nothing.
- */
- const acts = persona.tools.some((tool) =>
- ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool),
-)
- expect(persona.harnessApprovalMode, persona.name).toBe(
- acts || persona.harnessPlanner ? 'auto': 'ask',
-)
- }
- })
+  it('runs what acts unattended, and leaves a read-only persona asking', () => {
+    // Started by the merge queue rather than a human, so an approval gate leaves it in
+    // `awaiting_approval` until the SLA auto-denies — found by a live run stalling
+    // there. Every other built-in is @mentioned by someone who is present.
+    for (const persona of BUILTIN_PERSONAS) {
+      /**
+       * **[AMENDED — the human gate moved to the merge.]** The reconciler was
+       * the only autonomous built-in because it is the only one nobody watches; now every
+       * persona that *acts* is autonomous, and every planner is too — not for its own sake
+       * but because the data model refuses a child wider than its parent, so an `ask`
+       * planner cannot start an `auto` worker at all. A read-only persona stays at `ask`,
+       * where the mode gates nothing.
+       */
+      const acts = persona.tools.some((tool) =>
+        ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool),
+      )
+      expect(persona.harnessApprovalMode, persona.name).toBe(
+        acts || persona.harnessPlanner ? 'auto' : 'ask',
+      )
+    }
+  })
 
- /**
- * Every other built-in ships on the narrowest mode. `accept-edits` is a real
- * middle and a reasonable choice, but it is a choice an operator makes about their
- * own tolerance for unattended writes — not one a shipped default should make for
- * them (`approval-modes.ts`).
- */
- it('ships nothing on accept-edits', => {
- expect(BUILTIN_PERSONAS.every((p) => p.harnessApprovalMode !== 'accept-edits')).toBe(true)
- })
+  /**
+   * Every other built-in ships on the narrowest mode. `accept-edits` is a real
+   * middle and a reasonable choice, but it is a choice an operator makes about their
+   * own tolerance for unattended writes — not one a shipped default should make for
+   * them (`approval-modes.ts`).
+   */
+  it('ships nothing on accept-edits', () => {
+    expect(BUILTIN_PERSONAS.every((p) => p.harnessApprovalMode !== 'accept-edits')).toBe(true)
+  })
 
- it('tells the reconciler it is queue-started, not @mentioned', => {
- // It is seeded like every other built-in, so it appears in the persona picker even
- // with LOOM_RECONCILER_ENABLED off. Started by hand it gets an ordinary run on a
- // fresh branch with no conflict markers anywhere — `reconcile` is not reachable
- // from the contract, deliberately. Cheaper to say so than to special-case the UI.
- const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
- expect(reconciler?.systemPrompt).toMatch(/not meant to be invoked by hand/i)
- })
+  it('tells the reconciler it is queue-started, not @mentioned', () => {
+    // It is seeded like every other built-in, so it appears in the persona picker even
+    // with LOOM_RECONCILER_ENABLED off. Started by hand it gets an ordinary run on a
+    // fresh branch with no conflict markers anywhere — `reconcile` is not reachable
+    // from the contract, deliberately. Cheaper to say so than to special-case the UI.
+    const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
+    expect(reconciler?.systemPrompt).toMatch(/not meant to be invoked by hand/i)
+  })
 
- it('tells the reconciler that refusing is a correct outcome', => {
- // The parallel-branch measurement measured the population as mechanical, but the tail is conflicts that
- // encode a real disagreement. An agent that always resolves would silently drop
- // one side's intent on exactly those.
- const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
- expect(reconciler?.systemPrompt).toMatch(/refus/i)
- })
+  it('tells the reconciler that refusing is a correct outcome', () => {
+    // The parallel-branch measurement measured the population as mechanical, but the tail
+    // is conflicts that encode a real disagreement. An agent that always resolves would
+    // silently drop one side's intent on exactly those.
+    const reconciler = BUILTIN_PERSONAS.find((p) => p.name === 'reconciler')
+    expect(reconciler?.systemPrompt).toMatch(/refus/i)
+  })
 })
 
 /**
@@ -212,66 +212,67 @@ describe('BUILTIN_PERSONAS', => {
  * the setting: a mode is one line and easy to change, and what makes it acceptable is that
  * nothing on this roster can reach the default branch by itself.
  */
-describe('BUILTIN_PERSONAS autonomy', => {
- const acting = BUILTIN_PERSONAS.filter((persona) =>
- persona.tools.some((tool) => ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool)),
-)
+describe('BUILTIN_PERSONAS autonomy', () => {
+  const acting = BUILTIN_PERSONAS.filter((persona) =>
+    persona.tools.some((tool) => ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool)),
+  )
 
- /**
- * `accept-edits` would not have delivered autonomy: it covers Edit/Write/NotebookEdit and
- * deliberately not Bash, so every test run would still wait for a human — the reconciler's
- * documented stall, applied to the whole roster.
- */
- it('runs every acting persona unattended, because a half-gate is a stall', => {
- expect(acting.length).toBeGreaterThan(0)
- for (const persona of acting) {
- expect(persona.harnessApprovalMode, persona.name).toBe('auto')
- }
- })
+  /**
+   * `accept-edits` would not have delivered autonomy: it covers Edit/Write/NotebookEdit and
+   * deliberately not Bash, so every test run would still wait for a human — the reconciler's
+   * documented stall, applied to the whole roster.
+   */
+  it('runs every acting persona unattended, because a half-gate is a stall', () => {
+    expect(acting.length).toBeGreaterThan(0)
+    for (const persona of acting) {
+      expect(persona.harnessApprovalMode, persona.name).toBe('auto')
+    }
+  })
 
- /**
- * The bound that makes it acceptable. A persona holding a way to reach a remote itself
- * would put the human gate somewhere an agent can walk past — the push policy keeps credentials out
- * of the sandbox, and this asserts nothing on the roster is written as though they were.
- */
- it('gives no persona a path to a remote — the merge queue is the only way out', => {
- for (const persona of BUILTIN_PERSONAS) {
- expect(persona.tools, persona.name).not.toContain('WebSearch')
- // No shipped persona names a capability, so no MCP server is a route out either.
- expect(persona.markdownSource, persona.name).not.toContain('capabilities:')
- }
- })
+  /**
+   * The bound that makes it acceptable. A persona holding a way to reach a remote itself
+   * would put the human gate somewhere an agent can walk past — the push policy keeps
+   * credentials out of the sandbox, and this asserts nothing on the roster is written as
+   * though they were.
+   */
+  it('gives no persona a path to a remote — the merge queue is the only way out', () => {
+    for (const persona of BUILTIN_PERSONAS) {
+      expect(persona.tools, persona.name).not.toContain('WebSearch')
+      // No shipped persona names a capability, so no MCP server is a route out either.
+      expect(persona.markdownSource, persona.name).not.toContain('capabilities:')
+    }
+  })
 
- /**
- * A read-only persona's mode gates nothing — it holds no tool that asks — so leaving it
- * at `ask` is not an inconsistency, and changing it would be noise that reads as a
- * decision. Asserted so nobody "fixes" it later.
- */
- it('leaves a read-only persona at ask, because its mode gates nothing', => {
- /**
- * Planners excluded, and not as a carve-out: a planner's mode is a ceiling on its
- * children rather than a gate on itself, so it is the one read-only persona whose
- * mode has to be wide. See `builtin-personas.ts` on the `planner` define.
- */
- const readOnly = BUILTIN_PERSONAS.filter(
- (persona) =>
- persona.tools.length > 0 &&
- !persona.harnessPlanner &&
- !persona.tools.some((tool) => ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool)),
-)
- expect(readOnly.length).toBeGreaterThan(0)
- for (const persona of readOnly) {
- expect(persona.harnessApprovalMode, persona.name).toBe('ask')
- }
- })
+  /**
+   * A read-only persona's mode gates nothing — it holds no tool that asks — so leaving it
+   * at `ask` is not an inconsistency, and changing it would be noise that reads as a
+   * decision. Asserted so nobody "fixes" it later.
+   */
+  it('leaves a read-only persona at ask, because its mode gates nothing', () => {
+    /**
+     * Planners excluded, and not as a carve-out: a planner's mode is a ceiling on its
+     * children rather than a gate on itself, so it is the one read-only persona whose
+     * mode has to be wide. See `builtin-personas.ts` on the `planner` define.
+     */
+    const readOnly = BUILTIN_PERSONAS.filter(
+      (persona) =>
+        persona.tools.length > 0 &&
+        !persona.harnessPlanner &&
+        !persona.tools.some((tool) => ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(tool)),
+    )
+    expect(readOnly.length).toBeGreaterThan(0)
+    for (const persona of readOnly) {
+      expect(persona.harnessApprovalMode, persona.name).toBe('ask')
+    }
+  })
 
- /**
- * Autonomy pairs with the envelope rather than replacing it, and no shipped persona
- * carries one — an operator grants self-modification deliberately or not at all.
- */
- it('ships no persona that may rewrite itself', => {
- for (const persona of BUILTIN_PERSONAS) {
- expect(persona.envelope, persona.name).toBeNull
- }
- })
+  /**
+   * Autonomy pairs with the envelope rather than replacing it, and no shipped persona
+   * carries one — an operator grants self-modification deliberately or not at all.
+   */
+  it('ships no persona that may rewrite itself', () => {
+    for (const persona of BUILTIN_PERSONAS) {
+      expect(persona.envelope, persona.name).toBeNull()
+    }
+  })
 })

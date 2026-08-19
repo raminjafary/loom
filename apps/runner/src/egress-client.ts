@@ -9,72 +9,72 @@
  */
 
 export interface UsageRecord {
- readonly runId: string
- readonly model: string
- readonly costUsd: number | null
- readonly spentUsd: number
- readonly capUsd: number | null
- readonly exhausted: boolean
+  readonly runId: string
+  readonly model: string
+  readonly costUsd: number | null
+  readonly spentUsd: number
+  readonly capUsd: number | null
+  readonly exhausted: boolean
 }
 
 export interface EgressClientConfig {
- readonly controlUrl: string
- readonly dataUrl: string
- readonly controlSecret: string
+  readonly controlUrl: string
+  readonly dataUrl: string
+  readonly controlSecret: string
 }
 
 export const egressConfigFromEnv = (
- env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env,
 ): EgressClientConfig | null => {
- const controlSecret = env.LOOM_EGRESS_CONTROL_SECRET
- // Absent config is not an error here: it means this Runner is configured to run
- // agents unsandboxed (LOOM_SANDBOX_ENABLED=0), where the SDK uses the host's own
- // credentials and there is no lease to take out.
- if (!controlSecret) return null
- return {
- controlUrl: env.LOOM_EGRESS_CONTROL_URL ?? 'http://127.0.0.1:8081',
- // What the *sandbox* uses, so it is a container-network name, not loopback.
- dataUrl: env.LOOM_EGRESS_DATA_URL ?? 'http://loom-egress:8080',
- controlSecret,
- }
+  const controlSecret = env.LOOM_EGRESS_CONTROL_SECRET
+  // Absent config is not an error here: it means this Runner is configured to run
+  // agents unsandboxed (LOOM_SANDBOX_ENABLED=0), where the SDK uses the host's own
+  // credentials and there is no lease to take out.
+  if (!controlSecret) return null
+  return {
+    controlUrl: env.LOOM_EGRESS_CONTROL_URL ?? 'http://127.0.0.1:8081',
+    // What the *sandbox* uses, so it is a container-network name, not loopback.
+    dataUrl: env.LOOM_EGRESS_DATA_URL ?? 'http://loom-egress:8080',
+    controlSecret,
+  }
 }
 
 const control = async (
- config: EgressClientConfig,
- path: string,
- init: { method: string; body?: unknown },
+  config: EgressClientConfig,
+  path: string,
+  init: { method: string; body?: unknown },
 ): Promise<unknown> => {
- const response = await fetch(`${config.controlUrl}${path}`, {
- method: init.method,
- headers: {
- 'content-type': 'application/json',
- 'x-loom-control-secret': config.controlSecret,
- },
-...(init.body === undefined ? {}: { body: JSON.stringify(init.body) }),
- })
- if (!response.ok) {
- throw new Error(`egress control ${path} failed: ${response.status} ${await response.text}`)
- }
- return response.json
+  const response = await fetch(`${config.controlUrl}${path}`, {
+    method: init.method,
+    headers: {
+      'content-type': 'application/json',
+      'x-loom-control-secret': config.controlSecret,
+    },
+    ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+  })
+  if (!response.ok) {
+    throw new Error(`egress control ${path} failed: ${response.status} ${await response.text()}`)
+  }
+  return response.json()
 }
 
 export const leaseEgressToken = async (
- config: EgressClientConfig,
- input: { runId: string; budgetCapUsd: number | null; egressHosts?: readonly string[] },
+  config: EgressClientConfig,
+  input: { runId: string; budgetCapUsd: number | null; egressHosts?: readonly string[] },
 ): Promise<string> => {
- const result = (await control(config, '/_control/lease', {
- method: 'POST',
- body: input,
- })) as { token?: unknown }
- if (typeof result.token !== 'string') throw new Error('egress control returned no lease token')
- return result.token
+  const result = (await control(config, '/_control/lease', {
+    method: 'POST',
+    body: input,
+  })) as { token?: unknown }
+  if (typeof result.token !== 'string') throw new Error('egress control returned no lease token')
+  return result.token
 }
 
 export const revokeEgressToken = async (
- config: EgressClientConfig,
- runId: string,
+  config: EgressClientConfig,
+  runId: string,
 ): Promise<void> => {
- await control(config, `/_control/lease/${encodeURIComponent(runId)}`, { method: 'DELETE' })
+  await control(config, `/_control/lease/${encodeURIComponent(runId)}`, { method: 'DELETE' })
 }
 
 /**
@@ -83,10 +83,10 @@ export const revokeEgressToken = async (
  * dropping it on a transient socket failure, or that spend is lost.
  */
 export const drainUsage = async (config: EgressClientConfig): Promise<UsageRecord[]> => {
- const result = (await control(config, '/_control/usage', { method: 'GET' })) as {
- records?: unknown
- }
- return Array.isArray(result.records) ? (result.records as UsageRecord[]): []
+  const result = (await control(config, '/_control/usage', { method: 'GET' })) as {
+    records?: unknown
+  }
+  return Array.isArray(result.records) ? (result.records as UsageRecord[]) : []
 }
 
 /**
@@ -97,12 +97,12 @@ export const drainUsage = async (config: EgressClientConfig): Promise<UsageRecor
  * it — and a Date that survives one hop only to be re-serialized is work nobody asked for.
  */
 export interface EgressDecisionRecord {
- readonly runId: string
- readonly host: string
- readonly port: number
- readonly allowed: boolean
- readonly reason: string
- readonly at: string
+  readonly runId: string
+  readonly host: string
+  readonly port: number
+  readonly allowed: boolean
+  readonly reason: string
+  readonly at: string
 }
 
 /**
@@ -113,12 +113,12 @@ export interface EgressDecisionRecord {
  * rather than money — which is why this is best-effort at the call site and spend is not.
  */
 export const drainEgressDecisions = async (
- config: EgressClientConfig,
+  config: EgressClientConfig,
 ): Promise<EgressDecisionRecord[]> => {
- const result = (await control(config, '/_control/egress-decisions', { method: 'GET' })) as {
- decisions?: unknown
- }
- return Array.isArray(result.decisions) ? (result.decisions as EgressDecisionRecord[]): []
+  const result = (await control(config, '/_control/egress-decisions', { method: 'GET' })) as {
+    decisions?: unknown
+  }
+  return Array.isArray(result.decisions) ? (result.decisions as EgressDecisionRecord[]) : []
 }
 
 /**
@@ -127,8 +127,8 @@ export const drainEgressDecisions = async (
  * proxy has no way to notice on its own.
  */
 export const setUpstreamOauthToken = async (
- config: EgressClientConfig,
- oauthToken: string | null,
+  config: EgressClientConfig,
+  oauthToken: string | null,
 ): Promise<void> => {
- await control(config, '/_control/upstream-auth', { method: 'PUT', body: { oauthToken } })
+  await control(config, '/_control/upstream-auth', { method: 'PUT', body: { oauthToken } })
 }

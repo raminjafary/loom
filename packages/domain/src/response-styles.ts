@@ -21,40 +21,40 @@ export type ResponseStyle = (typeof RESPONSE_STYLES)[number]
 export const DEFAULT_RESPONSE_STYLE: ResponseStyle = 'default'
 
 export const isResponseStyle = (value: unknown): value is ResponseStyle =>
- typeof value === 'string' && (RESPONSE_STYLES as readonly string[]).includes(value)
+  typeof value === 'string' && (RESPONSE_STYLES as readonly string[]).includes(value)
 
 interface StyleDefinition {
- readonly label: string
- /** One line, shown next to the control so the choice is not a guess. */
- readonly description: string
- /** Appended to the persona's system prompt; empty means "change nothing". */
- readonly directive: string
+  readonly label: string
+  /** One line, shown next to the control so the choice is not a guess. */
+  readonly description: string
+  /** Appended to the persona's system prompt; empty means "change nothing". */
+  readonly directive: string
 }
 
 const STYLES: Record<ResponseStyle, StyleDefinition> = {
- default: {
- label: 'Default',
- description: 'The persona’s own voice, unmodified.',
- directive: '',
- },
- concise: {
- label: 'Concise',
- description: 'Short answers. No preamble, no summary of work already visible.',
- directive:
- 'Keep prose to a minimum. Answer in as few words as the question allows, skip preamble and postamble, and do not restate work that is already visible in the thread. Never abbreviate the work itself — only what you say about it.',
- },
- explanatory: {
- label: 'Explanatory',
- description: 'Says why, not just what — useful when someone is learning the codebase.',
- directive:
- 'Explain your reasoning as you go. When you make a non-obvious choice, say briefly what the alternatives were and why you rejected them, and point out anything in the codebase a reader would need to know to follow the change.',
- },
- caveman: {
- label: 'Caveman',
- description: 'Grug words only. Same work, fewer syllables.',
- directive:
- 'Write all prose in terse caveman speech: short words, no articles, no filler. This governs your prose only. Code, file paths, commands, identifiers and tool arguments are written normally and correctly — never abbreviate, misspell or simplify those.',
- },
+  default: {
+    label: 'Default',
+    description: 'The persona’s own voice, unmodified.',
+    directive: '',
+  },
+  concise: {
+    label: 'Concise',
+    description: 'Short answers. No preamble, no summary of work already visible.',
+    directive:
+      'Keep prose to a minimum. Answer in as few words as the question allows, skip preamble and postamble, and do not restate work that is already visible in the thread. Never abbreviate the work itself — only what you say about it.',
+  },
+  explanatory: {
+    label: 'Explanatory',
+    description: 'Says why, not just what — useful when someone is learning the codebase.',
+    directive:
+      'Explain your reasoning as you go. When you make a non-obvious choice, say briefly what the alternatives were and why you rejected them, and point out anything in the codebase a reader would need to know to follow the change.',
+  },
+  caveman: {
+    label: 'Caveman',
+    description: 'Grug words only. Same work, fewer syllables.',
+    directive:
+      'Write all prose in terse caveman speech: short words, no articles, no filler. This governs your prose only. Code, file paths, commands, identifiers and tool arguments are written normally and correctly — never abbreviate, misspell or simplify those.',
+  },
 }
 
 export const describeResponseStyle = (style: ResponseStyle): StyleDefinition => STYLES[style]
@@ -65,7 +65,7 @@ export const describeResponseStyle = (style: ResponseStyle): StyleDefinition => 
  * persona stops and an operator's dial starts.
  */
 export const applyResponseStyle = (systemPrompt: string, style: ResponseStyle): string => {
- const directive = STYLES[style].directive
- if (directive === '') return systemPrompt
- return `${systemPrompt}\n\n## Response style\n\n${directive}`
+  const directive = STYLES[style].directive
+  if (directive === '') return systemPrompt
+  return `${systemPrompt}\n\n## Response style\n\n${directive}`
 }

@@ -8,27 +8,27 @@ import type { LoomAuth } from './better-auth.js'
  * remains only for tests that need to bypass Better Auth's HTTP session flow.
  */
 export interface AuthPort {
- /** Resolves the calling principal. Returning null means unauthenticated. */
- resolve(headers: Record<string, string | string[] | undefined>): Promise<Principal | null>
+  /** Resolves the calling principal. Returning null means unauthenticated. */
+  resolve(headers: Record<string, string | string[] | undefined>): Promise<Principal | null>
 }
 
 export interface Principal {
- readonly actor: Actor
- readonly workspaceId: WorkspaceId
- /**
- * What to call this human where a record carries their name.
- *
- * Resolved from the authenticated session and **never** accepted from a client payload,
- * for the reason: a name a caller supplies is a name a caller can forge, and the
- * whole value of a promoted relation is whose judgement is behind it. Empty for a
- * non-human principal, and for a session with no name set — readers fall back rather
- * than dropping the record.
- */
- readonly displayName: string
+  readonly actor: Actor
+  readonly workspaceId: WorkspaceId
+  /**
+   * What to call this human where a record carries their name.
+   *
+   * Resolved from the authenticated session and **never** accepted from a client payload,
+   * for the reason: a name a caller supplies is a name a caller can forge, and the
+   * whole value of a promoted relation is whose judgement is behind it. Empty for a
+   * non-human principal, and for a session with no name set — readers fall back rather
+   * than dropping the record.
+   */
+  readonly displayName: string
 }
 
 export interface WorkspaceMembership {
- ensureMembership(userId: string): Promise<{ workspaceId: string; created: boolean }>
+  ensureMembership(userId: string): Promise<{ workspaceId: string; created: boolean }>
 }
 
 /**
@@ -37,27 +37,27 @@ export interface WorkspaceMembership {
  * know about our workspace/member tables, so the join happens here.
  */
 export const betterAuthPort = (auth: LoomAuth, membership: WorkspaceMembership): AuthPort => ({
- async resolve(headers) {
- const session = await auth.api.getSession({ headers: fromNodeHeaders(headers) })
- if (!session) return null
+  async resolve(headers) {
+    const session = await auth.api.getSession({ headers: fromNodeHeaders(headers) })
+    if (!session) return null
 
- const { workspaceId } = await membership.ensureMembership(session.user.id)
+    const { workspaceId } = await membership.ensureMembership(session.user.id)
 
- return {
- actor: userActor(asUserId(session.user.id)),
- workspaceId: asWorkspaceId(workspaceId),
- displayName: session.user.name ?? session.user.email ?? '',
- }
- },
+    return {
+      actor: userActor(asUserId(session.user.id)),
+      workspaceId: asWorkspaceId(workspaceId),
+      displayName: session.user.name ?? session.user.email ?? '',
+    }
+  },
 })
 
 const header = (
- headers: Record<string, string | string[] | undefined>,
- name: string,
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
 ): string | null => {
- const raw = headers[name]
- if (Array.isArray(raw)) return raw[0] ?? null
- return raw ?? null
+  const raw = headers[name]
+  if (Array.isArray(raw)) return raw[0] ?? null
+  return raw ?? null
 }
 
 /**
@@ -65,13 +65,13 @@ const header = (
  * anything reachable beyond localhost or a test harness.
  */
 export const devAuth = (defaults: { userId: string; workspaceId: string }): AuthPort => ({
- async resolve(headers) {
- const userId = header(headers, 'x-loom-dev-user') ?? defaults.userId
- const workspaceId = header(headers, 'x-loom-dev-workspace') ?? defaults.workspaceId
- return {
- actor: userActor(asUserId(userId)),
- workspaceId: asWorkspaceId(workspaceId),
- displayName: header(headers, 'x-loom-dev-name') ?? userId,
- }
- },
+  async resolve(headers) {
+    const userId = header(headers, 'x-loom-dev-user') ?? defaults.userId
+    const workspaceId = header(headers, 'x-loom-dev-workspace') ?? defaults.workspaceId
+    return {
+      actor: userActor(asUserId(userId)),
+      workspaceId: asWorkspaceId(workspaceId),
+      displayName: header(headers, 'x-loom-dev-name') ?? userId,
+    }
+  },
 })

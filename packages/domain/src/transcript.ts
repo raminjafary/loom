@@ -8,19 +8,19 @@
  * (`BlobStoragePort`), and the tech stack puts a local filesystem behind it until SeaweedFS
  * lands in Phase 3.
  *
- * Why redact at write rather than at read. A raw transcript is the one artifact
- * that is *deliberately* not summarized, so it is where a credential that leaked
- * into a tool result or an error message would sit verbatim and indefinitely. The security model
- * the credential broker's whole design is that a run holds no real credential — redaction here is
- * the backstop for the cases that design does not cover: an agent that read a
- * `.env` in its own clone, a provider error echoing an Authorization header, a
- * developer's key pasted into a task description.
+ * Why redact at write rather than at read. A raw transcript is the one artifact that is
+ * *deliberately* not summarized, so it is where a credential that leaked into a tool result
+ * or an error message would sit verbatim and indefinitely. The security model the
+ * credential broker's whole design is that a run holds no real credential — redaction here
+ * is the backstop for the cases that design does not cover: an agent that read a `.env` in
+ * its own clone, a provider error echoing an Authorization header, a developer's key pasted
+ * into a task description.
  */
 
 import type { AgentRunId } from './ids.js'
 
 /**
- * Chunk size, in lines. The event-tiering design asks for "batched writes... flushed on
+ * Chunk size, in lines. The event-tiering design asks for "batched writes ... flushed on
  * size/interval" — this is the size half; the interval is the Runner's, since
  * only it knows when a run has gone quiet.
  *
@@ -42,7 +42,7 @@ export const TRANSCRIPT_MAX_LINE_BYTES = 64_000
  * the wrong order is not a transcript.
  */
 export const transcriptChunkKey = (runId: AgentRunId, index: number): string =>
- `runs/${runId}/raw/${String(index).padStart(6, '0')}.jsonl`
+  `runs/${runId}/raw/${String(index).padStart(6, '0')}.jsonl`
 
 /** Everything belonging to one run, for deletion when its branch is discarded. */
 export const transcriptPrefix = (runId: AgentRunId): string => `runs/${runId}/raw/`
@@ -58,15 +58,15 @@ export const REDACTED = '<redacted>'
  * and essentially nothing else.
  */
 const SECRET_SHAPES: readonly RegExp[] = [
- // Anthropic keys and OAuth tokens — the credential this platform actually handles.
- /\bsk-ant-[A-Za-z0-9_-]{16,}/g,
- // OpenAI-style, in case a persona's task or an MCP server carries one.
- /\bsk-[A-Za-z0-9]{32,}/g,
- /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
- /\bAKIA[0-9A-Z]{16}\b/g,
- /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
- // JWTs: three base64url segments. Matches access tokens without matching prose.
- /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+  // Anthropic keys and OAuth tokens — the credential this platform actually handles.
+  /\bsk-ant-[A-Za-z0-9_-]{16,}/g,
+  // OpenAI-style, in case a persona's task or an MCP server carries one.
+  /\bsk-[A-Za-z0-9]{32,}/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+  // JWTs: three base64url segments. Matches access tokens without matching prose.
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
 ]
 
 /** `Authorization: Bearer <token>`, in a header dump or a provider error echo. */
@@ -79,7 +79,7 @@ const BEARER = /\b(authorization"?\s*[:=]\s*"?\s*)(bearer\s+)([A-Za-z0-9._~+/=-]
  * thing marking it is the key it sits under.
  */
 const SECRET_FIELD =
- /("?)\b(api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|auth[-_]?token|client[-_]?secret|password|passwd|secret|private[-_]?key|credential|vapid_private_key)\1(\s*[:=]\s*)("([^"\\]|\\.)*"|'[^']*'|[^\s,;}]+)/gi
+  /("?)\b(api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|auth[-_]?token|client[-_]?secret|password|passwd|secret|private[-_]?key|credential|vapid_private_key)\1(\s*[:=]\s*)("([^"\\]|\\.)*"|'[^']*'|[^\s,;}]+)/gi
 
 /** PEM blocks, which carry their own delimiters and are unmistakable. */
 const PEM = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g
@@ -90,26 +90,26 @@ const PEM = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE K
  * Order matters: field-name matching runs last, so a value already reduced to
  * `<redacted>` by a shape rule is not re-quoted oddly by the field rule.
  *
- * This is a backstop, not a guarantee, and the code should not pretend otherwise.
- * A secret with no recognizable shape, sitting under a field name nobody thought
- * of, survives. That is why the credential broker keeps real credentials out of the sandbox in
- * the first place rather than relying on this.
+ * This is a backstop, not a guarantee, and the code should not pretend otherwise. A secret
+ * with no recognizable shape, sitting under a field name nobody thought of, survives. That
+ * is why the credential broker keeps real credentials out of the sandbox in the first place
+ * rather than relying on this.
  */
 export const redactTranscriptLine = (line: string): string => {
- let out = line
+  let out = line
 
- out = out.replace(PEM, `-----BEGIN PRIVATE KEY-----${REDACTED}-----END PRIVATE KEY-----`)
- for (const pattern of SECRET_SHAPES) out = out.replace(pattern, REDACTED)
- out = out.replace(BEARER, (_match, prefix: string, bearer: string) => `${prefix}${bearer}${REDACTED}`)
- out = out.replace(
- SECRET_FIELD,
- (_match, quote: string, field: string, sep: string, value: string) => {
- const quoted = value.startsWith('"') || value.startsWith("'")
- return `${quote}${field}${quote}${sep}${quoted ? `"${REDACTED}"`: REDACTED}`
- },
-)
+  out = out.replace(PEM, `-----BEGIN PRIVATE KEY-----${REDACTED}-----END PRIVATE KEY-----`)
+  for (const pattern of SECRET_SHAPES) out = out.replace(pattern, REDACTED)
+  out = out.replace(BEARER, (_match, prefix: string, bearer: string) => `${prefix}${bearer}${REDACTED}`)
+  out = out.replace(
+    SECRET_FIELD,
+    (_match, quote: string, field: string, sep: string, value: string) => {
+      const quoted = value.startsWith('"') || value.startsWith("'")
+      return `${quote}${field}${quote}${sep}${quoted ? `"${REDACTED}"` : REDACTED}`
+    },
+  )
 
- return out
+  return out
 }
 
 /**
@@ -121,8 +121,8 @@ export const redactTranscriptLine = (line: string): string => {
  * looking at.
  */
 export const prepareTranscriptLine = (raw: string): string => {
- const redacted = redactTranscriptLine(raw)
- if (Buffer.byteLength(redacted, 'utf8') <= TRANSCRIPT_MAX_LINE_BYTES) return redacted
- const kept = Buffer.from(redacted, 'utf8').subarray(0, TRANSCRIPT_MAX_LINE_BYTES).toString('utf8')
- return `${kept}…[truncated by Loom at ${TRANSCRIPT_MAX_LINE_BYTES} bytes]`
+  const redacted = redactTranscriptLine(raw)
+  if (Buffer.byteLength(redacted, 'utf8') <= TRANSCRIPT_MAX_LINE_BYTES) return redacted
+  const kept = Buffer.from(redacted, 'utf8').subarray(0, TRANSCRIPT_MAX_LINE_BYTES).toString('utf8')
+  return `${kept}…[truncated by Loom at ${TRANSCRIPT_MAX_LINE_BYTES} bytes]`
 }

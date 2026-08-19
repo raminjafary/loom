@@ -13,46 +13,46 @@ import type { BlobStoragePort } from '@loom/application'
  * whose storage model makes it exploitable, rather than being assumed upstream.
  */
 export const fileBlobStorage = (root: string): BlobStoragePort => {
- const resolvedRoot = resolve(root)
+  const resolvedRoot = resolve(root)
 
- const pathFor = (key: string): string => {
- const full = resolve(resolvedRoot, key)
- if (full !== resolvedRoot && !full.startsWith(resolvedRoot + sep)) {
- throw new Error(`blob key escapes the storage root: ${key}`)
- }
- return full
- }
+  const pathFor = (key: string): string => {
+    const full = resolve(resolvedRoot, key)
+    if (full !== resolvedRoot && !full.startsWith(resolvedRoot + sep)) {
+      throw new Error(`blob key escapes the storage root: ${key}`)
+    }
+    return full
+  }
 
- return {
- async put(key, body) {
- const target = pathFor(key)
- await mkdir(dirname(target), { recursive: true })
- await writeFile(target, body, 'utf8')
- },
+  return {
+    async put(key, body) {
+      const target = pathFor(key)
+      await mkdir(dirname(target), { recursive: true })
+      await writeFile(target, body, 'utf8')
+    },
 
- async get(key) {
- try {
- return await readFile(pathFor(key), 'utf8')
- } catch {
- return null
- }
- },
+    async get(key) {
+      try {
+        return await readFile(pathFor(key), 'utf8')
+      } catch {
+        return null
+      }
+    },
 
- async list(prefix) {
- const dir = pathFor(prefix)
- try {
- const names = await readdir(dir)
- // Sorted here rather than relying on readdir's order, which is
- // filesystem-defined. `transcriptChunkKey` pads its index precisely so
- // this sort is chronological.
- return names.sort.map((name) => join(prefix, name))
- } catch {
- return []
- }
- },
+    async list(prefix) {
+      const dir = pathFor(prefix)
+      try {
+        const names = await readdir(dir)
+        // Sorted here rather than relying on readdir's order, which is
+        // filesystem-defined. `transcriptChunkKey` pads its index precisely so
+        // this sort is chronological.
+        return names.sort().map((name) => join(prefix, name))
+      } catch {
+        return []
+      }
+    },
 
- async deletePrefix(prefix) {
- await rm(pathFor(prefix), { recursive: true, force: true })
- },
- }
+    async deletePrefix(prefix) {
+      await rm(pathFor(prefix), { recursive: true, force: true })
+    },
+  }
 }

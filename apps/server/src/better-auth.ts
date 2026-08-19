@@ -12,19 +12,19 @@ import { betterAuth } from 'better-auth'
  * against in auth.ts.
  */
 export const createBetterAuth = (options: {
- db: Database
- secret: string
- baseUrl: string
- webOrigin: string
+  db: Database
+  secret: string
+  baseUrl: string
+  webOrigin: string
 }) =>
- betterAuth({
- database: drizzleAdapter(options.db, { provider: 'pg' }),
- secret: options.secret,
- baseURL: options.baseUrl,
- trustedOrigins: [options.webOrigin],
- emailAndPassword: {
- enabled: true,
- },
- })
+  betterAuth({
+    database: drizzleAdapter(options.db, { provider: 'pg' }),
+    secret: options.secret,
+    baseURL: options.baseUrl,
+    trustedOrigins: [options.webOrigin],
+    emailAndPassword: {
+      enabled: true,
+    },
+  })
 
 export type LoomAuth = ReturnType<typeof createBetterAuth>

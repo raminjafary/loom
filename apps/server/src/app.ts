@@ -1,44 +1,44 @@
 import {
- advanceMergeQueue,
- advanceScreenQueue,
- advanceVerificationQueue,
- curateIdleWorkspaces,
- expireStaleApprovals,
- reapStuckRuns,
- seedBuiltinPersonas,
- seedBuiltinTeams,
- type AgentDeps,
- type NotificationPort,
+  advanceMergeQueue,
+  advanceScreenQueue,
+  advanceVerificationQueue,
+  curateIdleWorkspaces,
+  expireStaleApprovals,
+  reapStuckRuns,
+  seedBuiltinPersonas,
+  seedBuiltinTeams,
+  type AgentDeps,
+  type NotificationPort,
 } from '@loom/application'
 import { asWorkspaceId } from '@loom/domain'
 import {
- agentRunEventRepository,
- agentRunRepository,
- approvalRepository,
- capabilityRepository,
- mergeQueueRepository,
- runVerificationRepository,
- auditAdapter,
- channelRepository,
- clearAllRunnerConnections,
- createDatabase,
- ensureWorkspaceMembership,
- messageRepository,
- notificationTargetRepository,
- personaGroupRepository,
- personaRepository,
- personaVariantRepository,
- screenRepository,
- repositoryRepository,
- runnerRepository,
- threadRepository,
- noteReadRepository,
- subjectMapRepository,
- atlasRepository,
- colosseumRepository,
- workerNoteRepository,
- planSubtaskRepository,
- workspaceRunControlRepository,
+  agentRunEventRepository,
+  agentRunRepository,
+  approvalRepository,
+  capabilityRepository,
+  mergeQueueRepository,
+  runVerificationRepository,
+  auditAdapter,
+  channelRepository,
+  clearAllRunnerConnections,
+  createDatabase,
+  ensureWorkspaceMembership,
+  messageRepository,
+  notificationTargetRepository,
+  personaGroupRepository,
+  personaRepository,
+  personaVariantRepository,
+  screenRepository,
+  repositoryRepository,
+  runnerRepository,
+  threadRepository,
+  noteReadRepository,
+  subjectMapRepository,
+  atlasRepository,
+  colosseumRepository,
+  workerNoteRepository,
+  planSubtaskRepository,
+  workspaceRunControlRepository,
 } from '@loom/db'
 import { RPCHandler } from '@orpc/server/node'
 import cors from '@fastify/cors'
@@ -55,9 +55,9 @@ import { fileBlobStorage } from './blob-storage.js'
 import { createRunnerGateway } from './runner-gateway.js'
 
 export interface App {
- readonly fastify: FastifyInstance
- readonly deps: AgentDeps
- close: Promise<void>
+  readonly fastify: FastifyInstance
+  readonly deps: AgentDeps
+  close(): Promise<void>
 }
 
 const DEFAULT_WORKSPACE = { slug: 'dev', name: 'Dev Workspace' }
@@ -69,227 +69,227 @@ const DEFAULT_WORKSPACE = { slug: 'dev', name: 'Dev Workspace' }
  * can substitute the port. Same reason `authOverride` exists.
  */
 export interface AppOverrides {
- readonly notifications?: NotificationPort
+  readonly notifications?: NotificationPort
 }
 
 export const buildApp = async (
- config: Config,
- authOverride?: AuthPort,
- overrides: AppOverrides = {},
+  config: Config,
+  authOverride?: AuthPort,
+  overrides: AppOverrides = {},
 ): Promise<App> => {
- const { db, close: closeDb } = createDatabase(config.DATABASE_URL)
- const events = createEventPublisher(config.VALKEY_URL)
+  const { db, close: closeDb } = createDatabase(config.DATABASE_URL)
+  const events = createEventPublisher(config.VALKEY_URL)
 
- const fastify = Fastify({ logger: config.NODE_ENV !== 'test' })
+  const fastify = Fastify({ logger: config.NODE_ENV !== 'test' })
 
- const notificationTargets = notificationTargetRepository(db)
- const notifications =
- overrides.notifications ??
- webPushNotificationPort({
- targets: notificationTargets,
- keys:
- config.VAPID_PUBLIC_KEY && config.VAPID_PRIVATE_KEY
- ? {
- publicKey: config.VAPID_PUBLIC_KEY,
- privateKey: config.VAPID_PRIVATE_KEY,
- subject: config.VAPID_SUBJECT,
- }
-: null,
- log: (event) => fastify.log.info(event),
- })
+  const notificationTargets = notificationTargetRepository(db)
+  const notifications =
+    overrides.notifications ??
+    webPushNotificationPort({
+      targets: notificationTargets,
+      keys:
+        config.VAPID_PUBLIC_KEY && config.VAPID_PRIVATE_KEY
+          ? {
+              publicKey: config.VAPID_PUBLIC_KEY,
+              privateKey: config.VAPID_PRIVATE_KEY,
+              subject: config.VAPID_SUBJECT,
+            }
+          : null,
+      log: (event) => fastify.log.info(event),
+    })
 
- const baseDeps = {
- channels: channelRepository(db),
- threads: threadRepository(db),
- messages: messageRepository(db),
- audit: auditAdapter(db),
- events,
- runners: runnerRepository(db),
- repositories: repositoryRepository(db),
- agentRuns: agentRunRepository(db),
- agentRunEvents: agentRunEventRepository(db),
- approvals: approvalRepository(db),
- mergeQueue: mergeQueueRepository(db),
- runVerifications: runVerificationRepository(db),
- workerNotes: workerNoteRepository(db),
- subjectMaps: subjectMapRepository(db),
- colosseum: colosseumRepository(db),
- atlas: atlasRepository(db),
- noteReads: noteReadRepository(db),
- planSubtasks: planSubtaskRepository(db),
- capabilities: capabilityRepository(db),
- personas: personaRepository(db),
- personaVariants: personaVariantRepository(db),
- screens: screenRepository(db),
- personaGroups: personaGroupRepository(db),
- runControl: workspaceRunControlRepository(db),
- blobs: fileBlobStorage(config.BLOB_STORAGE_ROOT),
- notifications,
- notificationTargets,
- limits: {
- maxConcurrentRunsPerWorkspace: config.MAX_CONCURRENT_RUNS_PER_WORKSPACE,
- maxDelegationDepth: config.MAX_DELEGATION_DEPTH,
- },
- }
+  const baseDeps = {
+    channels: channelRepository(db),
+    threads: threadRepository(db),
+    messages: messageRepository(db),
+    audit: auditAdapter(db),
+    events,
+    runners: runnerRepository(db),
+    repositories: repositoryRepository(db),
+    agentRuns: agentRunRepository(db),
+    agentRunEvents: agentRunEventRepository(db),
+    approvals: approvalRepository(db),
+    mergeQueue: mergeQueueRepository(db),
+    runVerifications: runVerificationRepository(db),
+    workerNotes: workerNoteRepository(db),
+    subjectMaps: subjectMapRepository(db),
+    colosseum: colosseumRepository(db),
+    atlas: atlasRepository(db),
+    noteReads: noteReadRepository(db),
+    planSubtasks: planSubtaskRepository(db),
+    capabilities: capabilityRepository(db),
+    personas: personaRepository(db),
+    personaVariants: personaVariantRepository(db),
+    screens: screenRepository(db),
+    personaGroups: personaGroupRepository(db),
+    runControl: workspaceRunControlRepository(db),
+    blobs: fileBlobStorage(config.BLOB_STORAGE_ROOT),
+    notifications,
+    notificationTargets,
+    limits: {
+      maxConcurrentRunsPerWorkspace: config.MAX_CONCURRENT_RUNS_PER_WORKSPACE,
+      maxDelegationDepth: config.MAX_DELEGATION_DEPTH,
+    },
+  }
 
- // The Runner gateway produces `dispatch` — see runner-gateway.ts for why
- // AgentDeps can't be fully built before it exists.
- const { register: registerRunnerGateway, dispatch } = createRunnerGateway(db, baseDeps)
- const deps: AgentDeps = {...baseDeps, dispatch }
+  // The Runner gateway produces `dispatch` — see runner-gateway.ts for why
+  // AgentDeps can't be fully built before it exists.
+  const { register: registerRunnerGateway, dispatch } = createRunnerGateway(db, baseDeps)
+  const deps: AgentDeps = { ...baseDeps, dispatch }
 
- const betterAuth = createBetterAuth({
- db,
- secret: config.BETTER_AUTH_SECRET,
- baseUrl: config.BETTER_AUTH_URL,
- webOrigin: config.WEB_ORIGIN,
- })
+  const betterAuth = createBetterAuth({
+    db,
+    secret: config.BETTER_AUTH_SECRET,
+    baseUrl: config.BETTER_AUTH_URL,
+    webOrigin: config.WEB_ORIGIN,
+  })
 
- const auth =
- authOverride ??
- betterAuthPort(betterAuth, {
- ensureMembership: async (userId) => {
- const result = await ensureWorkspaceMembership(db, userId, DEFAULT_WORKSPACE)
- // Every time, not only on creation: `seedBuiltinPersonas` skips names that
- // already exist, and running it once meant a workspace never received any
- // built-in added after it was made — silently, since the reconciler is looked
- // up by name and simply does nothing when absent.
- await seedBuiltinPersonas(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
- // After the personas, necessarily: a team is a roster of them, and a member
- // whose persona has not been seeded yet would simply be dropped.
- await seedBuiltinTeams(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
- return result
- },
- })
+  const auth =
+    authOverride ??
+    betterAuthPort(betterAuth, {
+      ensureMembership: async (userId) => {
+        const result = await ensureWorkspaceMembership(db, userId, DEFAULT_WORKSPACE)
+        // Every time, not only on creation: `seedBuiltinPersonas` skips names that
+        // already exist, and running it once meant a workspace never received any
+        // built-in added after it was made — silently, since the reconciler is looked
+        // up by name and simply does nothing when absent.
+        await seedBuiltinPersonas(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
+        // After the personas, necessarily: a team is a roster of them, and a member
+        // whose persona has not been seeded yet would simply be dropped.
+        await seedBuiltinTeams(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
+        return result
+      },
+    })
 
- // Background safety sweeps — skipped under NODE_ENV=test so a
- // stray sweep never races a test's own DB assertions. Both share one interval:
- // they're cheap indexed scans, and coupling them keeps a single knob for how
- // often the platform checks itself.
- //
- // Order matters. The approval SLA runs first so a gate that just expired hands
- // its run back to `running` before the reaper looks at it — the other order
- // would let the reaper judge that same run on a heartbeat it is about to renew.
- const reaperTimer =
- config.NODE_ENV === 'test'
- ? null
-: setInterval( => {
- void (async => {
- await expireStaleApprovals(deps, { approvalSlaMs: config.APPROVAL_SLA_MS })
- await reapStuckRuns(deps, {
- heartbeatTimeoutMs: config.REAPER_HEARTBEAT_TIMEOUT_MS,
- noProgressTimeoutMs: config.REAPER_NO_PROGRESS_TIMEOUT_MS,
- })
- // Last, and deliberately not awaited *into* the two above: a merge
- // runs a test suite, so this call can outlive its own interval tick.
- // Overlapping ticks are safe — see advanceMergeQueue — and running it
- // after the reapers means a run this sweep just failed is already
- // terminal when the queue looks at its entry.
- /**
- * The verification harness, before the merge queue and
- * for the same reason the reapers run before both: a branch that just
- * failed its repository's definition of done should already say so by the
- * time a human is deciding whether to queue it.
- */
- await advanceVerificationQueue(deps, {
- verificationStuckMs: config.MERGE_STUCK_TIMEOUT_MS,
- })
- await advanceMergeQueue(deps, { mergeStuckMs: config.MERGE_STUCK_TIMEOUT_MS })
- /**
- * The held-out screen, after the verification harness because that is what
- * it reads: a screening run's item is scored from the definition-of-done verdict
- * on its branch, so a sweep that ran first would find every finished run
- * unscored and have to wait a whole tick to notice.
- */
- await advanceScreenQueue(deps, {
- screenStuckMs: config.SCREEN_STUCK_TIMEOUT_MS,
- maxStartsPerTick: config.SCREEN_MAX_STARTS_PER_TICK,
- })
- /**
- * Curation, last and only while nothing is running.
- *
- * Mastery is explicit that a curation pass "never competes with work a human is
- * waiting for", so the gate is the count of active runs — checked *after* the
- * reapers, which is what makes it meaningful: a run this sweep just failed is
- * already terminal by the time it is counted. `curateIdleMaps` re-checks the
- * kill switch itself, because a timer cannot be trusted to remember a safety
- * rule.
- */
- await curateIdleWorkspaces(deps)
- }).catch((error) => {
- fastify.log.error({ error }, 'background safety sweep failed')
- })
- }, config.REAPER_INTERVAL_MS)
+  // Background safety sweeps — skipped under NODE_ENV=test so a
+  // stray sweep never races a test's own DB assertions. Both share one interval:
+  // they're cheap indexed scans, and coupling them keeps a single knob for how
+  // often the platform checks itself.
+  //
+  // Order matters. The approval SLA runs first so a gate that just expired hands
+  // its run back to `running` before the reaper looks at it — the other order
+  // would let the reaper judge that same run on a heartbeat it is about to renew.
+  const reaperTimer =
+    config.NODE_ENV === 'test'
+      ? null
+      : setInterval(() => {
+          void (async () => {
+            await expireStaleApprovals(deps, { approvalSlaMs: config.APPROVAL_SLA_MS })
+            await reapStuckRuns(deps, {
+              heartbeatTimeoutMs: config.REAPER_HEARTBEAT_TIMEOUT_MS,
+              noProgressTimeoutMs: config.REAPER_NO_PROGRESS_TIMEOUT_MS,
+            })
+            // Last, and deliberately not awaited *into* the two above: a merge
+            // runs a test suite, so this call can outlive its own interval tick.
+            // Overlapping ticks are safe — see advanceMergeQueue — and running it
+            // after the reapers means a run this sweep just failed is already
+            // terminal when the queue looks at its entry.
+            /**
+             * The verification harness, before the merge queue and
+             * for the same reason the reapers run before both: a branch that just
+             * failed its repository's definition of done should already say so by the
+             * time a human is deciding whether to queue it.
+             */
+            await advanceVerificationQueue(deps, {
+              verificationStuckMs: config.MERGE_STUCK_TIMEOUT_MS,
+            })
+            await advanceMergeQueue(deps, { mergeStuckMs: config.MERGE_STUCK_TIMEOUT_MS })
+            /**
+             * The held-out screen, after the verification harness because that is what it
+             * reads: a screening run's item is scored from the definition-of-done verdict
+             * on its branch, so a sweep that ran first would find every finished run
+             * unscored and have to wait a whole tick to notice.
+             */
+            await advanceScreenQueue(deps, {
+              screenStuckMs: config.SCREEN_STUCK_TIMEOUT_MS,
+              maxStartsPerTick: config.SCREEN_MAX_STARTS_PER_TICK,
+            })
+            /**
+             * Curation, last and only while nothing is running.
+             *
+             * Mastery is explicit that a curation pass "never competes with work a human is
+             * waiting for", so the gate is the count of active runs — checked *after* the
+             * reapers, which is what makes it meaningful: a run this sweep just failed is
+             * already terminal by the time it is counted. `curateIdleMaps` re-checks the
+             * kill switch itself, because a timer cannot be trusted to remember a safety
+             * rule.
+             */
+            await curateIdleWorkspaces(deps)
+          })().catch((error) => {
+            fastify.log.error({ error }, 'background safety sweep failed')
+          })
+        }, config.REAPER_INTERVAL_MS)
 
- await fastify.register(cors, {
- origin: config.WEB_ORIGIN,
- credentials: true,
- })
+  await fastify.register(cors, {
+    origin: config.WEB_ORIGIN,
+    credentials: true,
+  })
 
- // Before any Runner can reconnect: this process owns no live connections yet,
- // so any lingering `connected: true` is stale (see clearAllRunnerConnections).
- await clearAllRunnerConnections(db)
+  // Before any Runner can reconnect: this process owns no live connections yet,
+  // so any lingering `connected: true` is stale (see clearAllRunnerConnections).
+  await clearAllRunnerConnections(db)
 
- await registerRunnerGateway(fastify)
+  await registerRunnerGateway(fastify)
 
- // Better Auth owns everything under /api/auth — sign-up, sign-in, session,
- // sign-out. Mounted before the oRPC body-parser override below so it keeps
- // Fastify's normal JSON parsing.
- //
- // toNodeHandler writes straight to `reply.raw` (the underlying Node
- // response), bypassing Fastify's send lifecycle entirely — so
- // @fastify/cors's onSend-based header injection never runs here, even
- // though it *did* run for the OPTIONS preflight (that's short-circuited
- // earlier, in cors's onRequest hook, before this handler executes). Set
- // the two headers the browser actually needs by hand.
- fastify.all('/api/auth/*', async (request, reply) => {
- reply.raw.setHeader('Access-Control-Allow-Origin', config.WEB_ORIGIN)
- reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
- await toNodeHandler(betterAuth.handler)(request.raw, reply.raw)
- })
+  // Better Auth owns everything under /api/auth — sign-up, sign-in, session,
+  // sign-out. Mounted before the oRPC body-parser override below so it keeps
+  // Fastify's normal JSON parsing.
+  //
+  // toNodeHandler writes straight to `reply.raw` (the underlying Node
+  // response), bypassing Fastify's send lifecycle entirely — so
+  // @fastify/cors's onSend-based header injection never runs here, even
+  // though it *did* run for the OPTIONS preflight (that's short-circuited
+  // earlier, in cors's onRequest hook, before this handler executes). Set
+  // the two headers the browser actually needs by hand.
+  fastify.all('/api/auth/*', async (request, reply) => {
+    reply.raw.setHeader('Access-Control-Allow-Origin', config.WEB_ORIGIN)
+    reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
+    await toNodeHandler(betterAuth.handler)(request.raw, reply.raw)
+  })
 
- const mintSubscriptionToken = subscriptionTokenMinter(config.WS_SUBSCRIPTION_SECRET)
+  const mintSubscriptionToken = subscriptionTokenMinter(config.WS_SUBSCRIPTION_SECRET)
 
- const handler = new RPCHandler(router)
+  const handler = new RPCHandler(router)
 
- // oRPC reads the raw request stream itself, so Fastify must not consume the
- // body first. Anchored regex: an unanchored /.*/ makes MIME essence detection
- // unreliable, which Fastify flags as a CORS risk.
- fastify.removeAllContentTypeParsers
- fastify.addContentTypeParser(/^.*$/, (_req, _payload, done) => done(null, undefined))
+  // oRPC reads the raw request stream itself, so Fastify must not consume the
+  // body first. Anchored regex: an unanchored /.*/ makes MIME essence detection
+  // unreliable, which Fastify flags as a CORS risk.
+  fastify.removeAllContentTypeParsers()
+  fastify.addContentTypeParser(/^.*$/, (_req, _payload, done) => done(null, undefined))
 
- fastify.all('/rpc/*', async (request, reply) => {
- // Same reason as the /api/auth/* handler above: RPCHandler#handle writes
- // straight to `reply.raw`, bypassing Fastify's send lifecycle that
- // @fastify/cors hooks into — so these headers must be set by hand here too.
- reply.raw.setHeader('Access-Control-Allow-Origin', config.WEB_ORIGIN)
- reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
+  fastify.all('/rpc/*', async (request, reply) => {
+    // Same reason as the /api/auth/* handler above: RPCHandler#handle writes
+    // straight to `reply.raw`, bypassing Fastify's send lifecycle that
+    // @fastify/cors hooks into — so these headers must be set by hand here too.
+    reply.raw.setHeader('Access-Control-Allow-Origin', config.WEB_ORIGIN)
+    reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
 
- const principal = await auth.resolve(request.headers)
- if (!principal) {
- await reply.code(401).send({ error: 'unauthenticated' })
- return
- }
+    const principal = await auth.resolve(request.headers)
+    if (!principal) {
+      await reply.code(401).send({ error: 'unauthenticated' })
+      return
+    }
 
- const { matched } = await handler.handle(request.raw, reply.raw, {
- prefix: '/rpc',
- context: { principal, deps, mintSubscriptionToken },
- })
+    const { matched } = await handler.handle(request.raw, reply.raw, {
+      prefix: '/rpc',
+      context: { principal, deps, mintSubscriptionToken },
+    })
 
- if (!matched) {
- await reply.code(404).send({ error: 'no matching procedure' })
- }
- })
+    if (!matched) {
+      await reply.code(404).send({ error: 'no matching procedure' })
+    }
+  })
 
- fastify.get('/healthz', async => ({ status: 'ok' }))
+  fastify.get('/healthz', async () => ({ status: 'ok' }))
 
- return {
- fastify,
- deps,
- close: async => {
- if (reaperTimer) clearInterval(reaperTimer)
- await fastify.close
- await events.close
- await closeDb
- },
- }
+  return {
+    fastify,
+    deps,
+    close: async () => {
+      if (reaperTimer) clearInterval(reaperTimer)
+      await fastify.close()
+      await events.close()
+      await closeDb()
+    },
+  }
 }

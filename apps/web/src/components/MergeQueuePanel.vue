@@ -13,185 +13,185 @@ import ConfirmButton from './ConfirmButton.vue'
  * a way to jump the queue would be the race the queue replaces.
  */
 
-const props = defineProps<{ entries: MergeQueueEntry[] }>
+const props = defineProps<{ entries: MergeQueueEntry[] }>()
 const emit = defineEmits<{
- cancel: [entryId: string]
- refresh: []
- /** See the failed-entry button below — the run that owns the branch. */
- open: [agentRunId: string]
-}>
+  cancel: [entryId: string]
+  refresh: []
+  /** See the failed-entry button below — the run that owns the branch. */
+  open: [agentRunId: string]
+}>()
 
 // Only a still-queued entry can be called back: once it is merging, a rebase is
 // already running on the Runner.
 const canCancel = (entry: MergeQueueEntry) => entry.status === 'queued'
 
 const detailOf = (entry: MergeQueueEntry): string | null => {
- if (entry.status === 'merged') {
- return `${entry.mergedCommitSha?.slice(0, 8) ?? ''} · ${entry.verified ? 'verified': 'unverified'}`
- }
- if (entry.status === 'failed') return entry.failureReason ?? 'failed'
- return null
+  if (entry.status === 'merged') {
+    return `${entry.mergedCommitSha?.slice(0, 8) ?? ''} · ${entry.verified ? 'verified' : 'unverified'}`
+  }
+  if (entry.status === 'failed') return entry.failureReason ?? 'failed'
+  return null
 }
 </script>
 
 <template>
- <section class="panel">
- <header>
- <h3>Merge queue</h3>
- <button type="button" @click="emit('refresh')">Refresh</button>
- </header>
- <p v-if="props.entries.length === 0" class="empty">Nothing queued.</p>
- <ul v-else class="list">
- <li v-for="entry in props.entries":key="entry.id" class="row":class="entry.status">
- <div class="line">
- <span class="branch":title="entry.branchName">{{
- shortBranchName(entry.branchName)
- }}</span>
- <span class="status">{{ entry.status }}</span>
- <ConfirmButton
- v-if="canCancel(entry)"
- variant="link"
- label="Cancel"
- confirm-label="Remove from queue"
- @confirm="emit('cancel', entry.id)"
- />
- </div>
- <p v-if="detailOf(entry)" class="detail">{{ detailOf(entry) }}</p>
- <!--
- `agentRunId` has been on this payload the whole time and nothing used it, so
- a failed merge was a dead end at the exact moment a human has a reason to
- dig in: the branch is the run's to fix, and this is the only place that says
- it failed.
- -->
- <button
- v-if="entry.status === 'failed'"
- type="button"
- class="open"
- @click="emit('open', entry.agentRunId)"
- >
- Open the run that owns this branch
- </button>
- <!-- Plain text, never v-html: this carries git output. -->
- <pre v-if="entry.status === 'failed' && entry.detail" class="reason">{{ entry.detail }}</pre>
- </li>
- </ul>
- </section>
+  <section class="panel">
+    <header>
+      <h3>Merge queue</h3>
+      <button type="button" @click="emit('refresh')">Refresh</button>
+    </header>
+    <p v-if="props.entries.length === 0" class="empty">Nothing queued.</p>
+    <ul v-else class="list">
+      <li v-for="entry in props.entries" :key="entry.id" class="row" :class="entry.status">
+        <div class="line">
+          <span class="branch" :title="entry.branchName">{{
+            shortBranchName(entry.branchName)
+          }}</span>
+          <span class="status">{{ entry.status }}</span>
+          <ConfirmButton
+            v-if="canCancel(entry)"
+            variant="link"
+            label="Cancel"
+            confirm-label="Remove from queue"
+            @confirm="emit('cancel', entry.id)"
+          />
+        </div>
+        <p v-if="detailOf(entry)" class="detail">{{ detailOf(entry) }}</p>
+        <!--
+          `agentRunId` has been on this payload the whole time and nothing used it, so
+          a failed merge was a dead end at the exact moment a human has a reason to
+          dig in: the branch is the run's to fix, and this is the only place that says
+          it failed.
+        -->
+        <button
+          v-if="entry.status === 'failed'"
+          type="button"
+          class="open"
+          @click="emit('open', entry.agentRunId)"
+        >
+          Open the run that owns this branch
+        </button>
+        <!-- Plain text, never v-html: this carries git output. -->
+        <pre v-if="entry.status === 'failed' && entry.detail" class="reason">{{ entry.detail }}</pre>
+      </li>
+    </ul>
+  </section>
 </template>
 
 <style scoped>
 .open {
- margin-top: 0.3rem;
- border: 0;
- padding: 0;
- background: none;
- color: var(--accent);
- font: inherit;
- font-size: 0.75rem;
- text-decoration: underline;
- cursor: pointer;
+  margin-top: 0.3rem;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.75rem;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .panel {
- border: 1px solid var(--border);
- border-radius: 0.5rem;
- padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.7rem;
 }
 
 header {
- display: flex;
- align-items: center;
- justify-content: space-between;
- gap: 0.5rem;
- margin-bottom: 0.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
 }
 
 h3 {
- margin: 0;
- font-size: 0.7rem;
- text-transform: uppercase;
- letter-spacing: 0.06em;
- color: var(--text-faint);
+  margin: 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
 }
 
 header button {
- padding: 0.15rem 0.4rem;
- border: 1px solid var(--border);
- border-radius: 0.3rem;
- background: var(--surface-hover);
- color: var(--text);
- font: inherit;
- font-size: 0.7rem;
- cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--surface-hover);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
 }
 
 .empty {
- margin: 0;
- font-size: 0.8rem;
- color: var(--text-faint);
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-faint);
 }
 
 .list {
- margin: 0;
- padding: 0;
- list-style: none;
- display: flex;
- flex-direction: column;
- gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 .line {
- display: flex;
- align-items: baseline;
- gap: 0.4rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
 }
 
 .branch {
- font-size: 0.8rem;
- overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 .status {
- font-size: 0.68rem;
- text-transform: uppercase;
- letter-spacing: 0.05em;
- color: var(--text-faint);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
 }
 
-.row.merging.status {
- color: var(--accent);
+.row.merging .status {
+  color: var(--accent);
 }
 
-.row.failed.status {
- color: var(--danger);
+.row.failed .status {
+  color: var(--danger);
 }
 
 .cancel {
- margin-left: auto;
- padding: 0.1rem 0.35rem;
- border: 1px solid var(--border);
- border-radius: 0.3rem;
- background: none;
- color: var(--text-faint);
- font: inherit;
- font-size: 0.7rem;
- cursor: pointer;
+  margin-left: auto;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
 }
 
 .detail {
- margin: 0.1rem 0 0;
- font-size: 0.72rem;
- color: var(--text-faint);
+  margin: 0.1rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-faint);
 }
 
 .reason {
- margin: 0.2rem 0 0;
- padding: 0.3rem 0.4rem;
- max-height: 6rem;
- overflow: auto;
- background: var(--surface);
- border-radius: 0.3rem;
- font-size: 0.7rem;
- white-space: pre-wrap;
- overflow-wrap: anywhere;
+  margin: 0.2rem 0 0;
+  padding: 0.3rem 0.4rem;
+  max-height: 6rem;
+  overflow: auto;
+  background: var(--surface);
+  border-radius: 0.3rem;
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 </style>

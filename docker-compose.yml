@@ -1,89 +1,89 @@
 services:
- postgres:
- image: postgres:18-alpine
- restart: unless-stopped
- environment:
- POSTGRES_USER: loom
- POSTGRES_PASSWORD: loom
- POSTGRES_DB: loom
- ports:
- - "5432:5432"
- # PG 18+ images store data in a major-version subdirectory, so the mount
- # must be /var/lib/postgresql — not /var/lib/postgresql/data as in <=17.
- volumes:
- - postgres-data:/var/lib/postgresql
- healthcheck:
- test: ["CMD-SHELL", "pg_isready -U loom -d loom"]
- interval: 5s
- timeout: 5s
- retries: 10
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: loom
+      POSTGRES_PASSWORD: loom
+      POSTGRES_DB: loom
+    ports:
+      - "5432:5432"
+    # PG 18+ images store data in a major-version subdirectory, so the mount
+    # must be /var/lib/postgresql — not /var/lib/postgresql/data as in <=17.
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loom -d loom"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
- valkey:
- image: valkey/valkey:9-alpine
- restart: unless-stopped
- command: valkey-server --save "" --appendonly no
- ports:
- - "6379:6379"
- healthcheck:
- test: ["CMD", "valkey-cli", "ping"]
- interval: 5s
- timeout: 5s
- retries: 10
+  valkey:
+    image: valkey/valkey:9-alpine
+    restart: unless-stopped
+    command: valkey-server --save "" --appendonly no
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
- # The credential-injecting, metering, allowlisting egress boundary
- #. Deliberately the only service on both networks below:
- # that asymmetry is what makes deny-by-default egress real for sandboxes.
- egress-proxy:
- build:
- context:.
- dockerfile: apps/egress-proxy/Dockerfile
- restart: unless-stopped
- environment:
- LOOM_EGRESS_CONTROL_SECRET: ${LOOM_EGRESS_CONTROL_SECRET:?set it in.env — the Runner authenticates to the control plane with it}
- ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?the proxy holds the real key so the sandbox never does}
- EGRESS_ALLOWED_HOSTS: ${EGRESS_ALLOWED_HOSTS:-}
- # Logs the header *names* forwarded upstream (never values). Needed to answer
- # "what shape of request is the SDK actually sending?", which decides whether an
- # API key can stand in for the OAuth token — see the credential broker section.
- LOOM_EGRESS_TRACE_HEADERS: ${LOOM_EGRESS_TRACE_HEADERS:-0}
- ports:
- # Published to the host's loopback only, which is not the same as unreachable:
- # this container is also on loom-sandbox, so a sandbox CAN reach 8081 by
- # container name. The control secret is the boundary — the control-plane exposure.
- - "127.0.0.1:8081:8081"
- networks:
- loom-sandbox:
- # Stable name for sandboxes to reach, instead of the compose-generated
- # container name — apps/runner/src/sandbox.ts hardcodes no project prefix.
- aliases:
- - loom-egress
- default: {}
- healthcheck:
- test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(=>process.exit(1))"]
- interval: 10s
- timeout: 5s
- retries: 5
+  # The credential-injecting, metering, allowlisting egress boundary
+  #. Deliberately the only service on both networks below:
+  # that asymmetry is what makes deny-by-default egress real for sandboxes.
+  egress-proxy:
+    build:
+      context: .
+      dockerfile: apps/egress-proxy/Dockerfile
+    restart: unless-stopped
+    environment:
+      LOOM_EGRESS_CONTROL_SECRET: ${LOOM_EGRESS_CONTROL_SECRET:?set it in .env — the Runner authenticates to the control plane with it}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?the proxy holds the real key so the sandbox never does}
+      EGRESS_ALLOWED_HOSTS: ${EGRESS_ALLOWED_HOSTS:-}
+      # Logs the header *names* forwarded upstream (never values). Needed to answer
+      # "what shape of request is the SDK actually sending?", which decides whether an
+      # API key can stand in for the OAuth token.
+      LOOM_EGRESS_TRACE_HEADERS: ${LOOM_EGRESS_TRACE_HEADERS:-0}
+    ports:
+      # Published to the host's loopback only, which is not the same as unreachable:
+      # this container is also on loom-sandbox, so a sandbox CAN reach 8081 by
+      # container name. The control secret is the boundary.
+      - "127.0.0.1:8081:8081"
+    networks:
+      loom-sandbox:
+        # Stable name for sandboxes to reach, instead of the compose-generated
+        # container name — apps/runner/src/sandbox.ts hardcodes no project prefix.
+        aliases:
+          - loom-egress
+      default: {}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 networks:
- # `internal: true` removes the gateway, so a container attached only to this
- # network cannot reach the internet, the host, or the other compose services
- # (postgres and valkey are on `default`). Sandboxes get exactly one reachable
- # peer: egress-proxy. This is the "--network=none by default with
- # all egress through the authenticating proxy" expressed in a way that still
- # lets the proxy be reachable — a literal --network=none would cut that too.
- #
- # Known Phase 1 limitation, stated rather than hidden: concurrent sandboxes
- # share this network and can therefore reach each other. They hold no
- # credentials so the blast radius is one run's clone, but per-run
- # networks would close it and are the right follow-up.
- loom-sandbox:
- # Fixed name, because apps/runner/src/sandbox.ts passes it to `--network` and
- # the Runner is a host process with no knowledge of the compose project prefix.
- name: loom-sandbox
- internal: true
- # `default` is left unnamed on purpose: renaming it strands containers created
- # under the previous name and `docker compose up` then refuses to reattach them.
- default: {}
+  # `internal: true` removes the gateway, so a container attached only to this
+  # network cannot reach the internet, the host, or the other compose services
+  # (postgres and valkey are on `default`). Sandboxes get exactly one reachable
+  # peer: egress-proxy. This is "--network=none by default with all egress through the
+  # authenticating proxy" expressed in a way that still lets the proxy be reachable — a
+  # literal --network=none would cut that too.
+  #
+  # Known Phase 1 limitation, stated rather than hidden: concurrent sandboxes
+  # share this network and can therefore reach each other. They hold no
+  # credentials so the blast radius is one run's clone, but per-run
+  # networks would close it and are the right follow-up.
+  loom-sandbox:
+    # Fixed name, because apps/runner/src/sandbox.ts passes it to `--network` and
+    # the Runner is a host process with no knowledge of the compose project prefix.
+    name: loom-sandbox
+    internal: true
+  # `default` is left unnamed on purpose: renaming it strands containers created
+  # under the previous name and `docker compose up` then refuses to reattach them.
+  default: {}
 
 volumes:
- postgres-data:
+  postgres-data:

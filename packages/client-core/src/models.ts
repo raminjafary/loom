@@ -8,27 +8,27 @@
  * clear rejection rather than an unmetered run.
  */
 export interface SelectableModel {
- readonly id: string
- readonly label: string
- /** USD per million input tokens. */
- readonly inputPerMTok: number
- /** USD per million output tokens. */
- readonly outputPerMTok: number
+  readonly id: string
+  readonly label: string
+  /** USD per million input tokens. */
+  readonly inputPerMTok: number
+  /** USD per million output tokens. */
+  readonly outputPerMTok: number
 }
 
 export const SELECTABLE_MODELS: readonly SelectableModel[] = [
- { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', inputPerMTok: 1, outputPerMTok: 5 },
- { id: 'claude-sonnet-5', label: 'Sonnet 5', inputPerMTok: 3, outputPerMTok: 15 },
- { id: 'claude-opus-5', label: 'Opus 5', inputPerMTok: 5, outputPerMTok: 25 },
- { id: 'claude-fable-5', label: 'Fable 5', inputPerMTok: 10, outputPerMTok: 50 },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', inputPerMTok: 1, outputPerMTok: 5 },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', inputPerMTok: 3, outputPerMTok: 15 },
+  { id: 'claude-opus-5', label: 'Opus 5', inputPerMTok: 5, outputPerMTok: 25 },
+  { id: 'claude-fable-5', label: 'Fable 5', inputPerMTok: 10, outputPerMTok: 50 },
 ]
 
 /** The priced entry a model id falls under, by longest matching prefix. */
 export const findSelectableModel = (model: string): SelectableModel | null => {
- let best: SelectableModel | null = null
- for (const entry of SELECTABLE_MODELS) {
- if (!model.startsWith(entry.id)) continue
- if (best === null || entry.id.length > best.id.length) best = entry
- }
- return best
+  let best: SelectableModel | null = null
+  for (const entry of SELECTABLE_MODELS) {
+    if (!model.startsWith(entry.id)) continue
+    if (best === null || entry.id.length > best.id.length) best = entry
+  }
+  return best
 }

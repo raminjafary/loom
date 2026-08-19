@@ -2,21 +2,21 @@
  * Who reviews whom, as a design-time fact.
  *
  * The reviewing role built `reviews` as a **per-plan** edge: one subtask names a sibling it
- * reviews, and a Planner decides that fresh for every goal. The canvas design asks for the same
- * relation "as *policy* rather than as events, because that is the only form [it has]
+ * reviews, and a Planner decides that fresh for every goal. The canvas design asks for the
+ * same relation "as *policy* rather than as events, because that is the only form [it has]
  * before anything runs" — a human saying once that this team's `security-reviewer` reads
  * whatever `swe` writes, instead of hoping each plan remembers to ask.
  *
- * **The rule that keeps it honest is the roadmap's**, quoted in the canvas design: "a design canvas may only
- * draw what the runtime executes, so each of these has to be a field the platform already
- * reads — never a decoration." So this is read in two places, and both are places the
- * fleet's width is read, for the same reasons:
+ * **The rule that keeps it honest is the roadmap's**, quoted in the canvas design: "a
+ * design canvas may only draw what the runtime executes, so each of these has to be a field
+ * the platform already reads — never a decoration." So this is read in two places, and both
+ * are places the fleet's width is read, for the same reasons:
  *
  * 1. **The Planner's roster** — it is told, at plan time, which of its workers this team
- * expects to be reviewed and by whom. That is an instruction to a model that is at
- * that moment choosing subtasks, which is the only moment it can act on it.
+ *    expects to be reviewed and by whom. That is an instruction to a model that is at
+ *    that moment choosing subtasks, which is the only moment it can act on it.
  * 2. **Plan validation** — a decomposition that gives work to a reviewed persona and asks
- * for no review of it gets a warning, before the first child starts.
+ *    for no review of it gets a warning, before the first child starts.
  *
  * **Why it warns rather than refuses**, unlike the fleet's concurrency check: enforcing
  * would mean the platform *adding a subtask the Planner did not ask for*, and the
@@ -42,8 +42,8 @@ export type ReviewPolicy = Readonly<Record<string, readonly string[]>>
 export const MAX_REVIEWERS_PER_PERSONA = 4
 
 export type ReviewPolicyVerdict =
- | { readonly ok: true; readonly reviewers: Record<string, string[]> }
- | { readonly ok: false; readonly reason: string }
+  | { readonly ok: true; readonly reviewers: Record<string, string[]> }
+  | { readonly ok: false; readonly reason: string }
 
 /**
  * Validates a policy a client sent, and drops what says nothing.
@@ -56,63 +56,63 @@ export type ReviewPolicyVerdict =
  * rather than refused, for the reason `parseFleetSizes` drops stale widths.
  */
 export const parseReviewPolicy = (
- value: unknown,
- memberIds: readonly string[],
- /** Which members are planners, so a planner cannot be the reviewed party. */
- plannerIds: readonly string[],
+  value: unknown,
+  memberIds: readonly string[],
+  /** Which members are planners, so a planner cannot be the reviewed party. */
+  plannerIds: readonly string[],
 ): ReviewPolicyVerdict => {
- if (value === undefined || value === null) return { ok: true, reviewers: {} }
- if (typeof value !== 'object' || Array.isArray(value)) {
- return { ok: false, reason: 'A review policy must be an object keyed by reviewer persona id' }
- }
+  if (value === undefined || value === null) return { ok: true, reviewers: {} }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, reason: 'A review policy must be an object keyed by reviewer persona id' }
+  }
 
- const members = new Set(memberIds)
- const planners = new Set(plannerIds)
- const reviewers: Record<string, string[]> = {}
+  const members = new Set(memberIds)
+  const planners = new Set(plannerIds)
+  const reviewers: Record<string, string[]> = {}
 
- for (const [reviewerId, reviewed] of Object.entries(value as Record<string, unknown>)) {
- if (!members.has(reviewerId)) continue
- if (!Array.isArray(reviewed)) {
- return { ok: false, reason: `The reviewed list for ${reviewerId} must be an array` }
- }
- if (reviewed.length > MAX_REVIEWERS_PER_PERSONA) {
- return {
- ok: false,
- reason: `A persona may review at most ${MAX_REVIEWERS_PER_PERSONA} others on one team`,
- }
- }
+  for (const [reviewerId, reviewed] of Object.entries(value as Record<string, unknown>)) {
+    if (!members.has(reviewerId)) continue
+    if (!Array.isArray(reviewed)) {
+      return { ok: false, reason: `The reviewed list for ${reviewerId} must be an array` }
+    }
+    if (reviewed.length > MAX_REVIEWERS_PER_PERSONA) {
+      return {
+        ok: false,
+        reason: `A persona may review at most ${MAX_REVIEWERS_PER_PERSONA} others on one team`,
+      }
+    }
 
- const kept: string[] = []
- for (const reviewedId of reviewed) {
- if (typeof reviewedId !== 'string') {
- return { ok: false, reason: `The reviewed list for ${reviewerId} holds a non-id` }
- }
- if (!members.has(reviewedId)) continue
- if (reviewedId === reviewerId) {
- return {
- ok: false,
- reason: 'A persona cannot review its own work — a reviewer reads a branch it did not write',
- }
- }
- if (planners.has(reviewedId)) {
- return {
- ok: false,
- reason:
- 'A planner cannot be reviewed: its output is a decomposition, not a branch, so there is nothing for a reviewer to read. Review the workers it delegates to instead.',
- }
- }
- if (!kept.includes(reviewedId)) kept.push(reviewedId)
- }
- if (kept.length > 0) reviewers[reviewerId] = kept
- }
+    const kept: string[] = []
+    for (const reviewedId of reviewed) {
+      if (typeof reviewedId !== 'string') {
+        return { ok: false, reason: `The reviewed list for ${reviewerId} holds a non-id` }
+      }
+      if (!members.has(reviewedId)) continue
+      if (reviewedId === reviewerId) {
+        return {
+          ok: false,
+          reason: 'A persona cannot review its own work — a reviewer reads a branch it did not write',
+        }
+      }
+      if (planners.has(reviewedId)) {
+        return {
+          ok: false,
+          reason:
+            'A planner cannot be reviewed: its output is a decomposition, not a branch, so there is nothing for a reviewer to read. Review the workers it delegates to instead.',
+        }
+      }
+      if (!kept.includes(reviewedId)) kept.push(reviewedId)
+    }
+    if (kept.length > 0) reviewers[reviewerId] = kept
+  }
 
- return { ok: true, reviewers }
+  return { ok: true, reviewers }
 }
 
 /** One expectation, resolved to names for a prompt or a warning. */
 export interface ReviewExpectation {
- readonly reviewerName: string
- readonly reviewedName: string
+  readonly reviewerName: string
+  readonly reviewedName: string
 }
 
 /**
@@ -128,30 +128,30 @@ export interface ReviewExpectation {
  * instruction points at the field that carries it.
  */
 export const describeReviewPolicy = (
- expectations: readonly ReviewExpectation[],
+  expectations: readonly ReviewExpectation[],
 ): string | null => {
- if (expectations.length === 0) return null
- return [
- '',
- '',
- 'This team expects some work to be reviewed:',
-...expectations.map(
- (expectation) =>
- `- ${expectation.reviewedName}'s work is reviewed by ${expectation.reviewerName}`,
-),
- 'When your plan gives work to one of those, add a subtask for its reviewer and set the ' +
- 'reviews field to the index of the subtask being reviewed. Use reviews, not dependsOn: ' +
- 'a reviewer needs the reviewed branch checked out and must claim no paths, which only ' +
- 'that field arranges.',
- ].join('\n')
+  if (expectations.length === 0) return null
+  return [
+    '',
+    '',
+    'This team expects some work to be reviewed:',
+    ...expectations.map(
+      (expectation) =>
+        `- ${expectation.reviewedName}'s work is reviewed by ${expectation.reviewerName}`,
+    ),
+    'When your plan gives work to one of those, add a subtask for its reviewer and set the ' +
+      'reviews field to the index of the subtask being reviewed. Use reviews, not dependsOn: ' +
+      'a reviewer needs the reviewed branch checked out and must claim no paths, which only ' +
+      'that field arranges.',
+  ].join('\n')
 }
 
 /** A persona given work with no review asked for, though the team expects one. */
 export interface MissingReview {
- readonly reviewedName: string
- readonly reviewerName: string
- /** The subtask titles that went unreviewed, for a message that names them. */
- readonly titles: readonly string[]
+  readonly reviewedName: string
+  readonly reviewerName: string
+  /** The subtask titles that went unreviewed, for a message that names them. */
+  readonly titles: readonly string[]
 }
 
 /**
@@ -164,31 +164,31 @@ export interface MissingReview {
  * nobody is checking at all.
  */
 export const detectMissingReviews = (
- subtasks: readonly { readonly title: string; readonly personaName: string; readonly reviews: number | null }[],
- expectations: readonly ReviewExpectation[],
+  subtasks: readonly { readonly title: string; readonly personaName: string; readonly reviews: number | null }[],
+  expectations: readonly ReviewExpectation[],
 ): MissingReview[] => {
- const reviewedPositions = new Set(
- subtasks.map((subtask) => subtask.reviews).filter((index): index is number => index !== null),
-)
+  const reviewedPositions = new Set(
+    subtasks.map((subtask) => subtask.reviews).filter((index): index is number => index !== null),
+  )
 
- const missing: MissingReview[] = []
- for (const expectation of expectations) {
- const titles = subtasks
-.map((subtask, index) => ({ subtask, index }))
-.filter(
- ({ subtask, index }) =>
- subtask.personaName === expectation.reviewedName && !reviewedPositions.has(index),
-)
-.map(({ subtask }) => subtask.title)
- if (titles.length > 0) {
- missing.push({
- reviewedName: expectation.reviewedName,
- reviewerName: expectation.reviewerName,
- titles,
- })
- }
- }
- return missing
+  const missing: MissingReview[] = []
+  for (const expectation of expectations) {
+    const titles = subtasks
+      .map((subtask, index) => ({ subtask, index }))
+      .filter(
+        ({ subtask, index }) =>
+          subtask.personaName === expectation.reviewedName && !reviewedPositions.has(index),
+      )
+      .map(({ subtask }) => subtask.title)
+    if (titles.length > 0) {
+      missing.push({
+        reviewedName: expectation.reviewedName,
+        reviewerName: expectation.reviewerName,
+        titles,
+      })
+    }
+  }
+  return missing
 }
 
 /**
@@ -199,18 +199,18 @@ export const detectMissingReviews = (
  * button that is not there.
  */
 export const describeMissingReviews = (missing: readonly MissingReview[]): string | null => {
- if (missing.length === 0) return null
- return [
- missing.length === 1
- ? 'This team expects a review that this plan did not ask for:'
-: `This team expects ${missing.length} reviews that this plan did not ask for:`,
-...missing.map(
- (entry) =>
- `• ${entry.reviewerName} reviews ${entry.reviewedName}'s work, and nothing reviews ${entry.titles
-.map((title) => `"${title}"`)
-.join(', ')}`,
-),
- 'The plan still runs — this is the team\'s standing expectation, not a rule about this ' +
- 'goal. Steer the planner to add the review, or accept it for this one.',
- ].join('\n')
+  if (missing.length === 0) return null
+  return [
+    missing.length === 1
+      ? 'This team expects a review that this plan did not ask for:'
+      : `This team expects ${missing.length} reviews that this plan did not ask for:`,
+    ...missing.map(
+      (entry) =>
+        `• ${entry.reviewerName} reviews ${entry.reviewedName}'s work, and nothing reviews ${entry.titles
+          .map((title) => `"${title}"`)
+          .join(', ')}`,
+    ),
+    'The plan still runs — this is the team\'s standing expectation, not a rule about this ' +
+      'goal. Steer the planner to add the review, or accept it for this one.',
+  ].join('\n')
 }

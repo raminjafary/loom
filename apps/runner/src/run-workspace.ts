@@ -9,18 +9,18 @@ import { LOOM_COMMITTER_FLAGS } from './git-identity.js'
 const execFileAsync = promisify(execFile)
 
 export interface RunWorkspace {
- readonly clonePath: string
- readonly branchName: string
- /**
- * Host-backed HOME for the run's sandbox. Exists so the SDK's session transcript
- * (`$HOME/.claude/projects`) outlives the container — without it the session id in
- * the Runner's state file names a transcript that was destroyed, and resumption after
- * a restart is impossible.
- */
- readonly homePath: string
+  readonly clonePath: string
+  readonly branchName: string
+  /**
+   * Host-backed HOME for the run's sandbox. Exists so the SDK's session transcript
+   * (`$HOME/.claude/projects`) outlives the container — without it the session id in
+   * the Runner's state file names a transcript that was destroyed, and resumption after
+   * a restart is impossible.
+   */
+  readonly homePath: string
 }
 
-const scratchRoot = : string => process.env.LOOM_RUN_SCRATCH_ROOT ?? tmpdir
+const scratchRoot = (): string => process.env.LOOM_RUN_SCRATCH_ROOT ?? tmpdir()
 
 /**
  * Clone-per-run isolation: concurrent runs against the same
@@ -31,36 +31,37 @@ const scratchRoot = : string => process.env.LOOM_RUN_SCRATCH_ROOT ?? tmpdir
  * the clone itself, per the exact requirement.
  */
 export const prepareRunWorkspace = async (
- sourcePath: string,
- runId: string,
- /**
- * Open the branch at this commit instead of at the clone's HEAD. A sha the clone does not contain **fails**, because `checkout -b`
- * fails: falling back to HEAD would hand a screening run a different problem from the one
- * the replay item names, and report the verdict as if it were about the same one.
- */
- baseCommitSha?: string,
+  sourcePath: string,
+  runId: string,
+  /**
+   * Open the branch at this commit instead of at the clone's HEAD. A sha the clone does not
+   * contain **fails**, because `checkout -b` fails: falling back to HEAD would hand a
+   * screening run a different problem from the one the replay item names, and report the
+   * verdict as if it were about the same one.
+   */
+  baseCommitSha?: string,
 ): Promise<RunWorkspace> => {
- const branchName = `loom/run-${runId}`
- const clonePath = await mkdtemp(join(scratchRoot, `loom-run-${runId}-`))
- const homePath = await mkdtemp(join(scratchRoot, `loom-home-${runId}-`))
- // The sandbox runs as uid 1000, which is not the Runner's uid on Linux. Docker
- // Desktop maps ownership on bind mounts, but a plain Linux host does not, so the
- // directory is made group/other-writable rather than silently unwritable there.
- await chmod(homePath, 0o777)
+  const branchName = `loom/run-${runId}`
+  const clonePath = await mkdtemp(join(scratchRoot(), `loom-run-${runId}-`))
+  const homePath = await mkdtemp(join(scratchRoot(), `loom-home-${runId}-`))
+  // The sandbox runs as uid 1000, which is not the Runner's uid on Linux. Docker
+  // Desktop maps ownership on bind mounts, but a plain Linux host does not, so the
+  // directory is made group/other-writable rather than silently unwritable there.
+  await chmod(homePath, 0o777)
 
- await execFileAsync('git', ['clone', '--quiet', sourcePath, clonePath])
- await execFileAsync('git', [
- '-C',
- clonePath,
- 'checkout',
- '-b',
- branchName,
-...(baseCommitSha === undefined ? []: [baseCommitSha]),
- ])
- await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
- await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
+  await execFileAsync('git', ['clone', '--quiet', sourcePath, clonePath])
+  await execFileAsync('git', [
+    '-C',
+    clonePath,
+    'checkout',
+    '-b',
+    branchName,
+    ...(baseCommitSha === undefined ? [] : [baseCommitSha]),
+  ])
+  await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
+  await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
 
- return { clonePath, branchName, homePath }
+  return { clonePath, branchName, homePath }
 }
 
 /**
@@ -86,27 +87,27 @@ export const prepareRunWorkspace = async (
  * where the target's movement is accounted for.
  */
 export const prepareReviewWorkspace = async (
- targetClonePath: string,
- reviewedBranchName: string,
- runId: string,
+  targetClonePath: string,
+  reviewedBranchName: string,
+  runId: string,
 ): Promise<RunWorkspace> => {
- const branchName = `loom/run-${runId}`
- const clonePath = await mkdtemp(join(scratchRoot, `loom-review-${runId}-`))
- const homePath = await mkdtemp(join(scratchRoot, `loom-home-${runId}-`))
- await chmod(homePath, 0o777)
+  const branchName = `loom/run-${runId}`
+  const clonePath = await mkdtemp(join(scratchRoot(), `loom-review-${runId}-`))
+  const homePath = await mkdtemp(join(scratchRoot(), `loom-home-${runId}-`))
+  await chmod(homePath, 0o777)
 
- await execFileAsync('git', ['clone', '--quiet', targetClonePath, clonePath])
- await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
- await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
- await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', reviewedBranchName])
- await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', '-b', branchName])
+  await execFileAsync('git', ['clone', '--quiet', targetClonePath, clonePath])
+  await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
+  await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
+  await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', reviewedBranchName])
+  await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', '-b', branchName])
 
- return { clonePath, branchName, homePath }
+  return { clonePath, branchName, homePath }
 }
 
 export interface ReconcileWorkspace extends RunWorkspace {
- /** Repository-relative paths left with conflict markers, for the agent's task text. */
- readonly conflictedPaths: string[]
+  /** Repository-relative paths left with conflict markers, for the agent's task text. */
+  readonly conflictedPaths: string[]
 }
 
 /**
@@ -128,38 +129,38 @@ export interface ReconcileWorkspace extends RunWorkspace {
  * the agent's task. `finishReconcile` is the other half.
  */
 export const prepareReconcileWorkspace = async (
- parentClonePath: string,
- sourcePath: string,
- defaultBranch: string,
- branchName: string,
- runId: string,
+  parentClonePath: string,
+  sourcePath: string,
+  defaultBranch: string,
+  branchName: string,
+  runId: string,
 ): Promise<ReconcileWorkspace> => {
- const clonePath = await mkdtemp(join(scratchRoot, `loom-reconcile-${runId}-`))
- const homePath = await mkdtemp(join(scratchRoot, `loom-home-${runId}-`))
- await chmod(homePath, 0o777)
+  const clonePath = await mkdtemp(join(scratchRoot(), `loom-reconcile-${runId}-`))
+  const homePath = await mkdtemp(join(scratchRoot(), `loom-home-${runId}-`))
+  await chmod(homePath, 0o777)
 
- await execFileAsync('git', ['clone', '--quiet', parentClonePath, clonePath])
- await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
- await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
- await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', branchName])
+  await execFileAsync('git', ['clone', '--quiet', parentClonePath, clonePath])
+  await execFileAsync('git', ['-C', clonePath, 'config', 'core.hooksPath', '/dev/null'])
+  await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
+  await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', branchName])
 
- // The live tip of the merge target, from the bound repository rather than from the
- // parent's clone — the parent cloned before earlier entries in the queue landed, so
- // its copy of the default branch is exactly the stale thing being rebased away from.
- await execFileAsync('git', ['-C', clonePath, 'fetch', '--quiet', sourcePath, defaultBranch])
- const { stdout: tip } = await execFileAsync('git', ['-C', clonePath, 'rev-parse', 'FETCH_HEAD'])
+  // The live tip of the merge target, from the bound repository rather than from the
+  // parent's clone — the parent cloned before earlier entries in the queue landed, so
+  // its copy of the default branch is exactly the stale thing being rebased away from.
+  await execFileAsync('git', ['-C', clonePath, 'fetch', '--quiet', sourcePath, defaultBranch])
+  const { stdout: tip } = await execFileAsync('git', ['-C', clonePath, 'rev-parse', 'FETCH_HEAD'])
 
- let conflictedPaths: string[] = []
- try {
- await execFileAsync('git', ['-C', clonePath,...LOOM_COMMITTER_FLAGS, 'rebase', tip.trim])
- } catch {
- const { stdout } = await execFileAsync('git', [
- '-C', clonePath, 'diff', '--name-only', '--diff-filter=U',
- ])
- conflictedPaths = stdout.trim.split('\n').filter((line) => line.length > 0)
- }
+  let conflictedPaths: string[] = []
+  try {
+    await execFileAsync('git', ['-C', clonePath, ...LOOM_COMMITTER_FLAGS, 'rebase', tip.trim()])
+  } catch {
+    const { stdout } = await execFileAsync('git', [
+      '-C', clonePath, 'diff', '--name-only', '--diff-filter=U',
+    ])
+    conflictedPaths = stdout.trim().split('\n').filter((line) => line.length > 0)
+  }
 
- return { clonePath, branchName, homePath, conflictedPaths }
+  return { clonePath, branchName, homePath, conflictedPaths }
 }
 
 /**
@@ -174,68 +175,68 @@ export const prepareReconcileWorkspace = async (
  * path, not an exceptional one.
  */
 export const finishReconcile = async (
- clonePath: string,
+  clonePath: string,
 ): Promise<{ ok: true; commitSha: string } | { ok: false; reason: string }> => {
- const git = async (args: string[]): Promise<string> => {
- const { stdout } = await execFileAsync(
- 'git',
- ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',...LOOM_COMMITTER_FLAGS,...args],
- { maxBuffer: 32 * 1024 * 1024 },
-)
- return stdout.trim
- }
+  const git = async (args: string[]): Promise<string> => {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...LOOM_COMMITTER_FLAGS, ...args],
+      { maxBuffer: 32 * 1024 * 1024 },
+    )
+    return stdout.trim()
+  }
 
- const refuse = async (reason: string): Promise<{ ok: false; reason: string }> => {
- await git(['rebase', '--abort']).catch( => {})
- return { ok: false, reason }
- }
+  const refuse = async (reason: string): Promise<{ ok: false; reason: string }> => {
+    await git(['rebase', '--abort']).catch(() => {})
+    return { ok: false, reason }
+  }
 
- /**
- * Staged *first*, deliberately. The agent edits the working tree and never runs git,
- * so until the resolution is staged git still considers the path unmerged — checking
- * `--diff-filter=U` before this point reports every file as conflicted no matter how
- * correctly the agent resolved it.
- */
- try {
- await git(['add', '-A'])
- } catch (error) {
- return refuse(error instanceof Error ? error.message: String(error))
- }
+  /**
+   * Staged *first*, deliberately. The agent edits the working tree and never runs git,
+   * so until the resolution is staged git still considers the path unmerged — checking
+   * `--diff-filter=U` before this point reports every file as conflicted no matter how
+   * correctly the agent resolved it.
+   */
+  try {
+    await git(['add', '-A'])
+  } catch (error) {
+    return refuse(error instanceof Error ? error.message : String(error))
+  }
 
- /**
- * So the surviving check is on *content*, which is the one that matters anyway: a
- * staged file with `<<<<<<<` still inside it looks perfectly resolved to git, and
- * `rebase --continue` will commit it without ever reading it.
- */
- let marked = ''
- try {
- marked = await git(['grep', '-l', '-e', '^<<<<<<< ', '-e', '^>>>>>>> '])
- } catch {
- // `git grep -l` exits non-zero when nothing matches, which is the good case.
- }
- if (marked.length > 0) {
- return refuse(
- `conflict markers remain in ${marked.split('\n').join(', ')} — the reconciler did not resolve them`,
-)
- }
+  /**
+   * So the surviving check is on *content*, which is the one that matters anyway: a
+   * staged file with `<<<<<<<` still inside it looks perfectly resolved to git, and
+   * `rebase --continue` will commit it without ever reading it.
+   */
+  let marked = ''
+  try {
+    marked = await git(['grep', '-l', '-e', '^<<<<<<< ', '-e', '^>>>>>>> '])
+  } catch {
+    // `git grep -l` exits non-zero when nothing matches, which is the good case.
+  }
+  if (marked.length > 0) {
+    return refuse(
+      `conflict markers remain in ${marked.split('\n').join(', ')} — the reconciler did not resolve them`,
+    )
+  }
 
- try {
- // An empty index means the resolution took the target's side wholesale, which git
- // reports as "nothing to commit" and `--skip` would answer by dropping the branch's
- // commit entirely. Refused rather than treated as success.
- if ((await git(['diff', '--cached', '--name-only'])).length === 0) {
- return refuse('resolution left nothing to commit — the branch would be dropped')
- }
- await execFileAsync(
- 'git',
- ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.editor=true',...LOOM_COMMITTER_FLAGS, 'rebase', '--continue'],
- { env: {...process.env, GIT_EDITOR: 'true' } },
-)
- } catch (error) {
- return refuse(error instanceof Error ? error.message: String(error))
- }
+  try {
+    // An empty index means the resolution took the target's side wholesale, which git
+    // reports as "nothing to commit" and `--skip` would answer by dropping the branch's
+    // commit entirely. Refused rather than treated as success.
+    if ((await git(['diff', '--cached', '--name-only'])).length === 0) {
+      return refuse('resolution left nothing to commit — the branch would be dropped')
+    }
+    await execFileAsync(
+      'git',
+      ['-C', clonePath, '-c', 'core.hooksPath=/dev/null', '-c', 'core.editor=true', ...LOOM_COMMITTER_FLAGS, 'rebase', '--continue'],
+      { env: { ...process.env, GIT_EDITOR: 'true' } },
+    )
+  } catch (error) {
+    return refuse(error instanceof Error ? error.message : String(error))
+  }
 
- return { ok: true, commitSha: await git(['rev-parse', 'HEAD']) }
+  return { ok: true, commitSha: await git(['rev-parse', 'HEAD']) }
 }
 
 /**
@@ -251,54 +252,54 @@ export const finishReconcile = async (
  * nothing else writes it. It is not a fast-forward, because a rebase never is.
  */
 export const updateBranchFrom = async (
- destinationClonePath: string,
- sourceClonePath: string,
- branchName: string,
+  destinationClonePath: string,
+  sourceClonePath: string,
+  branchName: string,
 ): Promise<void> => {
- const git = (args: string[]) =>
- execFileAsync('git', [
- '-C', destinationClonePath,
- '-c', 'core.hooksPath=/dev/null',
- '-c', 'core.fsmonitor=false',
-...args,
- ])
+  const git = (args: string[]) =>
+    execFileAsync('git', [
+      '-C', destinationClonePath,
+      '-c', 'core.hooksPath=/dev/null',
+      '-c', 'core.fsmonitor=false',
+      ...args,
+    ])
 
- /**
- * The run's own branch is *checked out* in its clone — `prepareRunWorkspace` does
- * `checkout -b` — and git refuses to fetch directly into a checked-out branch:
- * "refusing to fetch into branch... checked out at...". Found by the first live
- * end-to-end reconcile, which resolved its conflict correctly and then threw the
- * result away here.
- *
- * So: land it on a temporary ref, then move the branch and its working tree together
- * with `reset --hard`. Safe because the owning run is terminal by the time anything
- * reconciles its branch, and `commitRunWork` has already committed whatever it left —
- * there is no uncommitted work in that tree for the reset to discard.
- */
- const TEMP_REF = 'refs/loom/reconciled'
- await git(['fetch', '--quiet', '--force', sourceClonePath, `refs/heads/${branchName}:${TEMP_REF}`])
+  /**
+   * The run's own branch is *checked out* in its clone — `prepareRunWorkspace` does
+   * `checkout -b` — and git refuses to fetch directly into a checked-out branch:
+   * "refusing to fetch into branch ... checked out at ...". Found by the first live
+   * end-to-end reconcile, which resolved its conflict correctly and then threw the
+   * result away here.
+   *
+   * So: land it on a temporary ref, then move the branch and its working tree together
+   * with `reset --hard`. Safe because the owning run is terminal by the time anything
+   * reconciles its branch, and `commitRunWork` has already committed whatever it left —
+   * there is no uncommitted work in that tree for the reset to discard.
+   */
+  const TEMP_REF = 'refs/loom/reconciled'
+  await git(['fetch', '--quiet', '--force', sourceClonePath, `refs/heads/${branchName}:${TEMP_REF}`])
 
- let checkedOut: string | null
- try {
- const { stdout } = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])
- checkedOut = stdout.trim
- } catch {
- checkedOut = null // detached HEAD
- }
+  let checkedOut: string | null
+  try {
+    const { stdout } = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])
+    checkedOut = stdout.trim()
+  } catch {
+    checkedOut = null // detached HEAD
+  }
 
- if (checkedOut === branchName) {
- await git(['reset', '--hard', '--quiet', TEMP_REF])
- } else {
- await git(['update-ref', `refs/heads/${branchName}`, TEMP_REF])
- }
- await git(['update-ref', '-d', TEMP_REF]).catch( => {})
+  if (checkedOut === branchName) {
+    await git(['reset', '--hard', '--quiet', TEMP_REF])
+  } else {
+    await git(['update-ref', `refs/heads/${branchName}`, TEMP_REF])
+  }
+  await git(['update-ref', '-d', TEMP_REF]).catch(() => {})
 }
 
 /**
  * Commits whatever the agent left in the working tree, on the run's own branch.
  *
- * Not optional, and not the model's job. Repository binding renders "the run's branch diff"
- * for review and the push policy pushes `HEAD:refs/heads/<branch>` — both are empty if the agent
+ * Not optional, and not the model's job. Review renders the run's branch diff and the
+ * push targets `HEAD:refs/heads/<branch>` — both are empty if the agent
  * edited files and never committed, which is exactly what a real run did: the diff came
  * back as zero bytes and a push would have shipped a branch with no commits. Relying on
  * the persona prompt to remember `git commit` makes the review and push paths depend on
@@ -311,26 +312,26 @@ export const updateBranchFrom = async (
  * should say so.
  */
 export const commitRunWork = async (
- clonePath: string,
- input: { personaName: string; runId: string },
+  clonePath: string,
+  input: { personaName: string; runId: string },
 ): Promise<{ committed: boolean }> => {
- const { stdout: status } = await execFileAsync('git', ['-C', clonePath, 'status', '--porcelain'])
- if (status.trim.length === 0) return { committed: false }
+  const { stdout: status } = await execFileAsync('git', ['-C', clonePath, 'status', '--porcelain'])
+  if (status.trim().length === 0) return { committed: false }
 
- await execFileAsync('git', ['-C', clonePath, 'add', '-A'])
- await execFileAsync('git', [
- '-C',
- clonePath,
- '-c',
- `user.name=${input.personaName} (Loom agent)`,
- '-c',
- 'user.email=agent@loom.invalid',
- 'commit',
- '--quiet',
- '-m',
- `${input.personaName}: work from run ${input.runId}`,
- ])
- return { committed: true }
+  await execFileAsync('git', ['-C', clonePath, 'add', '-A'])
+  await execFileAsync('git', [
+    '-C',
+    clonePath,
+    '-c',
+    `user.name=${input.personaName} (Loom agent)`,
+    '-c',
+    'user.email=agent@loom.invalid',
+    'commit',
+    '--quiet',
+    '-m',
+    `${input.personaName}: work from run ${input.runId}`,
+  ])
+  return { committed: true }
 }
 
 /**
@@ -348,33 +349,33 @@ export const commitRunWork = async (
  * caller treats a git error as "no diff yet".
  */
 const resolveDefaultBranchRef = async (
- clonePath: string,
- defaultBranch: string,
+  clonePath: string,
+  defaultBranch: string,
 ): Promise<string> => {
- for (const ref of [defaultBranch, `origin/${defaultBranch}`]) {
- try {
- await execFileAsync('git', ['-C', clonePath, 'rev-parse', '--verify', '--quiet', ref])
- return ref
- } catch {
- // Not present — try the next candidate.
- }
- }
- // Neither exists: fall through with the caller's own name so the error names the
- // branch they asked for rather than a rewritten one.
- return defaultBranch
+  for (const ref of [defaultBranch, `origin/${defaultBranch}`]) {
+    try {
+      await execFileAsync('git', ['-C', clonePath, 'rev-parse', '--verify', '--quiet', ref])
+      return ref
+    } catch {
+      // Not present — try the next candidate.
+    }
+  }
+  // Neither exists: fall through with the caller's own name so the error names the
+  // branch they asked for rather than a rewritten one.
+  return defaultBranch
 }
 
 /** The run's branch diff against the point it was cloned from, for end-of-run review. */
 export const getDiff = async (clonePath: string, defaultBranch: string): Promise<string> => {
- const base = await resolveDefaultBranchRef(clonePath, defaultBranch)
- const { stdout } = await execFileAsync(
- 'git',
- ['-C', clonePath, 'diff', `${base}...HEAD`],
- // A review of a large branch is exactly the case this is needed for, and the default
- // 1MB buffer would reject it with a stdout-maxBuffer error rather than a git error.
- { maxBuffer: 32 * 1024 * 1024 },
-)
- return stdout
+  const base = await resolveDefaultBranchRef(clonePath, defaultBranch)
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', clonePath, 'diff', `${base}...HEAD`],
+    // A review of a large branch is exactly the case this is needed for, and the default
+    // 1MB buffer would reject it with a stdout-maxBuffer error rather than a git error.
+    { maxBuffer: 32 * 1024 * 1024 },
+  )
+  return stdout
 }
 
 /**
@@ -386,13 +387,13 @@ export const getDiff = async (clonePath: string, defaultBranch: string): Promise
  * a revision nobody checked, so the caller leaves it pending instead.
  */
 export const readHeadSha = async (clonePath: string): Promise<string | null> => {
- try {
- const { stdout } = await execFileAsync('git', ['-C', clonePath, 'rev-parse', 'HEAD'])
- const sha = stdout.trim
- return sha.length > 0 ? sha: null
- } catch {
- return null
- }
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', clonePath, 'rev-parse', 'HEAD'])
+    const sha = stdout.trim()
+    return sha.length > 0 ? sha : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -401,34 +402,34 @@ export const readHeadSha = async (clonePath: string): Promise<string | null> => 
  * a record of the run and should not outlive the branch a human just discarded.
  */
 export const discardRunWorkspace = async (clonePath: string, homePath?: string): Promise<void> => {
- await rm(clonePath, { recursive: true, force: true })
- if (homePath) await rm(homePath, { recursive: true, force: true })
+  await rm(clonePath, { recursive: true, force: true })
+  if (homePath) await rm(homePath, { recursive: true, force: true })
 }
 
 interface ParsedRemote {
- readonly host: string
- readonly owner: string
- readonly repo: string
+  readonly host: string
+  readonly owner: string
+  readonly repo: string
 }
 
 /** Handles both `git@host:owner/repo.git` and `https://host/owner/repo.git` forms. */
 const parseGitRemoteUrl = (url: string): ParsedRemote | null => {
- const ssh = /^git@([^:]+):([^/]+)\/(.+?)(?:\.git)?$/.exec(url)
- if (ssh?.[1] && ssh[2] && ssh[3]) return { host: ssh[1], owner: ssh[2], repo: ssh[3] }
+  const ssh = /^git@([^:]+):([^/]+)\/(.+?)(?:\.git)?$/.exec(url)
+  if (ssh?.[1] && ssh[2] && ssh[3]) return { host: ssh[1], owner: ssh[2], repo: ssh[3] }
 
- try {
- const parsed = new URL(url)
- const [owner, repo] = parsed.pathname.replace(/^\//, '').replace(/\.git$/, '').split('/')
- if (!owner || !repo) return null
- return { host: parsed.hostname, owner, repo }
- } catch {
- return null
- }
+  try {
+    const parsed = new URL(url)
+    const [owner, repo] = parsed.pathname.replace(/^\//, '').replace(/\.git$/, '').split('/')
+    if (!owner || !repo) return null
+    return { host: parsed.hostname, owner, repo }
+  } catch {
+    return null
+  }
 }
 
 export type PushResult =
- | { readonly ok: true; readonly prUrl?: string; readonly compareUrl?: string; readonly warning?: string }
- | { readonly ok: false; readonly error: string }
+  | { readonly ok: true; readonly prUrl?: string; readonly compareUrl?: string; readonly warning?: string }
+  | { readonly ok: false; readonly error: string }
 
 /**
  * Host-side push + best-effort PR/MR open. The agent never
@@ -439,89 +440,89 @@ export type PushResult =
  * force, never a tag — there is no code path here that could do otherwise.
  */
 export const pushRunBranch = async (
- sourcePath: string,
- clonePath: string,
- branchName: string,
- defaultBranch: string,
- acknowledgeCiChange: boolean,
+  sourcePath: string,
+  clonePath: string,
+  branchName: string,
+  defaultBranch: string,
+  acknowledgeCiChange: boolean,
 ): Promise<PushResult> => {
- let remoteUrl: string
- try {
- remoteUrl = (await execFileAsync('git', ['-C', sourcePath, 'remote', 'get-url', 'origin'])).stdout.trim
- } catch {
- return { ok: false, error: 'Repository has no configured remote — nothing to push to' }
- }
+  let remoteUrl: string
+  try {
+    remoteUrl = (await execFileAsync('git', ['-C', sourcePath, 'remote', 'get-url', 'origin'])).stdout.trim()
+  } catch {
+    return { ok: false, error: 'Repository has no configured remote — nothing to push to' }
+  }
 
- const { stdout: changedRaw } = await execFileAsync('git', [
- '-C',
- clonePath,
- 'diff',
- '--name-only',
- `${defaultBranch}...HEAD`,
- ])
- const changedPaths = changedRaw.split('\n').filter((line) => line.length > 0)
- const verdict = classifyPushEffect(changedPaths, acknowledgeCiChange)
- if (!verdict.ok) return { ok: false, error: verdict.reason }
+  const { stdout: changedRaw } = await execFileAsync('git', [
+    '-C',
+    clonePath,
+    'diff',
+    '--name-only',
+    `${defaultBranch}...HEAD`,
+  ])
+  const changedPaths = changedRaw.split('\n').filter((line) => line.length > 0)
+  const verdict = classifyPushEffect(changedPaths, acknowledgeCiChange)
+  if (!verdict.ok) return { ok: false, error: verdict.reason }
 
- await execFileAsync('git', ['-C', clonePath, 'push', remoteUrl, `HEAD:refs/heads/${branchName}`])
+  await execFileAsync('git', ['-C', clonePath, 'push', remoteUrl, `HEAD:refs/heads/${branchName}`])
 
- const parsed = parseGitRemoteUrl(remoteUrl)
- if (!parsed) return { ok: true, warning: 'Pushed, but the remote URL could not be parsed for a PR link' }
+  const parsed = parseGitRemoteUrl(remoteUrl)
+  if (!parsed) return { ok: true, warning: 'Pushed, but the remote URL could not be parsed for a PR link' }
 
- const { host, owner, repo } = parsed
+  const { host, owner, repo } = parsed
 
- if (host === 'github.com') {
- try {
- const { stdout } = await execFileAsync('gh', [
- 'pr',
- 'create',
- '--repo',
- `${owner}/${repo}`,
- '--head',
- branchName,
- '--base',
- defaultBranch,
- '--title',
- `Loom: ${branchName}`,
- '--body',
- `Opened by Loom for branch \`${branchName}\`.`,
- ])
- return { ok: true, prUrl: stdout.trim }
- } catch (error) {
- return {
- ok: true,
- compareUrl: `https://github.com/${owner}/${repo}/compare/${defaultBranch}...${branchName}`,
- warning: `Pushed, but PR creation failed: ${error instanceof Error ? error.message: String(error)}`,
- }
- }
- }
+  if (host === 'github.com') {
+    try {
+      const { stdout } = await execFileAsync('gh', [
+        'pr',
+        'create',
+        '--repo',
+        `${owner}/${repo}`,
+        '--head',
+        branchName,
+        '--base',
+        defaultBranch,
+        '--title',
+        `Loom: ${branchName}`,
+        '--body',
+        `Opened by Loom for branch \`${branchName}\`.`,
+      ])
+      return { ok: true, prUrl: stdout.trim() }
+    } catch (error) {
+      return {
+        ok: true,
+        compareUrl: `https://github.com/${owner}/${repo}/compare/${defaultBranch}...${branchName}`,
+        warning: `Pushed, but PR creation failed: ${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+  }
 
- if (host === 'gitlab.com') {
- try {
- const { stdout } = await execFileAsync('glab', [
- 'mr',
- 'create',
- '--repo',
- `${owner}/${repo}`,
- '--source-branch',
- branchName,
- '--target-branch',
- defaultBranch,
- '--title',
- `Loom: ${branchName}`,
- '--description',
- `Opened by Loom for branch \`${branchName}\`.`,
- '--yes',
- ])
- return { ok: true, prUrl: stdout.trim }
- } catch (error) {
- return {
- ok: true,
- compareUrl: `https://gitlab.com/${owner}/${repo}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${branchName}&merge_request%5Btarget_branch%5D=${defaultBranch}`,
- warning: `Pushed, but MR creation failed: ${error instanceof Error ? error.message: String(error)}`,
- }
- }
- }
+  if (host === 'gitlab.com') {
+    try {
+      const { stdout } = await execFileAsync('glab', [
+        'mr',
+        'create',
+        '--repo',
+        `${owner}/${repo}`,
+        '--source-branch',
+        branchName,
+        '--target-branch',
+        defaultBranch,
+        '--title',
+        `Loom: ${branchName}`,
+        '--description',
+        `Opened by Loom for branch \`${branchName}\`.`,
+        '--yes',
+      ])
+      return { ok: true, prUrl: stdout.trim() }
+    } catch (error) {
+      return {
+        ok: true,
+        compareUrl: `https://gitlab.com/${owner}/${repo}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${branchName}&merge_request%5Btarget_branch%5D=${defaultBranch}`,
+        warning: `Pushed, but MR creation failed: ${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+  }
 
- return { ok: true, warning: `Pushed. No PR/MR was opened — unrecognized git host: ${host}` }
+  return { ok: true, warning: `Pushed. No PR/MR was opened — unrecognized git host: ${host}` }
 }
