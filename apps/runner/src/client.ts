@@ -14,7 +14,7 @@ import {
 } from '@loom/runner-protocol'
 import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
-import { runAgent } from './claude-agent-adapter.js'
+import { runAgentOnBackend } from './agent-backend.js'
 import { depCacheEnv, depCacheFromEnv, warmDepCache } from './dep-cache.js'
 import {
   capturePreparedTree,
@@ -1074,7 +1074,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
       log(
         `WARNING: running ${input.runId} UNSANDBOXED — the agent has this Runner's privileges`,
       )
-      await runAgent({
+      await runAgentOnBackend({
         persona: input.persona,
         cwd: input.clonePath,
         ...(plannerTool

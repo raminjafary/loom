@@ -3,7 +3,7 @@
 [![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
-![tests](https://img.shields.io/badge/tests-2%2C084-brightgreen)
+![tests](https://img.shields.io/badge/tests-2%2C100-brightgreen)
 
 **Run ten coding agents at once, each in its own git clone and container. Nothing any of them
 says about its own work is taken as evidence: spend is counted at the network boundary, "done"
@@ -99,6 +99,7 @@ nine cents.
 | 🚦 | **Serialized merge queue** | Rebase, verify, fast-forward, one branch per repository at a time, with a reconciler agent for additive conflicts and a refusal for real ones |
 | ✅ | **Repository-owned definition of done** | Named, ordered checks, run in the sandbox against a rebased branch and against every finished run's own. The verdict is the platform's |
 | 💸 | **Metered spend, enforced caps** | Cost is read from the provider's responses at the proxy, not self-reported, with pre-flight estimate, per-turn check and a hard kill |
+| 🔌 | **Two execution backends, one port** | The Claude Agent SDK, and any model an operator serves themselves over the chat-completions protocol — same persona document, same tool names, same approval gate, same run row. A backend is chosen by a prefix in the model id, so which one ran a run is still readable months later |
 | 🧠 | **Measured persona memory** | Subject maps, an atlas across projects, and retrieval as a trial with a deliberately-denied baseline arm |
 | 📓 | **Durable lessons, per repository** | An agent records what it learned about *this* codebase and the next run against it is shown that back — bounded hard, ranked by what became of the runs that read each one, fenced as untrusted data, and retired when a merge changes the files it named |
 | ⚔️ | **The Colosseum** | Two agents that learned different things put questions to each other in a bounded, recorded session — settled by a check the repository can answer, never by agreement |
@@ -404,6 +405,8 @@ Two things that otherwise cost you a pass:
 | `LOOM_REVISIONS_ROOT` | `~/.loom/revisions` | Where built revisions and the running-revision pointer live. Outside the repository on purpose: a store inside the tree being replaced is one `git clean -fd` deletes during the recovery it exists to serve |
 | `LOOM_USE_HOST_CLAUDE_AUTH` | off | Lets the Runner read the host's Claude OAuth token and push it to the proxy |
 | `LOOM_ALLOWED_ROOTS` | — | Parent directories a repository may be bound from |
+| `LOOM_CHAT_COMPLETIONS_BASE_URL` | — | Where a model the operator serves themselves is reachable. Required for any persona whose model id starts with `local/`; unset is a refusal rather than a guess at localhost |
+| `LOOM_CHAT_COMPLETIONS_API_KEY` | unset | Sent as a bearer token to that endpoint, for a server that wants one |
 | `LOOM_DEP_CACHE_ENABLED` | off | Shared package-manager cache; a warmed repository also captures a **prepared tree**, so runs open with `node_modules` already in place |
 | `LOOM_DEP_CACHE_MODE` | `copy` | `shared` is faster and unsound — a directory shared between sandboxes is a channel between them |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | unset | Web push. Off until configured; `npx web-push generate-vapid-keys` |
@@ -423,7 +426,7 @@ each one exists because the next depends on it.
 
 | | |
 |---|---|
-| **Other execution backends** | Codex, vLLM and Cursor adapters — the port is enforced today, but nothing else has been driven through it (Phase 3) |
+| **Platform channels on the second backend** | The execution port now has two adapters and the second is driven live, so replaceability is demonstrated rather than architectural — but a model served over the chat-completions protocol gets file and shell tools only. A run needing the planner, mastery, verifier, proposer, self-edit or memory channel is refused with the channel named rather than run without it (Phase 3) |
 | **microVM isolation** | Containers alone are insufficient; Kata or microsandbox is the boundary (Phase 3) |
 | **Workflows** | A harness per task, **drawn on the composition canvas rather than written as a script**: nodes are steps, an edge is a pipeline, a bar is a barrier where a stage really does need every prior result. It is data the server validates rather than code the platform executes — an agent-authored script run by the host is the one thing the security model exists to prevent — and every step is an ordinary run, so the tree, the cost meter, the envelope, approvals and steering all apply unchanged. Deterministic and replayable from the journal, with an enforced budget rather than a requested one. Five built-ins ship as drawn graphs: deep research, code review, security analysis, agent teams, and a migration sweep (Phase 3) |
 

@@ -41,6 +41,24 @@ export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   'claude-opus-5': price(5, 25),
   'claude-sonnet-5': price(3, 15),
   'claude-haiku-4-5': price(1, 5),
+  /**
+   * A model the operator serves themselves, on the second execution backend.
+   *
+   * **Priced at zero, and that is the honest figure rather than a placeholder.** There is no
+   * per-token price for hardware you already own: what a self-hosted call costs is
+   * electricity and a slot on a GPU, neither of which is denominated in the units a budget
+   * cap is written in. Reporting a guess here would be worse than reporting nothing — it
+   * would put an invented number into the one figure this platform insists is a measurement.
+   *
+   * Zero is safe in the direction that matters. `usageCostUsd` returns null for an *unpriced*
+   * model precisely so an unmeterable call cannot spend under a cap; a `local/` call is not
+   * unmeterable, it is free of the thing the cap meters. What still bounds it is everything
+   * that is not money: the turn cap, the reaper, and the operator's own serving capacity.
+   *
+   * The prefix is a convention rather than a vendor: everything after `local/` is the id the
+   * operator's own endpoint knows the model by, and the platform passes it through untouched.
+   */
+  'local/': price(0, 0),
 }
 
 export const findModelPrice = (model: string): ModelPrice | null => {
@@ -61,6 +79,15 @@ export const findModelPrice = (model: string): ModelPrice | null => {
  * ids carry date and variant suffixes.
  */
 const MODEL_TIERS: Readonly<Record<string, number>> = {
+  /**
+   * The lowest rank, so a self-hosted model is inside every ceiling.
+   *
+   * Ranking it above anything would be a claim about a model whose weights this table has
+   * never seen — the operator chose what to serve, and the platform knows only that it is
+   * not a frontier hosted model. The attenuation rule cares about a *ceiling*, and the
+   * bottom of the ladder is the one position that is safe to assign without knowing.
+   */
+  'local/': 1,
   'claude-haiku-4-5': 1,
   'claude-sonnet-5': 2,
   'claude-opus-5': 3,

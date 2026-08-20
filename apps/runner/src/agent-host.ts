@@ -1,7 +1,7 @@
 import { classifyToolEffect, isRiskyTool, maySelfModify } from '@loom/domain'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
-import { runAgent } from './claude-agent-adapter.js'
+import { runAgentOnBackend } from './agent-backend.js'
 import { createHandoffTool } from './handoff-tool.js'
 import { createMapTool } from './map-tool.js'
 import { createExperienceTool } from './experience-tool.js'
@@ -259,7 +259,7 @@ const main = async (): Promise<void> => {
   note('waiting for start frame')
 
   const command = await started
-  const persona = command.persona as Parameters<typeof runAgent>[0]['persona']
+  const persona = command.persona as Parameters<typeof runAgentOnBackend>[0]['persona']
   // A Planner's delegation tool is an in-process MCP server, so inside a sandbox
   // it lives here and its result crosses the stdio boundary like everything else.
   // A re-planning turn gets the delta tool *instead* — a run re-entered
@@ -517,7 +517,7 @@ const main = async (): Promise<void> => {
     },
   })
 
-  await runAgent({
+  await runAgentOnBackend({
     persona,
     cwd: command.cwd,
     ...(command.task === undefined ? {} : { task: command.task }),
