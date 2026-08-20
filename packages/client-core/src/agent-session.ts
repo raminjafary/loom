@@ -481,6 +481,20 @@ export interface AgentSession {
   /** Ends a search taking none of them. Every candidate stays on the record. */
   discardVariants(personaId: string): Promise<void>
   /**
+   * Asks a separate session to write the next set of candidates for a persona.
+   *
+   * Resolves `{ started: false, reason }` rather than rejecting for the states that are
+   * ordinary rather than broken — this persona has never lost a candidate, a measurement is
+   * already running, a human never granted it an envelope. Each of those has one sentence
+   * worth reading, and the session banner is the wrong place for a sentence about one
+   * persona.
+   */
+  startProposer(input: {
+    personaId: string
+    threadId: string
+    repositoryId: string
+  }): Promise<{ started: boolean; reason: string | null }>
+  /**
    * Unbinds a repository, deleting its runs and their recorded spend with it.
    * Resolves `{ ok: false, reason }` when the server wants that loss acknowledged,
    * so a caller can show the count before asking again with `acknowledge`.
@@ -1532,6 +1546,24 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         patch(await readPersonasAndMatrix())
       } catch (error) {
         patch({ error: errorMessage(error) })
+      }
+    },
+
+    async startProposer(input) {
+      patch({ error: null })
+      try {
+        const result = await options.api.persona.startProposer(input)
+        /**
+         * Reloaded either way: a started proposer is a run, and the run list is what makes it
+         * visible at all. A refused one wrote nothing, and refreshing costs one read against
+         * the alternative — a panel whose state depends on which answer came back.
+         */
+        patch(await readPersonasAndMatrix())
+        return { started: result.started, reason: result.reason }
+      } catch (error) {
+        const reason = errorMessage(error)
+        patch({ error: reason })
+        return { started: false, reason }
       }
     },
 

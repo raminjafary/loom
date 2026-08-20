@@ -64,6 +64,14 @@ const props = defineProps<{
    * is a smaller overlay, which is a change to this surface and not to this feature.
    */
   settleSearch: (input: { personaId: string; variantId: string | null }) => void
+  /**
+   * Asks a separate session for the next set of candidates. A callback prop for the reason
+   * `settleSearch` is one, and for a second: the answer is a sentence the panel shows, and an
+   * emit cannot return one.
+   */
+  startProposer: (input: {
+    personaId: string
+  }) => Promise<{ started: boolean; reason: string | null }>
   capabilityAttachments: PersonaCapability[]
   lastPairing: { runnerId: string; name: string; rawToken: string } | null
   /** The expertise tab — fetched on demand, so never part of the session snapshot. */
@@ -339,6 +347,7 @@ onMounted(() => scrim.value?.focus())
             @revert-persona="(input) => emit('revert-persona', input)"
             @keep-revision="(input) => emit('keep-revision', input)"
             @settle-search="settleSearch"
+            :start-proposer="startProposer"
           />
           <PersonaGroupPanel
             :personas="personas"

@@ -69,6 +69,17 @@ const props = defineProps<{
    * by persona id. Absent is the ordinary state.
    */
   searches?: Record<string, VariantSearch>
+  /**
+   * Asks a separate session to write the next set of candidates for this persona.
+   *
+   * A callback prop rather than an emit because the answer matters: a refusal is a sentence
+   * about *this* persona — it has never lost a candidate, a measurement is already running —
+   * and an emit cannot bring one back. Optional, so a mount that never offers the gesture
+   * simply does not show the button.
+   */
+  startProposer?: (input: {
+    personaId: string
+  }) => Promise<{ started: boolean; reason: string | null }>
 }>()
 
 const emit = defineEmits<{
@@ -182,6 +193,31 @@ const search = computed(() =>
  */
 const screenArmOf = (variantId: string | null) =>
   search.value?.screen?.arms.find((arm) => arm.variantId === variantId) ?? null
+
+/**
+ * Asking for candidates: in flight, and whatever came back.
+ *
+ * The notice is kept until the next attempt rather than cleared on a timer, because every
+ * refusal here is something a human has to *do* something about — settle the open search, set
+ * an envelope, run the persona a few more times — and a sentence that disappears while it is
+ * being read is a sentence nobody acts on.
+ */
+const proposerBusy = ref(false)
+const proposerNotice = ref<string | null>(null)
+
+const askForCandidates = async () => {
+  if (!props.startProposer || proposerBusy.value) return
+  proposerBusy.value = true
+  proposerNotice.value = null
+  try {
+    const result = await props.startProposer({ personaId: editingId.value })
+    proposerNotice.value = result.started
+      ? 'A proposer session is reading the repository. Its candidates arrive here as a search.'
+      : result.reason
+  } finally {
+    proposerBusy.value = false
+  }
+}
 
 const candidateOf = (variantId: string | null) =>
   variantId === null
@@ -1042,6 +1078,34 @@ const harnessSummary = (persona: AgentPersona): string => {
             @confirm="emit('settle-search', { personaId: editingId, variantId: null })"
           />
         </div>
+      </section>
+
+      <!--
+        Asking for the next set of candidates, offered only when nothing is being measured.
+        Two measurements at once split the same runs across more arms than a workspace can
+        fill, so the platform refuses the second — and a button that is always there and
+        usually refused teaches a human to ignore it.
+
+        The refusal is shown here rather than in the session banner, because every one of them
+        is a fact about this persona and names something to do about it.
+      -->
+      <section
+        v-if="mode === 'edit' && startProposer && !search && !trial"
+        class="trial proposer"
+      >
+        <h4>Ask for candidate prompts</h4>
+        <p class="hint">
+          A separate session reads this repository and writes two or three candidates for this
+          persona — shown what has already been measured and lost here, which a run of the
+          persona itself has no way to know. Nothing goes live: the candidates are measured
+          against the prompt in use, and you decide.
+        </p>
+        <div class="trial-actions">
+          <button type="button" class="link" :disabled="proposerBusy" @click="askForCandidates">
+            {{ proposerBusy ? 'Starting…' : 'Ask a proposer' }}
+          </button>
+        </div>
+        <p v-if="proposerNotice" class="hint proposer-notice">{{ proposerNotice }}</p>
       </section>
 
       <section v-if="mode === 'edit' && history.length > 0" class="history">

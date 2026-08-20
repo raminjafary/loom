@@ -112,6 +112,43 @@ const settleSearch = (input: { personaId: string; variantId: string | null }) =>
     : agent.promoteVariant({ personaId: input.personaId, variantId: input.variantId }))
 }
 
+/**
+ * Asking a separate session for the next set of candidates.
+ *
+ * A proposer is a run, so it needs a thread to live in and a repository to read — and neither
+ * is a property of the persona being revised. They are resolved here because this is the only
+ * side that knows what the human is looking at: the thread they have open, and the repository
+ * a run is already using, falling back to the workspace's single bound one.
+ *
+ * When neither resolves, the refusal is a sentence rather than a disabled button: "no
+ * repository" and "three repositories and no run to infer from" are different problems with
+ * different fixes, and a greyed-out control says neither.
+ */
+const startProposer = async (input: { personaId: string }) => {
+  const threadId = snapshot.value.activeThread?.id ?? null
+  if (!threadId) {
+    return {
+      started: false,
+      reason: 'Open a channel first — a proposer is a run, and a run lives in a thread.',
+    }
+  }
+  const repositories = agentSnapshot.value.repositories
+  const repositoryId =
+    agentSnapshot.value.activeRun?.repositoryId ??
+    (repositories.length === 1 ? repositories[0]!.id : null)
+  if (!repositoryId) {
+    return {
+      started: false,
+      reason:
+        repositories.length === 0
+          ? 'Bind a repository first — a proposer reads the codebase before it writes anything.'
+          : 'This workspace has several repositories and nothing running to infer one from. ' +
+            'Start a run in the one you want a proposer to read, then ask again.',
+    }
+  }
+  return agent.startProposer({ personaId: input.personaId, threadId, repositoryId })
+}
+
 const selectExpertisePersona = async (personaId: string) => {
   masteryPersonaId.value = personaId
   masteryView.value = null
@@ -1360,6 +1397,7 @@ onBeforeUnmount(() => {
       @revert-persona="(input) => agent.revertPersonaPrompt(input)"
       @keep-revision="(input) => agent.keepPersonaRevision(input)"
       :settle-search="settleSearch"
+      :start-proposer="startProposer"
       @register="(input) => agent.registerCapability(input)"
       @remove="(capabilityId) => agent.removeCapability(capabilityId)"
       @attach="(input) => agent.attachCapability(input)"

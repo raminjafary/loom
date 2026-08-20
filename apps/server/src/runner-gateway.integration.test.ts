@@ -5,7 +5,6 @@ import {
   expireStaleApprovals,
   reapStuckRuns,
   startAgentRun,
-  startVariantProposer,
 } from '@loom/application'
 import {
   ATLAS_CLOSE,
@@ -18,9 +17,7 @@ import {
   asAgentRunId,
   asRepositoryId,
   asThreadId,
-  asUserId,
   asWorkspaceId,
-  userActor,
   type Notification,
   UNTRUSTED_MAP_OPEN,
 } from '@loom/domain'
@@ -7146,16 +7143,14 @@ The prompt it started with.`
       (v) => v.type === 'start_run' && v.proposeVariants !== undefined,
       10_000,
     )
-    const started = await startVariantProposer(app.deps, {
-      workspaceId: asWorkspaceId(workspaceId),
-      actor: userActor(asUserId('dev-user')),
-      threadId: asThreadId(created.rootThread.id),
-      repositoryId: asRepositoryId(repo.id),
-      personaId: asAgentPersonaId(persona.id),
+    const started = await client.persona.startProposer({
+      personaId: persona.id,
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
     })
-    expect(started.ok).toBe(true)
-    if (!started.ok) throw new Error(started.reason)
-    expect(started.shown.losingArms).toBe(2)
+    expect(started.started).toBe(true)
+    expect(started.reason).toBeNull()
+    expect(started.agentRunId).not.toBeNull()
 
     const frame = await proposerStart
     const proposerPersona = frame.persona as { name: string; tools: string[] }
@@ -7220,6 +7215,14 @@ The prompt it started with.`
      */
     const proposerRow = (await client.persona.list()).find((p) => p.name === 'variant-proposer')!
     expect(searches.some((entry) => entry.personaId === proposerRow.id)).toBe(false)
+    /**
+     * And the panel can say where they came from, with the bound the session was held to —
+     * through the same mapping a client reads, which is where a field of this shape gets
+     * dropped in silence.
+     */
+    expect(search?.proposer?.runId).toBe(started.agentRunId)
+    expect(search?.proposer?.detail).toContain('separate proposer session')
+    expect(search?.proposer?.detail).toContain('2 of 2 candidates this persona has already lost')
     expect(await client.persona.revisions({ personaId: proposerRow.id })).toHaveLength(0)
 
     socket.close()
@@ -7238,15 +7241,18 @@ The prompt it started with.`
       markdownSource: SELF_EDITING_PERSONA.replace('self-editor', 'self-editor-untried'),
     })
 
-    const verdict = await startVariantProposer(app.deps, {
-      workspaceId: asWorkspaceId(workspaceId),
-      actor: userActor(asUserId('dev-user')),
-      threadId: asThreadId(created.rootThread.id),
-      repositoryId: asRepositoryId(repo.id),
-      personaId: asAgentPersonaId(persona.id),
+    /**
+     * Through the route rather than the use case, because the claim being checked is the
+     * contract's: a refusal is an *output*. Thrown, it would reach a human as a failure and
+     * lose the one sentence that says what to do about it.
+     */
+    const verdict = await client.persona.startProposer({
+      personaId: persona.id,
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
     })
-    expect(verdict.ok).toBe(false)
-    if (verdict.ok) throw new Error('expected a refusal')
+    expect(verdict.started).toBe(false)
+    expect(verdict.agentRunId).toBeNull()
     expect(verdict.reason).toContain('Nothing has been measured and lost')
     expect(await client.agentRun.listActive()).toHaveLength(0)
 

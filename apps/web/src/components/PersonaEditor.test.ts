@@ -5,7 +5,7 @@ import type {
   PromptTrial,
   VariantSearch,
 } from '@loom/api-contract'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PersonaEditor from './PersonaEditor.vue'
 
@@ -419,6 +419,64 @@ describe('the variant search panel', () => {
       },
     ],
     ...over,
+  })
+
+  /**
+   * The gesture that starts one. Mounted with no search and no trial, which is the only state
+   * it is offered in: two measurements at once split the same runs across more arms than a
+   * workspace can fill, so a button that is always there and usually refused would teach a
+   * human to ignore it.
+   */
+  const openedIdle = async (
+    startProposer: (input: { personaId: string }) => Promise<{
+      started: boolean
+      reason: string | null
+    }>,
+  ) => {
+    const wrapper = mount(PersonaEditor, {
+      props: {
+        personas: [persona()],
+        capabilities: [],
+        attachments: [],
+        revisions: [],
+        startProposer,
+      },
+    })
+    await wrapper.get('.row-actions .link').trigger('click')
+    return wrapper
+  }
+
+  it('asks for candidates for the persona being edited, and says a session is reading', async () => {
+    const calls: { personaId: string }[] = []
+    const wrapper = await openedIdle(async (input) => {
+      calls.push(input)
+      return { started: true, reason: null }
+    })
+    await wrapper.get('.trial.proposer .link').trigger('click')
+    await flushPromises()
+    // The callback actually fired with the right persona — an unwired handler passes every
+    // static check while doing nothing.
+    expect(calls).toEqual([{ personaId: 'p1' }])
+    expect(wrapper.get('.trial.proposer').text()).toContain('reading the repository')
+  })
+
+  /**
+   * And a refusal is shown where the gesture was, not in a session banner: every refusal here
+   * is a fact about this persona and names something to do about it.
+   */
+  it('shows the refusal beside the button that produced it', async () => {
+    const wrapper = await openedIdle(async () => ({
+      started: false,
+      reason: 'Nothing has been measured and lost for "swe" yet.',
+    }))
+    await wrapper.get('.trial.proposer .link').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.trial.proposer').text()).toContain('measured and lost')
+  })
+
+  it('does not offer a proposer while a search is already being measured', async () => {
+    const wrapper = await openedSearch(search())
+    expect(wrapper.find('.trial.proposer').exists()).toBe(false)
   })
 
   const openedSearch = async (variantSearch: VariantSearch) => {

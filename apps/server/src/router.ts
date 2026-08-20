@@ -97,6 +97,7 @@ import {
   listRunVerifications,
   warmRepositoryCache,
   startAgentRun,
+  startVariantProposer,
   steerSwarm,
   unregisterNotificationTarget,
   updatePersona,
@@ -1158,6 +1159,21 @@ export const router = os.router({
           personaId: asAgentPersonaId(input.personaId),
         })
         return { ok: true as const }
+      }),
+    ),
+
+    startProposer: os.persona.startProposer.handler(({ context, input }) =>
+      guard(async () => {
+        const verdict = await startVariantProposer(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          personaId: asAgentPersonaId(input.personaId),
+          threadId: asThreadId(input.threadId),
+          repositoryId: asRepositoryId(input.repositoryId),
+        })
+        return verdict.ok
+          ? { started: true as const, reason: null, agentRunId: verdict.run.id as string }
+          : { started: false as const, reason: verdict.reason, agentRunId: null }
       }),
     ),
 

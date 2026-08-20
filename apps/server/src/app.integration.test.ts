@@ -880,6 +880,7 @@ describe('contract completeness', () => {
       'variantSearches',
       'promoteVariant',
       'discardVariants',
+      'startProposer',
     ])
     expect(Object.keys(contract.personaGroup)).toEqual([
       'list',

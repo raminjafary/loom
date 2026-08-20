@@ -866,6 +866,40 @@ export const contract = {
     discardVariants: oc
       .input(z.object({ personaId: z.string() }))
       .output(z.object({ ok: z.literal(true) })),
+
+    /**
+     * A human asks a separate session to write the next set of candidates.
+     *
+     * The one way a proposer starts, and it is a human's act by construction rather than by
+     * policy: a proposer is nobody's child — being outside the run being edited is the whole
+     * point — and only a human may start a run with no parent.
+     *
+     * `threadId` and `repositoryId` come from the client because a run needs somewhere to
+     * live and a tree to read, and the caller is the only side that knows which one the human
+     * is looking at. Neither says anything about *which persona* is revised; that is the
+     * `personaId`, and the session's authority is written server-side from it.
+     *
+     * **A refusal is an output rather than an error.** "This persona has never lost a
+     * candidate" and "a measurement is already running" are ordinary states of a workspace
+     * and each has one sentence worth reading; a thrown error would reach the human as a
+     * failure and lose it.
+     */
+    startProposer: oc
+      .input(
+        z.object({
+          personaId: z.string(),
+          threadId: z.string(),
+          repositoryId: z.string(),
+        }),
+      )
+      .output(
+        z.object({
+          started: z.boolean(),
+          /** Null when it started; the sentence to show when it did not. */
+          reason: z.string().nullable(),
+          agentRunId: z.string().nullable(),
+        }),
+      ),
   },
 
   /**
