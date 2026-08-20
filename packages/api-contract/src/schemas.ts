@@ -1004,6 +1004,24 @@ export const VariantSearchSchema = z.object({
       ),
     })
     .nullable(),
+  /**
+   * Where these candidates came from.
+   *
+   * **Null means a run of this persona wrote them about its own work**, which is what every
+   * search was before there was a proposer — not "a proposer with nothing to show". A
+   * proposer is never started without a record, so the absence of a row means the older path
+   * and never a thinner version of the newer one.
+   *
+   * `detail` carries the bound the session was held to, because a proposer shown 2 of 19
+   * losses is a weaker witness than one shown all 19, and that is the part a human deciding
+   * whether to promote would otherwise have no way to discount.
+   */
+  proposer: z
+    .object({
+      runId: z.string(),
+      detail: z.string(),
+    })
+    .nullable(),
 })
 
 export const AgentPersonaSchema = z.object({

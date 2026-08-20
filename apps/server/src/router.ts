@@ -1114,6 +1114,15 @@ export const router = os.router({
                     pending: arm.pending,
                   })),
                 },
+          // Named field by field like the rest, and this one is a fact about *authorship*:
+          // dropped, a panel would say a run proposed about its own work when it did not.
+          proposer:
+            found.proposer === null
+              ? null
+              : {
+                  runId: found.proposer.runId as string,
+                  detail: found.proposer.detail,
+                },
           arms: found.effect.arms.map((arm) => ({
             variantId: arm.variantId === null ? null : (arm.variantId as string),
             decided: arm.decided,

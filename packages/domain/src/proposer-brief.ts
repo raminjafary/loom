@@ -293,6 +293,48 @@ export type ProposerEligibility =
   | { readonly ok: false; readonly reason: string }
 
 /**
+ * Where a search's candidates came from, for the human deciding whether to promote one.
+ *
+ * This sentence is the only place the difference between the two generating paths reaches a
+ * reader, and the difference is the substance of the whole piece. A human looking at three
+ * candidates and two weeks of arms is being asked to make one prompt permanent; "written by
+ * the run that had just done this work" and "written by a separate session shown what has
+ * already lost" are different kinds of evidence about the same numbers.
+ *
+ * It states the bound, for the reason the brief does: a proposer shown 2 of 19 losses is a
+ * weaker witness than one shown all 19, and a panel that said only "written by a proposer"
+ * would hide exactly the part a reader would want to discount.
+ */
+export const describeProposerProvenance = (shown: ProposerShown): string => {
+  const losses = shown.losingArms + shown.losingArmsWithheld
+  const refusals = shown.refusedCandidates + shown.refusedCandidatesWithheld
+  /**
+   * A part with nothing behind it is dropped rather than printed as "0 of 0", which carries
+   * no information and reads as a defect. One of the two is always non-zero — the brief
+   * refuses to open at all when both are — so the sentence never ends up empty.
+   */
+  const parts = [
+    ...(losses === 0
+      ? []
+      : [
+          `${shown.losingArms} of ${losses} ${losses === 1 ? 'candidate' : 'candidates'} this ` +
+            'persona has already lost',
+        ]),
+    ...(refusals === 0
+      ? []
+      : [
+          `${shown.refusedCandidates} of ${refusals} ` +
+            `${refusals === 1 ? 'candidate' : 'candidates'} the held-out screen refused`,
+        ]),
+  ]
+  return (
+    'Written by a separate proposer session rather than by a run of this persona: it was ' +
+    `shown ${parts.join(', and ')}. It has never done this persona's work, so nothing here ` +
+    'is a session grading its own transcript.'
+  )
+}
+
+/**
  * The half of eligibility that can be decided before a proposer session exists.
  *
  * Extracted because it is checked twice from two different states, and a second copy of the

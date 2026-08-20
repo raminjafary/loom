@@ -71,6 +71,7 @@ import {
   screenOutcomeFor,
   tallyScreenScore,
   proposeVariantSet,
+  describeProposerProvenance,
   proposerBrief,
   proposerEligibility,
   proposerSubjectEligibility,
@@ -2103,6 +2104,27 @@ export const screenForSearch = async (
  * The list a settings surface renders from. Empty is the ordinary answer: a search is
  * something a run opens deliberately and a human closes, not a standing state.
  */
+/**
+ * The provenance line for one search, or null when it came from a run of the persona itself.
+ *
+ * Best-effort on the read rather than on the write: a session row that cannot be read is a
+ * missing sentence in a panel, and refusing to list the searches over it would hide the
+ * measurement itself — which is the thing a human is actually there to settle.
+ */
+const proposerProvenanceFor = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; proposedByRunId: AgentRunId | null },
+): Promise<{ runId: AgentRunId; detail: string } | null> => {
+  if (input.proposedByRunId === null) return null
+  const session = await deps.personaVariants.findProposerSession(
+    input.workspaceId,
+    input.proposedByRunId,
+  )
+  return session === null
+    ? null
+    : { runId: input.proposedByRunId, detail: describeProposerProvenance(session.shown) }
+}
+
 export const listVariantSearches = async (
   deps: AgentDeps,
   input: { workspaceId: WorkspaceId },
@@ -2120,6 +2142,15 @@ export const listVariantSearches = async (
     } | null
     /** The screen, or null when this search has none. */
     screen: Awaited<ReturnType<typeof screenForSearch>>
+    /**
+     * Where the candidates came from — null when they came from a run of this persona doing
+     * its own work, which is what every search was before the proposer existed.
+     *
+     * Null and "a proposer with an empty record" are different facts and must not collapse:
+     * a proposer is never started without a record, so an absent row means the old path
+     * rather than a thin one.
+     */
+    proposer: { runId: AgentRunId; detail: string } | null
   }[]
 > => {
   const open = await deps.personaVariants.listOpenSets(input.workspaceId)
@@ -2154,6 +2185,16 @@ export const listVariantSearches = async (
         screen: await screenForSearch(deps, {
           workspaceId: input.workspaceId,
           setId: entry.set.id,
+        }),
+        /**
+         * Resolved through the run that proposed it rather than stored on the set, because
+         * that run *is* the session: one row keyed by run id answers both "may this session
+         * submit" and "where did this come from", and a second copy on the set would be a
+         * second thing to keep in step.
+         */
+        proposer: await proposerProvenanceFor(deps, {
+          workspaceId: input.workspaceId,
+          proposedByRunId: entry.set.proposedByRunId,
         }),
       }
     }),

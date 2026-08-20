@@ -380,6 +380,8 @@ describe('the variant search panel', () => {
     leader: 'v2',
     verifier: null,
     screen: null,
+    /** Null is the older path: a run of this persona wrote these about its own work. */
+    proposer: null,
     candidates: [
       { variantId: 'v1', body: 'READ THE TESTS FIRST.', rationale: 'tests before code' },
       { variantId: 'v2', body: 'WRITE THE SMALLEST DIFF.', rationale: 'small diffs land' },
@@ -466,6 +468,38 @@ describe('the variant search panel', () => {
       },
     ],
     ...over,
+  })
+
+  /**
+   * Where the candidates came from, which is the one fact in this panel that is about the
+   * *author* rather than the measurement. A human promoting a candidate is making an agent's
+   * document permanent, and a session that has never done this persona's work is a different
+   * witness from the run that had just finished doing it.
+   */
+  it('says when a separate proposer wrote the candidates, and how much it was shown', async () => {
+    const wrapper = await openedSearch(
+      search({
+        proposer: {
+          runId: 'run_proposer',
+          detail:
+            'Written by a separate proposer session rather than by a run of this persona: it ' +
+            'was shown 2 of 19 candidates this persona has already lost.',
+        },
+      }),
+    )
+    const text = wrapper.get('.trial.search').text()
+    expect(text).toContain('separate proposer session')
+    expect(text).toContain('2 of 19')
+  })
+
+  /**
+   * And says nothing when it was the older path. Null is "a run proposed about its own work",
+   * not "a proposer with nothing to show" — a caveat printed on every search that predates
+   * the proposer would be noise attached to history nobody can act on.
+   */
+  it('stays silent about provenance when a run proposed about its own work', async () => {
+    const wrapper = await openedSearch(search())
+    expect(wrapper.get('.trial.search').text()).not.toContain('proposer session')
   })
 
   it('names the held-out set version, because a score without one compares two things', async () => {

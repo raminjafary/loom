@@ -928,6 +928,20 @@ const harnessSummary = (persona: AgentPersona): string => {
         <h4>{{ search.leader ? 'A candidate is ahead' : 'Trying several prompts' }}</h4>
         <p class="detail">{{ search.detail }}</p>
         <!--
+          Where the candidates came from, above everything else in the panel because it is
+          upstream of every number below it: a reader weighing three prompts is being asked to
+          make one of them permanent, and "written by the run that had just done this work"
+          and "written by a session shown what has already lost" are different kinds of
+          evidence about the same arms.
+
+          Absence is deliberately silent. Null is the older path — a run proposing about its
+          own work — and a line saying so on every search that predates the proposer would be
+          a caveat attached to history nobody can act on.
+        -->
+        <p v-if="search.proposer" class="detail proposer-detail">
+          {{ search.proposer.detail }}
+        </p>
+        <!--
           The held-out screen. Above the arms because it is upstream of them: a candidate
           the screen refused has no arm, so a reader who met an empty row first would be looking
           for a measurement that was deliberately never taken.

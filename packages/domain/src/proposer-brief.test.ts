@@ -5,6 +5,7 @@ import {
   MAX_PROPOSER_REFUSALS,
   UNTRUSTED_PROPOSER_CLOSE,
   UNTRUSTED_PROPOSER_OPEN,
+  describeProposerProvenance,
   proposerBrief,
   proposerEligibility,
   proposerSubjectEligibility,
@@ -259,5 +260,40 @@ describe('proposerEligibility', () => {
         armRunIds: ['run-0', 'run-1'],
       }),
     ).toEqual({ ok: true })
+  })
+})
+
+describe('describeProposerProvenance', () => {
+  /**
+   * The sentence a human reads before promoting. It states the bound rather than only the
+   * origin: a proposer shown 2 of 19 losses is a weaker witness than one shown all 19, and
+   * that is the part a reader would otherwise have no way to discount.
+   */
+  it('says where the candidates came from and how much their author was shown', () => {
+    const text = describeProposerProvenance({
+      losingArms: 2,
+      refusedCandidates: 1,
+      losingArmsWithheld: 17,
+      refusedCandidatesWithheld: 2,
+    })
+    expect(text).toContain('separate proposer session')
+    expect(text).toContain('2 of 19 candidates this persona has already lost')
+    expect(text).toContain('1 of 3 candidates the held-out screen refused')
+  })
+
+  /**
+   * "0 of 0 refusals" is not a fact a reader can use, and it reads as a defect. One of the
+   * two is always non-zero, because the brief refuses to open when both are.
+   */
+  it('drops a half of the record that has nothing behind it', () => {
+    const text = describeProposerProvenance({
+      losingArms: 1,
+      refusedCandidates: 0,
+      losingArmsWithheld: 0,
+      refusedCandidatesWithheld: 0,
+    })
+    expect(text).toContain('1 of 1 candidate this persona has already lost')
+    expect(text).not.toContain('0 of 0')
+    expect(text).not.toContain('screen refused')
   })
 })
