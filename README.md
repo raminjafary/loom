@@ -424,6 +424,7 @@ each one exists because the next depends on it.
 |---|---|
 | **Other execution backends** | Codex, vLLM and Cursor adapters — the port is enforced today, but nothing else has been driven through it (Phase 3) |
 | **microVM isolation** | Containers alone are insufficient; Kata or microsandbox is the boundary (Phase 3) |
+| **Workflows** | A harness per task, **drawn on the composition canvas rather than written as a script**: nodes are steps, an edge is a pipeline, a bar is a barrier where a stage really does need every prior result. It is data the server validates rather than code the platform executes — an agent-authored script run by the host is the one thing the security model exists to prevent — and every step is an ordinary run, so the tree, the cost meter, the envelope, approvals and steering all apply unchanged. Deterministic and replayable from the journal, with an enforced budget rather than a requested one. Five built-ins ship as drawn graphs: deep research, code review, security analysis, agent teams, and a migration sweep (Phase 3) |
 
 ## Contributing
 
