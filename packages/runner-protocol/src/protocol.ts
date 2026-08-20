@@ -805,6 +805,19 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
       .object({ optionKeys: z.array(z.string().max(2)).min(2).max(5) })
       .optional(),
     /**
+     * Start this run as the **proposer** over another persona's next search.
+     *
+     * Carries the subject's name and nothing else. The evidence rides in `task`, assembled
+     * and fenced by the server — for `verifyVariants`' reason, and here it is sharper: the
+     * brief neutralizes every delimiter in the bodies it quotes, and a second formatter on
+     * the Runner would be a second place for a quoted prompt to close its own fence and
+     * continue as the platform's voice.
+     *
+     * No persona id: the server resolves the subject from the session it started, so an id in
+     * this frame or in the submission that answers it would not be believed.
+     */
+    proposeVariants: z.object({ personaName: z.string().min(1).max(120) }).optional(),
+    /**
      * Start this run as a **reviewer** of another run's branch.
      *
      * Present, the Runner clones the reviewed run's clone and checks that branch out

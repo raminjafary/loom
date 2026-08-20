@@ -14,6 +14,7 @@ import { MAP_SERVER_NAME, MAP_TOOL_NAMES } from './map-tool.js'
 import { HANDOFF_SERVER_NAME, HANDOFF_TOOL_NAMES } from './handoff-tool.js'
 import { ATLAS_SERVER_NAME, ATLAS_TOOL_NAMES } from './atlas-tool.js'
 import { SELF_SERVER_NAME, SELF_TOOL_NAMES } from './self-tool.js'
+import { PROPOSAL_SERVER_NAME, SUBMIT_PROPOSALS_TOOL_NAME } from './proposal-tool.js'
 import { SUBMIT_VERDICT_TOOL_NAME, VERDICT_SERVER_NAME } from './verdict-tool.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
@@ -220,6 +221,15 @@ export interface RunAgentOptions {
    */
   readonly verdictTool?: McpSdkServerConfigWithInstance
   /**
+   * The proposal channel, present only on a run the platform started as a proposer.
+   *
+   * Separate from `selfTool` rather than folded into it, which is the same distinction
+   * `proposal-tool.ts` draws: `selfTool` is an agent changing its own configuration inside its
+   * own envelope, and this is a session writing candidates for a persona it is not. Bundling
+   * them would give a proposer `revise_own_prompt` over itself.
+   */
+  readonly proposalTool?: McpSdkServerConfigWithInstance
+  /**
    * The handover channel, offered to every run.
    *
    * Unlike `mapTool`, which is a mastery run's alone: a map is persona-level state every
@@ -331,6 +341,7 @@ export const buildQueryOptions = (
     | 'questionTool'
     | 'mapTool'
     | 'verdictTool'
+    | 'proposalTool'
     | 'handoffTool'
     | 'selfTool'
   >,
@@ -347,6 +358,7 @@ export const buildQueryOptions = (
   if (options.atlasTool) mcpServers[ATLAS_SERVER_NAME] = options.atlasTool
   if (options.mapTool) mcpServers[MAP_SERVER_NAME] = options.mapTool
   if (options.verdictTool) mcpServers[VERDICT_SERVER_NAME] = options.verdictTool
+  if (options.proposalTool) mcpServers[PROPOSAL_SERVER_NAME] = options.proposalTool
   if (options.handoffTool) mcpServers[HANDOFF_SERVER_NAME] = options.handoffTool
   if (options.selfTool) mcpServers[SELF_SERVER_NAME] = options.selfTool
   if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
@@ -383,6 +395,7 @@ export const buildQueryOptions = (
     ...(options.atlasTool ? ATLAS_TOOL_NAMES : []),
     ...(options.mapTool ? MAP_TOOL_NAMES : []),
     ...(options.verdictTool ? [SUBMIT_VERDICT_TOOL_NAME] : []),
+    ...(options.proposalTool ? [SUBMIT_PROPOSALS_TOOL_NAME] : []),
     ...(options.handoffTool ? HANDOFF_TOOL_NAMES : []),
     ...(options.selfTool ? SELF_TOOL_NAMES : []),
     ...(options.questionTool ? [ASK_HUMAN_TOOL_NAME] : []),

@@ -8,6 +8,7 @@ import { createAtlasTool } from './atlas-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSelfTool } from './self-tool.js'
+import { createProposalTool } from './proposal-tool.js'
 import { createVerdictTool } from './verdict-tool.js'
 import {
   PLANNER_TOOL_NAME,
@@ -433,6 +434,30 @@ const main = async (): Promise<void> => {
       })
     : null
 
+  /**
+   * The proposal channel inside the container, present only when the host said this is a
+   * proposer — the same gating `verdictTool` has just above, and the same `variants_propose`
+   * message the self tool uses, because it is the same request arriving from a different
+   * authority.
+   */
+  const proposalTool = command.proposeVariants
+    ? createProposalTool(command.proposeVariants.personaName, {
+        submit: (edit) => {
+          const requestId = nextRequestId()
+          emit({ t: 'variants_propose', requestId, ...edit })
+          return new Promise((resolve) => {
+            pendingSelfEdits.set(requestId, (result) =>
+              resolve(
+                result.ok
+                  ? { ok: true, outcome: result.outcome ?? '' }
+                  : { ok: false, error: result.error ?? 'the platform refused it' },
+              ),
+            )
+          })
+        },
+      })
+    : null
+
   const questionTool = createQuestionTool({
     askHuman: (question) => {
       const requestId = nextRequestId()
@@ -452,6 +477,7 @@ const main = async (): Promise<void> => {
     atlasTool,
     ...(mapTool ? { mapTool } : {}),
     ...(verdictTool ? { verdictTool } : {}),
+    ...(proposalTool ? { proposalTool } : {}),
     handoffTool,
     ...(selfTool ? { selfTool } : {}),
     ...(command.mapContext === undefined ? {} : { mapContext: command.mapContext }),

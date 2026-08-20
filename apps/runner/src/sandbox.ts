@@ -173,6 +173,8 @@ export interface SandboxOptions {
   }
   /** Present when this run is the surrogate verifier — the option letters it may pick. */
   readonly verifyVariants?: { optionKeys: string[] }
+  /** Present when this run is the proposer — the persona it writes candidates for. */
+  readonly proposeVariants?: { personaName: string }
   readonly onSessionId?: (sessionId: string) => void
   /** How full the model's context window is, sampled inside the container. */
   readonly onContextUsage?: (usage: { totalTokens: number; maxTokens: number }) => void
@@ -576,6 +578,9 @@ export const runAgentInSandbox = async (
       ...(options.mapContext === undefined ? {} : { mapContext: options.mapContext }),
       ...(options.mastery === undefined ? {} : { mastery: options.mastery }),
       ...(options.verifyVariants === undefined ? {} : { verifyVariants: options.verifyVariants }),
+      ...(options.proposeVariants === undefined
+        ? {}
+        : { proposeVariants: options.proposeVariants }),
       cwd: WORK_DIR,
       ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
       ...(options.steering ? { steering: true } : {}),

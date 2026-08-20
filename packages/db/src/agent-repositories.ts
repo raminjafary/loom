@@ -1991,6 +1991,14 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
       .onConflictDoNothing({ target: variantUse.agentRunId })
   },
 
+  async listArmRunIds(workspaceId, setId) {
+    const rows = await db
+      .select({ agentRunId: variantUse.agentRunId })
+      .from(variantUse)
+      .where(and(eq(variantUse.workspaceId, workspaceId), eq(variantUse.setId, setId)))
+    return rows.map((row) => asAgentRunId(row.agentRunId))
+  },
+
   /**
    * Assigned runs per arm, in-flight included — the count `nextVariantArm` balances.
    *

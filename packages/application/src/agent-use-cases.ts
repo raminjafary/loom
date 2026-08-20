@@ -72,6 +72,7 @@ import {
   tallyScreenScore,
   proposeVariantSet,
   proposerBrief,
+  proposerEligibility,
   proposerSubjectEligibility,
   MAX_PROPOSER_LOSING_ARMS,
   MAX_PROPOSER_REFUSALS,
@@ -1075,6 +1076,16 @@ const supersededPromptsFor = async (
  * `revisePromptBody`), so nothing here can reach a configuration a tier-1 edit could not.
  * The persona is resolved from the run's snapshot by name, never from a payload — the same
  * rule and the same reason as tier 1: an id in a tool call is model output.
+ *
+ * **Two authorities arrive through this one door**, and neither of them is the payload. A run
+ * proposing about its own work resolves the subject from its own snapshot, gated on its own
+ * envelope. A proposer session resolves it from the row the platform wrote when it started
+ * that session — which is what lets a session write candidates for a persona it is not, and
+ * why the row is a grant rather than a description. Everything after the resolution is
+ * identical, deliberately: one validator, one archive rule, one screen, one verifier. A
+ * second path for the proposer would be a second place for "what a candidate may be" to
+ * drift, and the whole claim of this piece is that a proposer reaches nothing a tier-1 edit
+ * could not.
  */
 export const proposeOwnVariants = async (
   deps: AgentDeps,
@@ -1087,15 +1098,49 @@ export const proposeOwnVariants = async (
   const run = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
   if (!run) throw new NotFoundError('AgentRun')
 
+  const session = await deps.personaVariants.findProposerSession(
+    input.workspaceId,
+    input.agentRunId,
+  )
+
   const personas = await deps.personas.listByWorkspace(input.workspaceId)
-  const persona = personas.find((entry) => entry.name === run.persona.name)
+  const persona = session
+    ? personas.find((entry) => entry.id === session.personaId)
+    : personas.find((entry) => entry.name === run.persona.name)
   if (!persona) {
     return {
       ok: false,
-      reason:
-        `There is no persona called "${run.persona.name}" in this workspace any more, so ` +
-        'there is nothing to search over. Carry on with your task.',
+      reason: session
+        ? 'The persona you were writing candidates for has been deleted from this workspace, ' +
+          'so there is nothing left to search over. Nothing was recorded.'
+        : `There is no persona called "${run.persona.name}" in this workspace any more, so ` +
+          'there is nothing to search over. Carry on with your task.',
     }
+  }
+
+  /**
+   * The property the proposer exists for, checked where the request actually arrives rather
+   * than only where the session was started.
+   *
+   * Not applied to the self path, and that is not an oversight: a run proposing about its own
+   * work *is* the persona under revision, which is the state this rule refuses. The rule is
+   * about a session that claims to be separate — so it is checked exactly where that claim is
+   * made. Both halves are reachable: a human who renames a persona to the proposer's own name
+   * mid-session hits the first, and the second is what stops a run being scored on a candidate
+   * from proposing what it is compared against.
+   */
+  if (session) {
+    const open = await deps.personaVariants.findOpenSet(input.workspaceId, persona.id)
+    const armRunIds = open
+      ? await deps.personaVariants.listArmRunIds(input.workspaceId, open.set.id)
+      : []
+    const eligible = proposerEligibility({
+      proposerRunId: input.agentRunId as string,
+      proposerPersonaName: run.persona.name,
+      subjectPersonaName: persona.name,
+      armRunIds: armRunIds.map((id) => id as string),
+    })
+    if (!eligible.ok) return { ok: false, reason: eligible.reason }
   }
 
   const [revisionsThisRun, measurementOpen, supersededPrompts] = await Promise.all([
@@ -1186,7 +1231,18 @@ export const proposeOwnVariants = async (
       `Recorded ${opened.variants.length} candidate prompts for "${persona.name}". None of ` +
       'them is live: the next runs of this persona alternate between them and the prompt it ' +
       'has now, and a human promotes whichever the outcomes favour — or discards all of ' +
-      'them. **Your own run is unchanged.** Carry on with your task.',
+      'them. ' +
+      /**
+       * Two different last sentences, because the two paths end in different places. Telling a
+       * run to carry on with its task is right for a worker that proposed on the way past and
+       * wrong for a proposer, whose task was this: it has nothing to carry on with, and a
+       * session that goes looking for more work after submitting is a session spending money
+       * on a job that is finished.
+       */
+      (session
+        ? 'That is what this session was for, and it is done — nothing further is expected of ' +
+          'you. One search per persona is measured at a time, so there is no second set to send.'
+        : '**Your own run is unchanged.** Carry on with your task.'),
   }
 }
 
@@ -4130,6 +4186,7 @@ export const startAgentRun = async (
    * before dispatch: it is what authorizes the submission, so a run that reached its tool
    * first would be refused by a race rather than by a rule.
    */
+  let proposalSubject: string | null = null
   if (input.proposeVariants) {
     await deps.personaVariants.openProposerSession({
       workspaceId: input.workspaceId,
@@ -4137,6 +4194,12 @@ export const startAgentRun = async (
       agentRunId: run.id,
       shown: input.proposeVariants.shown,
     })
+    const subject = await deps.personas.findById(
+      input.workspaceId,
+      input.proposeVariants.personaId,
+    )
+    if (!subject) throw new NotFoundError('AgentPersona')
+    proposalSubject = subject.name
   }
 
   /**
@@ -4190,6 +4253,12 @@ export const startAgentRun = async (
       // message by starting a whole second fan-out.
       ...(input.relation === 'steer' ? { steering: true } : {}),
       ...(input.verifyVariants ? { verifyVariants: input.verifyVariants } : {}),
+      /**
+       * The subject's name, resolved here from the id the caller passed rather than taken
+       * from the persona this run is: a proposer runs as `variant-proposer` and writes for
+       * somebody else, so its own snapshot is the one name that must not appear here.
+       */
+      ...(proposalSubject === null ? {} : { proposeVariants: { personaName: proposalSubject } }),
       ...(input.screen ? { baseCommitSha: input.screen.commitSha } : {}),
     })
   } catch (error) {

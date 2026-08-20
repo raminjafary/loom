@@ -65,6 +65,7 @@ COPY apps/runner/src/notes-tool.ts src/
 COPY apps/runner/src/question-tool.ts src/
 COPY apps/runner/src/self-tool.ts src/
 COPY apps/runner/src/verdict-tool.ts src/
+COPY apps/runner/src/proposal-tool.ts src/
 COPY apps/runner/src/planner-tool.ts src/
 COPY apps/runner/src/capabilities.ts src/
 COPY tsconfig.base.json ./

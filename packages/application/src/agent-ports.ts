@@ -1017,6 +1017,18 @@ export interface PersonaVariantRepositoryPort {
     agentRunId: AgentRunId
   }): Promise<void>
 
+  /**
+   * Which runs are on an arm of this search — the run ids rather than the counts.
+   *
+   * Read by the proposer's eligibility check, and it is the half of that rule the persona
+   * names cannot answer: a run being *scored* on a candidate does not get to propose what
+   * replaces it, and "am I one of the arms" is a question about run ids.
+   */
+  listArmRunIds(
+    workspaceId: WorkspaceId,
+    setId: PersonaVariantSetId,
+  ): Promise<AgentRunId[]>
+
   /** Assigned runs per arm, in flight included — what `nextVariantArm` balances. */
   countVariantArms(
     workspaceId: WorkspaceId,
@@ -1462,6 +1474,15 @@ export interface RunDispatchPort {
      * spread against a port that never declared it compiles.
      */
     verifyVariants?: { optionKeys: string[] }
+    /**
+     * Start this run as the **proposer**: the name of the persona it writes candidates for,
+     * whose presence is what gives the run `submit_variant_proposals`.
+     *
+     * A name and not the persona id, and that is the point rather than an economy — the
+     * Runner never needs to identify the persona, only to tell a model whose instructions it
+     * is writing. Which persona a submission lands on is resolved from the session row.
+     */
+    proposeVariants?: { personaName: string }
   }): Promise<void>
   /**
    * Aborts a run mid-flight. Fire-and-forget and

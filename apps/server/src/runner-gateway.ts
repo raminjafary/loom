@@ -286,6 +286,7 @@ export const createRunnerGateway = (
       review,
       steering,
       verifyVariants,
+      proposeVariants,
     }) {
       send(runnerId, {
         type: 'start_run',
@@ -331,6 +332,13 @@ export const createRunnerGateway = (
         ...(verifyVariants === undefined
           ? {}
           : { verifyVariants: { optionKeys: [...verifyVariants.optionKeys] } }),
+        // Destructured above and forwarded here, for the reason `mapContext`'s comment
+        // gives: a field this port declares and this function declines to read is dropped
+        // with no type error, and a proposer that never reaches its tool is a session that
+        // reads a repository and submits nothing.
+        ...(proposeVariants === undefined
+          ? {}
+          : { proposeVariants: { personaName: proposeVariants.personaName } }),
       })
     },
 

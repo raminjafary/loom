@@ -52,6 +52,7 @@ import {
 } from './mastery-progress.js'
 import { createAtlasTool } from './atlas-tool.js'
 import { createSelfTool } from './self-tool.js'
+import { createProposalTool } from './proposal-tool.js'
 import { createVerdictTool } from './verdict-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
@@ -558,6 +559,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
      * Its presence is what gives the agent `submit_variant_verdict` at all.
      */
     verifyVariants?: { optionKeys: string[] }
+    proposeVariants?: { personaName: string }
   }): Promise<void> => {
     // Async, and awaited by whoever produces events (the SDK loop in-process, the
     // container's stdout reader when sandboxed) — that await is the backpressure.
@@ -936,6 +938,16 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         })
       })
     }
+    /**
+     * The proposer's channel — the same frame and the same pending map as `onProposeVariants`, because it is the same request: candidates for a persona, answered by the
+     * validator every candidate has always gone through. What differs is who is allowed to
+     * send it, and that is not decided here.
+     */
+    const proposalTool =
+      input.proposeVariants !== undefined
+        ? createProposalTool(input.proposeVariants.personaName, { submit: onProposeVariants })
+        : null
+
     const selfTool = maySelfModify(input.persona.envelope ?? null)
       ? createSelfTool({
           revisePrompt: onSelfEdit,
@@ -1023,6 +1035,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         handoffTool,
         ...(mapTool ? { mapTool } : {}),
         ...(verdictTool ? { verdictTool } : {}),
+        ...(proposalTool ? { proposalTool } : {}),
         ...(selfTool ? { selfTool } : {}),
         questionTool: questionTool.server,
         ...(input.task === undefined ? {} : { task: input.task }),
@@ -1102,6 +1115,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         ...(input.mapContext === undefined ? {} : { mapContext: input.mapContext }),
         ...(input.mastery === undefined ? {} : { mastery: input.mastery }),
         ...(input.verifyVariants === undefined ? {} : { verifyVariants: input.verifyVariants }),
+        ...(input.proposeVariants === undefined
+          ? {}
+          : { proposeVariants: input.proposeVariants }),
         clonePath: input.clonePath,
         homePath: input.homePath,
         egressToken,
@@ -1447,6 +1463,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 ...(frame.verifyVariants === undefined
                   ? {}
                   : { verifyVariants: { optionKeys: [...frame.verifyVariants.optionKeys] } }),
+                ...(frame.proposeVariants === undefined
+                  ? {}
+                  : { proposeVariants: { personaName: frame.proposeVariants.personaName } }),
                 clonePath,
                 homePath,
                 abort,

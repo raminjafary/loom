@@ -62,6 +62,13 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
     verifyVariants: z
       .object({ optionKeys: z.array(z.string().max(2)).min(2).max(5) })
       .optional(),
+    /**
+     * Present when this run is the proposer: the name of the persona it is writing candidates
+     * for, which the tool says out loud so a model cannot mistake whose instructions these
+     * are. Declared here as well as on the wire for `verifyVariants`' reason — a container
+     * that strips it runs a proposer with nothing to submit through.
+     */
+    proposeVariants: z.object({ personaName: z.string().min(1).max(120) }).optional(),
     /** The tree's ledger, rendered and fenced server-side. */
     contextLedger: z.string().optional(),
     /** Where the run's clone is mounted inside the container, not the host path. */
