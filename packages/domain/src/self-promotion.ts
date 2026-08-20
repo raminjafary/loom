@@ -311,3 +311,137 @@ export const rollbackSelfRevision = (input: {
       'for, through the same gate as anything else.',
   }
 }
+
+/**
+ * The version of the on-disk state format.
+ *
+ * On disk rather than in Postgres, and that is the load-bearing decision of this tier's
+ * storage. The process that recovers from a bad promotion must not be the code being
+ * repaired — that is the whole property the rollback drill establishes — and a recovery
+ * that had to query Postgres through this repository's own database client would be
+ * depending on exactly the thing it is recovering from. A JSON file with a version is
+ * readable by plain Node on the standard library, from a worktree pinned at a known-good
+ * commit, with nothing installed.
+ *
+ * So the format is the contract, not a shared module: a recovery script re-reads these
+ * field names rather than importing this file, and the version is what lets it refuse a
+ * format it does not know instead of taking the first field that looks about right.
+ *
+ * Postgres still records *that* a promotion happened, for the audit trail and the panel.
+ * That is a different job — history a human reads, rather than the pointer a recovery
+ * follows — and keeping them apart is what stops the pointer depending on a service being
+ * up.
+ */
+export const SELF_STATE_VERSION = 1
+
+export type SelfStateRule = 'unparseable' | 'version' | 'shape' | 'orphan-previous'
+
+export type SelfStateResult =
+  | { readonly ok: true; readonly deployment: SelfDeployment }
+  | { readonly ok: false; readonly rule: SelfStateRule; readonly reason: string }
+
+const revisionJson = (revision: SelfRevision) => ({
+  commit: revision.commit,
+  builtAt: revision.builtAt.toISOString(),
+  retained: revision.retained,
+  health: revision.health,
+})
+
+/** Pretty-printed on purpose: this file is read by humans mid-incident more than by programs. */
+export const serializeDeployment = (deployment: SelfDeployment): string =>
+  `${JSON.stringify(
+    {
+      version: SELF_STATE_VERSION,
+      running: deployment.running === null ? null : revisionJson(deployment.running),
+      previous: deployment.previous === null ? null : revisionJson(deployment.previous),
+    },
+    null,
+    2,
+  )}\n`
+
+const asRevision = (value: unknown): SelfRevision | null => {
+  if (value === null || typeof value !== 'object') return null
+  const row = value as Record<string, unknown>
+  if (typeof row.commit !== 'string' || row.commit.trim() === '') return null
+  if (typeof row.builtAt !== 'string') return null
+  const builtAt = new Date(row.builtAt)
+  if (Number.isNaN(builtAt.getTime())) return null
+  if (typeof row.retained !== 'boolean') return null
+  if (row.health !== 'unchecked' && row.health !== 'healthy' && row.health !== 'unhealthy') {
+    return null
+  }
+  return { commit: row.commit, builtAt, retained: row.retained, health: row.health }
+}
+
+/**
+ * Reads the state file, or says why it will not.
+ *
+ * **Every refusal here is a refusal to guess.** A malformed pointer is the one input where a
+ * best effort is worse than an error: "promote over whatever this half-parsed thing is" and
+ * "roll back to a revision whose commit did not survive the round trip" are both worse than
+ * stopping and telling an operator that the file is broken, because both of them move a
+ * pointer to something nobody chose.
+ */
+export const parseDeployment = (text: string): SelfStateResult => {
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch (error) {
+    return {
+      ok: false,
+      rule: 'unparseable',
+      reason:
+        'The deployment state file is not JSON, so nothing can be said about which revision is ' +
+        `serving: ${error instanceof Error ? error.message : String(error)}. It is written by ` +
+        'rename rather than in place, so a torn file means something outside this platform ' +
+        'edited it.',
+    }
+  }
+  if (raw === null || typeof raw !== 'object') {
+    return { ok: false, rule: 'shape', reason: 'The deployment state file is not an object.' }
+  }
+  const row = raw as Record<string, unknown>
+  if (row.version !== SELF_STATE_VERSION) {
+    return {
+      ok: false,
+      rule: 'version',
+      reason:
+        `The deployment state file is version ${JSON.stringify(row.version)} and this build ` +
+        `reads version ${SELF_STATE_VERSION}. Refused rather than read field by field: a ` +
+        'reader that guessed at an unknown format is a reader that could move the running ' +
+        'pointer to something nobody wrote.',
+    }
+  }
+
+  const running = row.running === null || row.running === undefined ? null : asRevision(row.running)
+  const previous =
+    row.previous === null || row.previous === undefined ? null : asRevision(row.previous)
+  if (
+    (row.running !== null && row.running !== undefined && running === null) ||
+    (row.previous !== null && row.previous !== undefined && previous === null)
+  ) {
+    return {
+      ok: false,
+      rule: 'shape',
+      reason:
+        'A revision in the deployment state file is missing a field or holds one of the wrong ' +
+        'type. Refused whole rather than partially: half a pointer is not a smaller pointer.',
+    }
+  }
+  /**
+   * A way back to something that never served. Refused because it is not a state this platform
+   * can produce, so reading it as "nothing is running" would be reading somebody's hand-edit as
+   * an intention — and the intention it most resembles is a rollback that was interrupted.
+   */
+  if (running === null && previous !== null) {
+    return {
+      ok: false,
+      rule: 'orphan-previous',
+      reason:
+        `The state file says nothing is serving but keeps ${previous.commit.slice(0, 12)} as the ` +
+        'way back. Nothing here writes that, so it is a hand-edit or an interrupted rollback — ' +
+        'and either way an operator has to say which of the two revisions should be running.',
+    }
+  }
+  return { ok: true, deployment: { running, previous } }
+}

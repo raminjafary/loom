@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ManifestCheck, RollbackManifest } from './rollback-manifest.js'
 import {
+  SELF_STATE_VERSION,
+  parseDeployment,
   promoteSelfRevision,
   rollbackSelfRevision,
+  serializeDeployment,
   type SelfDeployment,
   type SelfRevision,
 } from './self-promotion.js'
@@ -252,5 +255,86 @@ describe('rollbackSelfRevision', () => {
     if (verdict.ok) throw new Error('expected a refusal')
     expect(verdict.rule).toBe('nothing-retained')
     expect(verdict.reason).toContain('the drill')
+  })
+})
+
+describe('the deployment state file', () => {
+  /**
+   * A round trip, because the format *is* the contract with the recovery script — that script
+   * re-reads these field names on the standard library rather than importing this module, so a
+   * rename here is a rename of an interface with an outside reader.
+   */
+  it('round-trips through the format a recovery script reads by hand', () => {
+    const deployment = {
+      running: revision(CANDIDATE),
+      previous: revision(RUNNING, { health: 'unchecked' as const }),
+    }
+    const text = serializeDeployment(deployment)
+    expect(JSON.parse(text).version).toBe(SELF_STATE_VERSION)
+    expect(JSON.parse(text).previous.commit).toBe(RUNNING)
+    const read = parseDeployment(text)
+    expect(read.ok).toBe(true)
+    if (!read.ok) throw new Error(read.reason)
+    expect(read.deployment).toEqual(deployment)
+  })
+
+  it('reads a deployment that has never promoted', () => {
+    const read = parseDeployment(serializeDeployment({ running: null, previous: null }))
+    expect(read.ok).toBe(true)
+    if (!read.ok) throw new Error(read.reason)
+    expect(read.deployment).toEqual({ running: null, previous: null })
+  })
+
+  /**
+   * Every refusal below is a refusal to guess. A pointer moved to something nobody wrote is
+   * worse than a platform that stops and says the file is broken.
+   */
+  it('refuses a format version it does not know rather than reading field by field', () => {
+    const read = parseDeployment(JSON.stringify({ version: 99, running: null, previous: null }))
+    expect(read.ok).toBe(false)
+    if (read.ok) throw new Error('expected a refusal')
+    expect(read.rule).toBe('version')
+  })
+
+  it('refuses a torn file rather than reporting an empty deployment', () => {
+    const read = parseDeployment('{"version": 1, "running": {')
+    expect(read.ok).toBe(false)
+    if (read.ok) throw new Error('expected a refusal')
+    expect(read.rule).toBe('unparseable')
+  })
+
+  it('refuses a revision missing a field, whole rather than partially', () => {
+    const read = parseDeployment(
+      JSON.stringify({ version: 1, running: { commit: CANDIDATE, retained: true }, previous: null }),
+    )
+    expect(read.ok).toBe(false)
+    if (read.ok) throw new Error('expected a refusal')
+    expect(read.rule).toBe('shape')
+    expect(read.reason).toContain('half a pointer is not a smaller pointer')
+  })
+
+  it('refuses an unknown health value, since it decides whether a revision may serve', () => {
+    const read = parseDeployment(
+      JSON.stringify({
+        version: 1,
+        running: { commit: CANDIDATE, builtAt: new Date(0).toISOString(), retained: true, health: 'probably' },
+        previous: null,
+      }),
+    )
+    expect(read.ok).toBe(false)
+  })
+
+  /** Nothing serving but a way back recorded is an interrupted rollback, not an empty deployment. */
+  it('refuses a way back to something that never served', () => {
+    const read = parseDeployment(
+      JSON.stringify({
+        version: 1,
+        running: null,
+        previous: { commit: RUNNING, builtAt: new Date(0).toISOString(), retained: true, health: 'healthy' },
+      }),
+    )
+    expect(read.ok).toBe(false)
+    if (read.ok) throw new Error('expected a refusal')
+    expect(read.rule).toBe('orphan-previous')
   })
 })

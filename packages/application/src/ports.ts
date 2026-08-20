@@ -41,6 +41,26 @@ export interface BlobStoragePort {
   deletePrefix(prefix: string): Promise<void>
 }
 
+/**
+ * Where the running-revision pointer lives — tier 3's one piece of state.
+ *
+ * A store of *one* value with no key, which is why it is not `BlobStoragePort`: there is
+ * exactly one deployment, the thing being stored is a pointer rather than a document, and the
+ * property this port has to promise is one a general key/value store does not — that a reader
+ * never sees a half-written state. An operator reading it mid-incident, and a recovery script
+ * reading it with nothing installed, both have to get either the old pointer or the new one.
+ *
+ * `read` returns the file's text rather than a parsed deployment, deliberately: parsing is the
+ * domain's, refusals included, and an adapter that parsed would be an adapter deciding whether
+ * a malformed pointer is usable.
+ */
+export interface SelfDeploymentStorePort {
+  /** Null when nothing has been written yet — a deployment that has never promoted. */
+  read(): Promise<string | null>
+  /** Must be atomic: a reader sees the previous text or the new text, never a mixture. */
+  write(text: string): Promise<void>
+}
+
 export interface ClockPort {
   now(): Date
 }
