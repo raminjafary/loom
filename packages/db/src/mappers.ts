@@ -328,6 +328,8 @@ export interface MergeQueueEntryRow {
   detail: string | null
   mergedCommitSha: string | null
   verified: boolean
+  revertedAt: Date | null
+  revertedBySha: string | null
   enqueuedByUserId: string | null
   createdAt: Date
   startedAt: Date | null
@@ -375,6 +377,8 @@ export const toMergeQueueEntry = (row: MergeQueueEntryRow): MergeQueueEntry => {
     detail: row.detail,
     mergedCommitSha: row.mergedCommitSha,
     verified: row.verified,
+    revertedAt: row.revertedAt,
+    revertedBySha: row.revertedBySha,
     enqueuedByUserId: row.enqueuedByUserId,
     createdAt: row.createdAt,
     startedAt: row.startedAt,

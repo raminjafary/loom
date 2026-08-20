@@ -60,6 +60,13 @@ export interface MergeQueueEntry {
    * — recording every merge as verified would make the column worthless.
    */
   readonly verified: boolean
+  /**
+   * When a later merge took this one back out, and what did it. Null for every entry that
+   * has not been reverted — which is almost all of them, and is also what an unseen revert
+   * looks like. See `reverted-merges.ts` for what the queue can and cannot see.
+   */
+  readonly revertedAt: Date | null
+  readonly revertedBySha: string | null
   readonly enqueuedByUserId: string | null
   readonly createdAt: Date
   readonly startedAt: Date | null

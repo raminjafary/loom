@@ -216,6 +216,23 @@ export interface MergeQueueRepositoryPort {
       verified?: boolean
     },
   ): Promise<MergeQueueEntry | null>
+
+  /**
+   * Stamps the merges a later merge took back out, and returns the ones it stamped.
+   *
+   * Scoped to one repository because a sha only means anything inside one, and to
+   * `status = 'merged'` because a queued or failed entry never landed. Returns the rows so
+   * the caller can tell the branch's own run — a revert is a fact about work somebody
+   * approved, and the run that produced it is where the platform says so.
+   *
+   * The first revert wins: a branch reverted, restored and reverted again is one entry whose
+   * disposition was wrong once.
+   */
+  markReverted(
+    workspaceId: WorkspaceId,
+    repositoryId: RepositoryId,
+    input: { revertedShas: readonly string[]; revertedBySha: string },
+  ): Promise<MergeQueueEntry[]>
 }
 
 /**
@@ -1598,7 +1615,15 @@ export interface RunDispatchPort {
     runId: AgentRunId
     checks: readonly VerificationCheck[]
   }): Promise<
-    | { ok: true; commitSha: string; verified: boolean; changedPaths: string[]; note?: string }
+    | {
+        ok: true
+        commitSha: string
+        verified: boolean
+        changedPaths: string[]
+        /** What this merge takes back out. See `parseRevertedShas`. */
+        revertedShas: string[]
+        note?: string
+      }
     | { ok: false; reason: MergeFailureReason; detail: string }
   >
   /**

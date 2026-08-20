@@ -802,6 +802,15 @@ export const MergeQueueEntrySchema = z.object({
   mergedCommitSha: z.string().nullable(),
   /** Whether tests actually ran and passed — not whether any were configured. */
   verified: z.boolean(),
+  /**
+   * When a later merge took this one back out, and what did it.
+   *
+   * On the wire because it changes how a merge rate should be read, and a number that
+   * changes a reading belongs where the reading happens. It is never a score: nothing is
+   * re-dispositioned for a revert — see `reverted-merges.ts`.
+   */
+  revertedAt: z.date().nullable(),
+  revertedBySha: z.string().nullable(),
   createdAt: z.date(),
   startedAt: z.date().nullable(),
   finishedAt: z.date().nullable(),

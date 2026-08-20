@@ -78,6 +78,38 @@ describe('mergeRunBranch', () => {
   })
 
   /**
+   * The tripwire's only real test: git's own revert message, written by git, read back out
+   * of a real range. A fabricated message would prove the regex and not the plumbing.
+   */
+  it('reports what a merged branch takes back out, as git wrote it', async () => {
+    const first = await makeRunClone('loom/run-keep')
+    await commitFile(first, 'feature.txt', 'one\n', 'add feature')
+    const landed = await merge(first, 'loom/run-keep')
+    expect(landed.ok).toBe(true)
+    if (!landed.ok) return
+    expect(landed.revertedShas).toEqual([])
+
+    const second = await makeRunClone('loom/run-revert')
+    await git(second, ['fetch', '--quiet', source, 'main'])
+    await git(second, [
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t.invalid',
+      'revert',
+      '--no-edit',
+      landed.commitSha,
+    ])
+
+    const undone = await merge(second, 'loom/run-revert')
+    expect(undone.ok).toBe(true)
+    if (!undone.ok) return
+    // The sha git abbreviated into its own message, matched back to the merge it names.
+    expect(undone.revertedShas).toHaveLength(1)
+    expect(landed.commitSha.startsWith(undone.revertedShas[0]!)).toBe(true)
+  })
+
+  /**
    * The queue's whole reason for existing (repository binding: "sibling branches converge
    * through the merge queue, not a race"). Both clones were taken from the same base, so
    * the second only merges cleanly because it is rebased onto the first's result at merge

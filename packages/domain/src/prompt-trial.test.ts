@@ -20,6 +20,7 @@ const tally = (arm: PromptArm, over: Partial<PromptArmTally> = {}): PromptArmTal
   arm,
   decided: MIN_DECIDED_RUNS_PER_ARM,
   merged: MIN_DECIDED_RUNS_PER_ARM,
+  reverted: 0,
   discarded: 0,
   failed: 0,
   costUsdTotal: MIN_DECIDED_RUNS_PER_ARM * 0.1,

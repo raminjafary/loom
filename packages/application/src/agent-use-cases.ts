@@ -44,6 +44,7 @@ import {
   isHuman,
   parseEgressHost,
   isPricedModel,
+  isUsableRevertSha,
   isMergeQueueEntryTerminal,
   escalateAfterFailure,
   isRiskyTool,
@@ -7574,6 +7575,75 @@ const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<v
         `${drifted.length} maps of ${repository.displayName} lost nodes to this merge. ` +
           'A crunch is convened over them — nothing has been said in it yet.',
       )
+    }
+  } catch {
+    // Deliberately swallowed — see above.
+  }
+
+  await recordRevertedMerges(deps, entry, result.revertedShas, result.commitSha)
+}
+
+/**
+ * Stamps the merges this one took back out, and tells the runs whose work came back.
+ *
+ * The one signal that says a *disposition* was wrong: fitness is a human merging, and a
+ * revert is the same human's later disagreement with themselves. It is recorded where it is
+ * observed — the queue is the only place this platform watches the default branch move — and
+ * it is a tripwire rather than a term in the fitness, which `describeRevertedMerges` argues
+ * for and this function is careful not to undo: nothing here changes a branch disposition,
+ * settles a search, or re-scores an arm.
+ *
+ * Best-effort and last, like the map invalidation above it: a merge that landed must not be
+ * reported as failed because bookkeeping about an older one did not.
+ */
+const recordRevertedMerges = async (
+  deps: AgentDeps,
+  entry: MergeQueueEntry,
+  revertedShas: readonly string[],
+  revertedBySha: string,
+): Promise<void> => {
+  /**
+   * Filtered through the domain rule before the query, so the seven-character floor is
+   * enforced in one place — a three-character "sha" would prefix-match a fifteenth of the
+   * repository, and a tripwire that accuses on a coincidence is worse than one that misses.
+   */
+  const named = revertedShas.filter(isUsableRevertSha)
+  if (named.length === 0) return
+  try {
+    const reverted = await deps.mergeQueue.markReverted(entry.workspaceId, entry.repositoryId, {
+      revertedShas: named,
+      revertedBySha,
+    })
+    for (const stamped of reverted) {
+      /**
+       * Said in the thread of the run that produced the branch, not in the thread of the
+       * run that reverted it: the fact is about work somebody approved, and the run that
+       * did that work is where its record lives. A revert of one's own branch — a run
+       * reverting itself — reads the same way and is equally worth saying.
+       */
+      const owner = await deps.agentRuns.findById(stamped.workspaceId, stamped.agentRunId)
+      if (!owner) continue
+      await postRunSystemMessage(
+        deps,
+        owner,
+        `${stamped.branchName} was merged and has now been reverted, by ${revertedBySha.slice(0, 8)}. ` +
+          'Nothing is re-scored for this — the branch keeps the disposition it was given. It is ' +
+          'recorded because a merge that comes back out is the only sign the platform gets that ' +
+          'a merge rate was measuring what was easy to approve.',
+      )
+      await deps.audit.record({
+        workspaceId: stamped.workspaceId,
+        actor: systemActor(),
+        action: 'merge.reverted',
+        subjectType: 'agent_run',
+        subjectId: stamped.agentRunId,
+        metadata: {
+          entryId: stamped.id,
+          branchName: stamped.branchName,
+          mergedCommitSha: stamped.mergedCommitSha,
+          revertedBySha,
+        },
+      })
     }
   } catch {
     // Deliberately swallowed — see above.

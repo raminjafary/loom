@@ -1890,6 +1890,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                       commitSha: result.commitSha,
                       verified: result.verified,
                       changedPaths: result.changedPaths,
+                      revertedShas: result.revertedShas,
                       ...(result.note === undefined ? {} : { note: result.note }),
                     }
                   : {

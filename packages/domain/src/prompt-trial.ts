@@ -5,6 +5,7 @@ import {
   verificationFailureRate,
   type VerificationTally,
 } from './expertise-trial.js'
+import { describeRevertedMerges } from './reverted-merges.js'
 
 /**
  * Whether a self-edit was an **improvement**.
@@ -67,6 +68,14 @@ export interface PromptArmTally extends VerificationTally {
    */
   readonly decided: number
   readonly merged: number
+  /**
+   * Merged branches on this arm that a later merge took back out.
+   *
+   * Reported and never scored: see `describeRevertedMerges`. It is here rather than in
+   * `VerificationTally` because a revert is a fact about a *persona document's* work being
+   * kept, and the map trial next door measures something a revert says nothing about.
+   */
+  readonly reverted: number
   readonly discarded: number
   readonly failed: number
   readonly costUsdTotal: number
@@ -100,6 +109,7 @@ const EMPTY = (arm: PromptArm): PromptArmTally => ({
   arm,
   decided: 0,
   merged: 0,
+  reverted: 0,
   discarded: 0,
   failed: 0,
   costUsdTotal: 0,
@@ -144,10 +154,21 @@ export const summarizePromptEffect = (
 ): PromptTrialEffect => {
   const revised = summarizeArm(tallies.find((t) => t.arm === 'revised') ?? EMPTY('revised'))
   const previous = summarizeArm(tallies.find((t) => t.arm === 'previous') ?? EMPTY('previous'))
-  const verification = describeVerificationFailures(
-    { label: REVISED_LABEL, ...revised },
-    { label: PREVIOUS_LABEL, ...previous },
-  )
+  const verification =
+    describeVerificationFailures(
+      { label: REVISED_LABEL, ...revised },
+      { label: PREVIOUS_LABEL, ...previous },
+    ) +
+    /**
+     * Appended to the clause the verification failures already use, and for the same reason:
+     * a fact that changes what a human should do belongs in the sentence they read, not in a
+     * panel nobody opens. It never changes the verdict — a revert says the disposition was
+     * wrong, and re-scoring an arm on it would make the platform the judge of a review.
+     */
+    describeRevertedMerges(
+      { label: REVISED_LABEL, reverted: revised.reverted, merged: revised.merged },
+      { label: PREVIOUS_LABEL, reverted: previous.reverted, merged: previous.merged },
+    )
 
   if (revised.decided < MIN_DECIDED_RUNS_PER_ARM || previous.decided < MIN_DECIDED_RUNS_PER_ARM) {
     return {

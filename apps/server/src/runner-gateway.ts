@@ -126,7 +126,15 @@ interface PendingWarm {
 interface PendingMerge {
   resolve(
     result:
-      | { ok: true; commitSha: string; verified: boolean; changedPaths: string[]; note?: string }
+      | {
+          ok: true
+          commitSha: string
+          verified: boolean
+          changedPaths: string[]
+          /** What this merge takes back out. See `parseRevertedShas`. */
+          revertedShas: string[]
+          note?: string
+        }
       | { ok: false; reason: MergeFailureReason; detail: string },
   ): void
   reject(error: Error): void
@@ -479,7 +487,14 @@ export const createRunnerGateway = (
       }
       const requestId = randomUUID()
       return new Promise<
-        | { ok: true; commitSha: string; verified: boolean; changedPaths: string[]; note?: string }
+        | {
+            ok: true
+            commitSha: string
+            verified: boolean
+            changedPaths: string[]
+            revertedShas: string[]
+            note?: string
+          }
         | { ok: false; reason: MergeFailureReason; detail: string }
       >((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -746,6 +761,7 @@ export const createRunnerGateway = (
                 commitSha: frame.commitSha ?? '',
                 verified: frame.verified ?? false,
                 changedPaths: frame.changedPaths ?? [],
+                revertedShas: frame.revertedShas ?? [],
                 ...(frame.note === undefined ? {} : { note: frame.note }),
               }
             : {

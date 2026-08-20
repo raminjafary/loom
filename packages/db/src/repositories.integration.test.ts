@@ -27,6 +27,7 @@ import { schemaStatus } from './schema-status.js'
 import {
   agentRunRepository,
   atlasRepository,
+  mergeQueueRepository,
   personaGroupRepository,
   personaRepository,
   personaVariantRepository,
@@ -2005,5 +2006,164 @@ describe('model outcomes per persona', () => {
 
   it('says nothing about a persona nothing has run as', async () => {
     expect(await personas.tallyModelOutcomes(WS, 'never-existed')).toEqual([])
+  })
+})
+
+/**
+ * A merged branch that came back out.
+ *
+ * The arithmetic is `reverted-merges.test.ts`. What is only testable here is the pair of
+ * things this join gets wrong silently: matching an abbreviated sha against the wrong
+ * repository's commits, and inflating every other count in an arm's tally by joining a table
+ * a run can have two rows in.
+ */
+describe('reverted merges', () => {
+  const queue = mergeQueueRepository(db)
+  const variants = personaVariantRepository(db)
+  let seq = 0
+
+  const scaffold = async (workspaceId: WorkspaceId) => {
+    seq += 1
+    const [ch] = await db
+      .insert(channel)
+      .values({ workspaceId, name: `revert-${seq}`, isPrivate: false })
+      .returning({ id: channel.id })
+    const [th] = await db
+      .insert(thread)
+      .values({ workspaceId, channelId: ch!.id, isRoot: true })
+      .returning({ id: thread.id })
+    const [rn] = await db
+      .insert(runner)
+      .values({ workspaceId, name: `runner-revert-${seq}`, pairingTokenHash: `hash-revert-${seq}` })
+      .returning({ id: runner.id })
+    const repos = await db
+      .insert(repository)
+      .values(
+        [1, 2].map((n) => ({
+          workspaceId,
+          runnerId: rn!.id,
+          displayName: `repo-${n}`,
+          absolutePath: `/tmp/revert-${seq}-${n}`,
+          defaultBranch: 'main',
+        })),
+      )
+      .returning({ id: repository.id })
+    const [persona] = await db
+      .insert(agentPersona)
+      .values({
+        workspaceId,
+        name: `reverted-${seq}`,
+        description: 'd',
+        markdownSource: 'live',
+        model: 'claude-haiku-4-5',
+      })
+      .returning({ id: agentPersona.id })
+    return {
+      threadId: th!.id,
+      runnerId: rn!.id,
+      repositoryId: asRepositoryId(repos[0]!.id),
+      otherRepositoryId: asRepositoryId(repos[1]!.id),
+      personaId: asAgentPersonaId(persona!.id),
+    }
+  }
+
+  const addMergedRun = async (
+    workspaceId: WorkspaceId,
+    s: Awaited<ReturnType<typeof scaffold>>,
+    input: { repositoryId?: string; commitSha: string; entries?: number },
+  ) => {
+    const [run] = await db
+      .insert(agentRun)
+      .values({
+        workspaceId,
+        threadId: s.threadId,
+        repositoryId: input.repositoryId ?? s.repositoryId,
+        runnerId: s.runnerId,
+        persona: {
+          name: 'reverted',
+          model: 'claude-haiku-4-5',
+          systemPrompt: 'x',
+          tools: [],
+          approvalMode: 'ask' as const,
+        },
+        status: 'completed',
+        branchDisposition: 'merged',
+        completedAt: new Date(),
+      })
+      .returning({ id: agentRun.id })
+    const runId = asAgentRunId(run!.id)
+
+    /**
+     * More than one entry per run is the ordinary case this has to survive: a branch that
+     * failed verification and was re-queued has two, and only the last one merged.
+     */
+    for (let attempt = 0; attempt < (input.entries ?? 1); attempt += 1) {
+      const entry = await queue.enqueue({
+        workspaceId,
+        repositoryId: asRepositoryId(input.repositoryId ?? s.repositoryId),
+        agentRunId: runId,
+        branchName: `loom/${input.commitSha}`,
+        enqueuedByUserId: null,
+      })
+      await queue.claim(workspaceId, entry.id)
+      const last = attempt === (input.entries ?? 1) - 1
+      await queue.finish(
+        workspaceId,
+        entry.id,
+        last
+          ? { status: 'merged', mergedCommitSha: input.commitSha, verified: true }
+          : { status: 'failed', failureReason: 'conflict', detail: 'earlier attempt' },
+      )
+    }
+    return runId
+  }
+
+  it('stamps the merge an abbreviated sha named, and nothing in another repository', async () => {
+    const s = await scaffold(WS)
+    const mine = 'abc1234def5678901234567890123456789012ab'
+    const theirs = 'abc1234def5678901234567890123456789012ab'
+    await addMergedRun(WS, s, { commitSha: mine })
+    await addMergedRun(WS, s, { commitSha: theirs, repositoryId: s.otherRepositoryId })
+
+    const stamped = await queue.markReverted(WS, s.repositoryId, {
+      revertedShas: ['abc1234'],
+      revertedBySha: 'ffff000',
+    })
+    expect(stamped).toHaveLength(1)
+    expect(stamped[0]?.repositoryId).toBe(s.repositoryId)
+    expect(stamped[0]?.revertedBySha).toBe('ffff000')
+
+    // And the second revert of the same branch does not re-date the disagreement.
+    const again = await queue.markReverted(WS, s.repositoryId, {
+      revertedShas: ['abc1234'],
+      revertedBySha: 'eeee111',
+    })
+    expect(again).toEqual([])
+  })
+
+  it('counts a reverted merge once per run, without inflating the arm it is on', async () => {
+    const s = await scaffold(WS)
+    const opened = await variants.openSet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      candidates: [{ markdownSource: 'a', rationale: 'r' }],
+    })
+    const candidate = opened.variants[0]!
+    // Two queue entries on one run: the join this count avoids would double `decided`.
+    const runId = await addMergedRun(WS, s, { commitSha: '1111111aaaa', entries: 2 })
+    await variants.recordVariantUse({
+      workspaceId: WS,
+      setId: opened.set.id,
+      variantId: candidate.id,
+      agentRunId: runId,
+    })
+    await queue.markReverted(WS, s.repositoryId, {
+      revertedShas: ['1111111'],
+      revertedBySha: '9999999',
+    })
+
+    const tallies = await variants.tallyVariantOutcomes(WS, opened.set.id)
+    const arm = tallies.find((tally) => tally.variantId === candidate.id)
+    expect(arm).toMatchObject({ decided: 1, merged: 1, reverted: 1 })
   })
 })

@@ -41,7 +41,7 @@ import {
   type WorkspaceRunControl,
 } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
-import { and, count, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
+import { and, count, desc, eq, gte, ilike, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { Database } from './client.js'
 import {
@@ -160,6 +160,22 @@ const modalFailingCheck = sql<
 const verificationFailedCount = sql<
   number
 >`count(*) filter (where ${runVerification.status} = 'failed')::int`
+
+/**
+ * Runs on this arm whose merged branch a later merge took back out.
+ *
+ * A correlated `exists` rather than a join, deliberately: a run can hold more than one
+ * merge-queue entry — a branch that failed and was re-queued is a second legitimate attempt —
+ * and joining the table in would multiply the rows every other count in these queries is
+ * computed over. `count(distinct … )` over the run id keeps it one run, one revert.
+ *
+ * A tripwire, never a term in the fitness — see `reverted-merges.ts`.
+ */
+const revertedMergeCount = sql<number>`count(distinct case when exists (
+    select 1 from ${mergeQueueEntry}
+    where ${mergeQueueEntry.agentRunId} = ${agentRun.id}
+      and ${mergeQueueEntry.revertedAt} is not null
+  ) then ${agentRun.id} end)::int`
 
 export const runnerRepository = (db: Database): RunnerRepositoryPort => ({
   async findById(workspaceId, id) {
@@ -383,6 +399,38 @@ export const mergeQueueRepository = (db: Database): MergeQueueRepositoryPort => 
       )
       .returning()
     return row ? toMergeQueueEntry(row as MergeQueueEntryRow) : null
+  },
+
+  async markReverted(workspaceId, repositoryId, input) {
+    if (input.revertedShas.length === 0) return []
+    /**
+     * Prefix matching in SQL, in one direction: git abbreviates the sha it writes into a
+     * revert message and never lengthens it, so a stored full sha may *start with* what the
+     * message said. `revertNamesMerge` is the same rule in the domain, and the seven-character
+     * floor is applied there before anything reaches here.
+     */
+    const named = or(
+      ...input.revertedShas.map((sha) => ilike(mergeQueueEntry.mergedCommitSha, `${sha}%`)),
+    )
+    const rows = await db
+      .update(mergeQueueEntry)
+      .set({ revertedAt: new Date(), revertedBySha: input.revertedBySha })
+      .where(
+        and(
+          eq(mergeQueueEntry.workspaceId, workspaceId),
+          eq(mergeQueueEntry.repositoryId, repositoryId),
+          eq(mergeQueueEntry.status, 'merged'),
+          /**
+           * The first revert is the one recorded. A branch reverted, restored and reverted
+           * again is one entry whose disposition was wrong once; overwriting the stamp would
+           * date the disagreement to whichever revert happened last.
+           */
+          isNull(mergeQueueEntry.revertedAt),
+          named,
+        ),
+      )
+      .returning()
+    return rows.map((row) => toMergeQueueEntry(row as MergeQueueEntryRow))
   },
 })
 
@@ -1702,6 +1750,7 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
       .select({
         arm: promptTrialUse.arm,
         decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
+        reverted: revertedMergeCount,
         merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
         discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
         failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
@@ -1725,6 +1774,7 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
       .map((row) => ({
         arm: row.arm as 'revised' | 'previous',
         decided: row.decided,
+        reverted: row.reverted,
         merged: row.merged,
         discarded: row.discarded,
         failed: row.failed,
@@ -2162,6 +2212,7 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
       .select({
         variantId: variantUse.variantId,
         decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
+        reverted: revertedMergeCount,
         merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
         discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
         failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
@@ -2178,6 +2229,7 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
     return rows.map((row) => ({
       variantId: row.variantId === null ? null : asPersonaVariantId(row.variantId),
       decided: row.decided,
+      reverted: row.reverted,
       merged: row.merged,
       discarded: row.discarded,
       failed: row.failed,

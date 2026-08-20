@@ -574,6 +574,13 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
      * What the merge actually changed, from `git diff --name-only`.
      */
     changedPaths: z.array(z.string()).optional(),
+    /**
+     * The commits these merged commits say they revert, from git's own
+     * `This reverts commit …` lines. Optional and ordinarily empty: a merge that takes an
+     * earlier merge back out is the one signal that says a disposition was wrong, and the
+     * server is where it is joined to the arm that earned it.
+     */
+    revertedShas: z.array(z.string()).optional(),
     /** Why verification did not run, when it did not. */
     note: z.string().optional(),
     reason: z

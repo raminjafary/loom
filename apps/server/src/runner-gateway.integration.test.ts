@@ -2506,6 +2506,55 @@ describe('runner-gateway: serialized merge queue', () => {
     socket.close()
   })
 
+  /**
+   * The tripwire's whole path: a Runner reports what a merge took back out, the server finds
+   * the earlier entry the abbreviated sha names, stamps it, and says so in the thread of the
+   * run that produced it — not the run that reverted it.
+   */
+  it('stamps the merge a later one reverted, and tells the run whose branch it was', async () => {
+    const { socket, runnerId } = await pairFakeRunner('merge-revert')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'merge-revert' })
+
+    const kept = await finishRun(socket, created.rootThread.id, repo.id, 'loom/kept-1')
+    await client.mergeQueue.enqueue({ agentRunId: kept.id })
+    const firstSweep = sweep()
+    await answerMerge(socket, {
+      ok: true,
+      commitSha: 'deadbeef1234567890abcdef1234567890abcdef',
+      verified: false,
+    })
+    await firstSweep
+
+    const undoing = await finishRun(socket, created.rootThread.id, repo.id, 'loom/undo-1')
+    await client.mergeQueue.enqueue({ agentRunId: undoing.id })
+    const secondSweep = sweep()
+    await answerMerge(socket, {
+      ok: true,
+      commitSha: 'feed0001234567890abcdef1234567890abcdef0',
+      verified: false,
+      // As git writes it: abbreviated, and the server matches it by prefix.
+      revertedShas: ['deadbeef'],
+    })
+    await secondSweep
+
+    const entries = await client.mergeQueue.list()
+    const stamped = entries.find((entry) => entry.agentRunId === kept.id)
+    expect(stamped?.revertedAt).not.toBeNull()
+    expect(stamped?.revertedBySha).toBe('feed0001234567890abcdef1234567890abcdef0')
+    // The reverting merge is not itself marked — it is the one that did the reverting.
+    expect(entries.find((entry) => entry.agentRunId === undoing.id)?.revertedAt).toBeNull()
+
+    const { messages } = await client.message.list({ threadId: created.rootThread.id })
+    const bodies = messages.map((message) => message.body.text)
+    expect(bodies.join(' | ')).toContain('loom/kept-1 was merged and has now been reverted')
+    expect(bodies.join(' | ')).toContain('feed0001')
+    // Nothing is re-scored for a revert: the branch keeps the disposition it was given.
+    expect((await client.agentRun.get({ agentRunId: kept.id })).branchDisposition).toBe('merged')
+
+    socket.close()
+  })
+
   it('merges in queue order, one at a time, never two branches at once', async () => {
     const { socket, runnerId } = await pairFakeRunner('merge-order')
     const repo = await bindViaFakeRunner(socket, runnerId)

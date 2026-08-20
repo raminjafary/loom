@@ -46,6 +46,7 @@ const tally = (
   variantId,
   decided: MIN_DECIDED_RUNS_PER_ARM,
   merged: 0,
+  reverted: 0,
   discarded: 0,
   failed: 0,
   costUsdTotal: MIN_DECIDED_RUNS_PER_ARM * 0.1,

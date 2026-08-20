@@ -36,6 +36,8 @@ const entry = (
   detail: null,
   mergedCommitSha: null,
   verified: false,
+  revertedAt: null,
+  revertedBySha: null,
   enqueuedByUserId: 'user-1',
   createdAt: new Date('2026-01-01T00:00:00Z'),
   startedAt: null,

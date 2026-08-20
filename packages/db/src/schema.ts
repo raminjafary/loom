@@ -386,6 +386,24 @@ export const mergeQueueEntry = pgTable(
     failureReason: text('failure_reason'),
     detail: text('detail'),
     mergedCommitSha: text('merged_commit_sha'),
+    /**
+     * When a later merge took this one back out, and the commit that did it.
+     *
+     * Written by the queue itself: a merge whose commits carry git's own
+     * `This reverts commit …` line names earlier merges, and those rows are stamped here.
+     * It is the only signal the platform has that a *disposition* was wrong — fitness is a
+     * human merging, and a revert is the same human's later disagreement with themselves.
+     *
+     * A **tripwire and never a term in the fitness**: nothing scores an arm down for it. A
+     * trial's sentence reports it beside the merge rate, because an arm that got more merged
+     * and had more of it reverted may be measuring what was easy to approve.
+     *
+     * Only reverts that arrive through the queue are seen. One a human commits straight into
+     * the repository is invisible here, and the queue does not poll for it — an under-counting
+     * tripwire is the safe direction, since the alternative is accusing a reviewer on a guess.
+     */
+    revertedAt: timestamp('reverted_at', { withTimezone: true }),
+    revertedBySha: text('reverted_by_sha'),
     // Whether a verification command actually ran and passed — not whether one was
     // configured. A repository with no command merges unverified, and this says so.
     verified: boolean('verified').notNull().default(false),

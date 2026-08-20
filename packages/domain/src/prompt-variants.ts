@@ -50,6 +50,7 @@ import {
   type VerificationTally,
 } from './expertise-trial.js'
 import type { PersonaVariantId } from './ids.js'
+import { describeRevertedMerges } from './reverted-merges.js'
 import {
   revisePromptBody,
   type SelfEditVerdict,
@@ -247,6 +248,8 @@ export interface VariantArmTally extends VerificationTally {
   readonly variantId: PersonaVariantId | null
   readonly decided: number
   readonly merged: number
+  /** Merged branches on this arm a later merge took back out. Reported, never scored. */
+  readonly reverted: number
   readonly discarded: number
   readonly failed: number
   readonly costUsdTotal: number
@@ -288,6 +291,7 @@ const EMPTY = (variantId: PersonaVariantId | null): VariantArmTally => ({
   variantId,
   decided: 0,
   merged: 0,
+  reverted: 0,
   discarded: 0,
   failed: 0,
   costUsdTotal: 0,
@@ -352,10 +356,24 @@ export const summarizeVariantSearch = (
   const undecided = arms.filter((arm) => arm.decided < MIN_DECIDED_RUNS_PER_ARM).length
 
   const asPercent = (rate: number) => `${Math.round(rate * 100)}%`
-  const verification = describeVerificationFailures(
-    { label: 'the candidates', ...aggregate(candidates) },
-    { label: 'the prompt in use', ...incumbentTally },
-  )
+  const verification =
+    describeVerificationFailures(
+      { label: 'the candidates', ...aggregate(candidates) },
+      { label: 'the prompt in use', ...incumbentTally },
+    ) +
+    // See `describeRevertedMerges`: reported beside the merge rate, never scored against an arm.
+    describeRevertedMerges(
+      {
+        label: 'the candidates',
+        reverted: candidates.reduce((sum, arm) => sum + arm.reverted, 0),
+        merged: candidates.reduce((sum, arm) => sum + arm.merged, 0),
+      },
+      {
+        label: 'the prompt in use',
+        reverted: incumbentTally.reverted,
+        merged: incumbentTally.merged,
+      },
+    )
 
   if (undecided > 0) {
     return {

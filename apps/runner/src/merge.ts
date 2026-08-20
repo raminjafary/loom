@@ -1,5 +1,6 @@
 import {
   describeVerification,
+  parseRevertedShas,
   planVerification,
   summarizeVerification,
   type MergeFailureReason,
@@ -39,6 +40,14 @@ export type MergeOutcome =
        * ones.
        */
       readonly changedPaths: string[]
+      /**
+       * The commits these merged commits say they revert, from their own messages.
+       *
+       * Read here because this is the one moment the branch's contribution is exactly
+       * `targetTipBefore..HEAD` — the same reason `changedPaths` is computed here — and
+       * because the server has no git. Empty is the ordinary answer.
+       */
+      readonly revertedShas: string[]
       /** Why verification did not run, when it did not. Recorded, never implied. */
       readonly note?: string
     }
@@ -172,6 +181,21 @@ export const mergeRunBranch = async (input: MergeRunBranchInput): Promise<MergeO
     // pass, which is strictly better than a merge reported as failed.
   }
 
+  /**
+   * What this branch takes back out, from git's own `This reverts commit …` lines.
+   *
+   * Best-effort like `changedPaths`, and for the same reason: a merge that succeeded must
+   * not be reported as failed because a log could not be read. The cost of an empty list is
+   * a tripwire that misses one revert, which is the direction that tripwire errs in anyway.
+   */
+  let revertedShas: string[] = []
+  try {
+    const messages = await git(clonePath, ['log', '--format=%B%x00', `${targetTipBefore}..HEAD`])
+    revertedShas = parseRevertedShas(messages.split('\0'))
+  } catch {
+    // See above.
+  }
+
   let verified = false
   let note: string | undefined
   if (plan.kind === 'run') {
@@ -251,6 +275,7 @@ export const mergeRunBranch = async (input: MergeRunBranchInput): Promise<MergeO
     commitSha: rebasedSha,
     verified,
     changedPaths,
+    revertedShas,
     ...(note === undefined ? {} : { note }),
   }
 }
