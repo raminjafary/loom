@@ -46,6 +46,7 @@ import {
   isPricedModel,
   isMergeQueueEntryTerminal,
   isRiskyTool,
+  maySelfModify,
   isTerminalRunStatus,
   validateMessageText,
   MAX_NOTE_BODY_LENGTH,
@@ -1393,11 +1394,13 @@ const PROPOSER_PERSONA_NAME = 'variant-proposer'
  * live run, because none of that happened in its context. This assembles that record and
  * spends a separate session on it.
  *
- * **It refuses rather than starting, in four cases, and every one of them is a session
- * saved.** No proposer persona to run as; the subject is the proposer itself; a measurement
- * already open, which is what `proposeVariantSet` would refuse the submission with an hour
- * later; and — the one the domain owns — no record to generate from, where a proposer would
- * know exactly what the run being edited knows.
+ * **It refuses rather than starting, in five cases, and every one of them is a session
+ * saved.** No proposer persona to run as; the subject is the proposer itself; a subject with
+ * no self-modification envelope, whose prompt nothing may rewrite; a measurement already
+ * open; and — the one the domain owns — no record to generate from, where a proposer would
+ * know exactly what the run being edited knows. The middle three are all states in which
+ * `proposeVariantSet` would refuse the submission an hour later, for the same reason, after
+ * the session had been paid for.
  *
  * Nothing here is best-effort, which is the difference from `startVariantVerifier`. A verifier
  * is a second opinion the platform adds to a search that is already open, so a failure there
@@ -1445,6 +1448,29 @@ export const startVariantProposer = async (
     subjectPersonaName: persona.name,
   })
   if (!eligible.ok) return { ok: false, reason: eligible.reason }
+
+  /**
+   * The ceiling, read from the persona under revision rather than from the session doing the
+   * writing — the proposer's own envelope is irrelevant, since it is not the thing being
+   * edited.
+   *
+   * A candidate for a persona with no envelope is refused by `revisePromptBody` when it
+   * arrives, so this changes no outcome. It changes what it costs: without it a human clicks
+   * a button, a session reads the repository and writes three prompts, and every one of them
+   * is refused at the door for a reason that was knowable before it started. An absent
+   * envelope is no permission rather than an unlimited one, and a proposer must not be the
+   * way around it.
+   */
+  const subject = parsePersonaMarkdown(persona.markdownSource)
+  if (!maySelfModify(subject.envelope)) {
+    return {
+      ok: false,
+      reason:
+        `"${persona.name}" has no self-modification envelope, so nothing may rewrite its ` +
+        'prompt — a candidate for it would be refused when it was submitted. A human sets a ' +
+        'ceiling first, and then a proposer has something it can propose inside.',
+    }
+  }
 
   /**
    * Checked here as well as at submission, and it is not a duplicate: this is what stops a
@@ -1510,7 +1536,7 @@ export const startVariantProposer = async (
 
   const assembled = proposerBrief({
     personaName: persona.name,
-    currentBody: parsePersonaMarkdown(persona.markdownSource).systemPrompt,
+    currentBody: subject.systemPrompt,
     losingArms,
     refusedCandidates,
     archivedBodies: superseded.map((entry) => entry.body),

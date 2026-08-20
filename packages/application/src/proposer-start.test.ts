@@ -16,22 +16,27 @@ const WS = asWorkspaceId('ws_1')
 const SUBJECT = asAgentPersonaId('p_subject')
 const REPO = asRepositoryId('repo_1')
 
+/** With an envelope: a persona a human has never let rewrite itself gets no candidates. */
 const PERSONA_MARKDOWN = `---
 name: swe
 description: A worker.
 model: claude-haiku-4-5-20251001
+envelope:
+  tools: [Read]
 ---
 
 The prompt in use.
 `
 
+const NO_ENVELOPE_MARKDOWN = PERSONA_MARKDOWN.replace('envelope:\n  tools: [Read]\n', '')
+
 const VARIANT_MARKDOWN = PERSONA_MARKDOWN.replace('The prompt in use.', 'A candidate that lost.')
 
-const persona = (name: string, id = SUBJECT) => ({
+const persona = (name: string, id = SUBJECT, markdownSource = PERSONA_MARKDOWN) => ({
   id,
   name,
   description: 'A worker.',
-  markdownSource: PERSONA_MARKDOWN,
+  markdownSource,
 })
 
 const harness = (options: {
@@ -41,8 +46,13 @@ const harness = (options: {
   searchOpen?: boolean
   losingArms?: number
   refusals?: number
+  envelope?: false
 }) => {
-  const subject = persona(options.subjectName ?? 'swe')
+  const subject = persona(
+    options.subjectName ?? 'swe',
+    SUBJECT,
+    options.envelope === false ? NO_ENVELOPE_MARKDOWN : PERSONA_MARKDOWN,
+  )
   const listLosingArms = vi.fn(async () => ({
     arms: Array.from({ length: options.losingArms ?? 0 }, (_, index) => ({
       variantId: `variant_${index}`,
@@ -157,6 +167,16 @@ describe('startVariantProposer', () => {
    * Both storage answers to "is something being measured", because a session spent writing
    * candidates the validator refuses on arrival is the expensive way to learn this.
    */
+  /**
+   * The ceiling, read from the persona under revision. The validator refuses such a candidate
+   * when it arrives anyway, so what this saves is the session — and a proposer must not be
+   * the way around an off switch a human left off.
+   */
+  it('refuses to propose for a persona a human never let rewrite itself', async () => {
+    const { deps } = harness({ envelope: false, losingArms: 1 })
+    expect(await refusal(deps)).toContain('no self-modification envelope')
+  })
+
   it('refuses while a variant search is open', async () => {
     const { deps } = harness({ searchOpen: true, losingArms: 1 })
     expect(await refusal(deps)).toContain('already running')
