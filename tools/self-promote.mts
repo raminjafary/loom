@@ -34,6 +34,23 @@
  *
  * Nothing here is destructive without the gate agreeing: a refused promotion leaves the built
  * revision on disk (it is the next attempt's starting point) and the pointer untouched.
+ *
+ * ## There is no agent-initiated promotion, and that is the decision rather than the backlog
+ *
+ * An agent can already change Loom's source: it is handed a clone of this repository like any
+ * other, its branch goes through the merge queue, and the result is a commit. What it cannot do
+ * is make that commit the code that serves — a human runs this script.
+ *
+ * That is the same line `promoteVariant` draws for prompts, and it draws harder here. The
+ * self-improvement loop takes no authority a run did not already have: it ranks, and every write
+ * it makes is one a run could have made inside its envelope. Promoting is different in kind,
+ * because it takes an artifact no human has read and makes it what everything does next — and at
+ * tier 3 the artifact is the platform, including the envelope, the approval gate and this gate.
+ * A run that could promote could promote a revision in which none of those exist.
+ *
+ * So the missing piece is not a tool. It is a *request*: a run that has merged something says it
+ * would like the platform rebuilt, and a human runs the promoter. That is what the merge queue
+ * and this script already amount to, which is why nothing further is built here.
  */
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'

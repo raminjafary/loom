@@ -104,6 +104,7 @@ nine cents.
 | ♻️ | **Self-editing inside a ceiling** | An envelope bounds what a persona may become; edits go on trial against what they replaced, judged by outcomes rather than by a model's opinion |
 | 🎯 | **A held-out screen before a candidate costs anything** | A proposed prompt is replayed against past decided work at the commit each run opened at. One that does worse than the prompt in use is refused an arm, so no live run is spent on it |
 | 🪞 | **Candidates from a session that is not the run being edited** | A separate read-only proposer is shown which arms lost and which candidates the screen refused, and submits through the same validator a self-edit uses — a run grading its own transcript writes the prompt that flatters its own last hour |
+| ⬆️ | **It can replace itself, and has to prove the replacement** | A revision of Loom's own source is built in a worktree with a frozen lockfile, started on a port of its own until `/healthz` says the schema it expects is the schema the database has, and checked against what the running revision could do. Only then does a pointer move — and a rollback is the same pointer moving back |
 | ⏮️ | **A rehearsed rollback** | A scripted drill promotes a knowingly-broken change to Loom's own source and recovers from it — with the recovery running from a checkout pinned before the change, so the broken code cannot take part in its own repair |
 | 🖼️ | **Two canvases** | Design a team on a canvas that will not draw an edge the runtime would refuse, and watch a live graph of what each run is doing now |
 | ⚡ | **Warm dependency trees** | Optional: runs open with `node_modules` already in place instead of spending a model turn installing |
@@ -397,6 +398,8 @@ Two things that otherwise cost you a pass:
 | `WS_SUBSCRIPTION_SECRET` | — | Shared by the server and the realtime gateway: the server signs a short-lived subscription token, the gateway verifies it. It is the whole authentication of `/ws/client`, so both refuse to start without a real one |
 | `LOOM_SANDBOX_ENABLED` | on | Container isolation per run. Needs `LOOM_EGRESS_CONTROL_SECRET` set, or runs are refused rather than sandboxed |
 | `LOOM_ALLOW_UNSANDBOXED` | unset | The acknowledgement that lets a run hold the Runner's privileges |
+| `LOOM_SELF_PROMOTION` | unset | Whether `tools/self-promote.mts` may make a revision of Loom's own source the one that serves. Off is a real off switch rather than an unset value, and a rollback is deliberately *not* gated on it — a deployment that turned promotion off while a bad revision was serving must not have disabled its own way out |
+| `LOOM_REVISIONS_ROOT` | `~/.loom/revisions` | Where built revisions and the running-revision pointer live. Outside the repository on purpose: a store inside the tree being replaced is one `git clean -fd` deletes during the recovery it exists to serve |
 | `LOOM_USE_HOST_CLAUDE_AUTH` | off | Lets the Runner read the host's Claude OAuth token and push it to the proxy |
 | `LOOM_ALLOWED_ROOTS` | — | Parent directories a repository may be bound from |
 | `LOOM_DEP_CACHE_ENABLED` | off | Shared package-manager cache; a warmed repository also captures a **prepared tree**, so runs open with `node_modules` already in place |
@@ -418,7 +421,6 @@ each one exists because the next depends on it.
 
 | | |
 |---|---|
-| **Self-modification over Loom's own source** | Tiers 3 and 4 — code and dependencies — build-and-promote with a health-checked swap and a retained previous revision. The rollback drill that gated them now passes (Phase 3b) |
 | **Model routing** | A definition-of-done failure retries once at a higher tier, then a `(task class, model)` table read from runs already happening. The largest single cost lever in the system |
 | **Other execution backends** | Codex, vLLM and Cursor adapters — the port is enforced today, but nothing else has been driven through it (Phase 3) |
 | **microVM isolation** | Containers alone are insufficient; Kata or microsandbox is the boundary (Phase 3) |
