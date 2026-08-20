@@ -2103,6 +2103,17 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
           createdAt: personaVariantSet.createdAt,
           decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
           kept: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+          /**
+           * The models this arm was actually run on, from each run's own persona snapshot.
+           *
+           * From the snapshot rather than `agent_persona.model` for the reason the arm's
+           * prompt body is stored on the candidate: the persona row is what a human may
+           * have edited since, and a proposer is being handed a score, which belongs to a
+           * `(document, model)` pair. Empty for an arm nothing was ever dealt.
+           */
+          models: sql<
+            string[] | null
+          >`array_remove(array_agg(distinct ${agentRun.persona} ->> 'model'), null)`,
         })
         .from(personaVariant)
         .innerJoin(personaVariantSet, eq(personaVariantSet.id, personaVariant.setId))
@@ -2139,6 +2150,7 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
         rationale: row.rationale,
         decided: row.decided,
         kept: row.kept,
+        models: [...(row.models ?? [])].sort(),
         settledAt: row.settledAt ?? row.createdAt,
       })),
       total: counted?.total ?? 0,

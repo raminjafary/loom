@@ -61,6 +61,7 @@ const screenRun = (
     claimedAt: Date | null
     agentRunId: ReturnType<typeof asAgentRunId> | null
     outcome: ScreenRunOutcome
+    model: string | null
   }> = {},
 ) => ({
   id: `${screenId}-${itemIndex}`,
@@ -70,6 +71,7 @@ const screenRun = (
   agentRunId: null,
   outcome: 'pending' as ScreenRunOutcome,
   reason: null,
+  model: null as string | null,
   finishedAt: null,
   ...overrides,
 })
@@ -97,7 +99,7 @@ const run = (overrides: Partial<AgentRun> = {}): AgentRun =>
     threadId: 'thread_1',
     repositoryId: asRepositoryId('repo_1'),
     status: 'completed',
-    persona: { name: 'swe' },
+    persona: { name: 'swe', model: 'claude-haiku-4-5-20251001' },
     ...overrides,
   }) as unknown as AgentRun
 
@@ -273,9 +275,13 @@ describe('advanceScreenQueue: what stops a screen wedging', () => {
 })
 
 describe('advanceScreenQueue: deciding', () => {
-  const scored = (screenId: string, outcomes: readonly ReplayCheckOutcome[]) =>
+  const scored = (
+    screenId: string,
+    outcomes: readonly ReplayCheckOutcome[],
+    model: string | null = 'claude-haiku-4-5-20251001',
+  ) =>
     outcomes.map((outcome, index) =>
-      screenRun(screenId, index, { outcome, agentRunId: asAgentRunId(`r${index}`) }),
+      screenRun(screenId, index, { outcome, model, agentRunId: asAgentRunId(`r${index}`) }),
     )
 
   it('decides a candidate against the incumbent screened on the same items', async () => {
@@ -288,6 +294,44 @@ describe('advanceScreenQueue: deciding', () => {
     await advanceScreenQueue(deps, { screenStuckMs: 3_600_000, maxStartsPerTick: 4 })
     expect(decideScreen).toHaveBeenCalledTimes(1)
     expect(callsOf(decideScreen)[0]?.[2]).toMatchObject({ decision: 'rejected' })
+  })
+
+  it('stamps the score with the model off the run\'s own snapshot', async () => {
+    const { deps, recordScreenRunOutcome } = harness({
+      screens: [
+        {
+          screen: screen('s_inc', null),
+          runs: [screenRun('s_inc', 0, { agentRunId: asAgentRunId('r0'), claimedAt: new Date(0) })],
+        },
+      ],
+    })
+    await advanceScreenQueue(deps, { screenStuckMs: 60_000, maxStartsPerTick: 4 })
+    expect(callsOf(recordScreenRunOutcome)[0]?.[2]).toMatchObject({
+      outcome: 'passed',
+      model: 'claude-haiku-4-5-20251001',
+    })
+  })
+
+  it('does not refuse a candidate that a cheaper model, not a worse prompt, lost with', async () => {
+    // Routing cannot do this to a screen any more, but a human editing the persona between
+    // two arms still can, and the gate must not read a price tier as a verdict on a prompt.
+    const { deps, decideScreen } = harness({
+      screens: [
+        {
+          screen: screen('s_inc', null),
+          runs: scored('s_inc', ['passed', 'passed', 'passed', 'passed'], 'claude-opus-5'),
+        },
+        {
+          screen: screen('s_cand', CANDIDATE),
+          runs: scored('s_cand', ['failed', 'failed', 'failed', 'failed'], 'claude-haiku-4-5-20251001'),
+        },
+      ],
+    })
+    await advanceScreenQueue(deps, { screenStuckMs: 3_600_000, maxStartsPerTick: 4 })
+    expect(callsOf(decideScreen)[0]?.[2]).toMatchObject({
+      decision: 'admitted',
+      reason: expect.stringContaining('difference of model'),
+    })
   })
 
   it('does not decide anything until the incumbent has finished', async () => {

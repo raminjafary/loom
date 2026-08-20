@@ -65,6 +65,16 @@ export interface LosingArm {
   /** Decided runs on this arm, and how many of them the fitness kept. */
   readonly decided: number
   readonly kept: number
+  /**
+   * The models this arm's decided runs actually ran on, distinct and sorted.
+   *
+   * A proposer is being handed a *score*, and a score belongs to a `(document, model)` pair:
+   * "kept 1 of 5" on Haiku and the same figure on Opus are different facts about the same
+   * body, and a proposer told only the figure will rewrite a prompt to fix what was a price
+   * tier. Empty when nothing was ever dealt to the arm — the most useful kind of loss, and
+   * the one with no model to name.
+   */
+  readonly models: readonly string[]
   readonly settledAt: Date
 }
 
@@ -81,6 +91,8 @@ export interface RefusedCandidate {
    * against items that have since changed.
    */
   readonly reason: string
+  /** The models the screening runs behind that sentence ran on. See `LosingArm.models`. */
+  readonly models: readonly string[]
   readonly refusedAt: Date
 }
 
@@ -97,6 +109,7 @@ export interface LosingArmRecord {
   readonly rationale: string
   readonly decided: number
   readonly kept: number
+  readonly models: readonly string[]
   readonly settledAt: Date
 }
 
@@ -106,6 +119,7 @@ export interface RefusedCandidateRecord {
   readonly markdownSource: string
   readonly rationale: string
   readonly reason: string
+  readonly models: readonly string[]
   readonly refusedAt: Date
 }
 
@@ -170,9 +184,19 @@ const clamp = (text: string): string =>
 
 const quoted = (text: string): string => neutralize(clamp(text)).trim()
 
+/**
+ * `on claude-opus-5`, or nothing at all.
+ *
+ * Nothing rather than "on an unknown model", because a brief is prompt text: a proposer told
+ * "unknown" will reason about the unknown, and a score with no model recorded is simply a
+ * score, which is what every score was before the stamp existed.
+ */
+const onModels = (models: readonly string[]): string =>
+  models.length === 0 ? '' : ` on ${models.join(' and ')}`
+
 const armLine = (arm: LosingArm, index: number): string =>
   [
-    `${index + 1}. Measured and not kept. ${arm.kept} of ${arm.decided} decided ` +
+    `${index + 1}. Measured${onModels(arm.models)} and not kept. ${arm.kept} of ${arm.decided} decided ` +
       `${arm.decided === 1 ? 'run' : 'runs'} kept.`,
     `   Proposed as: ${quoted(arm.rationale) || '(no rationale given)'}`,
     `   Prompt body:`,
@@ -184,7 +208,7 @@ const armLine = (arm: LosingArm, index: number): string =>
 
 const refusalLine = (candidate: RefusedCandidate, index: number): string =>
   [
-    `${index + 1}. ${quoted(candidate.reason)}`,
+    `${index + 1}. Screened${onModels(candidate.models)}. ${quoted(candidate.reason)}`,
     `   Proposed as: ${quoted(candidate.rationale) || '(no rationale given)'}`,
     `   Prompt body:`,
     quoted(candidate.body)

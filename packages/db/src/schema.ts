@@ -1993,6 +1993,23 @@ export const variantScreenRun = pgTable(
     outcome: text('outcome').notNull().default('pending'),
     /** Why it was not scored, when it was not. Recorded, never implied — the habit. */
     reason: text('reason'),
+    /**
+     * The model that answered this item, stamped from the **run's own persona snapshot**
+     * when its outcome was recorded.
+     *
+     * A pass rate is evidence about a `(document, model)` pair, and routing makes that
+     * concrete: without this column, a table that moves one arm to a cheaper model turns
+     * every score in the rejected-edit buffer into a number nothing can be compared across.
+     * `screenGate` reads the distinct models per arm and abstains rather than comparing two.
+     *
+     * From the snapshot and not from `agent_persona.model` on purpose — the persona row can
+     * be edited between the run and the reading, and this has to say what ran.
+     *
+     * Nullable, and null means nobody ran it: a pending row, or one written off before a run
+     * existed. Rows from before this column are null for the same reason and read the same
+     * way, which is why an unknown model does not abstain the gate.
+     */
+    model: text('model'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
   },

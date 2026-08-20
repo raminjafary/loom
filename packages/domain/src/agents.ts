@@ -352,6 +352,15 @@ export interface VariantScreenRunRecord {
   readonly agentRunId: AgentRunId | null
   readonly outcome: ScreenRunOutcome
   readonly reason: string | null
+  /**
+   * The model that produced this item's answer, read off the run's own snapshot when its
+   * outcome was recorded — never from the persona row, which may since have been edited.
+   *
+   * Null while the run is pending, and on a row written off before a run existed. Null is
+   * therefore "nobody ran this", never "we did not bother to look", which is what lets
+   * `screenGate` tell an unknown model apart from a differing one.
+   */
+  readonly model: string | null
   readonly finishedAt: Date | null
 }
 

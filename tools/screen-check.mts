@@ -248,22 +248,30 @@ const main = async () => {
    */
   const incumbent = screens.find((entry) => entry.screen.variantId === null)!
   const candidates = screens.filter((entry) => entry.screen.variantId !== null)
+  /**
+   * One model across every arm, because that is what the gate requires to compare them at
+   * all — a screen whose arms ran on two models abstains rather than refusing anything.
+   */
+  const screenedOn = 'claude-sonnet-5'
   for (const entry of incumbent.runs) {
     await app.deps.screens.recordScreenRunOutcome(workspaceId, entry.id, {
       outcome: 'passed',
       reason: null,
+      model: screenedOn,
     })
   }
   for (const entry of candidates[0]!.runs) {
     await app.deps.screens.recordScreenRunOutcome(workspaceId, entry.id, {
       outcome: 'failed',
       reason: null,
+      model: screenedOn,
     })
   }
   for (const entry of candidates[1]!.runs) {
     await app.deps.screens.recordScreenRunOutcome(workspaceId, entry.id, {
       outcome: 'passed',
       reason: null,
+      model: screenedOn,
     })
   }
   await advanceScreenQueue(app.deps, { screenStuckMs: 3_600_000, maxStartsPerTick: 0 })
@@ -277,6 +285,16 @@ const main = async () => {
     'and the rejection names the numbers a proposer could act on',
     /\d+ of \d+/.test(rejected?.screen.reason ?? ''),
     rejected?.screen.reason ?? '',
+  )
+  check(
+    'the rejection files the score against the model that produced it',
+    (rejected?.screen.reason ?? '').includes(`Both arms ran on ${screenedOn}`),
+    rejected?.screen.reason ?? '',
+  )
+  check(
+    'and the model is on the rows the buffer is read from, not only in the sentence',
+    (rejected?.runs ?? []).length > 0 && (rejected?.runs ?? []).every((entry) => entry.model === screenedOn),
+    (rejected?.runs ?? []).map((entry) => entry.model ?? 'null').join(','),
   )
   check(
     'the incumbent is not gated — it is what the gate compares to',

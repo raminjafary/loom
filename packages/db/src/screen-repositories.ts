@@ -112,6 +112,7 @@ const toScreenRun = (row: {
   agentRunId: string | null
   outcome: string
   reason: string | null
+  model: string | null
   finishedAt: Date | null
 }): VariantScreenRunRecord => ({
   id: row.id,
@@ -121,6 +122,7 @@ const toScreenRun = (row: {
   agentRunId: row.agentRunId === null ? null : asAgentRunId(row.agentRunId),
   outcome: row.outcome as ScreenRunOutcome,
   reason: row.reason,
+  model: row.model,
   finishedAt: row.finishedAt,
 })
 
@@ -379,7 +381,17 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
   async recordScreenRunOutcome(workspaceId, screenRunId, input) {
     await db
       .update(variantScreenRun)
-      .set({ outcome: input.outcome, reason: input.reason, finishedAt: new Date() })
+      .set({
+        outcome: input.outcome,
+        reason: input.reason,
+        /**
+         * Written beside the outcome in one statement, because a score and the model that
+         * produced it are one fact — two statements could leave a row that says a prompt
+         * failed and nothing about what ran it.
+         */
+        model: input.model,
+        finishedAt: new Date(),
+      })
       .where(
         and(
           eq(variantScreenRun.workspaceId, workspaceId),
@@ -423,10 +435,27 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
           reason: variantScreen.reason,
           decidedAt: variantScreen.decidedAt,
           createdAt: variantScreen.createdAt,
+          /**
+           * The models the screening runs behind that sentence ran on. Aggregated here
+           * rather than joined out and reduced in the use case, because the interesting
+           * answer is "one" and the query can say that in one round trip.
+           */
+          models: sql<
+            string[] | null
+          >`array_remove(array_agg(distinct ${variantScreenRun.model}), null)`,
         })
         .from(variantScreen)
         .innerJoin(personaVariant, eq(personaVariant.id, variantScreen.variantId))
+        .leftJoin(variantScreenRun, eq(variantScreenRun.screenId, variantScreen.id))
         .where(where)
+        .groupBy(
+          personaVariant.id,
+          personaVariant.markdownSource,
+          personaVariant.rationale,
+          variantScreen.reason,
+          variantScreen.decidedAt,
+          variantScreen.createdAt,
+        )
         .orderBy(desc(variantScreen.decidedAt))
         .limit(limit),
       db
@@ -447,6 +476,7 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
          * the fallback is here rather than a non-null assertion.
          */
         reason: row.reason ?? '',
+        models: [...(row.models ?? [])].sort(),
         refusedAt: row.decidedAt ?? row.createdAt,
       })),
       total: counted?.total ?? 0,

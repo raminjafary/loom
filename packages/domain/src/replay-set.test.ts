@@ -31,8 +31,12 @@ const run = (overrides: Partial<DecidedRunRecord> & { runId: string }): DecidedR
   ...overrides,
 })
 
-const tally = (variantId: string | null, outcomes: readonly ReplayCheckOutcome[]) =>
-  tallyScreenScore({ variantId, outcomes })
+/** Both arms on one model unless a test says otherwise — the ordinary case. */
+const tally = (
+  variantId: string | null,
+  outcomes: readonly ReplayCheckOutcome[],
+  models: readonly (string | null)[] = ['claude-sonnet-5'],
+) => tallyScreenScore({ variantId, outcomes, models })
 
 /** A set of `count` items, all of one observed outcome — the gate reads only the mix. */
 const mixOf = (count: number, outcome: ReplayOutcome = 'merged'): ReplayOutcome[] =>
@@ -325,6 +329,62 @@ describe('screenGate', () => {
       ].map((verdict) => verdict.decision),
     )
     expect([...decisions].sort()).toEqual(['admitted', 'rejected'])
+  })
+})
+
+describe('the model a score belongs to', () => {
+  const items = MAX_REPLAY_ITEMS
+  const passes = (n: number, of: number): ReplayCheckOutcome[] => [
+    ...Array.from({ length: n }, () => 'passed' as const),
+    ...Array.from({ length: of - n }, () => 'failed' as const),
+  ]
+
+  it('reduces the observed models to the distinct ones, dropping what never ran', () => {
+    const result = tally('v1', ['passed', 'failed', 'not-scored'], [
+      'claude-haiku-4-5-20251001',
+      'claude-haiku-4-5-20251001',
+      null,
+    ])
+    expect(result.models).toEqual(['claude-haiku-4-5-20251001'])
+  })
+
+  it('does not refuse a candidate that was beaten by a model rather than by a prompt', () => {
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(2, 6), ['claude-haiku-4-5-20251001']),
+      incumbent: tally(null, passes(6, 6), ['claude-opus-5']),
+    })
+    expect(verdict.decision).toBe('admitted')
+    expect(verdict.reason).toContain('difference of model as much as of prompt')
+  })
+
+  it('abstains when one arm\'s own items were answered by two models', () => {
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(2, 6), ['claude-haiku-4-5-20251001', 'claude-opus-5']),
+      incumbent: tally(null, passes(6, 6), ['claude-opus-5']),
+    })
+    expect(verdict.decision).toBe('admitted')
+    expect(verdict.reason).toContain('mixes models')
+  })
+
+  it('gates as usual when nothing is known about what ran — silence is not disagreement', () => {
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(2, 6), [null, null]),
+      incumbent: tally(null, passes(6, 6), [null]),
+    })
+    expect(verdict.decision).toBe('rejected')
+  })
+
+  it('names the model in a verdict both arms shared, so a score can be filed against it', () => {
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(2, 6), ['claude-opus-5']),
+      incumbent: tally(null, passes(6, 6), ['claude-opus-5']),
+    })
+    expect(verdict.decision).toBe('rejected')
+    expect(verdict.reason).toContain('Both arms ran on claude-opus-5')
   })
 })
 

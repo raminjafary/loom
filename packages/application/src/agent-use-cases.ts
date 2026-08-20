@@ -1618,6 +1618,7 @@ export const startVariantProposer = async (
             rationale: arm.rationale,
             decided: arm.decided,
             kept: arm.kept,
+            models: arm.models,
             settledAt: arm.settledAt,
           },
         ]
@@ -1632,6 +1633,7 @@ export const startVariantProposer = async (
             body,
             rationale: candidate.rationale,
             reason: candidate.reason,
+            models: candidate.models,
             refusedAt: candidate.refusedAt,
           },
         ]
@@ -1795,6 +1797,8 @@ const advanceScreensForSet = async (
       if (tooOld || persona === null || proposingRun === null) {
         await deps.screens.recordScreenRunOutcome(workspaceId, screenRun.id, {
           outcome: 'not-scored',
+          // No run answered this item, so there is no model to stamp. Null says exactly that.
+          model: null,
           reason: tooOld
             ? `the screening run did not finish within ${Math.round(options.screenStuckMs / 60_000)} min`
             : persona === null
@@ -1874,21 +1878,33 @@ const resolveScreenRunOutcome = async (
   deps: AgentDeps,
   workspaceId: WorkspaceId,
   agentRunId: AgentRunId,
-): Promise<{ outcome: ReplayCheckOutcome; reason: string | null } | null> => {
+): Promise<{
+  outcome: ReplayCheckOutcome
+  reason: string | null
+  /** What ran it, from its own snapshot. Null when the run is gone and cannot be asked. */
+  model: string | null
+} | null> => {
   const run = await deps.agentRuns.findById(workspaceId, agentRunId)
   if (!run) {
-    return { outcome: 'not-scored', reason: 'the screening run is gone' }
+    return { outcome: 'not-scored', reason: 'the screening run is gone', model: null }
   }
   if (run.status !== 'completed' && run.status !== 'failed' && run.status !== 'cancelled') {
     return null
   }
   const [verification] = await deps.runVerifications.listByRuns(workspaceId, [agentRunId])
   if (verification && verification.status === 'pending') return null
-  return screenOutcomeFor({
-    runStatus: run.status,
-    verificationStatus:
-      verification && verification.status !== 'pending' ? verification.status : null,
-  })
+  return {
+    ...screenOutcomeFor({
+      runStatus: run.status,
+      verificationStatus:
+        verification && verification.status !== 'pending' ? verification.status : null,
+    }),
+    /**
+     * The run's own snapshot, never the persona row: the row can be edited between the
+     * screening run and this reading, and the score belongs to whatever actually answered.
+     */
+    model: run.persona.model,
+  }
 }
 
 /**
@@ -1910,13 +1926,19 @@ const decideScreens = async (
   const screens = await deps.screens.screensForSet(workspaceId, setId)
   const complete = (runs: readonly VariantScreenRunRecord[]) =>
     runs.length > 0 && runs.every((run) => run.outcome !== 'pending')
-  const tallyOf = (runs: readonly VariantScreenRunRecord[]) =>
-    tallyScreenScore({
+  const tallyOf = (runs: readonly VariantScreenRunRecord[]) => {
+    const reported = runs.filter((run) => run.outcome !== 'pending')
+    return tallyScreenScore({
       variantId: null,
-      outcomes: runs
-        .filter((run) => run.outcome !== 'pending')
-        .map((run) => run.outcome as ReplayCheckOutcome),
+      outcomes: reported.map((run) => run.outcome as ReplayCheckOutcome),
+      /**
+       * Every reported item's model, including the nulls: a `not-scored` row nothing ran has
+       * no model, and dropping it here rather than in the tally would be indistinguishable
+       * from an arm whose models agreed.
+       */
+      models: reported.map((run) => run.model),
     })
+  }
 
   const incumbent = screens.find((entry) => entry.screen.variantId === null)
   if (!incumbent || !complete(incumbent.runs)) return
@@ -3913,7 +3935,17 @@ export const startAgentRun = async (
    * it applies to every optimisation in this file.
    */
   let routed: { model: string; detail: string } | null = null
-  if (input.model === undefined && control.modelRoutingEnabled) {
+  /**
+   * A screening run is exempt.
+   *
+   * The screen is a controlled comparison of *documents*, and the table is a claim about
+   * task classes: routing one arm to a cheaper model mid-screen would make the difference in
+   * pass rate a difference of model, and the gate would then read a price tier as a verdict
+   * about a prompt. The run's model is stamped on its outcome either way — prevention here,
+   * and `screenGate` abstains if two arms still end up on different models, because a human
+   * editing the persona between arms can do what the table now cannot.
+   */
+  if (input.model === undefined && input.screen === undefined && control.modelRoutingEnabled) {
     try {
       const verdict = routeModel({
         taskClass: persona.name,

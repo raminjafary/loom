@@ -1,0 +1,1 @@
+ALTER TABLE "variant_screen_run" ADD COLUMN "model" text;

@@ -29,6 +29,7 @@ const arm = (overrides: Partial<LosingArm> & { variantId: string }): LosingArm =
   rationale: 'Shorter answers.',
   decided: 5,
   kept: 1,
+  models: ['claude-sonnet-5'],
   settledAt: new Date(1_000),
   ...overrides,
 })
@@ -41,6 +42,7 @@ const refusal = (
   reason:
     'Rejected by the held-out screen: it passed 2 of 6 items (33%) where the prompt in use ' +
     'passed 5 of 6 (83%). It was not given an arm, so no live run was spent on it.',
+  models: ['claude-sonnet-5'],
   refusedAt: new Date(2_000),
   ...overrides,
 })
@@ -54,6 +56,31 @@ const evidence = (overrides: Partial<ProposerEvidence> = {}): ProposerEvidence =
   totalLosingArms: 1,
   totalRefusedCandidates: 1,
   ...overrides,
+})
+
+describe('the model a record belongs to', () => {
+  it('names it on an arm and on a refusal, so a proposer is not shown a bare number', () => {
+    const verdict = proposerBrief(
+      evidence({
+        losingArms: [arm({ variantId: 'v1', models: ['claude-haiku-4-5-20251001'] })],
+        refusedCandidates: [refusal({ variantId: 'v2', models: ['claude-opus-5'] })],
+      }),
+    )
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    expect(verdict.brief).toContain('Measured on claude-haiku-4-5-20251001 and not kept')
+    expect(verdict.brief).toContain('Screened on claude-opus-5.')
+  })
+
+  it('says nothing at all when no model was recorded, rather than saying "unknown"', () => {
+    const verdict = proposerBrief(
+      evidence({ losingArms: [arm({ variantId: 'v1', models: [] })], refusedCandidates: [] }),
+    )
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    expect(verdict.brief).toContain('Measured and not kept')
+    expect(verdict.brief).not.toContain('unknown')
+  })
 })
 
 describe('proposerBrief', () => {

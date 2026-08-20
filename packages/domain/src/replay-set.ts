@@ -386,6 +386,16 @@ export interface ScreenScore {
   readonly variantId: string | null
   /** One entry per item attempted, in the set's order. */
   readonly outcomes: readonly ReplayCheckOutcome[]
+  /**
+   * The models that actually answered this arm's items, as observed on the runs — nulls for
+   * items nothing ran, and duplicates welcome; `tallyScreenScore` reduces them.
+   *
+   * Carried because **a pass rate is evidence about a `(document, model)` pair and not
+   * about a document**. Routing makes that concrete: the same prompt body scores differently
+   * on Haiku and on Opus, so a score filed without its model turns the whole rejected-edit
+   * buffer into a pile of numbers nothing can be compared across.
+   */
+  readonly models: readonly (string | null)[]
 }
 
 export interface ScreenTally {
@@ -396,6 +406,13 @@ export interface ScreenTally {
   readonly notScored: number
   /** Passed over scored. Zero when nothing was scored — see `scored` before reading it. */
   readonly passRate: number
+  /**
+   * The distinct models observed on this arm, sorted, with unknowns dropped.
+   *
+   * Empty means nothing is known about what ran — an arm whose runs never started. More
+   * than one means this arm's own score mixes models, which `screenGate` refuses to compare.
+   */
+  readonly models: readonly string[]
 }
 
 export const tallyScreenScore = (score: ScreenScore): ScreenTally => {
@@ -410,6 +427,12 @@ export const tallyScreenScore = (score: ScreenScore): ScreenTally => {
     failed,
     notScored,
     passRate: scored === 0 ? 0 : passed / scored,
+    models: [
+      ...new Set(
+        // A non-string is the same fact as a null here: nothing was recorded about what ran.
+        score.models.filter((model): model is string => typeof model === 'string' && model !== ''),
+      ),
+    ].sort(),
   }
 }
 
@@ -424,6 +447,47 @@ export interface ScreenGateVerdict {
    * items where the prompt in use passed 5" is.
    */
   readonly reason: string
+}
+
+/**
+ * Why these two scores cannot be compared, when they cannot — otherwise null.
+ *
+ * Two ways they cannot: one arm's own items were answered by more than one model, or the two
+ * arms were answered by different ones. Both make the difference in pass rate a difference of
+ * model as much as of document, and the screen's authority is to refuse a measurement on
+ * evidence about the *document*.
+ *
+ * Silence is not disagreement. An arm with no known model — rows from before the stamp, an
+ * arm whose runs never started — falls through to the ordinary comparison, because inventing
+ * a mismatch out of a missing column would abstain the gate on every historical screen.
+ */
+const crossModelComparison = (
+  candidateModels: readonly string[],
+  incumbentModels: readonly string[],
+): string | null => {
+  const spread = (models: readonly string[]) => models.join(' and ')
+  if (candidateModels.length > 1) {
+    return (
+      `Not screened: this candidate's items were answered by ${spread(candidateModels)}, so its ` +
+      'pass rate mixes models and is not a score for one prompt. The arms measure it instead.'
+    )
+  }
+  if (incumbentModels.length > 1) {
+    return (
+      `Not screened: the prompt in use was screened across ${spread(incumbentModels)}, so there ` +
+      'is no single-model control to compare against. A candidate is not refused on a baseline ' +
+      'that moved underneath it.'
+    )
+  }
+  const [candidateModel] = candidateModels
+  const [incumbentModel] = incumbentModels
+  if (candidateModel === undefined || incumbentModel === undefined) return null
+  if (candidateModel === incumbentModel) return null
+  return (
+    `Not screened: this candidate ran on ${candidateModel} and the prompt in use on ` +
+    `${incumbentModel}. A difference between those two is a difference of model as much as of ` +
+    'prompt, and the screen only refuses on evidence about the prompt.'
+  )
 }
 
 /**
@@ -444,7 +508,13 @@ export interface ScreenGateVerdict {
  * 3. **The candidate could not be scored → admitted.** A screening run that errored says
  *    nothing about the prompt. Rejecting here would let an infrastructure failure kill a
  *    candidate, which is the failure mode where a loop quietly stops proposing anything.
- * 4. **Strictly worse → rejected.** Everything else is admitted, ties included.
+ * 4. **The two arms did not run on the same one model → admitted.** A candidate on Haiku
+ *    scoring under an incumbent on Opus has been beaten by the model, and refusing it would
+ *    file a fact about a price tier as a fact about a document. Mixed models *within* one
+ *    arm are the same defect one level down and abstain the same way. Unknown models do not
+ *    trigger it: a set of screens from before the stamp existed is silent about what ran,
+ *    and silence is not disagreement.
+ * 5. **Strictly worse → rejected.** Everything else is admitted, ties included.
  *
  * The set arrives as its **composition** rather than as a count, and both decisions that
  * compare rates name it. A pass rate is only readable against the work it was measured on:
@@ -463,7 +533,11 @@ export const screenGate = (input: {
   const itemCount = input.composition.length
   const asPercent = (rate: number) => `${Math.round(rate * 100)}%`
   const mix = describeOutcomeMix(input.composition)
-  const wasMadeOf = ` The set was ${mix} when the work was originally run.`
+  const on =
+    candidate.models.length === 1 && candidate.models[0] === incumbent.models[0]
+      ? ` Both arms ran on ${candidate.models[0]}.`
+      : ''
+  const wasMadeOf = ` The set was ${mix} when the work was originally run.${on}`
 
   if (itemCount < MIN_REPLAY_ITEMS) {
     return {
@@ -489,6 +563,10 @@ export const screenGate = (input: {
         `Not screened: none of the ${itemCount} held-out items produced a verdict for this ` +
         'candidate. That is a fact about the screening runs, not about the prompt.',
     }
+  }
+  const cross = crossModelComparison(candidate.models, incumbent.models)
+  if (cross !== null) {
+    return { decision: 'admitted', reason: cross }
   }
   if (candidate.passRate < incumbent.passRate) {
     return {

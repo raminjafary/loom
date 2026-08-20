@@ -1578,10 +1578,20 @@ describe('the held-out screen', () => {
     const [first] = await screens.screensForSet(WS, opened.set.id)
     const screenRunId = first!.runs[0]!.id
 
-    await screens.recordScreenRunOutcome(WS, screenRunId, { outcome: 'passed', reason: null })
-    await screens.recordScreenRunOutcome(WS, screenRunId, { outcome: 'failed', reason: 'later' })
+    await screens.recordScreenRunOutcome(WS, screenRunId, {
+      outcome: 'passed',
+      reason: null,
+      model: 'claude-sonnet-5',
+    })
+    await screens.recordScreenRunOutcome(WS, screenRunId, {
+      outcome: 'failed',
+      reason: 'later',
+      model: 'claude-opus-5',
+    })
     const [again] = await screens.screensForSet(WS, opened.set.id)
     expect(again!.runs[0]?.outcome).toBe('passed')
+    // The model is written with the outcome, so the second sweep cannot restamp it either.
+    expect(again!.runs[0]?.model).toBe('claude-sonnet-5')
   })
 
   it('decides a screen once, so two sweeps cannot record two verdicts', async () => {

@@ -945,7 +945,12 @@ export interface ScreenRepositoryPort {
   recordScreenRunOutcome(
     workspaceId: WorkspaceId,
     screenRunId: string,
-    input: { outcome: ReplayCheckOutcome; reason: string | null },
+    /**
+     * `model` is what answered the item, read off the run's snapshot — null when nothing
+     * ran it. A score without it cannot be compared across a workspace that routes models,
+     * which is the whole reason the column exists.
+     */
+    input: { outcome: ReplayCheckOutcome; reason: string | null; model: string | null },
   ): Promise<void>
 
   /**
