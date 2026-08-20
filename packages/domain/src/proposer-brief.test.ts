@@ -43,12 +43,14 @@ const refusal = (
     'Rejected by the held-out screen: it passed 2 of 6 items (33%) where the prompt in use ' +
     'passed 5 of 6 (83%). It was not given an arm, so no live run was spent on it.',
   models: ['claude-sonnet-5'],
+  items: [],
   refusedAt: new Date(2_000),
   ...overrides,
 })
 
 const evidence = (overrides: Partial<ProposerEvidence> = {}): ProposerEvidence => ({
   personaName: 'Backend worker',
+  weakness: null,
   currentBody: 'Write the handler. Run the tests.',
   losingArms: [arm({ variantId: 'v1' })],
   refusedCandidates: [refusal({ variantId: 'v2' })],
@@ -56,6 +58,81 @@ const evidence = (overrides: Partial<ProposerEvidence> = {}): ProposerEvidence =
   totalLosingArms: 1,
   totalRefusedCandidates: 1,
   ...overrides,
+})
+
+describe('weakness mining', () => {
+  it('turns a pass rate into the items and the check that failed', () => {
+    const verdict = proposerBrief(
+      evidence({
+        refusedCandidates: [
+          refusal({
+            variantId: 'v1',
+            items: [
+              { position: 1, outcome: 'passed', task: 'Fix the parser.', failingCheck: null },
+              { position: 2, outcome: 'failed', task: 'Handle an empty list.', failingCheck: 'boundary' },
+              { position: 3, outcome: 'not-scored', task: 'Rename the module.', failingCheck: null },
+              { position: 4, outcome: 'failed', task: 'Handle a single element.', failingCheck: 'boundary' },
+            ],
+          }),
+        ],
+      }),
+    )
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    expect(verdict.brief).toContain('Failed items 2, 4 of 4.')
+    expect(verdict.brief).toContain('The `boundary` check failed on them.')
+    // An unscored item is not a failure, and the brief says how many scored nothing.
+    expect(verdict.brief).toContain('1 of 4 items scored nothing either way.')
+    expect(verdict.brief).toContain('Item 2: Handle an empty list.')
+  })
+
+  it('says nothing about items for a refusal recorded before they were mined', () => {
+    const verdict = proposerBrief(
+      evidence({ refusedCandidates: [refusal({ variantId: 'v1', items: [] })] }),
+    )
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    expect(verdict.brief).not.toContain('Failed item')
+  })
+
+  it('states the histogram over decided runs, with its denominator', () => {
+    const verdict = proposerBrief(
+      evidence({
+        weakness: {
+          decidedRuns: 24,
+          verificationFailures: 9,
+          checks: [
+            { name: 'boundary', failures: 5 },
+            { name: 'types', failures: 3 },
+            { name: 'lint', failures: 1 },
+          ],
+        },
+      }),
+    )
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    expect(verdict.brief).toContain('over 24 decided runs: 9 left a branch that failed')
+    expect(verdict.brief).toContain('`boundary` 5, `types` 3, `lint` 1')
+  })
+
+  it('does not dress up a persona with no measured weakness as having one', () => {
+    const verdict = proposerBrief(
+      evidence({ weakness: { decidedRuns: 12, verificationFailures: 0, checks: [] } }),
+    )
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    expect(verdict.brief).toContain('no branch this persona produced failed')
+    expect(verdict.brief).toContain('no failing-check pattern to aim at')
+  })
+
+  it('says nothing at all when nothing has ever been verified', () => {
+    const verdict = proposerBrief(evidence({ weakness: null }))
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    // The arm lines say "decided runs" too, so the absent thing is the histogram itself.
+    expect(verdict.brief).not.toContain("What this persona's work fails on")
+    expect(verdict.brief).not.toContain('no failing-check pattern')
+  })
 })
 
 describe('the model a record belongs to', () => {

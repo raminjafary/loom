@@ -72,9 +72,24 @@ const harness = (options: {
       rationale: 'It would have been shorter.',
       reason: 'Passed 2 of 6 items where the prompt in use passed 5.',
       models: ['claude-sonnet-5'],
+      items: [
+        { position: 1, outcome: 'passed' as const, task: 'Fix the parser.', failingCheck: null },
+        {
+          position: 2,
+          outcome: 'failed' as const,
+          task: 'Handle an empty list.',
+          failingCheck: 'boundary',
+        },
+      ],
       refusedAt: new Date(0),
     })),
     total: options.refusals ?? 0,
+  }))
+
+  const tallyFailingChecks = vi.fn(async () => ({
+    decidedRuns: 24,
+    verificationFailures: 9,
+    checks: [{ name: 'boundary', failures: 5 }],
   }))
 
   const deps = {
@@ -94,6 +109,7 @@ const harness = (options: {
       listLosingArms,
     },
     screens: { listRefusedCandidates },
+    agentRuns: { tallyFailingChecks },
     /**
      * The first thing `startAgentRun` reads. Throwing here is how these tests tell "it got
      * past every gate and started a run" apart from "it refused" — the alternative is
@@ -106,7 +122,7 @@ const harness = (options: {
     },
   } as unknown as AgentDeps
 
-  return { deps, listLosingArms, listRefusedCandidates }
+  return { deps, listLosingArms, listRefusedCandidates, tallyFailingChecks }
 }
 
 const start = (deps: AgentDeps) =>
@@ -194,9 +210,24 @@ describe('startVariantProposer', () => {
    * the buffer until it spent more context on failures than on the prompt being revised.
    */
   it('asks storage for no more than the brief can carry', async () => {
-    const { deps, listLosingArms, listRefusedCandidates } = harness({ refusals: 1 })
+    const { deps, listLosingArms, listRefusedCandidates, tallyFailingChecks } = harness({
+      refusals: 1,
+    })
     await start(deps).catch(() => {})
     expect(limitOf(listLosingArms)).toBe(6)
     expect(limitOf(listRefusedCandidates)).toBe(6)
+    // The histogram is mined by persona *name*, because a run carries a snapshot.
+    expect((tallyFailingChecks.mock.calls as unknown as unknown[][])[0]?.slice(1)).toEqual([
+      'swe',
+      5,
+    ])
+  })
+
+  it('starts a proposer even when the weakness histogram cannot be read', async () => {
+    // Best-effort by design: a proposer is worth starting on the losses and refusals alone,
+    // and a mining query that fails must not be the reason nothing is ever proposed.
+    const { deps, tallyFailingChecks } = harness({ refusals: 1 })
+    tallyFailingChecks.mockRejectedValueOnce(new Error('the histogram is unreadable'))
+    await expect(start(deps)).rejects.toThrow('REACHED-START')
   })
 })

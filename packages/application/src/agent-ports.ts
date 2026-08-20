@@ -5,6 +5,7 @@ import type {
   ModelObservation,
   ProposerShown,
   RefusedCandidateRecord,
+  WeaknessRecord,
   ReplayCheckOutcome,
   ReplayItemId,
   ReplayItemRecord,
@@ -578,6 +579,23 @@ export interface AgentRunRepositoryPort {
     workspaceId: WorkspaceId,
     input: { since: Date | null },
   ): Promise<AgentRunCostRollup>
+  /**
+   * What this persona's work fails on: the named checks its decided runs left failing, most
+   * failures first, over a bounded window of its own history.
+   *
+   * By persona **name**, like `listDecidedRunsForPersona`, because a run carries a persona
+   * snapshot and the snapshot is what says who did the work.
+   *
+   * Aggregated in the database for `costRollup`'s reason — the population grows for the life
+   * of the persona — and screening runs are excluded for the reason they are excluded from an
+   * arm: their prompt is substituted, so their failures are a fact about a candidate rather
+   * than about the persona in use.
+   */
+  tallyFailingChecks(
+    workspaceId: WorkspaceId,
+    personaName: string,
+    limit: number,
+  ): Promise<WeaknessRecord>
   /** Bumped by the Runner's periodic heartbeat frame. */
   /**
    * Liveness, and — when the Runner sampled it — how full the run's context window is

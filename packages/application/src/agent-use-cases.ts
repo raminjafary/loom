@@ -82,6 +82,7 @@ import {
   proposerEligibility,
   proposerSubjectEligibility,
   MAX_PROPOSER_LOSING_ARMS,
+  MAX_PROPOSER_FAILING_CHECKS,
   MAX_PROPOSER_REFUSALS,
   type LosingArm,
   type ProposerShown,
@@ -1591,7 +1592,7 @@ export const startVariantProposer = async (
     }
   }
 
-  const [losing, refused, superseded] = await Promise.all([
+  const [losing, refused, superseded, weakness] = await Promise.all([
     deps.personaVariants.listLosingArms(
       input.workspaceId,
       persona.id,
@@ -1599,6 +1600,14 @@ export const startVariantProposer = async (
     ),
     deps.screens.listRefusedCandidates(input.workspaceId, persona.id, MAX_PROPOSER_REFUSALS),
     supersededPromptsFor(deps, { workspaceId: input.workspaceId, personaId: persona.id }),
+    /**
+     * Best-effort, and the only piece of the brief that can be missing without changing
+     * whether a session opens: a proposer is worth starting on the losses and refusals
+     * alone, and a histogram that cannot be read must not be the reason nothing is proposed.
+     */
+    deps.agentRuns
+      .tallyFailingChecks(input.workspaceId, persona.name, MAX_PROPOSER_FAILING_CHECKS)
+      .catch(() => null),
   ])
 
   /**
@@ -1635,6 +1644,7 @@ export const startVariantProposer = async (
             rationale: candidate.rationale,
             reason: candidate.reason,
             models: candidate.models,
+            items: candidate.items,
             refusedAt: candidate.refusedAt,
           },
         ]
@@ -1648,6 +1658,13 @@ export const startVariantProposer = async (
     archivedBodies: superseded.map((entry) => entry.body),
     totalLosingArms: losing.total,
     totalRefusedCandidates: refused.total,
+    /**
+     * The persona's own failure histogram, and the only piece of the brief that says what to
+     * aim at rather than what has already been tried. Best-effort: a proposer is worth
+     * starting on the losses and refusals alone, so a histogram that could not be read
+     * arrives as null and the brief simply says nothing about weakness.
+     */
+    weakness,
   })
   if (!assembled.ok) return { ok: false, reason: assembled.reason }
 

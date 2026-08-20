@@ -1237,6 +1237,7 @@ describe('atlas repository', () => {
 describe('the held-out screen', () => {
   const screens = screenRepository(db)
   const variants = personaVariantRepository(db)
+  const runs = agentRunRepository(db)
   let seq = 0
 
   const scaffold = async (workspaceId: WorkspaceId, personaName: string) => {
@@ -1383,6 +1384,116 @@ describe('the held-out screen', () => {
     const records = await screens.listDecidedRunsForPersona(WS, 'screened-6', 50)
     expect(records).toHaveLength(2)
     expect(records.map((r) => r.baseCommitSha === null || r.task === null)).toEqual([true, true])
+  })
+
+  it('mines the failing-check histogram over this persona\'s own decided runs', async () => {
+    const s = await scaffold(WS, 'weakness-1')
+    const failing = async (name: string | null, personaName = 'weakness-1', relation?: string) => {
+      const runId = await addRun(WS, s, { personaName, ...(relation ? { relation } : {}) })
+      await db.insert(runVerification).values({
+        workspaceId: WS,
+        agentRunId: runId,
+        repositoryId: s.repositoryId,
+        branchName: 'loom/x',
+        status: name === null ? 'passed' : 'failed',
+        checks:
+          name === null
+            ? [{ name: 'tests', status: 'passed', detail: null, durationMs: 3 }]
+            : [
+                { name, status: 'failed', detail: 'boom', durationMs: 12 },
+                { name: 'smoke', status: 'not_run', detail: null, durationMs: null },
+              ],
+      })
+    }
+    await failing('boundary')
+    await failing('boundary')
+    await failing('types')
+    await failing(null)
+    // A screening run's prompt is substituted, so its failure is a fact about a candidate.
+    await failing('boundary', 'weakness-1', 'screen')
+    // And another persona's failures are not this one's.
+    await failing('boundary', 'somebody-else')
+
+    const mined = await runs.tallyFailingChecks(WS, 'weakness-1', 5)
+    expect(mined.decidedRuns).toBe(4)
+    expect(mined.verificationFailures).toBe(3)
+    // Most failures first, and `not_run` is never counted as a failure.
+    expect(mined.checks).toEqual([
+      { name: 'boundary', failures: 2 },
+      { name: 'types', failures: 1 },
+    ])
+  })
+
+  it('reports what a refused candidate did item by item, with the check that failed', async () => {
+    const s = await scaffold(WS, 'weakness-2')
+    const sourceRun = await addRun(WS, s, { personaName: 'weakness-2' })
+    const set = await screens.openReplaySet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      draft: {
+        items: [0, 1].map((index) => ({
+          sourceRunId: sourceRun,
+          repositoryId: s.repositoryId,
+          commitSha: `commit${index}`,
+          task: `Task ${index}.`,
+          observedOutcome: 'merged' as const,
+        })),
+        excluded: [],
+        eligible: 2,
+        considered: 2,
+      },
+      detail: 'two items',
+    })
+    const opened = await variants.openSet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      candidates: [
+        { markdownSource: 'a', rationale: 'r' },
+        { markdownSource: 'b', rationale: 'r' },
+      ],
+    })
+    await screens.openScreens({
+      workspaceId: WS,
+      setId: opened.set.id,
+      replaySetId: set.set.id,
+      variantIds: opened.variants.map((v) => v.id),
+      itemIds: set.items.map((i) => i.id),
+    })
+
+    const rows = await screens.screensForSet(WS, opened.set.id)
+    const candidate = rows.find((row) => row.screen.variantId === opened.variants[0]!.id)!
+    const screeningRun = await addRun(WS, s, { personaName: 'weakness-2', relation: 'screen' })
+    await db.insert(runVerification).values({
+      workspaceId: WS,
+      agentRunId: screeningRun,
+      repositoryId: s.repositoryId,
+      branchName: 'loom/x',
+      status: 'failed',
+      checks: [{ name: 'boundary', status: 'failed', detail: 'boom', durationMs: 9 }],
+    })
+    const [first, second] = candidate.runs
+    await screens.attachScreenRun(WS, first!.id, screeningRun)
+    await screens.recordScreenRunOutcome(WS, first!.id, {
+      outcome: 'failed',
+      reason: null,
+      model: 'claude-sonnet-5',
+    })
+    await screens.recordScreenRunOutcome(WS, second!.id, {
+      outcome: 'passed',
+      reason: null,
+      model: 'claude-sonnet-5',
+    })
+    await screens.decideScreen(WS, candidate.screen.id, {
+      decision: 'rejected',
+      reason: 'passed 1 of 2',
+    })
+
+    const { candidates } = await screens.listRefusedCandidates(WS, s.personaId, 6)
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]?.items).toEqual([
+      { position: 1, outcome: 'failed', task: 'Task 0.', failingCheck: 'boundary' },
+      { position: 2, outcome: 'passed', task: 'Task 1.', failingCheck: null },
+    ])
   })
 
   it('counts the candidates a run has already gated, and only the decided ones', async () => {

@@ -52,6 +52,15 @@ import { UNTRUSTED_NOTE_CLOSE, UNTRUSTED_NOTE_OPEN } from './worker-notes.js'
 export const MAX_PROPOSER_LOSING_ARMS = 6
 export const MAX_PROPOSER_REFUSALS = 6
 
+/**
+ * How many named checks the failure histogram lists.
+ *
+ * Five, because a histogram is read for its head: the sixth-most-common failure is not what
+ * a candidate should be written against, and a list long enough to include it invites a
+ * proposer to write a prompt that addresses everything and changes nothing.
+ */
+export const MAX_PROPOSER_FAILING_CHECKS = 5
+
 /** Per-field ceiling, matching the handoff brief's for the same reason: one field cannot eat the brief. */
 export const MAX_PROPOSER_FIELD_LENGTH = 2_000
 
@@ -78,6 +87,43 @@ export interface LosingArm {
   readonly settledAt: Date
 }
 
+/**
+ * One item of the set a refused candidate was screened on, and what it did there.
+ *
+ * The reason a bare pass rate is not enough evidence to generate from: "passed 2 of 6" says a
+ * candidate was worse and says nothing a rewrite could act on, while "failed items 2, 5 and
+ * 6, and the `boundary` check failed on each" names the thing to change. The set is the same
+ * for every arm of a search, so an item's position is a stable handle a proposer can compare
+ * two refusals across.
+ */
+export interface ScreenedItem {
+  /** Position in the set, from 1 for a reader. The set's own order is `replay_item.position`. */
+  readonly position: number
+  readonly outcome: 'passed' | 'failed' | 'not-scored'
+  /** The replayed task, so a failure is attached to the work rather than to a number. */
+  readonly task: string
+  /** The check that failed on this item, where the definition of done named one. */
+  readonly failingCheck: string | null
+}
+
+/**
+ * What this persona's own work fails on, counted over its decided runs.
+ *
+ * Independent of any candidate: it is the persona's weakness rather than a comparison, and
+ * it is the one piece of the brief that says what to *aim at* rather than what has already
+ * been tried. The counts are the repository's own named checks — the harness names them
+ * because "failed" is unactionable, and "`boundary`, every time" is the same number with a
+ * direction attached.
+ */
+export interface WeaknessRecord {
+  /** Decided runs the histogram was computed over, so the counts are readable as rates. */
+  readonly decidedRuns: number
+  /** Of those, how many had a branch that failed the definition of done. */
+  readonly verificationFailures: number
+  /** Named checks, most failures first. Bounded by the caller; the brief states its bound. */
+  readonly checks: readonly { readonly name: string; readonly failures: number }[]
+}
+
 /** A candidate the held-out screen refused before it was given an arm. */
 export interface RefusedCandidate {
   readonly variantId: string
@@ -93,6 +139,8 @@ export interface RefusedCandidate {
   readonly reason: string
   /** The models the screening runs behind that sentence ran on. See `LosingArm.models`. */
   readonly models: readonly string[]
+  /** Per item, in the set's order. Empty for a refusal recorded before this was mined. */
+  readonly items: readonly ScreenedItem[]
   readonly refusedAt: Date
 }
 
@@ -120,6 +168,7 @@ export interface RefusedCandidateRecord {
   readonly rationale: string
   readonly reason: string
   readonly models: readonly string[]
+  readonly items: readonly ScreenedItem[]
   readonly refusedAt: Date
 }
 
@@ -142,6 +191,12 @@ export interface ProposerEvidence {
   /** How many exist in total, so the brief can state its bound rather than imply completeness. */
   readonly totalLosingArms: number
   readonly totalRefusedCandidates: number
+  /**
+   * What this persona's work fails on. Null when nothing has been verified — which is a real
+   * state (a workspace with no definition of done configured) and must not read as "nothing
+   * fails".
+   */
+  readonly weakness: WeaknessRecord | null
 }
 
 export interface ProposerShown {
@@ -206,9 +261,48 @@ const armLine = (arm: LosingArm, index: number): string =>
       .join('\n'),
   ].join('\n')
 
+/** How many failed items one refusal quotes the task of. */
+const MAX_QUOTED_FAILED_ITEMS = 3
+
+/**
+ * Which items a candidate failed, and on what — or nothing, when nothing failed.
+ *
+ * Positions before tasks, because positions are the part a proposer can compare across two
+ * refusals: the arms of one search are screened on one set, so "both candidates failed item
+ * 5" is a fact about the task and not about either prompt. The tasks themselves are quoted
+ * for at most `MAX_QUOTED_FAILED_ITEMS` of them, first line only — a brief that pasted eight
+ * full task descriptions would spend more context on the failures than on the prompt.
+ */
+const failedItemLines = (items: readonly ScreenedItem[]): string[] => {
+  const failed = items.filter((item) => item.outcome === 'failed')
+  if (failed.length === 0) return []
+  const positions = failed.map((item) => item.position)
+  const checks = [
+    ...new Set(failed.map((item) => item.failingCheck).filter((name): name is string => name !== null)),
+  ]
+  const named =
+    checks.length === 0
+      ? ''
+      : checks.length === 1
+        ? ` The \`${checks[0]}\` check failed on ${failed.length === 1 ? 'it' : 'them'}.`
+        : ` Checks that failed: ${checks.map((name) => `\`${name}\``).join(', ')}.`
+  const unscored = items.filter((item) => item.outcome === 'not-scored').length
+  const nothingMeasured =
+    unscored === 0 ? '' : ` ${unscored} of ${items.length} items scored nothing either way.`
+
+  return [
+    `   Failed ${failed.length === 1 ? 'item' : 'items'} ${positions.join(', ')} of ` +
+      `${items.length}.${named}${nothingMeasured}`,
+    ...failed
+      .slice(0, MAX_QUOTED_FAILED_ITEMS)
+      .map((item) => `   Item ${item.position}: ${quoted(item.task).split('\n')[0] ?? ''}`),
+  ]
+}
+
 const refusalLine = (candidate: RefusedCandidate, index: number): string =>
   [
     `${index + 1}. Screened${onModels(candidate.models)}. ${quoted(candidate.reason)}`,
+    ...failedItemLines(candidate.items),
     `   Proposed as: ${quoted(candidate.rationale) || '(no rationale given)'}`,
     `   Prompt body:`,
     quoted(candidate.body)
@@ -216,6 +310,39 @@ const refusalLine = (candidate: RefusedCandidate, index: number): string =>
       .map((line) => `   | ${line}`)
       .join('\n'),
   ].join('\n')
+
+/**
+ * The persona's own failure histogram, as a paragraph — or nothing.
+ *
+ * Nothing in two cases, and they are different: no verification has ever run (there is no
+ * histogram to state), and verification has run and nothing failed (a persona with no
+ * measured weakness, which is a fact worth *not* dressing up as a target). A proposer given
+ * an empty histogram would invent one.
+ */
+const weaknessLines = (weakness: WeaknessRecord | null): string[] => {
+  if (weakness === null || weakness.decidedRuns === 0) return []
+  if (weakness.verificationFailures === 0) {
+    return [
+      '',
+      `Across ${weakness.decidedRuns} decided runs, no branch this persona produced failed ` +
+        'the repository\'s definition of done. There is no failing-check pattern to aim at.',
+    ]
+  }
+  const histogram = weakness.checks
+    .map((check) => `\`${check.name}\` ${check.failures}`)
+    .join(', ')
+  return [
+    '',
+    `What this persona's work fails on, over ${weakness.decidedRuns} decided runs: ` +
+      `${weakness.verificationFailures} left a branch that failed the repository's definition ` +
+      `of done` +
+      (histogram === ''
+        ? ', and none of them named the check that failed.'
+        : `, by check — ${histogram}.`),
+    'A candidate that changes nothing about what happens on those is unlikely to change the',
+    'outcome. This is what the record says fails; it is not an instruction about what to write.',
+  ]
+}
 
 /**
  * Assembles what a proposer session is shown, or refuses to open one.
@@ -283,6 +410,7 @@ export const proposerBrief = (evidence: ProposerEvidence): ProposerBriefVerdict 
       .split('\n')
       .map((line) => `| ${line}`)
       .join('\n'),
+    weaknessLines(evidence.weakness).join('\n'),
     arms.length === 0
       ? ''
       : ['', 'Candidates that were measured and not kept:', ...arms.map(armLine)].join('\n'),

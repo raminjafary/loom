@@ -12,6 +12,7 @@ import {
   type ReplayItemRecord,
   type ReplayOutcome,
   type ReplaySetRecord,
+  type RefusedCandidateRecord,
   type ScreenDecision,
   type ScreenRunOutcome,
   type VariantScreenRecord,
@@ -450,7 +451,7 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
       eq(personaVariant.personaId, personaId),
       eq(variantScreen.decision, 'rejected'),
     )
-    const [rows, [counted]] = await Promise.all([
+    const [rows, [counted], itemRows] = await Promise.all([
       db
         .select({
           variantId: personaVariant.id,
@@ -487,7 +488,56 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
         .from(variantScreen)
         .innerJoin(personaVariant, eq(personaVariant.id, variantScreen.variantId))
         .where(where),
+      /**
+       * What each refused candidate did item by item — the difference between "passed 2 of 6"
+       * and something a rewrite can act on.
+       *
+       * A second query rather than more aggregation on the first: the rows are per item, the
+       * first query is per candidate, and `array_agg` over four columns to rebuild an ordered
+       * list in TypeScript anyway is worse than a join the database is good at. Unbounded by
+       * design — the item count is bounded by `MAX_REPLAY_ITEMS`, so this is at most eight
+       * rows per refusal shown.
+       */
+      db
+        .select({
+          variantId: personaVariant.id,
+          position: replayItem.position,
+          task: replayItem.task,
+          outcome: variantScreenRun.outcome,
+          /**
+           * The check the definition of done failed this item on, from the screening run's
+           * own verification. Null when nothing ran, when nothing failed, or when the
+           * repository names no checks — all of which read the same way in the brief: no
+           * check is named.
+           */
+          failingCheck: sql<
+            string | null
+          >`jsonb_path_query_first(${runVerification.checks}, '$[*] ? (@.status == "failed")') ->> 'name'`,
+        })
+        .from(variantScreen)
+        .innerJoin(personaVariant, eq(personaVariant.id, variantScreen.variantId))
+        .innerJoin(variantScreenRun, eq(variantScreenRun.screenId, variantScreen.id))
+        .innerJoin(replayItem, eq(replayItem.id, variantScreenRun.replayItemId))
+        .leftJoin(runVerification, eq(runVerification.agentRunId, variantScreenRun.agentRunId))
+        .where(where)
+        .orderBy(asc(replayItem.position)),
     ])
+
+    const itemsByVariant = new Map<string, RefusedCandidateRecord['items'][number][]>()
+    for (const row of itemRows) {
+      const outcome =
+        row.outcome === 'passed' || row.outcome === 'failed' ? row.outcome : 'not-scored'
+      itemsByVariant.set(row.variantId, [
+        ...(itemsByVariant.get(row.variantId) ?? []),
+        {
+          // From one for a reader; the stored `position` is zero-based.
+          position: row.position + 1,
+          outcome,
+          task: row.task,
+          failingCheck: row.failingCheck,
+        },
+      ])
+    }
 
     return {
       candidates: rows.map((row) => ({
@@ -501,6 +551,7 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
          */
         reason: row.reason ?? '',
         models: [...(row.models ?? [])].sort(),
+        items: itemsByVariant.get(row.variantId) ?? [],
         refusedAt: row.decidedAt ?? row.createdAt,
       })),
       total: counted?.total ?? 0,

@@ -1134,6 +1134,66 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
     }
   },
 
+  /**
+   * The failing-check histogram, from the checks the harness names.
+   *
+   * `jsonb_array_elements` rather than `jsonb_path_query_first`: the modal-check fragment
+   * next door wants one name per run, and this wants every failing check across many, so a
+   * run whose verification failed two checks contributes both. The `status = 'failed'`
+   * filter on the element is what keeps a passing check out of a failure count.
+   *
+   * The denominator is counted separately, and over the same population, because a histogram
+   * without one is unreadable: five `boundary` failures out of nine runs and out of nine
+   * hundred are different facts.
+   */
+  async tallyFailingChecks(workspaceId, personaName, limit) {
+    const population = and(
+      eq(agentRun.workspaceId, workspaceId),
+      sql`${agentRun.persona} ->> 'name' = ${personaName}`,
+      /**
+       * A screening run's prompt is substituted, so its failures belong to a candidate and
+       * not to the persona in use — the same exclusion the routing table and the replay set
+       * both make, for the same reason.
+       */
+      sql`(${agentRun.relation} is null or ${agentRun.relation} <> 'screen')`,
+      decidedRun,
+    )
+
+    const [[totals], checkRows] = await Promise.all([
+      db
+        .select({
+          decided: sql<number>`count(*)::int`,
+          failures: verificationFailedCount,
+        })
+        .from(agentRun)
+        .leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+        .where(population),
+      db
+        .select({
+          name: sql<string>`failed_check ->> 'name'`,
+          failures: sql<number>`count(*)::int`,
+        })
+        .from(agentRun)
+        .innerJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+        .innerJoin(
+          sql`jsonb_array_elements(${runVerification.checks}) as failed_check`,
+          sql`failed_check ->> 'status' = 'failed'`,
+        )
+        .where(population)
+        .groupBy(sql`failed_check ->> 'name'`)
+        .orderBy(desc(sql`count(*)`), sql`failed_check ->> 'name'`)
+        .limit(limit),
+    ])
+
+    return {
+      decidedRuns: totals?.decided ?? 0,
+      verificationFailures: totals?.failures ?? 0,
+      checks: checkRows
+        .filter((row): row is typeof row & { name: string } => row.name !== null)
+        .map((row) => ({ name: row.name, failures: row.failures })),
+    }
+  },
+
   async recordHeartbeat(workspaceId, id, context) {
     await db
       .update(agentRun)
