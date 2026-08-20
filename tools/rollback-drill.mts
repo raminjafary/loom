@@ -7,9 +7,11 @@
  *
  * The plan's four steps, and where each one is:
  *
- * 1. **A previously-passing manifest** — `recordManifest` below, validated by
+ * 1. **A previously-passing manifest** — `observeChecks` over `MANIFEST_CHECKS`, validated by
  *    `validateManifest` so an empty one (which could not fail, and would make the drill pass by
- *    construction) is refused rather than recorded.
+ *    construction) is refused rather than recorded. The list lives in `manifest-checks.mts`
+ *    because the promoter gates on the same one: a gate narrower than what this drill rehearses
+ *    would be a recovery rehearsed for breakage nothing checks for.
  * 2. **Promote a knowingly-broken self-modification** — `DEFECTS`, each a tier-3-shaped write
  *    into Loom's own source whose defect is *chosen*. Each asserts it applied: a no-match
  *    replace is a silent no-op, and a drill that patched nothing would report a clean recovery
@@ -55,6 +57,7 @@ import {
   type ManifestCheck,
   type RollbackManifest,
 } from '../packages/domain/src/index.js'
+import { MANIFEST_CHECKS, observeChecks, selectChecks } from './manifest-checks.mjs'
 
 const execFileAsync = promisify(execFile)
 const REPO = resolve(new URL('..', import.meta.url).pathname)
@@ -67,45 +70,6 @@ const check = (label: string, ok: boolean, detail = '') => {
 
 const git = async (args: string[], cwd = REPO): Promise<string> =>
   (await execFileAsync('git', ['-C', cwd, ...args], { maxBuffer: 32 * 1024 * 1024 })).stdout.trim()
-
-/**
- * One entry of the manifest.
- *
- * `requires` is what makes "the modification deleted the check" a *different* outcome from "the
- * check failed". Without it, running a vitest file that no longer exists exits non-zero and reads
- * as a failure — which is nearly right and loses the distinction the comparison is built on:
- * `missing` is a check that cannot answer, and it is how a self-modification hides.
- */
-interface DrillCheck {
-  readonly name: string
-  readonly command: string
-  /** Repo-relative path the check needs. Absent means the check is reported as absent, not failed. */
-  readonly requires?: string
-}
-
-/**
- * The default manifest: everything that runs with no infrastructure.
- *
- * The 21 live drivers are the drill's natural material, and they are not here — every one
- * needs a live server, a Runner process and model access, and a drill that needs all three is one
- * that gets run once. They can be added with `--check`, and the honest position is written down
- * rather than implied: this manifest covers the platform's static guarantees and its
- * infrastructure-free suites, and says so.
- */
-const CHECKS: readonly DrillCheck[] = [
-  { name: 'typecheck', command: 'pnpm typecheck' },
-  { name: 'lint', command: 'pnpm lint' },
-  {
-    name: 'boundary',
-    command: 'npx vitest run tools/architecture.test.ts',
-    requires: 'tools/architecture.test.ts',
-  },
-  {
-    name: 'domain-suite',
-    command: 'npx vitest run packages/domain',
-    requires: 'packages/domain/src/index.ts',
-  },
-]
 
 interface Defect {
   readonly name: string
@@ -151,55 +115,15 @@ const DEFECTS: readonly Defect[] = [
   },
 ]
 
-const runCheck = async (entry: DrillCheck): Promise<ManifestCheck | null> => {
-  if (entry.requires !== undefined && !existsSync(join(REPO, entry.requires))) return null
-  try {
-    const { stdout, stderr } = await execFileAsync('sh', ['-c', entry.command], {
-      cwd: REPO,
-      // See the header: a cached pass is a check that did not run.
-      env: { ...process.env, TURBO_FORCE: '1', CI: '1' },
-      maxBuffer: 64 * 1024 * 1024,
-    })
-    return { name: entry.name, status: 'passed', detail: tail(stdout + stderr) }
-  } catch (error) {
-    const output = error as { stdout?: string; stderr?: string; message?: string }
-    return {
-      name: entry.name,
-      status: 'failed',
-      detail: tail(`${output.stdout ?? ''}${output.stderr ?? ''}` || (output.message ?? '')),
-    }
-  }
-}
-
-const tail = (text: string, lines = 4): string | null => {
-  const kept = text.trimEnd().split('\n').slice(-lines).join('\n')
-  return kept.length === 0 ? null : kept
-}
-
-const observe = async (selected: readonly DrillCheck[]): Promise<ManifestCheck[]> => {
-  const results: ManifestCheck[] = []
-  for (const entry of selected) {
-    const result = await runCheck(entry)
-    console.log(
-      `       ${entry.name}: ${result === null ? 'absent' : result.status}`,
-    )
-    if (result !== null) results.push(result)
-  }
-  return results
-}
-
 const main = async () => {
   const argOf = (name: string) => {
     const index = process.argv.indexOf(`--${name}`)
     return index === -1 ? null : (process.argv[index + 1] ?? null)
   }
   const only = argOf('defect')
-  const selectedNames = argOf('check')?.split(',').map((name) => name.trim())
-  const selected = selectedNames
-    ? CHECKS.filter((entry) => selectedNames.includes(entry.name))
-    : CHECKS
+  const selected = selectChecks(argOf('check'))
   if (selected.length === 0) {
-    console.error(`no such check. Available: ${CHECKS.map((c) => c.name).join(', ')}`)
+    console.error(`no such check. Available: ${MANIFEST_CHECKS.map((c) => c.name).join(', ')}`)
     process.exit(2)
   }
 
@@ -220,7 +144,7 @@ const main = async () => {
 
   const baseCommit = await git(['rev-parse', 'HEAD'])
   console.log(`\n— step 1: the previously-passing manifest, at ${baseCommit.slice(0, 12)} —`)
-  const recorded = await observe(selected)
+  const recorded = await observeChecks(selected, REPO)
   const valid = validateManifest({ commit: baseCommit, checks: recorded })
   if (!valid.ok) {
     console.error(`\nrefusing to record this manifest (${valid.rule}): ${valid.reason}`)
@@ -278,7 +202,7 @@ const main = async () => {
       )
 
       console.log(`\n— step 3: the manifest catches it, by name —`)
-      const broken = compareToManifest(manifest, await observe(selected))
+      const broken = compareToManifest(manifest, await observeChecks(selected, REPO))
       check('the manifest is not satisfied', broken.recovered === false, broken.detail)
       const caught = broken.regressions.find((entry) => entry.name === defect.expects.name)
       check(
@@ -302,7 +226,7 @@ const main = async () => {
       )
       check('the tree is clean again', (await git(['status', '--porcelain'])) === '')
 
-      const after = compareToManifest(manifest, await observe(selected))
+      const after = compareToManifest(manifest, await observeChecks(selected, REPO))
       check('every check that passed before passes again', after.recovered, after.detail)
       check(
         'and the check the defect broke is back',
