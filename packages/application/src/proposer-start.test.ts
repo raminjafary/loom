@@ -46,6 +46,8 @@ const harness = (options: {
   searchOpen?: boolean
   losingArms?: number
   refusals?: number
+  divergences?: number
+  siblingRefusals?: number
   envelope?: false
 }) => {
   const subject = persona(
@@ -92,6 +94,33 @@ const harness = (options: {
     checks: [{ name: 'boundary', failures: 5 }],
   }))
 
+  const divergenceSet = vi.fn(async () => ({
+    runs: Array.from({ length: options.divergences ?? 0 }, (_, index) => ({
+      runId: `run_${index}`,
+      task: 'Add the refund endpoint.',
+      kind: 'passed-and-discarded' as const,
+      failingCheck: null,
+      decidedAt: new Date(0),
+    })),
+    passedAndDiscarded: options.divergences ?? 0,
+    failedAndMerged: 0,
+    comparable: 30,
+  }))
+
+  const listSiblingRefusals = vi.fn(async () => ({
+    candidates: Array.from({ length: options.siblingRefusals ?? 0 }, (_, index) => ({
+      variantId: `sibling_${index}`,
+      personaName: 'security-reviewer',
+      markdownSource: VARIANT_MARKDOWN,
+      rationale: 'Fewer gates.',
+      reason: 'Passed 1 of 6 items where the prompt in use passed 5.',
+      models: ['claude-sonnet-5'],
+      items: [],
+      refusedAt: new Date(0),
+    })),
+    total: options.siblingRefusals ?? 0,
+  }))
+
   const deps = {
     audit: { record: vi.fn(async () => ({})) },
     personas: {
@@ -108,8 +137,8 @@ const harness = (options: {
       findOpenSet: vi.fn(async () => (options.searchOpen ? { set: {}, variants: [] } : null)),
       listLosingArms,
     },
-    screens: { listRefusedCandidates },
-    agentRuns: { tallyFailingChecks },
+    screens: { listRefusedCandidates, listSiblingRefusals },
+    agentRuns: { tallyFailingChecks, divergenceSet },
     /**
      * The first thing `startAgentRun` reads. Throwing here is how these tests tell "it got
      * past every gate and started a run" apart from "it refused" — the alternative is
@@ -122,16 +151,24 @@ const harness = (options: {
     },
   } as unknown as AgentDeps
 
-  return { deps, listLosingArms, listRefusedCandidates, tallyFailingChecks }
+  return {
+    deps,
+    listLosingArms,
+    listRefusedCandidates,
+    tallyFailingChecks,
+    divergenceSet,
+    listSiblingRefusals,
+  }
 }
 
-const start = (deps: AgentDeps) =>
+const start = (deps: AgentDeps, source?: 'failure-record' | 'taste-record' | 'sibling-refusals') =>
   startVariantProposer(deps, {
     workspaceId: WS,
     actor: userActor(asUserId('user_1')),
     threadId: 'thread_1' as never,
     repositoryId: REPO,
     personaId: SUBJECT,
+    ...(source === undefined ? {} : { source }),
   })
 
 /** The mocks are declared without argument types, so a call is read positionally. */
@@ -229,5 +266,62 @@ describe('startVariantProposer', () => {
     const { deps, tallyFailingChecks } = harness({ refusals: 1 })
     tallyFailingChecks.mockRejectedValueOnce(new Error('the histogram is unreadable'))
     await expect(start(deps)).rejects.toThrow('REACHED-START')
+  })
+})
+
+
+/**
+ * Brief sources, at the layer that decides which record is read at all.
+ *
+ * The domain owns what a brief says; what only this layer can show is that the *other*
+ * records are never fetched. That is not an optimisation — a query whose result is dropped is
+ * an invitation for a later edit to render it, and the experiments these sources exist for
+ * are comparisons that only hold while a session sees one record.
+ */
+describe('startVariantProposer — which record it reads', () => {
+  it('reads only the failure record by default, which is what it always did', async () => {
+    const h = harness({ losingArms: 2 })
+    await expect(start(h.deps)).rejects.toThrow('REACHED-START')
+    expect(h.listLosingArms).toHaveBeenCalled()
+    expect(h.divergenceSet).not.toHaveBeenCalled()
+    expect(h.listSiblingRefusals).not.toHaveBeenCalled()
+  })
+
+  it('reads only the divergence set on a taste brief', async () => {
+    const h = harness({ losingArms: 2, divergences: 3 })
+    await expect(start(h.deps, 'taste-record')).rejects.toThrow('REACHED-START')
+    expect(h.divergenceSet).toHaveBeenCalled()
+    expect(h.listLosingArms).not.toHaveBeenCalled()
+    expect(h.listRefusedCandidates).not.toHaveBeenCalled()
+    expect(h.tallyFailingChecks).not.toHaveBeenCalled()
+  })
+
+  it('reads only other personas’ refusals on a sibling brief', async () => {
+    const h = harness({ losingArms: 2, siblingRefusals: 2 })
+    await expect(start(h.deps, 'sibling-refusals')).rejects.toThrow('REACHED-START')
+    expect(h.listSiblingRefusals).toHaveBeenCalled()
+    expect(h.listLosingArms).not.toHaveBeenCalled()
+    expect(h.divergenceSet).not.toHaveBeenCalled()
+  })
+
+  /**
+   * A source with nothing in it refuses on its own terms rather than falling back. Falling
+   * back would be the one failure that never shows up as one: every arm of the experiment
+   * would quietly become the failure-record arm, on exactly the personas where the
+   * difference was hardest to see.
+   */
+  it('refuses a taste brief with an empty divergence set, even when the failure record is full', async () => {
+    const reason = await (async () => {
+      const verdict = await start(harness({ losingArms: 6, refusals: 6 }).deps, 'taste-record')
+      expect(verdict.ok).toBe(false)
+      return verdict.ok ? '' : verdict.reason
+    })()
+    expect(reason).toContain('never disagreed')
+  })
+
+  it('refuses a sibling brief when no other persona has been refused anything', async () => {
+    const verdict = await start(harness({ losingArms: 6 }).deps, 'sibling-refusals')
+    expect(verdict.ok).toBe(false)
+    expect(verdict.ok === false && verdict.reason).toContain('anti-library')
   })
 })

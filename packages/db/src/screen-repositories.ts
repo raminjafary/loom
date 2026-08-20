@@ -26,9 +26,10 @@ import {
   type VariantScreenRunRecord,
 } from '@loom/domain'
 import type { CampaignRepositoryPort, ScreenRepositoryPort } from '@loom/application'
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
+  agentPersona,
   agentRun,
   personaVariant,
   personaVariantSet,
@@ -630,6 +631,73 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
         reason: row.reason ?? '',
         models: [...(row.models ?? [])].sort(),
         items: itemsByVariant.get(row.variantId) ?? [],
+        refusedAt: row.decidedAt ?? row.createdAt,
+      })),
+      total: counted?.total ?? 0,
+    }
+  },
+
+  async listSiblingRefusals(workspaceId, excludePersonaId, limit) {
+    /**
+     * Every refusal in the workspace except this persona's own.
+     *
+     * Deliberately not the per-item detail `listRefusedCandidates` gathers. A sibling refusal
+     * is evidence about the *shape* of a prompt that failed here, and the items it failed
+     * belong to another persona's held-out set — positions a proposer cannot compare across
+     * and tasks that are not its own work. Quoting them would spend the brief's length making
+     * somebody else's set look like this persona's.
+     */
+    const where = and(
+      eq(variantScreen.workspaceId, workspaceId),
+      eq(variantScreen.decision, 'rejected'),
+      ne(personaVariant.personaId, excludePersonaId),
+    )
+    const [rows, [counted]] = await Promise.all([
+      db
+        .select({
+          variantId: personaVariant.id,
+          personaName: agentPersona.name,
+          markdownSource: personaVariant.markdownSource,
+          rationale: personaVariant.rationale,
+          reason: variantScreen.reason,
+          decidedAt: variantScreen.decidedAt,
+          createdAt: variantScreen.createdAt,
+          models: sql<
+            string[] | null
+          >`array_remove(array_agg(distinct ${variantScreenRun.model}), null)`,
+        })
+        .from(variantScreen)
+        .innerJoin(personaVariant, eq(personaVariant.id, variantScreen.variantId))
+        .innerJoin(agentPersona, eq(agentPersona.id, personaVariant.personaId))
+        .leftJoin(variantScreenRun, eq(variantScreenRun.screenId, variantScreen.id))
+        .where(where)
+        .groupBy(
+          personaVariant.id,
+          agentPersona.name,
+          personaVariant.markdownSource,
+          personaVariant.rationale,
+          variantScreen.reason,
+          variantScreen.decidedAt,
+          variantScreen.createdAt,
+        )
+        .orderBy(desc(variantScreen.decidedAt))
+        .limit(limit),
+      db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(variantScreen)
+        .innerJoin(personaVariant, eq(personaVariant.id, variantScreen.variantId))
+        .where(where),
+    ])
+
+    return {
+      candidates: rows.map((row) => ({
+        variantId: asPersonaVariantId(row.variantId),
+        personaName: row.personaName,
+        markdownSource: row.markdownSource,
+        rationale: row.rationale,
+        reason: row.reason ?? '',
+        models: [...(row.models ?? [])].sort(),
+        items: [],
         refusedAt: row.decidedAt ?? row.createdAt,
       })),
       total: counted?.total ?? 0,

@@ -20,6 +20,7 @@ import {
   personaFormToMarkdown,
   personaSaveDiscrepancies,
   compareScreenedSiblings,
+  type BriefSource,
   type CampaignReport,
   type CampaignRow,
   type PersonaLesson,
@@ -84,6 +85,7 @@ const props = defineProps<{
    */
   startProposer?: (input: {
     personaId: string
+    source?: BriefSource
   }) => Promise<{ started: boolean; reason: string | null }>
   /**
    * Campaigns: this persona's vintages replayed against its own past work, at real cost.
@@ -241,13 +243,40 @@ const screenArmOf = (variantId: string | null) =>
  */
 const proposerBusy = ref(false)
 const proposerNotice = ref<string | null>(null)
+/**
+ * Which record the session is shown, chosen here because it is the variable the two
+ * experiments turn on and there is nowhere else a person would set it. Defaulted to the
+ * failure record — what every proposer was shown before there was a choice.
+ */
+const proposerSource = ref<BriefSource>('failure-record')
+
+const PROPOSER_SOURCES: { value: BriefSource; label: string; hint: string }[] = [
+  {
+    value: 'failure-record',
+    label: 'What it has already lost',
+    hint: 'Candidates measured and not kept, candidates the screen refused, and the checks this persona\'s work fails on.',
+  },
+  {
+    value: 'taste-record',
+    label: 'Where you disagreed with the checks',
+    hint: 'Runs that passed and were discarded, and runs that failed and were taken anyway — the part no check can see.',
+  },
+  {
+    value: 'sibling-refusals',
+    label: 'What the screen refused for other personas',
+    hint: 'Prompts that failed here for somebody else. Nothing about this persona\'s own history.',
+  },
+]
 
 const askForCandidates = async () => {
   if (!props.startProposer || proposerBusy.value) return
   proposerBusy.value = true
   proposerNotice.value = null
   try {
-    const result = await props.startProposer({ personaId: editingId.value })
+    const result = await props.startProposer({
+      personaId: editingId.value,
+      source: proposerSource.value,
+    })
     proposerNotice.value = result.started
       ? 'A proposer session is reading the repository. Its candidates arrive here as a search.'
       : result.reason
@@ -1309,10 +1338,28 @@ const harnessSummary = (persona: AgentPersona): string => {
         <h4>Ask for candidate prompts</h4>
         <p class="hint">
           A separate session reads this repository and writes two or three candidates for this
-          persona — shown what has already been measured and lost here, which a run of the
+          persona — shown one record of what has already happened here, which a run of the
           persona itself has no way to know. Nothing goes live: the candidates are measured
           against the prompt in use, and you decide.
         </p>
+        <!--
+          One record per session, and the choice is a radio rather than a set of checkboxes
+          because that is the rule rather than the layout: a brief carrying every record would
+          leave the comparison between them with no arm to compare against.
+        -->
+        <div class="proposer-sources">
+          <label v-for="option in PROPOSER_SOURCES" :key="option.value">
+            <input
+              type="radio"
+              name="proposer-source"
+              :value="option.value"
+              :checked="proposerSource === option.value"
+              @change="proposerSource = option.value"
+            />
+            <span class="source-label">{{ option.label }}</span>
+            <span class="hint">{{ option.hint }}</span>
+          </label>
+        </div>
         <div class="trial-actions">
           <button type="button" class="link" :disabled="proposerBusy" @click="askForCandidates">
             {{ proposerBusy ? 'Starting…' : 'Ask a proposer' }}

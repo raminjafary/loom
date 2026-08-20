@@ -1095,6 +1095,16 @@ export const contract = {
           personaId: z.string(),
           threadId: z.string(),
           repositoryId: z.string(),
+          /**
+           * Which record to show the session — its own failures, the runs where the checks
+           * and a human disagreed, or the refusals other personas collected. One record per
+           * session and never a mixture: two hypotheses turn on the comparison between them,
+           * and a brief carrying everything would answer both "yes, together".
+           *
+           * Omitted means the failure record, which is what every proposer was shown before
+           * the choice existed.
+           */
+          source: z.enum(['failure-record', 'taste-record', 'sibling-refusals']).optional(),
         }),
       )
       .output(

@@ -84,11 +84,15 @@ import {
   proposerBrief,
   proposerEligibility,
   proposerSubjectEligibility,
+  MAX_PROPOSER_DIVERGENT_RUNS,
   MAX_PROPOSER_LOSING_ARMS,
+  MAX_PROPOSER_SIBLING_REFUSALS,
   MAX_PROPOSER_FAILING_CHECKS,
   MAX_PROPOSER_REFUSALS,
   type LosingArm,
+  type BriefSource,
   type ProposerShown,
+  type SiblingRefusal,
   type SelfDeployment,
   type SelfStateRule,
   type RefusedCandidate,
@@ -2196,6 +2200,12 @@ export const startVariantProposer = async (
     threadId: ThreadId
     repositoryId: RepositoryId
     personaId: AgentPersonaId
+    /**
+     * Which record to show it. Defaults to the failure record, which is what every proposer
+     * before this parameter existed was shown — a default that changes nothing for a caller
+     * that does not care, and a variable for the two experiments that do.
+     */
+    source?: BriefSource
   },
 ): Promise<
   { ok: true; run: AgentRun; shown: ProposerShown } | { ok: false; reason: string }
@@ -2263,22 +2273,49 @@ export const startVariantProposer = async (
     }
   }
 
-  const [losing, refused, superseded, weakness] = await Promise.all([
-    deps.personaVariants.listLosingArms(
-      input.workspaceId,
-      persona.id,
-      MAX_PROPOSER_LOSING_ARMS,
-    ),
-    deps.screens.listRefusedCandidates(input.workspaceId, persona.id, MAX_PROPOSER_REFUSALS),
+  const source: BriefSource = input.source ?? 'failure-record'
+  const onFailures = source === 'failure-record'
+
+  /**
+   * Only the source's own record is read.
+   *
+   * Not an optimisation: `proposerBrief` shows one record and would drop the rest, so
+   * querying them would be four round trips spent assembling evidence nobody is shown — and,
+   * worse, a standing invitation for a later edit to render what is already in hand and
+   * quietly collapse the comparison the sources exist for.
+   */
+  const [losing, refused, superseded, weakness, divergence, siblings] = await Promise.all([
+    onFailures
+      ? deps.personaVariants.listLosingArms(input.workspaceId, persona.id, MAX_PROPOSER_LOSING_ARMS)
+      : Promise.resolve({ arms: [], total: 0 }),
+    onFailures
+      ? deps.screens.listRefusedCandidates(input.workspaceId, persona.id, MAX_PROPOSER_REFUSALS)
+      : Promise.resolve({ candidates: [], total: 0 }),
     supersededPromptsFor(deps, { workspaceId: input.workspaceId, personaId: persona.id }),
     /**
      * Best-effort, and the only piece of the brief that can be missing without changing
      * whether a session opens: a proposer is worth starting on the losses and refusals
      * alone, and a histogram that cannot be read must not be the reason nothing is proposed.
      */
-    deps.agentRuns
-      .tallyFailingChecks(input.workspaceId, persona.name, MAX_PROPOSER_FAILING_CHECKS)
-      .catch(() => null),
+    onFailures
+      ? deps.agentRuns
+          .tallyFailingChecks(input.workspaceId, persona.name, MAX_PROPOSER_FAILING_CHECKS)
+          .catch(() => null)
+      : Promise.resolve(null),
+    /**
+     * By persona *name*, like every other read over run history: a run carries a snapshot,
+     * and an id would answer for a row that may since have been renamed.
+     */
+    source === 'taste-record'
+      ? deps.agentRuns.divergenceSet(input.workspaceId, persona.name, MAX_PROPOSER_DIVERGENT_RUNS)
+      : Promise.resolve(null),
+    source === 'sibling-refusals'
+      ? deps.screens.listSiblingRefusals(
+          input.workspaceId,
+          persona.id,
+          MAX_PROPOSER_SIBLING_REFUSALS,
+        )
+      : Promise.resolve({ candidates: [], total: 0 }),
   ])
 
   /**
@@ -2321,8 +2358,31 @@ export const startVariantProposer = async (
         ]
   })
 
+  /** The same parse-or-drop rule the other two records get, and for the same reason. */
+  const siblingRefusals: SiblingRefusal[] = siblings.candidates.flatMap((candidate) => {
+    const body = parsedPromptBody(candidate.markdownSource)
+    return body === null
+      ? []
+      : [
+          {
+            variantId: candidate.variantId as string,
+            personaName: candidate.personaName,
+            body,
+            rationale: candidate.rationale,
+            reason: candidate.reason,
+            models: candidate.models,
+            items: candidate.items,
+            refusedAt: candidate.refusedAt,
+          },
+        ]
+  })
+
   const assembled = proposerBrief({
     personaName: persona.name,
+    source,
+    divergence,
+    siblingRefusals,
+    totalSiblingRefusals: siblings.total,
     currentBody: subject.systemPrompt,
     losingArms,
     refusedCandidates,
@@ -2361,10 +2421,14 @@ export const startVariantProposer = async (
       // The bound, in the row: "which candidates came from a session shown how much" is the
       // question a human asks of a promotion months later, and prose about it is not an
       // answer they can check.
+      source,
       losingArmsShown: assembled.shown.losingArms,
       losingArmsWithheld: assembled.shown.losingArmsWithheld,
       refusalsShown: assembled.shown.refusedCandidates,
       refusalsWithheld: assembled.shown.refusedCandidatesWithheld,
+      divergentRunsShown: assembled.shown.divergentRuns,
+      siblingRefusalsShown: assembled.shown.siblingRefusals,
+      siblingRefusalsWithheld: assembled.shown.siblingRefusalsWithheld,
     },
   })
 

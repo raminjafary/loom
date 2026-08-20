@@ -1943,6 +1943,70 @@ describe('the held-out screen', () => {
     expect(bounded.total).toBe(1)
   })
 
+  /**
+   * The anti-library: the same refusals, minus this persona's own.
+   *
+   * Only Postgres can settle the two halves that matter — that the exclusion is by persona and
+   * not by name or by set, and that each row comes back with *whose* candidate it was, which is
+   * what stops a proposer reading somebody else's refusal as its own history.
+   */
+  it('offers other personas’ refusals with whose they were, and never this persona’s own', async () => {
+    const mine = await scaffold(WS, 'sibling-mine')
+    const theirs = await scaffold(WS, 'sibling-theirs')
+
+    const refuseOne = async (s: Awaited<ReturnType<typeof scaffold>>, body: string) => {
+      const set = await screens.openReplaySet({
+        workspaceId: WS,
+        personaId: s.personaId,
+        draft: { items: [], excluded: [], eligible: 0, considered: 0 },
+        detail: 'none',
+      })
+      const opened = await variants.openSet({
+        workspaceId: WS,
+        personaId: s.personaId,
+        candidates: [{ markdownSource: body, rationale: 'terser' }],
+      })
+      await screens.openScreens({
+        workspaceId: WS,
+        setId: opened.set.id,
+        replaySetId: set.set.id,
+        variantIds: opened.variants.map((v) => v.id),
+        itemIds: [],
+      })
+      const row = (await screens.screensForSet(WS, opened.set.id)).find(
+        (entry) => entry.screen.variantId !== null,
+      )!
+      await screens.decideScreen(WS, row.screen.id, {
+        decision: 'rejected',
+        reason: 'Rejected by the held-out screen: it passed 1 of 6 items.',
+      })
+      await variants.settleSet(WS, opened.set.id, { promotedVariantId: null })
+    }
+
+    await refuseOne(mine, 'my own refused body')
+    await refuseOne(theirs, 'their refused body')
+
+    const anti = await screens.listSiblingRefusals(WS, mine.personaId, 10)
+    expect(anti.total).toBe(1)
+    expect(anti.candidates).toHaveLength(1)
+    expect(anti.candidates[0]?.markdownSource).toBe('their refused body')
+    // Whose it was, which the brief renders — a refusal read as one's own is a lesson from a
+    // screen this persona has never faced.
+    expect(anti.candidates[0]?.personaName).toBe('sibling-theirs')
+    expect(anti.candidates[0]?.reason).toContain('passed 1 of 6 items')
+
+    // Bounded rows, unbounded count, exactly as the persona's own buffer reports it.
+    const bounded = await screens.listSiblingRefusals(WS, mine.personaId, 0)
+    expect(bounded.candidates).toHaveLength(0)
+    expect(bounded.total).toBe(1)
+
+    // And the other direction, so "excluded by persona" is not satisfied by an empty table.
+    const fromTheirSide = await screens.listSiblingRefusals(WS, theirs.personaId, 10)
+    expect(fromTheirSide.candidates.map((row) => row.markdownSource)).toEqual([
+      'my own refused body',
+    ])
+  })
+
   it('counts a candidate as losing only once its search has settled, and includes one never dealt a run', async () => {
     const s = await scaffold(WS, 'buffer-2')
     const opened = await variants.openSet({
@@ -2019,10 +2083,14 @@ describe('the held-out screen', () => {
       personaId: s.personaId,
       agentRunId: proposerRun,
       shown: {
+        source: 'taste-record',
         losingArms: 2,
         refusedCandidates: 1,
         losingArmsWithheld: 17,
         refusedCandidatesWithheld: 0,
+        divergentRuns: 3,
+        siblingRefusals: 0,
+        siblingRefusalsWithheld: 0,
       },
     })
 
@@ -2031,10 +2099,16 @@ describe('the held-out screen', () => {
     // The bound as it was at start, which is the provenance a promotion is read against
     // months later — recomputing it would report today's buffer against yesterday's brief.
     expect(session?.shown).toEqual({
+      // Which record, and not only how much of it: the two experiments these sources exist
+      // for compare by record, and "one thing shown" is the same number either way.
+      source: 'taste-record',
       losingArms: 2,
       refusedCandidates: 1,
       losingArmsWithheld: 17,
       refusedCandidatesWithheld: 0,
+      divergentRuns: 3,
+      siblingRefusals: 0,
+      siblingRefusalsWithheld: 0,
     })
 
     // Every other run in the workspace is not a proposer, which is what refuses a submission.
@@ -2050,10 +2124,14 @@ describe('the held-out screen', () => {
     const other = await scaffold(WS, 'proposer-3')
     const run = await addRun(WS, s, { personaName: 'variant-proposer' })
     const shown = {
+      source: 'failure-record' as const,
       losingArms: 1,
       refusedCandidates: 0,
       losingArmsWithheld: 0,
       refusedCandidatesWithheld: 0,
+      divergentRuns: 0,
+      siblingRefusals: 0,
+      siblingRefusalsWithheld: 0,
     }
     await variants.openProposerSession({
       workspaceId: WS,

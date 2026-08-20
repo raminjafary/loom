@@ -3,7 +3,7 @@
 [![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
-![tests](https://img.shields.io/badge/tests-2%2C041-brightgreen)
+![tests](https://img.shields.io/badge/tests-2%2C059-brightgreen)
 
 **Run ten coding agents at once, each in its own git clone and container. Nothing any of them
 says about its own work is taken as evidence: spend is counted at the network boundary, "done"

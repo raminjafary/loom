@@ -15,6 +15,7 @@ import {
   parseMention,
   SELECTABLE_MODELS,
   threadsByParentMessage,
+  type BriefSource,
   waitingCount,
 } from '@loom/client-core'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -129,7 +130,10 @@ const setModelRouting = (enabled: boolean) => {
   void agent.setModelRoutingEnabled(enabled)
 }
 
-const startProposer = async (input: { personaId: string }) => {
+const startProposer = async (input: {
+  personaId: string
+  source?: BriefSource
+}) => {
   const threadId = snapshot.value.activeThread?.id ?? null
   if (!threadId) {
     return {
@@ -151,7 +155,12 @@ const startProposer = async (input: { personaId: string }) => {
             'Start a run in the one you want a proposer to read, then ask again.',
     }
   }
-  return agent.startProposer({ personaId: input.personaId, threadId, repositoryId })
+  return agent.startProposer({
+    personaId: input.personaId,
+    threadId,
+    repositoryId,
+    ...(input.source === undefined ? {} : { source: input.source }),
+  })
 }
 
 const selectExpertisePersona = async (personaId: string) => {

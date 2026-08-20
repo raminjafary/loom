@@ -429,7 +429,7 @@ describe('the variant search panel', () => {
    * human to ignore it.
    */
   const openedIdle = async (
-    startProposer: (input: { personaId: string }) => Promise<{
+    startProposer: (input: { personaId: string; source?: string }) => Promise<{
       started: boolean
       reason: string | null
     }>,
@@ -457,8 +457,37 @@ describe('the variant search panel', () => {
     await flushPromises()
     // The callback actually fired with the right persona — an unwired handler passes every
     // static check while doing nothing.
-    expect(calls).toEqual([{ personaId: 'p1' }])
+    // The failure record is the default: it is what every proposer was shown before there was
+    // a choice, and a caller with no opinion must not silently get a different experiment.
+    expect(calls).toEqual([{ personaId: 'p1', source: 'failure-record' }])
     expect(wrapper.get('.trial.proposer').text()).toContain('reading the repository')
+  })
+
+  /**
+   * One record per session, which is the rule the two hypotheses rest on rather than a
+   * layout choice — hence radios, and hence a test that the choice actually travels.
+   */
+  it('sends the record a person chose, and offers them one at a time', async () => {
+    const calls: { personaId: string; source?: string }[] = []
+    const wrapper = await openedIdle(async (input) => {
+      calls.push(input)
+      return { started: true, reason: null }
+    })
+    const options = wrapper.findAll('.proposer-sources input[type="radio"]')
+    expect(options).toHaveLength(3)
+    expect(options.every((option) => option.attributes('name') === 'proposer-source')).toBe(true)
+
+    await options[1]!.trigger('change')
+    await wrapper.get('.trial.proposer .link').trigger('click')
+    await flushPromises()
+    expect(calls).toEqual([{ personaId: 'p1', source: 'taste-record' }])
+  })
+
+  it('says what each record is, so the choice is not three words', async () => {
+    const wrapper = await openedIdle(async () => ({ started: true, reason: null }))
+    const text = wrapper.get('.proposer-sources').text()
+    expect(text).toContain('passed and were discarded')
+    expect(text).toContain('failed here for somebody else')
   })
 
   /**

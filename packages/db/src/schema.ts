@@ -2328,10 +2328,24 @@ export const personaProposerSession = pgTable(
     agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
       onDelete: 'set null',
     }),
+    /**
+     * Which record this session was shown — 'failure-record', 'taste-record' or
+     * 'sibling-refusals'.
+     *
+     * Stored rather than derived from which counts are non-zero, because the two are not the
+     * same statement: a taste brief over a set that happened to hold one run and a failure
+     * brief with one loss both have "one thing shown", and the experiments these sources exist
+     * for compare *by record*. Defaulted to the failure record, which is what every session
+     * before this column was shown.
+     */
+    source: text('source').notNull().default('failure-record'),
     losingArmsShown: integer('losing_arms_shown').notNull().default(0),
     losingArmsWithheld: integer('losing_arms_withheld').notNull().default(0),
     refusalsShown: integer('refusals_shown').notNull().default(0),
     refusalsWithheld: integer('refusals_withheld').notNull().default(0),
+    divergentRunsShown: integer('divergent_runs_shown').notNull().default(0),
+    siblingRefusalsShown: integer('sibling_refusals_shown').notNull().default(0),
+    siblingRefusalsWithheld: integer('sibling_refusals_withheld').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

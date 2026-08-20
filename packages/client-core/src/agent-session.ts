@@ -37,6 +37,15 @@ import type { LoomApi } from './api.js'
 export type CampaignRow = Awaited<ReturnType<LoomApi['campaign']['listForPersona']>>[number]
 /** What one campaign measured — arms, scores, spend, and the sentence. */
 export type CampaignReport = NonNullable<Awaited<ReturnType<LoomApi['campaign']['report']>>>
+/**
+ * Which record a proposer session is shown, taken from the contract rather than restated.
+ *
+ * A second copy of this union would be a second answer to "what may be chosen", and the one
+ * that drifted would be the client's — which is the half a human clicks.
+ */
+export type BriefSource = NonNullable<
+  Parameters<LoomApi['persona']['startProposer']>[0]['source']
+>
 /** One lesson a persona holds about one repository, as the contract puts it on the wire. */
 export type PersonaLesson = Awaited<ReturnType<LoomApi['experience']['listForPersona']>>[number]
 import type { PushRegistration } from './push.js'
@@ -509,6 +518,11 @@ export interface AgentSession {
     personaId: string
     threadId: string
     repositoryId: string
+    /**
+     * Which record to show it. Omitted is the failure record — the only one there was before
+     * the choice existed, and the one a caller with no opinion should get.
+     */
+    source?: BriefSource
   }): Promise<{ started: boolean; reason: string | null }>
   /**
    * Campaigns: a persona's vintages replayed against its own past work, at real cost.

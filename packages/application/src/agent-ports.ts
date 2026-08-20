@@ -13,6 +13,7 @@ import type {
   ReplayCampaignRecord,
   ReplayCampaignRunRecord,
   RefusedCandidateRecord,
+  SiblingRefusalRecord,
   WeaknessRecord,
   ReplayCheckOutcome,
   ReplayCampaignId,
@@ -1060,6 +1061,21 @@ export interface ScreenRepositoryPort {
     personaId: AgentPersonaId,
     limit: number,
   ): Promise<{ candidates: RefusedCandidateRecord[]; total: number }>
+
+  /**
+   * The same refusals, for every persona in this workspace **except** one — the anti-library.
+   *
+   * Excluding rather than naming a sibling, because "which other persona" is not a question
+   * whoever opens a proposer should have to answer: the hypothesis is about failure modes of
+   * the *task domain*, so the material is the workspace's refusals minus this persona's own.
+   * Each row carries whose it was, which the brief renders — a refusal read as one's own is a
+   * lesson learned from a screen this persona has never faced.
+   */
+  listSiblingRefusals(
+    workspaceId: WorkspaceId,
+    excludePersonaId: AgentPersonaId,
+    limit: number,
+  ): Promise<{ candidates: SiblingRefusalRecord[]; total: number }>
 }
 
 /**

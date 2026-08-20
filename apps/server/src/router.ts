@@ -1349,6 +1349,7 @@ export const router = os.router({
           personaId: asAgentPersonaId(input.personaId),
           threadId: asThreadId(input.threadId),
           repositoryId: asRepositoryId(input.repositoryId),
+          ...(input.source === undefined ? {} : { source: input.source }),
         })
         return verdict.ok
           ? { started: true as const, reason: null, agentRunId: verdict.run.id as string }

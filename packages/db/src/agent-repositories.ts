@@ -39,6 +39,7 @@ import {
   type MapNodeKind,
   type WorkspaceId,
   type WorkspaceRunControl,
+  type ProposerShown,
 } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
 import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
@@ -2166,10 +2167,14 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
         workspaceId: input.workspaceId,
         personaId: input.personaId,
         agentRunId: input.agentRunId,
+        source: input.shown.source,
         losingArmsShown: input.shown.losingArms,
         losingArmsWithheld: input.shown.losingArmsWithheld,
         refusalsShown: input.shown.refusedCandidates,
         refusalsWithheld: input.shown.refusedCandidatesWithheld,
+        divergentRunsShown: input.shown.divergentRuns,
+        siblingRefusalsShown: input.shown.siblingRefusals,
+        siblingRefusalsWithheld: input.shown.siblingRefusalsWithheld,
       })
       /**
        * A second row for the same run would be two answers to "which persona may this
@@ -2193,10 +2198,14 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
     return {
       personaId: asAgentPersonaId(row.personaId),
       shown: {
+        source: row.source as ProposerShown['source'],
         losingArms: row.losingArmsShown,
         refusedCandidates: row.refusalsShown,
         losingArmsWithheld: row.losingArmsWithheld,
         refusedCandidatesWithheld: row.refusalsWithheld,
+        divergentRuns: row.divergentRunsShown,
+        siblingRefusals: row.siblingRefusalsShown,
+        siblingRefusalsWithheld: row.siblingRefusalsWithheld,
       },
     }
   },

@@ -100,7 +100,7 @@ export const useAgentStore = defineStore('agent', () => {
       session.promoteVariant(input),
     discardVariants: (personaId: string) => session.discardVariants(personaId),
     /** The generating half — a separate session writes the next set of candidates. */
-    startProposer: (input: { personaId: string; threadId: string; repositoryId: string }) =>
+    startProposer: (input: Parameters<typeof session.startProposer>[0]) =>
       session.startProposer(input),
     /**
      * Campaigns — pass-throughs, because the panel owns what it has loaded. See the session's
