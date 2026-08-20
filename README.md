@@ -3,7 +3,7 @@
 [![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
-![tests](https://img.shields.io/badge/tests-1%2C778-brightgreen)
+![tests](https://img.shields.io/badge/tests-1%2C825-brightgreen)
 
 **Run many AI coding agents at once on your own hardware. Each gets its own git clone and
 container sandbox. You stay in the loop only where it matters: approving a risky command,
@@ -31,7 +31,9 @@ real software work rather than a demo:
   rather than taken from a model's self-report
 - 🧠 **Persona memory and self-improving prompts that are measured, not assumed** — an agent may
   rewrite its own instructions inside a ceiling a human sets, and the platform runs both versions
-  to find out whether the edit actually helped
+  to find out whether the edit actually helped. Candidates come from a session that is *not* the
+  run being edited, shown what has already lost — a session grading its own transcript writes the
+  prompt that would have made its own last hour look better
 - 🗺️ **[Expertise](#expertise-and-the-colosseum): a map an agent built and can be held to** — a
   mastery run's deliverable is a graph of a codebase rather than a diff, every claim carries how
   it was arrived at, and retrieval is a trial with a deliberately-withheld baseline, because an
@@ -408,7 +410,6 @@ each one exists because the next depends on it.
 
 | | |
 |---|---|
-| **A proposer that is not the run being edited** | Candidates are currently written by the run that just did the work, about itself. A separate read-only session, shown the losing arms and the rejected-edit buffer, is the mirror of the blinded verifier that already exists |
 | **Self-modification over Loom's own source** | Tiers 3 and 4 — code and dependencies — build-and-promote with a health-checked swap and a retained previous revision. The rollback drill that gated them now passes (Phase 3b) |
 | **Model routing** | A definition-of-done failure retries once at a higher tier, then a `(task class, model)` table read from runs already happening. The largest single cost lever in the system |
 | **Other execution backends** | Codex, vLLM and Cursor adapters — the port is enforced today, but nothing else has been driven through it (Phase 3) |
