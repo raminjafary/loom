@@ -102,6 +102,16 @@ export const useAgentStore = defineStore('agent', () => {
     /** The generating half — a separate session writes the next set of candidates. */
     startProposer: (input: { personaId: string; threadId: string; repositoryId: string }) =>
       session.startProposer(input),
+    /**
+     * Campaigns — pass-throughs, because the panel owns what it has loaded. See the session's
+     * note: a campaign list in store state would refresh an experiment's rows on every persona
+     * edit, and tie its freshness to which panel is open.
+     */
+    openCampaign: (input: Parameters<typeof session.openCampaign>[0]) =>
+      session.openCampaign(input),
+    listCampaigns: (personaId: string) => session.listCampaigns(personaId),
+    campaignReport: (campaignId: string) => session.campaignReport(campaignId),
+    cancelCampaign: (campaignId: string) => session.cancelCampaign(campaignId),
     setModelRoutingEnabled: (enabled: boolean) => session.setModelRoutingEnabled(enabled),
     unbindRepository: (input: { repositoryId: string; acknowledge?: boolean }) =>
       session.unbindRepository(input),

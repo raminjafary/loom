@@ -20,6 +20,8 @@ import {
   personaFormToMarkdown,
   personaSaveDiscrepancies,
   compareScreenedSiblings,
+  type CampaignReport,
+  type CampaignRow,
   describeScreenedSiblings,
   describeRevision,
   personaHistory,
@@ -82,6 +84,23 @@ const props = defineProps<{
   startProposer?: (input: {
     personaId: string
   }) => Promise<{ started: boolean; reason: string | null }>
+  /**
+   * Campaigns: this persona's vintages replayed against its own past work, at real cost.
+   *
+   * Callbacks rather than data, and the panel owns what it has loaded — the session's reason:
+   * a campaign is an instrument rather than a persona field, so an experiment's rows must not
+   * refresh because somebody edited a description. Optional as a group; absent means this
+   * mount does not offer the gesture and shows nothing about it.
+   */
+  listCampaigns?: (personaId: string) => Promise<CampaignRow[]>
+  openCampaign?: (input: {
+    personaId: string
+    label: string
+    capUsd: number | null
+    revisionIds: readonly string[]
+  }) => Promise<{ opened: boolean; campaignId: string | null; detail: string }>
+  campaignReport?: (campaignId: string) => Promise<CampaignReport | null>
+  cancelCampaign?: (campaignId: string) => Promise<{ cancelled: boolean; detail: string }>
 }>()
 
 const emit = defineEmits<{
@@ -236,6 +255,89 @@ const siblingReadings = computed(() =>
     (variantId) => `candidate ${candidateOf(variantId)?.rationale || variantId}`,
   ),
 )
+
+/**
+ * The campaigns of the persona being edited, and the newest one's report.
+ *
+ * Loaded on demand and kept here rather than in the store, per the props' note. The report is
+ * fetched only for the newest campaign: a panel that fetched every report would spend a read
+ * per experiment to render lines nobody scrolled to, and an older campaign's score is one
+ * click away.
+ */
+const campaigns = ref<CampaignRow[]>([])
+const campaignDetail = ref<CampaignReport | null>(null)
+const campaignBusy = ref(false)
+const campaignNotice = ref<string | null>(null)
+const campaignCap = ref<number | null>(5)
+/** Which vintages to measure beside the document in use, by revision id. */
+const campaignVintages = ref<string[]>([])
+
+const loadCampaigns = async () => {
+  if (!props.listCampaigns || editingId.value === '') {
+    campaigns.value = []
+    campaignDetail.value = null
+    return
+  }
+  campaigns.value = await props.listCampaigns(editingId.value)
+  const newest = campaigns.value[0]
+  campaignDetail.value =
+    newest && props.campaignReport ? await props.campaignReport(newest.id) : null
+}
+
+/**
+ * Reloaded when the persona being edited changes, and only then.
+ *
+ * Not on every keystroke in the form: a campaign's rows have nothing to do with an unsaved
+ * draft, and re-reading them while somebody types would make an experiment's list flicker for
+ * reasons that are not about the experiment.
+ */
+watch(editingId, () => {
+  campaignVintages.value = []
+  campaignNotice.value = null
+  void loadCampaigns()
+})
+
+const openCampaignNow = async () => {
+  if (!props.openCampaign || campaignBusy.value || editingId.value === '') return
+  campaignBusy.value = true
+  campaignNotice.value = null
+  try {
+    const result = await props.openCampaign({
+      personaId: editingId.value,
+      label: `${editingPersona.value?.name ?? 'persona'} — ${new Date().toISOString().slice(0, 10)}`,
+      capUsd: campaignCap.value,
+      revisionIds: campaignVintages.value,
+    })
+    campaignNotice.value = result.detail
+    await loadCampaigns()
+  } finally {
+    campaignBusy.value = false
+  }
+}
+
+const stopCampaign = async (campaignId: string) => {
+  if (!props.cancelCampaign || campaignBusy.value) return
+  campaignBusy.value = true
+  try {
+    campaignNotice.value = (await props.cancelCampaign(campaignId)).detail
+    await loadCampaigns()
+  } finally {
+    campaignBusy.value = false
+  }
+}
+
+const toggleVintage = (revisionId: string) => {
+  campaignVintages.value = campaignVintages.value.includes(revisionId)
+    ? campaignVintages.value.filter((id) => id !== revisionId)
+    : [...campaignVintages.value, revisionId]
+}
+
+const CAMPAIGN_STATUS_LABEL: Record<CampaignRow['status'], string> = {
+  running: 'running',
+  finished: 'finished — every arm ran every item',
+  halted: 'stopped by its cap — the score is partial',
+  cancelled: 'stopped by a person — the score is partial',
+}
 
 const candidateOf = (variantId: string | null) =>
   variantId === null
@@ -1136,6 +1238,92 @@ const harnessSummary = (persona: AgentPersona): string => {
           </button>
         </div>
         <p v-if="proposerNotice" class="hint proposer-notice">{{ proposerNotice }}</p>
+      </section>
+
+      <!--
+        Campaigns, below the search and above the history: the search decides what this persona
+        *will* be, and a campaign measures what its past versions actually did. It is the one
+        section here that spends money on purpose, which is why the cap is a field beside the
+        button rather than a setting somewhere else — a person authorizing runs should see the
+        ceiling they are authorizing.
+      -->
+      <section v-if="mode === 'edit' && listCampaigns" class="campaigns">
+        <h4>Measured against its own past work</h4>
+        <p class="hint">
+          A campaign replays this persona's own decided tasks, at the commits they opened at,
+          and scores them with the repository's definition of done. Each vintage you add is a
+          full pass over the set — real runs, and real money — so it stops at its cap and says
+          so rather than quietly costing more.
+        </p>
+
+        <div class="campaign-form">
+          <label>
+            Cap (dollars)
+            <input v-model.number="campaignCap" type="number" min="1" step="1" />
+          </label>
+          <button
+            type="button"
+            :disabled="campaignBusy || !openCampaign"
+            @click="openCampaignNow"
+          >
+            Open a campaign
+          </button>
+        </div>
+
+        <!--
+          The vintages, from the history this editor already has. Checkboxes rather than a
+          select: measuring two past versions against the current one in a single campaign is
+          the ordinary case, and the alternative is three campaigns and three sets.
+        -->
+        <ul v-if="history.length > 0" class="campaign-vintages">
+          <li v-for="revision in history" :key="revision.id">
+            <label>
+              <input
+                type="checkbox"
+                :checked="campaignVintages.includes(revision.id)"
+                @change="toggleVintage(revision.id)"
+              />
+              {{ describeRevision(revision) }}
+            </label>
+          </li>
+        </ul>
+
+        <p v-if="campaignNotice" class="hint campaign-notice">{{ campaignNotice }}</p>
+
+        <ul v-if="campaigns.length > 0" class="campaign-list">
+          <li v-for="campaign in campaigns" :key="campaign.id">
+            <strong>{{ campaign.label }}</strong>
+            <span class="campaign-status" :class="campaign.status">
+              {{ CAMPAIGN_STATUS_LABEL[campaign.status] }}
+            </span>
+            <span v-if="campaign.capUsd !== null">cap ${{ campaign.capUsd.toFixed(2) }}</span>
+            <button
+              v-if="campaign.status === 'running' && cancelCampaign"
+              type="button"
+              class="link"
+              :disabled="campaignBusy"
+              @click="stopCampaign(campaign.id)"
+            >
+              Stop
+            </button>
+          </li>
+        </ul>
+
+        <!--
+          The newest campaign's score. `detail` is rendered as it arrives, including the
+          leading "**Partial.**" for one that stopped early — the number and the caveat are one
+          sentence on the server precisely so a client cannot separate them.
+        -->
+        <div v-if="campaignDetail" class="campaign-report">
+          <p class="detail">{{ campaignDetail.detail }}</p>
+          <p class="hint">
+            Spent ${{ campaignDetail.spentUsd.toFixed(2) }}<template
+              v-if="campaignDetail.capUsd !== null"
+            >
+              of ${{ campaignDetail.capUsd.toFixed(2) }}</template
+            >.
+          </p>
+        </div>
       </section>
 
       <section v-if="mode === 'edit' && history.length > 0" class="history">

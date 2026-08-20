@@ -5,6 +5,7 @@ import type {
   PromptTrial,
   VariantSearch,
 } from '@loom/api-contract'
+import type { CampaignReport, CampaignRow } from '@loom/client-core'
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PersonaEditor from './PersonaEditor.vue'
@@ -477,6 +478,125 @@ describe('the variant search panel', () => {
   it('does not offer a proposer while a search is already being measured', async () => {
     const wrapper = await openedSearch(search())
     expect(wrapper.find('.trial.proposer').exists()).toBe(false)
+  })
+
+  /**
+   * Campaigns on the panel.
+   *
+   * The one thing a client must not be able to do is separate a partial score from the word
+   * "partial" — the server writes them as one sentence for that reason — so the assertions
+   * are about what a reader sees, not about the arithmetic.
+   */
+  describe('campaigns', () => {
+    const row = (over: Partial<CampaignRow> & { id: string }): CampaignRow => ({
+      label: 'swe — 2026-08-20',
+      status: 'running' as const,
+      capUsd: 5,
+      haltReason: null,
+      createdAt: new Date(0),
+      finishedAt: null,
+      ...over,
+    })
+
+    const openedEditor = async (over: {
+      campaigns?: CampaignRow[]
+      report?: CampaignReport | null
+      open?: (input: unknown) => Promise<{ opened: boolean; campaignId: string | null; detail: string }>
+      cancel?: (campaignId: string) => Promise<{ cancelled: boolean; detail: string }>
+      revisions?: PersonaRevision[]
+    } = {}) => {
+      const wrapper = mount(PersonaEditor, {
+        props: {
+          personas: [persona()],
+          capabilities: [],
+          attachments: [],
+          revisions: over.revisions ?? [],
+          listCampaigns: async () => over.campaigns ?? [],
+          campaignReport: async () => over.report ?? null,
+          openCampaign:
+            over.open ??
+            (async () => ({ opened: true, campaignId: 'camp_1', detail: '2 arms over 8 items.' })),
+          cancelCampaign: over.cancel ?? (async () => ({ cancelled: true, detail: 'Stopped.' })),
+        },
+      })
+      await wrapper.get('.row-actions .link').trigger('click')
+      await flushPromises()
+      return wrapper
+    }
+
+    it('says what a campaign costs before offering to open one', async () => {
+      const wrapper = await openedEditor()
+      const text = wrapper.get('.campaigns').text()
+      expect(text).toContain('real runs, and real money')
+      expect(text).toContain('stops at its cap')
+      expect(wrapper.get('.campaign-form input').attributes('type')).toBe('number')
+    })
+
+    it('offers each past vintage as an arm, from the history it already has', async () => {
+      const wrapper = await openedEditor({
+        revisions: [
+          {
+            id: 'rev_1',
+            personaId: 'p1',
+            markdownSource: 'older',
+            replacedByKind: 'agent_run' as const,
+            replacedByRunId: 'run_1',
+            rationale: 'shorter',
+            createdAt: new Date(1_000).toISOString(),
+          },
+        ],
+      })
+      expect(wrapper.findAll('.campaign-vintages li')).toHaveLength(1)
+    })
+
+    it('shows what the opener said, whether it opened anything or not', async () => {
+      const wrapper = await openedEditor({
+        open: async () => ({
+          opened: false,
+          campaignId: null,
+          detail: 'There is not enough of this persona\'s own work to replay.',
+        }),
+      })
+      await wrapper.get('.campaign-form button').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.campaign-notice').text()).toContain('not enough of this persona')
+    })
+
+    it('renders a halted campaign as partial, and never only its rate', async () => {
+      const wrapper = await openedEditor({
+        campaigns: [row({ id: 'camp_1', status: 'halted', haltReason: 'The cap is reached.' })],
+        report: {
+          label: 'swe — 2026-08-20',
+          status: 'halted' as const,
+          detail: '**Partial.** The cap of $5.00 is reached. 50% on the items that were scored.',
+          capUsd: 5,
+          spentUsd: 5.4,
+          arms: [],
+        },
+      })
+      const text = wrapper.get('.campaigns').text()
+      expect(text).toContain('**Partial.**')
+      expect(text).toContain('stopped by its cap — the score is partial')
+      // The spend is shown against the cap it crossed, not on its own.
+      expect(text).toContain('Spent $5.40 of $5.00')
+    })
+
+    it('offers Stop only while a campaign is running', async () => {
+      const running = await openedEditor({ campaigns: [row({ id: 'camp_1' })] })
+      expect(running.get('.campaign-list button').text()).toBe('Stop')
+      const finished = await openedEditor({
+        campaigns: [row({ id: 'camp_1', status: 'finished' })],
+      })
+      expect(finished.find('.campaign-list button').exists()).toBe(false)
+    })
+
+    it('shows nothing about campaigns where the gesture is not offered', async () => {
+      const wrapper = mount(PersonaEditor, {
+        props: { personas: [persona()], capabilities: [], attachments: [], revisions: [] },
+      })
+      await wrapper.get('.row-actions .link').trigger('click')
+      expect(wrapper.find('.campaigns').exists()).toBe(false)
+    })
   })
 
   const openedSearch = async (variantSearch: VariantSearch) => {

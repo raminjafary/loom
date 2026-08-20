@@ -32,6 +32,11 @@ import type {
   WorkerNote,
 } from '@loom/api-contract'
 import type { LoomApi } from './api.js'
+
+/** One campaign row, as the contract puts it on the wire. */
+export type CampaignRow = Awaited<ReturnType<LoomApi['campaign']['listForPersona']>>[number]
+/** What one campaign measured — arms, scores, spend, and the sentence. */
+export type CampaignReport = NonNullable<Awaited<ReturnType<LoomApi['campaign']['report']>>>
 import type { PushRegistration } from './push.js'
 
 /**
@@ -503,6 +508,30 @@ export interface AgentSession {
     threadId: string
     repositoryId: string
   }): Promise<{ started: boolean; reason: string | null }>
+  /**
+   * Campaigns: a persona's vintages replayed against its own past work, at real cost.
+   *
+   * Four thin pass-throughs rather than session state, and that is deliberate. A campaign is
+   * neither a run nor a persona field — it is an instrument a human opens, watches and reads
+   * — so the panel owns what it has loaded. Putting a campaign list in session state would
+   * make every persona edit refresh an experiment's rows, and make the experiment's freshness
+   * depend on which panel happened to be open.
+   *
+   * `openCampaign` resolves `{ opened: false, detail }` for the ordinary refusals — too
+   * little history to replay, one already running, a model nothing can price — for
+   * `startProposer`'s reason: each is a sentence about one persona, and the session banner is
+   * the wrong place for it.
+   */
+  openCampaign(input: {
+    personaId: string
+    label: string
+    capUsd: number | null
+    revisionIds: readonly string[]
+    models?: readonly string[]
+  }): Promise<{ opened: boolean; campaignId: string | null; detail: string }>
+  listCampaigns(personaId: string): Promise<CampaignRow[]>
+  campaignReport(campaignId: string): Promise<CampaignReport | null>
+  cancelCampaign(campaignId: string): Promise<{ cancelled: boolean; detail: string }>
   /**
    * Unbinds a repository, deleting its runs and their recorded spend with it.
    * Resolves `{ ok: false, reason }` when the server wants that loss acknowledged,
@@ -1581,6 +1610,51 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         patch(await readPersonasAndMatrix())
       } catch (error) {
         patch({ error: errorMessage(error) })
+      }
+    },
+
+    async openCampaign(input) {
+      try {
+        const result = await options.api.campaign.open({
+          personaId: input.personaId,
+          label: input.label,
+          capUsd: input.capUsd,
+          revisionIds: [...input.revisionIds],
+          ...(input.models === undefined ? {} : { models: [...input.models] }),
+        })
+        return result
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { opened: false, campaignId: null, detail }
+      }
+    },
+
+    async listCampaigns(personaId) {
+      try {
+        return await options.api.campaign.listForPersona({ personaId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return []
+      }
+    },
+
+    async campaignReport(campaignId) {
+      try {
+        return await options.api.campaign.report({ campaignId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return null
+      }
+    },
+
+    async cancelCampaign(campaignId) {
+      try {
+        return await options.api.campaign.cancel({ campaignId })
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { cancelled: false, detail }
       }
     },
 
