@@ -2,6 +2,7 @@ import type {
   AtlasEdgeStatus,
   DecidedRunRecord,
   LosingArmRecord,
+  ProposerShown,
   RefusedCandidateRecord,
   ReplayCheckOutcome,
   ReplayItemId,
@@ -1052,6 +1053,33 @@ export interface PersonaVariantRepositoryPort {
     personaId: AgentPersonaId,
     limit: number,
   ): Promise<{ arms: LosingArmRecord[]; total: number }>
+
+  /**
+   * Records a proposer session: this run, for that persona, shown this much of its record.
+   *
+   * Written by the platform at start, and it is what *authorizes* the submission rather than
+   * merely describing it. The persona a proposer may write candidates for cannot come from
+   * its tool call — an id in a payload is model output, the same rule tier 1 and the
+   * verifier's verdict follow — so it comes from this row.
+   *
+   * The shown counts are stored rather than recomputed: they are a fact about one session's
+   * brief, and the buffer they were drawn from grows underneath them.
+   */
+  openProposerSession(input: {
+    workspaceId: WorkspaceId
+    personaId: AgentPersonaId
+    agentRunId: AgentRunId
+    shown: ProposerShown
+  }): Promise<void>
+
+  /**
+   * Which persona a session may propose for, resolved from the run. Null for every run that
+   * is not a proposer, which is what refuses the submission rather than a check on a name.
+   */
+  findProposerSession(
+    workspaceId: WorkspaceId,
+    agentRunId: AgentRunId,
+  ): Promise<{ personaId: AgentPersonaId; shown: ProposerShown } | null>
 
   /** Notes which session the verifier is running as, so its verdict can be resolved. */
   recordVerifierRun(

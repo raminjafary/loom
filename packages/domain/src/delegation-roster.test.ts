@@ -278,6 +278,17 @@ describe('PLATFORM_STARTED_PERSONAS', () => {
   })
 
   /**
+   * Both sides of the self-improvement loop, named rather than assumed. A verifier or a
+   * proposer reached by delegation is a subtask that opens a repository with nothing to judge
+   * and nothing to propose from — the context both of them need is assembled by the platform
+   * at start and a Planner cannot supply it.
+   */
+  it('never offers either side of the variant loop', () => {
+    expect(isPlatformStartedPersona('variant-verifier')).toBe(true)
+    expect(isPlatformStartedPersona('variant-proposer')).toBe(true)
+  })
+
+  /**
    * A roster of nothing but platform-started personas says so, rather than offering an empty
    * list — the same reasoning the no-candidates message already has.
    */

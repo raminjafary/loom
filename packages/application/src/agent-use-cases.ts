@@ -70,6 +70,13 @@ import {
   screenOutcomeFor,
   tallyScreenScore,
   proposeVariantSet,
+  proposerBrief,
+  proposerSubjectEligibility,
+  MAX_PROPOSER_LOSING_ARMS,
+  MAX_PROPOSER_REFUSALS,
+  type LosingArm,
+  type ProposerShown,
+  type RefusedCandidate,
   renderVerifierTask,
   resolveVerifierChoice,
   summarizeVariantSearch,
@@ -1371,6 +1378,177 @@ const startVariantVerifier = async (
      * already been answered.
      */
   }
+}
+
+const PROPOSER_PERSONA_NAME = 'variant-proposer'
+
+/**
+ * The generating side's third piece: a session that writes candidates for a persona it has
+ * never run as.
+ *
+ * Every other path into a variant search starts from a run — `proposeOwnVariants` is a run
+ * proposing about the work it has just finished. That is where the bias is, and it is also
+ * where the *ignorance* is: a run knows what it just did and cannot know that four earlier
+ * candidates were measured and lost, or that the screen refused three more before they cost a
+ * live run, because none of that happened in its context. This assembles that record and
+ * spends a separate session on it.
+ *
+ * **It refuses rather than starting, in four cases, and every one of them is a session
+ * saved.** No proposer persona to run as; the subject is the proposer itself; a measurement
+ * already open, which is what `proposeVariantSet` would refuse the submission with an hour
+ * later; and — the one the domain owns — no record to generate from, where a proposer would
+ * know exactly what the run being edited knows.
+ *
+ * Nothing here is best-effort, which is the difference from `startVariantVerifier`. A verifier
+ * is a second opinion the platform adds to a search that is already open, so a failure there
+ * has to leave the search alone. This *is* the thing being asked for, by a human, so a
+ * failure is reported to them.
+ *
+ * **Human-initiated, and that falls out of the design rather than being a policy on top of
+ * it.** A verifier is a child of the run that proposed the candidates; a proposer has no
+ * parent it *could* be a child of — being outside the run being edited is the whole point —
+ * and `startAgentRun` lets only a human start a run with no parent.
+ */
+export const startVariantProposer = async (
+  deps: AgentDeps,
+  input: {
+    workspaceId: WorkspaceId
+    actor: Actor
+    threadId: ThreadId
+    repositoryId: RepositoryId
+    personaId: AgentPersonaId
+  },
+): Promise<
+  { ok: true; run: AgentRun; shown: ProposerShown } | { ok: false; reason: string }
+> => {
+  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+  if (!persona) throw new NotFoundError('AgentPersona')
+
+  const personas = await deps.personas.listByWorkspace(input.workspaceId)
+  const proposer = personas.find((entry) => entry.name === PROPOSER_PERSONA_NAME)
+  if (!proposer) {
+    /**
+     * Named rather than reported as a generic failure, for the reason the verifier's absence
+     * is named: the persona is resolved by name, and a feature that no-ops because somebody
+     * renamed a row is one nobody can debug from the outside.
+     */
+    return {
+      ok: false,
+      reason:
+        `No persona named "${PROPOSER_PERSONA_NAME}" exists in this workspace, so there is ` +
+        'nothing to run the proposal as. Seeding the built-ins creates it.',
+    }
+  }
+
+  const eligible = proposerSubjectEligibility({
+    proposerPersonaName: proposer.name,
+    subjectPersonaName: persona.name,
+  })
+  if (!eligible.ok) return { ok: false, reason: eligible.reason }
+
+  /**
+   * Checked here as well as at submission, and it is not a duplicate: this is what stops a
+   * whole session being spent on candidates the validator will refuse when they arrive. The
+   * check at submission is still the one that decides.
+   */
+  if (await measurementOpenFor(deps, { workspaceId: input.workspaceId, personaId: persona.id })) {
+    return {
+      ok: false,
+      reason:
+        `A measurement of "${persona.name}" is already running, and a second one would split ` +
+        'the same runs across more arms than a workspace can fill. A human settles the open ' +
+        'one first — then a proposer has one more result to read.',
+    }
+  }
+
+  const [losing, refused, superseded] = await Promise.all([
+    deps.personaVariants.listLosingArms(
+      input.workspaceId,
+      persona.id,
+      MAX_PROPOSER_LOSING_ARMS,
+    ),
+    deps.screens.listRefusedCandidates(input.workspaceId, persona.id, MAX_PROPOSER_REFUSALS),
+    supersededPromptsFor(deps, { workspaceId: input.workspaceId, personaId: persona.id }),
+  ])
+
+  /**
+   * A record whose document no longer parses is dropped rather than refused, which is the
+   * same call `supersededPromptsFor` makes and for the same reason: one unreadable row out of
+   * nineteen is not a reason to refuse a proposer the other eighteen. The totals are left
+   * alone deliberately — they count what exists, so a brief that says "5 of 6 shown" after a
+   * drop is telling the truth about the buffer rather than about its own parse.
+   */
+  const losingArms: LosingArm[] = losing.arms.flatMap((arm) => {
+    const body = parsedPromptBody(arm.markdownSource)
+    return body === null
+      ? []
+      : [
+          {
+            variantId: arm.variantId as string,
+            body,
+            rationale: arm.rationale,
+            decided: arm.decided,
+            kept: arm.kept,
+            settledAt: arm.settledAt,
+          },
+        ]
+  })
+  const refusedCandidates: RefusedCandidate[] = refused.candidates.flatMap((candidate) => {
+    const body = parsedPromptBody(candidate.markdownSource)
+    return body === null
+      ? []
+      : [
+          {
+            variantId: candidate.variantId as string,
+            body,
+            rationale: candidate.rationale,
+            reason: candidate.reason,
+            refusedAt: candidate.refusedAt,
+          },
+        ]
+  })
+
+  const assembled = proposerBrief({
+    personaName: persona.name,
+    currentBody: parsePersonaMarkdown(persona.markdownSource).systemPrompt,
+    losingArms,
+    refusedCandidates,
+    archivedBodies: superseded.map((entry) => entry.body),
+    totalLosingArms: losing.total,
+    totalRefusedCandidates: refused.total,
+  })
+  if (!assembled.ok) return { ok: false, reason: assembled.reason }
+
+  const run = await startAgentRun(deps, {
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    threadId: input.threadId,
+    repositoryId: input.repositoryId,
+    personaId: proposer.id,
+    task: assembled.brief,
+    proposeVariants: { personaId: persona.id, shown: assembled.shown },
+  })
+
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'persona.proposer_started',
+    subjectType: 'agent_persona',
+    subjectId: persona.id,
+    metadata: {
+      personaName: persona.name,
+      proposerRunId: run.id,
+      // The bound, in the row: "which candidates came from a session shown how much" is the
+      // question a human asks of a promotion months later, and prose about it is not an
+      // answer they can check.
+      losingArmsShown: assembled.shown.losingArms,
+      losingArmsWithheld: assembled.shown.losingArmsWithheld,
+      refusalsShown: assembled.shown.refusedCandidates,
+      refusalsWithheld: assembled.shown.refusedCandidatesWithheld,
+    },
+  })
+
+  return { ok: true, run, shown: assembled.shown }
 }
 
 /**
@@ -3391,6 +3569,16 @@ export const startAgentRun = async (
      * screened and count the result as a sample.
      */
     screen?: { commitSha: string; systemPrompt: string }
+    /**
+     * Start this run as the **proposer** over another persona's next search: which persona it
+     * is writing candidates for, and how much of that persona's record its brief carried.
+     *
+     * Recorded before dispatch for the reason a mastery run's map is opened before dispatch:
+     * the row is what says this session may propose for that persona at all, so a run that
+     * reached its tool before the row existed would be refused for a race nobody could see.
+     * The persona id never comes from the tool call — an id in a payload is model output.
+     */
+    proposeVariants?: { personaId: AgentPersonaId; shown: ProposerShown }
   },
 ): Promise<AgentRun> => {
   const parent = input.parentRunId
@@ -3859,7 +4047,14 @@ export const startAgentRun = async (
    * generator's context agrees with it", and agreement manufactured that way looks exactly
    * like a finding.
    */
-  if (input.verifyVariants === undefined) {
+  /**
+   * **Withheld from a proposer too**, and the leak it closes is the same one by a different
+   * route. A proposer's claim is that its evidence is the assembled record — which arms lost,
+   * what the screen said — and nothing else. A session that also opened with the ledger of the
+   * tree it was started in would be reading the notes of the runs whose prompt it is revising,
+   * which is the run being edited's context arriving through the side door.
+   */
+  if (input.verifyVariants === undefined && input.proposeVariants === undefined) {
     try {
       contextLedger = await buildContextLedger(deps, {
         workspaceId: input.workspaceId,
@@ -3905,6 +4100,20 @@ export const startAgentRun = async (
   }
 
   /**
+   * A proposer's session row, written before dispatch for the reason the map above is opened
+   * before dispatch: it is what authorizes the submission, so a run that reached its tool
+   * first would be refused by a race rather than by a rule.
+   */
+  if (input.proposeVariants) {
+    await deps.personaVariants.openProposerSession({
+      workspaceId: input.workspaceId,
+      personaId: input.proposeVariants.personaId,
+      agentRunId: run.id,
+      shown: input.proposeVariants.shown,
+    })
+  }
+
+  /**
    * What this persona already knows.
    *
    * Swallowed on failure for the same reason the ledger is: a run without its map is
@@ -3917,8 +4126,12 @@ export const startAgentRun = async (
    * is the *judged persona's* accumulated view of this subject, and handing it to a session
    * asked which of that persona's prompts is better would be showing it the incumbent's
    * notes on the exam.
+   *
+   * And from a proposer, for the reason its ledger is withheld above: its context is meant to
+   * be exactly the record it was handed, so anything accumulated beside that is evidence
+   * nobody chose to show it.
    */
-  if (input.verifyVariants === undefined) try {
+  if (input.verifyVariants === undefined && input.proposeVariants === undefined) try {
     mapContext = await buildMapContext(deps, {
       workspaceId: input.workspaceId,
       personaId: persona.id,

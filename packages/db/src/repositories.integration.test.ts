@@ -1768,4 +1768,72 @@ describe('the held-out screen', () => {
     const losing = await variants.listLosingArms(WS, s.personaId, 10)
     expect(losing.total).toBe(2)
   })
+
+  /**
+   * The proposer session row, which is the thing that *authorizes* a submission rather than
+   * describing one: the persona a session may write candidates for is resolved from here and
+   * never from its tool call.
+   */
+  it('resolves which persona a proposer session may propose for, and only for its own run', async () => {
+    const s = await scaffold(WS, 'proposer-1')
+    const proposerRun = await addRun(WS, s, { personaName: 'variant-proposer' })
+    const otherRun = await addRun(WS, s, { personaName: 'proposer-1' })
+
+    expect(await variants.findProposerSession(WS, proposerRun)).toBeNull()
+
+    await variants.openProposerSession({
+      workspaceId: WS,
+      personaId: s.personaId,
+      agentRunId: proposerRun,
+      shown: {
+        losingArms: 2,
+        refusedCandidates: 1,
+        losingArmsWithheld: 17,
+        refusedCandidatesWithheld: 0,
+      },
+    })
+
+    const session = await variants.findProposerSession(WS, proposerRun)
+    expect(session?.personaId).toBe(s.personaId)
+    // The bound as it was at start, which is the provenance a promotion is read against
+    // months later — recomputing it would report today's buffer against yesterday's brief.
+    expect(session?.shown).toEqual({
+      losingArms: 2,
+      refusedCandidates: 1,
+      losingArmsWithheld: 17,
+      refusedCandidatesWithheld: 0,
+    })
+
+    // Every other run in the workspace is not a proposer, which is what refuses a submission.
+    expect(await variants.findProposerSession(WS, otherRun)).toBeNull()
+  })
+
+  /**
+   * A repeat is a no-op rather than a second grant: two rows for one run would be two answers
+   * to "which persona may this session propose for".
+   */
+  it('grants one persona per proposer run, whatever a retry says', async () => {
+    const s = await scaffold(WS, 'proposer-2')
+    const other = await scaffold(WS, 'proposer-3')
+    const run = await addRun(WS, s, { personaName: 'variant-proposer' })
+    const shown = {
+      losingArms: 1,
+      refusedCandidates: 0,
+      losingArmsWithheld: 0,
+      refusedCandidatesWithheld: 0,
+    }
+    await variants.openProposerSession({
+      workspaceId: WS,
+      personaId: s.personaId,
+      agentRunId: run,
+      shown,
+    })
+    await variants.openProposerSession({
+      workspaceId: WS,
+      personaId: other.personaId,
+      agentRunId: run,
+      shown,
+    })
+    expect((await variants.findProposerSession(WS, run))?.personaId).toBe(s.personaId)
+  })
 })

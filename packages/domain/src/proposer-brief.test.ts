@@ -7,6 +7,7 @@ import {
   UNTRUSTED_PROPOSER_OPEN,
   proposerBrief,
   proposerEligibility,
+  proposerSubjectEligibility,
   type LosingArm,
   type ProposerEvidence,
   type RefusedCandidate,
@@ -195,6 +196,32 @@ describe('proposerBrief', () => {
     expect(verdict.ok).toBe(true)
     if (!verdict.ok) return
     expect(verdict.brief).toContain('1 of 5 decided runs kept')
+  })
+})
+
+describe('proposerSubjectEligibility', () => {
+  /**
+   * The half that is checked before any run exists. Asserted separately from
+   * `proposerEligibility` because the two callers reach it from different states: nothing has
+   * been started yet at the point the platform is deciding whether to spend a session.
+   */
+  it('refuses the persona under revision without needing a run to point at', () => {
+    const verdict = proposerSubjectEligibility({
+      proposerPersonaName: 'swe',
+      subjectPersonaName: 'swe',
+    })
+    expect(verdict.ok).toBe(false)
+    if (verdict.ok) throw new Error('expected a refusal')
+    expect(verdict.reason).toContain('proposing about itself')
+  })
+
+  it('admits a different persona', () => {
+    expect(
+      proposerSubjectEligibility({
+        proposerPersonaName: 'variant-proposer',
+        subjectPersonaName: 'swe',
+      }).ok,
+    ).toBe(true)
   })
 })
 

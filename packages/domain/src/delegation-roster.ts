@@ -46,6 +46,14 @@ export const PLATFORM_STARTED_PERSONAS: readonly string[] = [
    * opens a repository, finds nothing to judge, and reports after the plan is paid for.
    */
   'variant-verifier',
+  /**
+   * The proposer, for the verifier's reason exactly: the platform starts it when somebody
+   * asks for candidates over a named persona, and its whole context is a record of that
+   * persona's losses that a Planner has no way to supply. A subtask assigned to it is a
+   * subtask that reads a repository, has nothing to propose from, and reports after the plan
+   * is paid for.
+   */
+  'variant-proposer',
 ]
 
 export const isPlatformStartedPersona = (name: string): boolean =>

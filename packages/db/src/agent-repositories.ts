@@ -97,6 +97,7 @@ import {
   personaCapability,
   notificationTarget,
   personaGroup,
+  personaProposerSession,
   personaRevision,
   personaVariant,
   personaVariantSet,
@@ -1881,6 +1882,48 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
         .filter((row) => row.setId === setRow.id)
         .map((row) => toPersonaVariant(row as PersonaVariantRow)),
     }))
+  },
+
+  async openProposerSession(input) {
+    await db
+      .insert(personaProposerSession)
+      .values({
+        workspaceId: input.workspaceId,
+        personaId: input.personaId,
+        agentRunId: input.agentRunId,
+        losingArmsShown: input.shown.losingArms,
+        losingArmsWithheld: input.shown.losingArmsWithheld,
+        refusalsShown: input.shown.refusedCandidates,
+        refusalsWithheld: input.shown.refusedCandidatesWithheld,
+      })
+      /**
+       * A second row for the same run would be two answers to "which persona may this
+       * session propose for", so a repeat is a no-op rather than a second grant.
+       */
+      .onConflictDoNothing({ target: personaProposerSession.agentRunId })
+  },
+
+  async findProposerSession(workspaceId, agentRunId) {
+    const [row] = await db
+      .select()
+      .from(personaProposerSession)
+      .where(
+        and(
+          eq(personaProposerSession.workspaceId, workspaceId),
+          eq(personaProposerSession.agentRunId, agentRunId),
+        ),
+      )
+      .limit(1)
+    if (!row) return null
+    return {
+      personaId: asAgentPersonaId(row.personaId),
+      shown: {
+        losingArms: row.losingArmsShown,
+        refusedCandidates: row.refusalsShown,
+        losingArmsWithheld: row.losingArmsWithheld,
+        refusedCandidatesWithheld: row.refusalsWithheld,
+      },
+    }
   },
 
   async recordVerifierRun(workspaceId, setId, runId) {

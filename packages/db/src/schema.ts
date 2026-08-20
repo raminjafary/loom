@@ -2016,3 +2016,52 @@ export const variantUse = pgTable(
     index('variant_use_set_idx').on(t.workspaceId, t.setId),
   ],
 )
+
+/**
+ * One proposer session: which persona a read-only session was started to write candidates
+ * for, and how much of that persona's record it was shown.
+ *
+ * **The row is what authorizes the submission.** A proposer's whole claim is that it is not
+ * the run being edited, so the persona it may propose for cannot come from its tool call —
+ * an id in a payload is model output, which is the same rule tier 1 and the verifier's
+ * verdict already follow. It comes from here, written by the platform at start.
+ *
+ * The counts are recorded rather than recomputed, and they are the provenance a panel shows:
+ * "these candidates came from a session shown 6 of 19 losing arms" is a fact about a
+ * particular session, and re-deriving it later would report today's buffer against
+ * yesterday's brief.
+ *
+ * `set null` on the run, cascade on the persona: the session is the record that a candidate
+ * came from somewhere other than the run being edited, and that record outlives the session
+ * — the same reasoning `persona_variant_set.proposed_by_run_id` keeps.
+ */
+export const personaProposerSession = pgTable(
+  'persona_proposer_session',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    /** The persona under revision — never the session's own. */
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    losingArmsShown: integer('losing_arms_shown').notNull().default(0),
+    losingArmsWithheld: integer('losing_arms_withheld').notNull().default(0),
+    refusalsShown: integer('refusals_shown').notNull().default(0),
+    refusalsWithheld: integer('refusals_withheld').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /**
+     * One session per run, which is what makes the run id a usable key for the submission
+     * path: a second row for the same run would be two answers to "which persona may this
+     * session propose for".
+     */
+    uniqueIndex('persona_proposer_session_run_idx').on(t.agentRunId),
+    index('persona_proposer_session_persona_idx').on(t.workspaceId, t.personaId, t.createdAt),
+  ],
+)

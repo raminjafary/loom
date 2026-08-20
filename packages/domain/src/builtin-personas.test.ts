@@ -19,9 +19,9 @@ const asSpec = (persona: BuiltinPersona): PersonaSpec => ({
 })
 
 describe('BUILTIN_PERSONAS', () => {
-  it('has exactly eleven roles with unique names', () => {
-    expect(BUILTIN_PERSONAS).toHaveLength(11)
-    expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(11)
+  it('has exactly twelve roles with unique names', () => {
+    expect(BUILTIN_PERSONAS).toHaveLength(12)
+    expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(12)
   })
 
   /**

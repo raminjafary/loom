@@ -293,6 +293,33 @@ export type ProposerEligibility =
   | { readonly ok: false; readonly reason: string }
 
 /**
+ * The half of eligibility that can be decided before a proposer session exists.
+ *
+ * Extracted because it is checked twice from two different states, and a second copy of the
+ * rule is how the two would come to disagree: once when the platform is about to *start* a
+ * proposer, where there is no run yet and no arms to be one of, and again when a session
+ * submits, where both halves apply. A persona proposing for itself is the same defect at
+ * either moment — the run being edited, editing itself.
+ */
+export const proposerSubjectEligibility = (input: {
+  readonly proposerPersonaName: string
+  readonly subjectPersonaName: string
+}): ProposerEligibility => {
+  if (input.proposerPersonaName === input.subjectPersonaName) {
+    return {
+      ok: false,
+      reason:
+        `A run of "${input.subjectPersonaName}" cannot propose candidates for ` +
+        '"' +
+        input.subjectPersonaName +
+        '": that is the run being edited proposing about itself, which is what a separate ' +
+        'proposer exists to avoid.',
+    }
+  }
+  return { ok: true }
+}
+
+/**
  * Whether a run may act as the proposer for a persona.
  *
  * The whole point of the piece is that the proposer is *not* the run being edited, so the
@@ -313,17 +340,8 @@ export const proposerEligibility = (input: {
   readonly subjectPersonaName: string
   readonly armRunIds: readonly string[]
 }): ProposerEligibility => {
-  if (input.proposerPersonaName === input.subjectPersonaName) {
-    return {
-      ok: false,
-      reason:
-        `A run of "${input.subjectPersonaName}" cannot propose candidates for ` +
-        '"' +
-        input.subjectPersonaName +
-        '": that is the run being edited proposing about itself, which is what a separate ' +
-        'proposer exists to avoid.',
-    }
-  }
+  const subject = proposerSubjectEligibility(input)
+  if (!subject.ok) return subject
   if (input.armRunIds.includes(input.proposerRunId)) {
     return {
       ok: false,
