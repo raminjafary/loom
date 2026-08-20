@@ -1241,6 +1241,19 @@ export const contract = {
      * and this is policy they edit deliberately, and a call that could do both would let a
      * pause quietly turn a review gate off.
      */
+    /**
+     * Whether a run's model may come from the routing table rather than from the persona.
+     *
+     * Off by default and its own procedure for `setPlanReviewRequired`'s reason: hitting the
+     * kill switch must not quietly change how models are chosen. The default is off rather than
+     * on because the table is the one measurement here nobody randomised — see `routeModel` —
+     * and a default that silently overrode an operator's `model:` on evidence of that quality
+     * would be the platform second-guessing a human from data it knows is biased.
+     */
+    setModelRoutingEnabled: oc
+      .input(z.object({ enabled: z.boolean() }))
+      .output(RunControlSchema),
+
     setPlanReviewRequired: oc
       .input(z.object({ required: z.boolean() }))
       .output(RunControlSchema),

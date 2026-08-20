@@ -1881,3 +1881,119 @@ describe('schema status', () => {
     expect((await schemaStatus(db)).applied).toBe(true)
   })
 })
+
+/**
+ * The routing table's evidence — what has happened per model for one persona.
+ *
+ * Grouped by the model on each run's own snapshot rather than by the persona row, which is the
+ * only reading that means anything: the row holds one model, and the whole question is how the
+ * several models this persona has run on compare.
+ */
+describe('model outcomes per persona', () => {
+  const personas = personaRepository(db)
+  let seq = 0
+
+  const scaffold = async (workspaceId: WorkspaceId, personaName: string) => {
+    seq += 1
+    const [ch] = await db
+      .insert(channel)
+      .values({ workspaceId, name: `routing-${seq}`, isPrivate: false })
+      .returning({ id: channel.id })
+    const [th] = await db
+      .insert(thread)
+      .values({ workspaceId, channelId: ch!.id, isRoot: true })
+      .returning({ id: thread.id })
+    const [rn] = await db
+      .insert(runner)
+      .values({ workspaceId, name: `runner-routing-${seq}`, pairingTokenHash: `hash-routing-${seq}` })
+      .returning({ id: runner.id })
+    const [repo] = await db
+      .insert(repository)
+      .values({
+        workspaceId,
+        runnerId: rn!.id,
+        displayName: 'repo',
+        absolutePath: `/tmp/routing-${seq}`,
+        defaultBranch: 'main',
+      })
+      .returning({ id: repository.id })
+    return { threadId: th!.id, runnerId: rn!.id, repositoryId: repo!.id, personaName }
+  }
+
+  const addRun = async (
+    workspaceId: WorkspaceId,
+    s: Awaited<ReturnType<typeof scaffold>>,
+    input: {
+      model: string
+      disposition?: 'merged' | 'discarded' | null
+      relation?: string
+      totalCostUsd?: number
+    },
+  ) => {
+    const [row] = await db
+      .insert(agentRun)
+      .values({
+        workspaceId,
+        threadId: s.threadId,
+        repositoryId: s.repositoryId,
+        runnerId: s.runnerId,
+        persona: {
+          name: s.personaName,
+          model: input.model,
+          systemPrompt: 'x',
+          tools: [],
+          approvalMode: 'ask' as const,
+        },
+        status: 'completed',
+        branchName: 'loom/x',
+        branchDisposition: input.disposition === undefined ? 'merged' : input.disposition,
+        totalCostUsd: input.totalCostUsd ?? 0.1,
+        ...(input.relation === undefined ? {} : { relation: input.relation, parentRunId: null }),
+        completedAt: new Date(),
+      })
+      .returning({ id: agentRun.id })
+    return asAgentRunId(row!.id)
+  }
+
+  it('groups by the model each run actually ran with, and averages only decided runs', async () => {
+    const s = await scaffold(WS, 'routing-worker-1')
+    await addRun(WS, s, { model: 'claude-haiku-4-5-20251001', disposition: 'merged', totalCostUsd: 0.1 })
+    await addRun(WS, s, { model: 'claude-haiku-4-5-20251001', disposition: 'discarded', totalCostUsd: 0.3 })
+    await addRun(WS, s, { model: 'claude-sonnet-5', disposition: 'merged', totalCostUsd: 0.6 })
+
+    const rows = await personas.tallyModelOutcomes(WS, 'routing-worker-1')
+    const haiku = rows.find((row) => row.model === 'claude-haiku-4-5-20251001')
+    expect(haiku).toMatchObject({ decided: 2, merged: 1 })
+    expect(haiku?.meanCostUsd).toBeCloseTo(0.2, 6)
+    expect(rows.find((row) => row.model === 'claude-sonnet-5')).toMatchObject({ decided: 1, merged: 1 })
+  })
+
+  /**
+   * Escalations are excluded, and this is the test that matters most. They are the same task
+   * retried after a failure, so counting them feeds the table a population selected for having
+   * already failed — the higher tier would show a worse merge rate *because* it only ever sees
+   * the hard cases, and the table would then route away from the tier that rescues them.
+   */
+  it('excludes an escalation, so the higher tier is not judged only on rescues', async () => {
+    const s = await scaffold(WS, 'routing-worker-2')
+    await addRun(WS, s, { model: 'claude-haiku-4-5-20251001', disposition: 'merged' })
+    await addRun(WS, s, { model: 'claude-sonnet-5', disposition: 'discarded', relation: 'escalate' })
+
+    const rows = await personas.tallyModelOutcomes(WS, 'routing-worker-2')
+    expect(rows.map((row) => row.model)).toEqual(['claude-haiku-4-5-20251001'])
+  })
+
+  /** And a screening run, for the reason it is excluded from an arm: it is not live traffic. */
+  it('excludes a screening run', async () => {
+    const s = await scaffold(WS, 'routing-worker-3')
+    await addRun(WS, s, { model: 'claude-haiku-4-5-20251001', disposition: 'merged' })
+    await addRun(WS, s, { model: 'claude-opus-5', disposition: 'merged', relation: 'screen' })
+    expect((await personas.tallyModelOutcomes(WS, 'routing-worker-3')).map((r) => r.model)).toEqual([
+      'claude-haiku-4-5-20251001',
+    ])
+  })
+
+  it('says nothing about a persona nothing has run as', async () => {
+    expect(await personas.tallyModelOutcomes(WS, 'never-existed')).toEqual([])
+  })
+})

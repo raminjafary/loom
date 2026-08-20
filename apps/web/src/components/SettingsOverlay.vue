@@ -102,6 +102,16 @@ const props = defineProps<{
    * own quiet line.
    */
   selfDeployment: SelfDeploymentView | null
+  /**
+   * Whether the platform may choose a run's model from the routing table.
+   *
+   * A callback prop rather than an emit, and not by preference: this overlay's emit map is at
+   * the size where one more entry pushes the parent's inference over a limit, after which
+   * *every* handler on it silently degrades to `any` — including the ones that were fine. That
+   * is not a hypothetical; adding this as an emit produced exactly that, on five unrelated
+   * handlers, in one typecheck.
+   */
+  setModelRouting: (enabled: boolean) => void
 }>()
 
 const repositoryNames = computed(() =>
@@ -332,6 +342,38 @@ onMounted(() => scrim.value?.focus())
               which is the gate that replaced the per-tool approvals when the teams became
               autonomous. Off, workers start the moment a plan is submitted, and steering is
               the only way to change it afterwards.
+            </p>
+          </section>
+
+          <!--
+            Model routing, beside the plan gate because it is the same kind of thing: workspace
+            policy an operator sets deliberately, and deliberately not beside the kill switch.
+
+            Off by default, and the hint says why rather than only what: this is the one
+            measurement in the platform nobody randomised, so the honest default is that it does
+            not override a model a human wrote.
+          -->
+          <section class="policy">
+            <h4>Models</h4>
+            <label class="check">
+              <input
+                type="checkbox"
+                :checked="runControl?.modelRoutingEnabled === true"
+                @change="
+                  setModelRouting(($event.target as HTMLInputElement).checked)
+                "
+              />
+              <span>Choose a run's model from what has already happened</span>
+            </label>
+            <p class="hint">
+              On, a run gets the cheapest model nothing more expensive has beaten on that
+              persona's work, and every routed run says in its thread which model it got and why.
+              Off, a run gets what its persona document says. It only ever routes *down*: the
+              table is read from runs nobody randomised, so it is biased against whichever model
+              a human reached for on the hard tasks — using it to save money risks the mistake it
+              is most likely making, while using it to spend more compounds one. A branch that
+              fails this repository's checks is retried one tier up either way, because that is a
+              real signal rather than a table.
             </p>
           </section>
 

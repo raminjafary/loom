@@ -65,6 +65,7 @@ import {
   nextPromptArm,
   blindVariantOptions,
   describeVerifierVerdict,
+  MIN_DECIDED_RUNS_PER_ARM,
   MIN_REPLAY_ITEMS,
   assembleReplaySet,
   describeReplaySet,
@@ -73,6 +74,7 @@ import {
   screenOutcomeFor,
   tallyScreenScore,
   proposeVariantSet,
+  routeModel,
   describeProposerProvenance,
   parseDeployment,
   proposerBrief,
@@ -3897,6 +3899,35 @@ export const startAgentRun = async (
   }
 
   /**
+   * The routing table, when an operator has switched it on and nobody named a model.
+   *
+   * **Below an explicit `model`, always.** A human choosing a model for one run, and an
+   * escalation choosing the tier above the one that just failed, are both decisions with a
+   * reason this table does not have — and a table that overrode either would be the platform
+   * second-guessing a caller from evidence it knows is confounded.
+   *
+   * Best-effort: a tally that cannot be read leaves the persona's model standing, because a
+   * measurement must never be able to fail a run. That is `assignPromptTrial`'s discipline and
+   * it applies to every optimisation in this file.
+   */
+  let routed: { model: string; detail: string } | null = null
+  if (input.model === undefined && control.modelRoutingEnabled) {
+    try {
+      const verdict = routeModel({
+        taskClass: persona.name,
+        observations: await deps.personas.tallyModelOutcomes(input.workspaceId, persona.name),
+        ceilingModel: parsePersonaMarkdown(persona.markdownSource).envelope?.model ?? null,
+        minDecided: MIN_DECIDED_RUNS_PER_ARM,
+      })
+      if (verdict.model !== null && verdict.model !== persona.model) {
+        routed = { model: verdict.model, detail: verdict.detail }
+      }
+    } catch {
+      // Deliberately swallowed — see above.
+    }
+  }
+
+  /**
    * Which prompt this run gets, while an agent's edit is being measured.
    *
    * Assigned *before* the snapshot is built, because the arm decides what the snapshot
@@ -3932,7 +3963,7 @@ export const startAgentRun = async (
       responseStyle,
     ),
     responseStyle,
-    model: input.model ?? persona.model,
+    model: input.model ?? routed?.model ?? persona.model,
     budgetCapUsd:
       input.budgetCapUsd !== undefined && isHuman(input.actor)
         ? input.budgetCapUsd
@@ -4172,6 +4203,23 @@ export const startAgentRun = async (
     // the question a human asks about exactly those runs.
     ...(input.task === undefined ? {} : { task: input.task }),
   })
+
+  /**
+   * A routed run says so, in the thread, before it does anything.
+   *
+   * The one thing that makes an overridden model acceptable: an operator who wrote
+   * `model: claude-opus-5` and finds a run on Haiku has to be able to see that the platform
+   * chose it and on what evidence. Silence here would make the persona document a lie about
+   * what runs — which is the cost of routing being invisible rather than of routing being wrong.
+   */
+  if (routed) {
+    await postRunSystemMessage(
+      deps,
+      run,
+      `Running on **${routed.model}** rather than the ${persona.model} this persona says. ` +
+        routed.detail,
+    )
+  }
 
   /**
    * The trial row, after the run exists. Best-effort for the reason
@@ -6627,6 +6675,32 @@ export const setPlanReviewRequired = async (
     subjectType: 'workspace',
     subjectId: input.workspaceId,
     metadata: { required: input.required },
+  })
+  return control
+}
+
+/**
+ * Whether the routing table may choose a run's model.
+ *
+ * Human-only for `setPlanReviewRequired`'s reason and one of its own: this decides whether the
+ * platform may override a model an operator wrote in a persona document, which is not a thing an
+ * agent gets to grant itself.
+ */
+export const setModelRoutingEnabled = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; enabled: boolean },
+): Promise<WorkspaceRunControl> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError('Only a human decides whether the platform chooses models')
+  }
+  const control = await deps.runControl.setModelRoutingEnabled(input.workspaceId, input.enabled)
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'workspace.model_routing_set',
+    subjectType: 'workspace',
+    subjectId: input.workspaceId,
+    metadata: { enabled: input.enabled },
   })
   return control
 }

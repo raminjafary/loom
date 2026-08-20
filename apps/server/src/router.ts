@@ -54,6 +54,7 @@ import {
   getPlanForReview,
   rejectPlan,
   requestPlanChanges,
+  setModelRoutingEnabled,
   setPlanReviewRequired,
   conveneSession,
   decideAtlasProposal,
@@ -1510,6 +1511,16 @@ export const router = os.router({
     ),
 
     /** Whether a decomposition waits for a human before anything starts. */
+    setModelRoutingEnabled: os.runControl.setModelRoutingEnabled.handler(({ context, input }) =>
+      guard(() =>
+        setModelRoutingEnabled(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          enabled: input.enabled,
+        }),
+      ),
+    ),
+
     setPlanReviewRequired: os.runControl.setPlanReviewRequired.handler(({ context, input }) =>
       guard(() =>
         setPlanReviewRequired(context.deps, {

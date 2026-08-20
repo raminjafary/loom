@@ -67,6 +67,20 @@ export const workspace = pgTable(
      * it), and read on a path that already reads this row.
      */
     planReviewRequired: boolean('plan_review_required').notNull().default(true),
+    /**
+     * Whether a run's model may be chosen from what has already happened on this task class
+     * rather than from what the persona says.
+     *
+     * **Off by default, unlike the plan gate**, and the asymmetry is the point: the routing
+     * table is the one measurement in this platform nobody randomised, so it is confounded by
+     * whoever picked the model. A default that silently overrode an operator's `model:` on
+     * evidence of that quality would be the platform second-guessing a human from data it
+     * knows is biased. On, every routed run says which model it got and why.
+     *
+     * Travels with the pause and the plan gate for their reason: workspace policy an operator
+     * sets, persisted so a redeploy cannot undo it, read on a path that already reads this row.
+     */
+    modelRoutingEnabled: boolean('model_routing_enabled').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('workspace_slug_idx').on(t.slug)],

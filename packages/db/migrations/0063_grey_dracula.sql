@@ -1,0 +1,1 @@
+ALTER TABLE "workspace" ADD COLUMN "model_routing_enabled" boolean DEFAULT false NOT NULL;

@@ -1339,6 +1339,11 @@ export const RunControlSchema = z.object({
    * runs spawn the moment a model submits, and the steering only reaches them afterwards.
    */
   planReviewRequired: z.boolean(),
+  /**
+   * Whether a run's model may come from the routing table. On the wire because a surface that
+   * offered the toggle without knowing its state would be a checkbox that lies.
+   */
+  modelRoutingEnabled: z.boolean(),
 })
 
 /**

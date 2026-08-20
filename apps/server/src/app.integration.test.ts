@@ -80,6 +80,22 @@ describe('contract over HTTP', () => {
    * one that matters: `deployment: null` with no `problem` is a clean install, and a broken
    * pointer would arrive as a `problem` rather than as the same empty answer.
    */
+  /**
+   * Model routing is off until a human turns it on, and the default is the assertion: the table
+   * is the one measurement here nobody randomised, so a default that overrode an operator's
+   * `model:` would be the platform second-guessing a human from data it knows is biased.
+   */
+  it('leaves model routing off until a human turns it on', async () => {
+    expect((await client.runControl.get()).modelRoutingEnabled).toBe(false)
+    const on = await client.runControl.setModelRoutingEnabled({ enabled: true })
+    expect(on.modelRoutingEnabled).toBe(true)
+    // And the kill switch does not carry it: hitting pause must not change how models are chosen.
+    const paused = await client.runControl.pauseAll()
+    expect(paused.control.modelRoutingEnabled).toBe(true)
+    await client.runControl.resume()
+    expect((await client.runControl.setModelRoutingEnabled({ enabled: false })).modelRoutingEnabled).toBe(false)
+  })
+
   it('reports no promoted revision, distinctly from a pointer it could not read', async () => {
     const result = await client.runControl.selfDeployment()
     expect(result.deployment).toBeNull()
@@ -938,6 +954,7 @@ describe('contract completeness', () => {
       'pauseAll',
       'resume',
       'setHandoffPolicy',
+      'setModelRoutingEnabled',
       'setPlanReviewRequired',
     ])
     expect(Object.keys(contract.notification)).toEqual(['config', 'subscribe', 'unsubscribe'])

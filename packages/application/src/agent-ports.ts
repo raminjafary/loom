@@ -2,6 +2,7 @@ import type {
   AtlasEdgeStatus,
   DecidedRunRecord,
   LosingArmRecord,
+  ModelObservation,
   ProposerShown,
   RefusedCandidateRecord,
   ReplayCheckOutcome,
@@ -801,6 +802,23 @@ export interface PersonaRepositoryPort {
    * than a record of what reviewers had time for, and it must match
    * `tallyExpertiseOutcomes` exactly: the two are one query written twice.
    */
+  /**
+   * What has happened per model for one persona — the routing table's evidence.
+   *
+   * Keyed by the persona *name* rather than its id, and that is deliberate: a run carries a
+   * snapshot, so the name is what says which persona did the work, and a persona that was
+   * deleted and recreated is the same class of task to whoever named it the same thing. The
+   * same resolution tier 1 and the proposer both use.
+   *
+   * The same "decided" as every other tally here — a disposition, a failed run, or a branch
+   * that failed its repository's definition of done — because a human reading a routing table
+   * beside a prompt trial must not be reading two definitions of "worked".
+   */
+  tallyModelOutcomes(
+    workspaceId: WorkspaceId,
+    personaName: string,
+  ): Promise<ModelObservation[]>
+
   tallyTrialOutcomes(
     workspaceId: WorkspaceId,
     revisionId: PersonaRevisionId,
@@ -1288,6 +1306,16 @@ export interface WorkspaceRunControlRepositoryPort {
   setPlanReviewRequired(
     workspaceId: WorkspaceId,
     required: boolean,
+  ): Promise<WorkspaceRunControl>
+  /**
+   * Whether a run's model may come from the routing table.
+   *
+   * Its own method for the reason the two above have theirs, and with the same consequence
+   * avoided: hitting the kill switch must not quietly change how models are chosen.
+   */
+  setModelRoutingEnabled(
+    workspaceId: WorkspaceId,
+    enabled: boolean,
   ): Promise<WorkspaceRunControl>
 }
 

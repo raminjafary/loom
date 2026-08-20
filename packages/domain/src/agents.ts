@@ -473,6 +473,13 @@ export interface WorkspaceRunControl {
    * spawn the moment a model submits, and the steering only reaches them afterwards.
    */
   readonly planReviewRequired: boolean
+  /**
+   * Whether a run's model may come from the routing table rather than from the persona.
+   *
+   * Off by default, because the table is observational — see `routeModel`. Beside the plan gate
+   * because it is the same kind of thing: workspace policy an operator sets deliberately.
+   */
+  readonly modelRoutingEnabled: boolean
   readonly handoff: {
     readonly threshold: number | null
     readonly capPerTree: number | null

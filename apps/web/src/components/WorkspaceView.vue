@@ -124,6 +124,11 @@ const settleSearch = (input: { personaId: string; variantId: string | null }) =>
  * repository" and "three repositories and no run to infer from" are different problems with
  * different fixes, and a greyed-out control says neither.
  */
+/** Whether the platform may choose a run's model from the routing table. */
+const setModelRouting = (enabled: boolean) => {
+  void agent.setModelRoutingEnabled(enabled)
+}
+
 const startProposer = async (input: { personaId: string }) => {
   const threadId = snapshot.value.activeThread?.id ?? null
   if (!threadId) {
@@ -1348,6 +1353,7 @@ onBeforeUnmount(() => {
       :colosseum-view="colosseumView"
       :atlas-proposals="atlasProposals"
       @set-plan-review="(required) => void agent.setPlanReviewRequired(required)"
+      :set-model-routing="setModelRouting"
       @atlas-refresh="() => void refreshAtlas()"
       @atlas-contend="(edgeId) => void contendAtlasProposal(edgeId)"
       @atlas-decide="(input) => void decideAtlasProposal(input)"

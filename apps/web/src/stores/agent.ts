@@ -102,6 +102,7 @@ export const useAgentStore = defineStore('agent', () => {
     /** The generating half — a separate session writes the next set of candidates. */
     startProposer: (input: { personaId: string; threadId: string; repositoryId: string }) =>
       session.startProposer(input),
+    setModelRoutingEnabled: (enabled: boolean) => session.setModelRoutingEnabled(enabled),
     unbindRepository: (input: { repositoryId: string; acknowledge?: boolean }) =>
       session.unbindRepository(input),
     removeRunner: (runnerId: string) => session.removeRunner(runnerId),

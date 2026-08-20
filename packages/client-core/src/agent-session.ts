@@ -361,6 +361,8 @@ export interface AgentSession {
   requestPlanChanges(input: { agentRunId: string; note: string }): Promise<boolean>
   rejectPlan(input: { agentRunId: string; reason?: string }): Promise<boolean>
   setPlanReviewRequired(required: boolean): Promise<void>
+  /** Whether a run's model may come from the routing table. Off by default — see `routeModel`. */
+  setModelRoutingEnabled(enabled: boolean): Promise<void>
   listAtlasProposals(input?: {
     status?: ('proposed' | 'contended' | 'promoted' | 'rejected')[]
   }): Promise<AtlasEdge[]>
@@ -1376,6 +1378,22 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       patch({ error: null })
       try {
         await options.api.runControl.setPlanReviewRequired({ required })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    async setModelRoutingEnabled(enabled) {
+      patch({ error: null })
+      try {
+        /**
+         * The returned control is patched back into state, unlike the setter above. A checkbox
+         * bound to a snapshot that was not updated keeps the value the *click* left in the DOM,
+         * which looks right until the next refresh contradicts it — and this toggle decides
+         * whether the platform may override a model a human wrote, so it is the wrong one to be
+         * quietly wrong about.
+         */
+        patch({ runControl: await options.api.runControl.setModelRoutingEnabled({ enabled }) })
       } catch (error) {
         patch({ error: errorMessage(error) })
       }

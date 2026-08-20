@@ -1382,6 +1382,7 @@ const CONTROL_COLUMNS = {
   handoffThreshold: workspace.handoffThreshold,
   handoffCapPerTree: workspace.handoffCapPerTree,
   planReviewRequired: workspace.planReviewRequired,
+  modelRoutingEnabled: workspace.modelRoutingEnabled,
 }
 
 const toControl = (
@@ -1393,6 +1394,7 @@ const toControl = (
     handoffThreshold: number | null
     handoffCapPerTree: number | null
     planReviewRequired: boolean
+    modelRoutingEnabled: boolean
   },
 ): WorkspaceRunControl => ({
   workspaceId,
@@ -1400,6 +1402,7 @@ const toControl = (
   pausedAt: row.runsPausedAt,
   pausedByUserId: row.runsPausedByUserId,
   planReviewRequired: row.planReviewRequired,
+  modelRoutingEnabled: row.modelRoutingEnabled,
   handoff: { threshold: row.handoffThreshold, capPerTree: row.handoffCapPerTree },
 })
 
@@ -1432,6 +1435,16 @@ export const workspaceRunControlRepository = (db: Database): WorkspaceRunControl
     const [row] = await db
       .update(workspace)
       .set({ handoffThreshold: patch.threshold, handoffCapPerTree: patch.capPerTree })
+      .where(eq(workspace.id, workspaceId))
+      .returning(CONTROL_COLUMNS)
+    if (!row) throw new NotFoundError('Workspace')
+    return toControl(workspaceId, row)
+  },
+
+  async setModelRoutingEnabled(workspaceId, enabled) {
+    const [row] = await db
+      .update(workspace)
+      .set({ modelRoutingEnabled: enabled })
       .where(eq(workspace.id, workspaceId))
       .returning(CONTROL_COLUMNS)
     if (!row) throw new NotFoundError('Workspace')
@@ -1635,6 +1648,55 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
    * whose verification has not finished, is a row with a null status, which `decidedRun`
    * reads as "not decided by the harness" and leaves to the disposition.
    */
+  /**
+   * What has happened per model for one persona, grouped by the model on the run's own snapshot.
+   *
+   * The snapshot rather than the persona row, which is the only reading that makes the table mean
+   * anything: the row holds one model, and the whole question is how the *several* models this
+   * persona has run on compare. A run's snapshot is what it actually ran with, including an
+   * escalation's higher tier and a human's one-off override.
+   *
+   * Escalations are excluded. They are the same task retried on purpose after a failure, so
+   * counting them would feed the routing table a population selected for having already failed —
+   * the higher tier would show a worse merge rate *because* it only ever sees the hard cases, and
+   * the table would then route away from the tier that rescues them. The confound this table
+   * already admits to is bad enough without the platform manufacturing one.
+   *
+   * Screening runs are excluded for the reason they are excluded from an arm: they are not live
+   * traffic, they exist to decide whether a candidate gets any, and their prompt is substituted.
+   */
+  async tallyModelOutcomes(workspaceId, personaName) {
+    const rows = await db
+      .select({
+        model: sql<string>`${agentRun.persona}->>'model'`,
+        decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
+        merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+        verificationFailed: verificationFailedCount,
+        costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${decidedRun}), 0)::double precision`,
+      })
+      .from(agentRun)
+      .leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+      .where(
+        and(
+          eq(agentRun.workspaceId, workspaceId),
+          sql`${agentRun.persona}->>'name' = ${personaName}`,
+          sql`${agentRun.relation} is distinct from 'escalate'`,
+          sql`${agentRun.relation} is distinct from 'screen'`,
+        ),
+      )
+      .groupBy(sql`${agentRun.persona}->>'model'`)
+
+    return rows
+      .filter((row): row is typeof row & { model: string } => row.model !== null)
+      .map((row) => ({
+        model: row.model,
+        decided: row.decided,
+        merged: row.merged,
+        verificationFailed: row.verificationFailed,
+        meanCostUsd: row.decided === 0 ? 0 : row.costUsdTotal / row.decided,
+      }))
+  },
+
   async tallyTrialOutcomes(workspaceId, revisionId) {
     const rows = await db
       .select({
