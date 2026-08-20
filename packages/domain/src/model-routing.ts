@@ -1,3 +1,4 @@
+import { compareTrialArms } from './expertise-trial.js'
 import { findModelPrice, modelTierRank, SELECTABLE_MODELS } from './model-pricing.js'
 
 /**
@@ -212,5 +213,158 @@ export const escalateAfterFailure = (input: {
       (estimatedCostUsd === null
         ? '. What it will cost is unknown: the first attempt has no recorded spend.'
         : `. Estimated at $${estimatedCostUsd.toFixed(4)}, from what the first attempt cost.`),
+  }
+}
+
+/**
+ * What has actually happened on one model for one class of task.
+ *
+ * The same four terms every other fitness in this platform uses — decided, merged,
+ * verification-failed, mean cost — because a human reading a routing table beside a prompt trial
+ * must not be reading two different definitions of "worked".
+ */
+export interface ModelObservation {
+  readonly model: string
+  /** Finished runs with a disposition, a failure, or a definition-of-done verdict. */
+  readonly decided: number
+  readonly merged: number
+  readonly verificationFailed: number
+  readonly meanCostUsd: number
+}
+
+export type RoutingKind =
+  /** Enough evidence, and the cheapest model nothing beats is the choice. */
+  | 'measured'
+  /** The evidence points above the ceiling this run is bounded by, so the ceiling is the choice. */
+  | 'clamped'
+  /** Not enough decided runs. The persona's own model stands. */
+  | 'no-evidence'
+
+export interface RoutingVerdict {
+  /** Null means "use what the persona says" — never a silent default to something else. */
+  readonly model: string | null
+  readonly kind: RoutingKind
+  readonly detail: string
+}
+
+const rate = (part: number, whole: number): number => (whole === 0 ? 0 : part / whole)
+
+const asPercent = (value: number): string => `${Math.round(value * 100)}%`
+
+const asMoney = (value: number): string => `$${value.toFixed(4)}`
+
+/**
+ * The cheapest model that nothing more expensive beats, for one class of task.
+ *
+ * ## This table is observational, and that is the most important sentence about it
+ *
+ * Every other measurement in this platform is an experiment: a prompt trial alternates arms, the
+ * held-out screen replays the same items, the expertise trial withholds a baseline deliberately.
+ * This one reads runs that were already happening — nothing was randomised, and nothing was
+ * withheld. So the table is **confounded by whoever chose the model**: a persona whose hard tasks
+ * were all handed to Opus by a human will show Opus with the worse merge rate, and a naive reader
+ * of that number concludes Opus is worse at the work it was brought in to rescue.
+ *
+ * Three things follow, and they are the design rather than caveats:
+ *
+ * - **The comparison is `compareTrialArms`**, the same one every trial here uses, so the
+ *   tolerances and the order of terms — what a human decided, then what the repository's checks
+ *   decided, then money — are not re-invented for a weaker kind of evidence.
+ * - **It only ever routes *down*, by preferring the cheapest model nothing beats.** The
+ *   asymmetry is deliberate: the confound above biases *against* expensive models, so acting on
+ *   it to save money risks the mistake this table is most likely to be making, and acting on it
+ *   to spend more compounds it. Escalation is what moves a task up a tier, and escalation runs on
+ *   a real signal.
+ * - **`no-evidence` is a first-class answer.** Below the minimum sample the persona's own model
+ *   stands, and the sentence says how far off the evidence is rather than implying a default.
+ */
+export const routeModel = (input: {
+  readonly taskClass: string
+  readonly observations: readonly ModelObservation[]
+  /** The highest model this run may reach, or null for unbounded by anything but the table. */
+  readonly ceilingModel: string | null
+  /** How many decided runs one model needs before it counts. */
+  readonly minDecided: number
+}): RoutingVerdict => {
+  const ranked = input.observations
+    .filter((entry) => entry.decided >= input.minDecided && modelTierRank(entry.model) !== null)
+    .map((entry) => ({
+      ...entry,
+      tier: modelTierRank(entry.model) as number,
+      facts: {
+        successRate: rate(entry.merged, entry.decided),
+        verificationFailureRate: rate(entry.verificationFailed, entry.decided),
+        meanCostUsd: entry.meanCostUsd,
+      },
+    }))
+    .sort((a, b) => a.tier - b.tier)
+
+  if (ranked.length < 2) {
+    const seen = input.observations.reduce((total, entry) => total + entry.decided, 0)
+    return {
+      model: null,
+      kind: 'no-evidence',
+      detail:
+        `Nothing to route "${input.taskClass}" on yet: ${ranked.length} of ` +
+        `${input.observations.length} model(s) have the ${input.minDecided} decided runs this ` +
+        `needs, across ${seen} finished run(s) in total. Two models have to have been used ` +
+        'before one can be compared to the other, so the persona\'s own model stands.',
+    }
+  }
+
+  const ceiling = input.ceilingModel === null ? null : modelTierRank(input.ceilingModel)
+
+  /**
+   * Walk up from the cheapest and stop at the first model nothing more expensive beats on
+   * outcomes or on the repository's checks. Cost is excluded from "beats" on purpose: this walk
+   * is already ordered by cost, so letting cost decide would be the sort order voting twice.
+   *
+   * The walk always stops, and it is worth saying why rather than leaving a branch for the case
+   * that cannot happen: "beaten" means beaten by something *above* it, and nothing is above the
+   * most expensive model observed. A first version of this had an unreachable block after the
+   * loop for that case, which a test caught by asserting on a sentence it could never produce.
+   */
+  let beatenCheaper = 0
+  let chosen: (typeof ranked)[number] | null = null
+  for (const candidate of ranked) {
+    const beatenBy = ranked.find((other) => {
+      if (other.tier <= candidate.tier) return false
+      const { favours, term } = compareTrialArms(other.facts, candidate.facts)
+      return favours === 'candidate' && (term === 'outcomes' || term === 'verification')
+    })
+    if (beatenBy !== undefined) {
+      beatenCheaper += 1
+      continue
+    }
+    chosen = candidate
+    break
+  }
+  // Non-null by the argument above: the last element can never be skipped.
+  const winner = chosen ?? ranked[ranked.length - 1]!
+
+  if (ceiling !== null && winner.tier > ceiling) {
+    return {
+      model: input.ceilingModel,
+      kind: 'clamped',
+      detail:
+        `What has happened on "${input.taskClass}" points at "${winner.model}", which is above ` +
+        `the ceiling of "${input.ceilingModel}" this run is bounded by — so it runs at the ` +
+        'ceiling. Worth a human raising if the work keeps failing there.',
+    }
+  }
+
+  return {
+    model: winner.model,
+    kind: 'measured',
+    detail:
+      (beatenCheaper === 0
+        ? `"${winner.model}" is the cheapest model nothing better has beaten on ` +
+          `"${input.taskClass}"`
+        : `Every cheaper model has been beaten on "${input.taskClass}", so "${winner.model}" is ` +
+          'the choice') +
+      `: ${asPercent(winner.facts.successRate)} of ${winner.decided} finished runs merged, at ` +
+      `${asMoney(winner.meanCostUsd)} a run. Read as what has happened rather than as what ` +
+      'works — nothing was randomised here, so the model a human reached for on the hard tasks ' +
+      'carries their difficulty with it.',
   }
 }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { escalateAfterFailure, scaleCostForTier, type AttemptOutcome } from './model-routing.js'
+import {
+  escalateAfterFailure,
+  routeModel,
+  scaleCostForTier,
+  type AttemptOutcome,
+} from './model-routing.js'
 
 /**
  * Escalation after a definition-of-done failure.
@@ -148,5 +153,136 @@ describe('scaleCostForTier', () => {
     expect(scaleCostForTier({ from: HAIKU, to: SONNET, spentUsd: null })).toBeNull()
     expect(scaleCostForTier({ from: 'some-local-llm', to: SONNET, spentUsd: 1 })).toBeNull()
     expect(scaleCostForTier({ from: HAIKU, to: 'some-local-llm', spentUsd: 1 })).toBeNull()
+  })
+})
+
+/**
+ * The routing table.
+ *
+ * Observational, which is the fact every one of these tests is shaped by: nothing was randomised
+ * and nothing withheld, so the table is confounded by whoever chose the model. That is why it
+ * only ever routes *down* — the confound biases against expensive models, so using it to save
+ * money risks the mistake it is most likely making, while using it to spend more compounds one.
+ */
+const observation = (
+  model: string,
+  over: Partial<{ decided: number; merged: number; verificationFailed: number; meanCostUsd: number }> = {},
+) => ({
+  model,
+  decided: over.decided ?? 5,
+  merged: over.merged ?? 4,
+  verificationFailed: over.verificationFailed ?? 0,
+  meanCostUsd: over.meanCostUsd ?? 0.1,
+})
+
+const route = (
+  observations: ReturnType<typeof observation>[],
+  over: { ceilingModel?: string | null; minDecided?: number } = {},
+) =>
+  routeModel({
+    taskClass: 'swe',
+    observations,
+    ceilingModel: over.ceilingModel === undefined ? null : over.ceilingModel,
+    minDecided: over.minDecided ?? 5,
+  })
+
+describe('routeModel', () => {
+  it('picks the cheapest model nothing more expensive has beaten', () => {
+    const verdict = route([
+      observation(HAIKU, { merged: 4 }),
+      observation(SONNET, { merged: 4, meanCostUsd: 0.3 }),
+    ])
+    expect(verdict.kind).toBe('measured')
+    expect(verdict.model).toBe(HAIKU)
+    // The sentence has to say what kind of evidence this is, because it is the weak kind.
+    expect(verdict.detail).toContain('what has happened rather than as what works')
+  })
+
+  it('moves up when the cheap model is beaten on what humans merged', () => {
+    const verdict = route([
+      observation(HAIKU, { merged: 1 }),
+      observation(SONNET, { merged: 5, meanCostUsd: 0.3 }),
+    ])
+    expect(verdict.model).toBe(SONNET)
+  })
+
+  /**
+   * And on the repository's checks, which is the term that exists so a fitness is more than a
+   * record of what a reviewer had time for.
+   */
+  it('moves up when outcomes are level but the cheap model leaves more failing checks', () => {
+    const verdict = route([
+      observation(HAIKU, { merged: 4, verificationFailed: 4 }),
+      observation(SONNET, { merged: 4, verificationFailed: 0, meanCostUsd: 0.3 }),
+    ])
+    expect(verdict.model).toBe(SONNET)
+  })
+
+  /**
+   * Cost is excluded from "beats" deliberately: the walk is already ordered cheapest-first, so
+   * letting cost decide would be the sort order voting twice.
+   */
+  it('does not move up merely because an expensive model is cheaper per run', () => {
+    const verdict = route([
+      observation(HAIKU, { merged: 4, meanCostUsd: 0.9 }),
+      observation(SONNET, { merged: 4, meanCostUsd: 0.1 }),
+    ])
+    expect(verdict.model).toBe(HAIKU)
+  })
+
+  it('takes the best observed when every cheaper model has been beaten', () => {
+    const verdict = route([
+      observation(HAIKU, { merged: 0 }),
+      observation(SONNET, { merged: 2 }),
+      observation(OPUS, { merged: 5 }),
+    ])
+    expect(verdict.model).toBe(OPUS)
+    expect(verdict.detail).toContain('Every cheaper model has been beaten')
+  })
+
+  /** Below the sample, the persona's own model stands and the sentence says how far off it is. */
+  it('says it has no evidence rather than defaulting to something', () => {
+    const verdict = route([observation(HAIKU, { decided: 2 }), observation(SONNET, { decided: 1 })])
+    expect(verdict.kind).toBe('no-evidence')
+    expect(verdict.model).toBeNull()
+    expect(verdict.detail).toContain('3 finished run(s)')
+  })
+
+  it('refuses to route on one model alone, however much of it there is', () => {
+    const verdict = route([observation(HAIKU, { decided: 500 })])
+    expect(verdict.kind).toBe('no-evidence')
+    expect(verdict.detail).toContain('Two models have to have been used')
+  })
+
+  it('ignores a model it cannot rank rather than guessing where it sits', () => {
+    const verdict = route([observation(HAIKU), observation('some-local-llm', { merged: 5 })])
+    expect(verdict.kind).toBe('no-evidence')
+  })
+
+  /**
+   * A ceiling is a human's bound. Where the evidence points above it, the run goes to the ceiling
+   * and the sentence says the evidence disagrees — which is the actionable half.
+   */
+  it('runs at the ceiling when the evidence points above it, and says so', () => {
+    const verdict = route(
+      [observation(HAIKU, { merged: 0 }), observation(OPUS, { merged: 5 })],
+      { ceilingModel: SONNET },
+    )
+    expect(verdict.kind).toBe('clamped')
+    expect(verdict.model).toBe(SONNET)
+    expect(verdict.detail).toContain('Worth a human raising')
+  })
+
+  it('clamps the every-cheaper-model-beaten case to the ceiling too', () => {
+    const verdict = route(
+      [
+        observation(HAIKU, { merged: 0 }),
+        observation(SONNET, { merged: 2 }),
+        observation(OPUS, { merged: 5 }),
+      ],
+      { ceilingModel: SONNET },
+    )
+    expect(verdict.kind).toBe('clamped')
+    expect(verdict.model).toBe(SONNET)
   })
 })
