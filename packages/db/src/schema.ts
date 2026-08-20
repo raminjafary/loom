@@ -1314,6 +1314,95 @@ export const expertiseUseNode = pgTable(
 )
 
 /**
+ * One distilled lesson — continuity mode's fifth tier, as a row.
+ *
+ * **`repository_id` is `notNull` and that is the security control, not a convenience.**
+ * Domain expertise: memory is "per persona and per repository, never global", because
+ * durable cross-run memory is what turns one poisoned run into a permanent one. A nullable
+ * column here would make "global" expressible, and a thing that is expressible in a schema
+ * is a thing some later code path will write.
+ *
+ * The bi-temporal treatment is `subject_map_node`'s exactly — a partial unique index on the
+ * live key, so invalidation is a write and a superseded lesson keeps its trail back to the
+ * run that acted on it. What differs is what a key means: a map node's key is a thing in the
+ * repository, and a lesson's is the *claim*, so re-using one is a persona correcting itself
+ * rather than re-observing a file.
+ *
+ * There is deliberately no `provenance` column. A map has one because it holds two kinds of
+ * claim, parsed and concluded; every row here is model-authored, forever, and a column whose
+ * only value is `inferred` would invite a second one.
+ */
+export const personaLesson = pgTable(
+  'persona_lesson',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    /** The run that wrote it. Nulled rather than cascaded: the lesson outlives its author. */
+    authoredByRunId: uuid('authored_by_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    key: text('key').notNull(),
+    // 'convention' | 'hazard' | 'procedure' | 'correction'.
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    paths: jsonb('paths').$type<string[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+    invalidatedReason: text('invalidated_reason'),
+  },
+  (t) => [
+    uniqueIndex('persona_lesson_live_key_idx')
+      .on(t.personaId, t.repositoryId, t.key)
+      .where(sql`${t.invalidatedAt} is null`),
+    index('persona_lesson_scope_idx').on(t.workspaceId, t.personaId, t.repositoryId),
+    index('persona_lesson_repository_idx').on(t.workspaceId, t.repositoryId),
+  ],
+)
+
+/**
+ * Which lessons a run was shown.
+ *
+ * The same record `expertise_use_node` keeps for map claims, and for the same reason: a
+ * lesson is ranked by "what became of the runs that read it", and a ranking needs a
+ * denominator the platform wrote down rather than inferred. This is the platform's own
+ * record of what it rendered into a prompt — "was shown", never "was used".
+ *
+ * One row per `(lesson, run)`. No arm column: the map's retrieval trial is a measurement of
+ * whether a map helps, and no such trial is registered for memory — what these rows support
+ * today is the ranking, and what they make possible later is that trial, which would need
+ * exactly this table plus a column.
+ */
+export const personaLessonCitation = pgTable(
+  'persona_lesson_citation',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    lessonId: uuid('lesson_id')
+      .notNull()
+      .references(() => personaLesson.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('persona_lesson_citation_unique_idx').on(t.lessonId, t.agentRunId),
+    index('persona_lesson_citation_lesson_idx').on(t.workspaceId, t.lessonId),
+  ],
+)
+
+/**
  * A convened session.
  *
  * Mastery calls it "a venue rather than a feature because everything in it needs the same

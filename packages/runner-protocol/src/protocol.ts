@@ -460,6 +460,25 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
     fragment: z.record(z.string(), z.unknown()),
   }),
   /**
+   * What a run wants to remember about this repository — continuity mode's fifth tier.
+   *
+   * No persona id and no repository id, and that absence is the security property, exactly
+   * as it is for `persona_prompt_revised`: both halves of the scope are resolved server-side
+   * from the run's own row. A model that could name either could write into another
+   * persona's memory, or into a memory belonging to no repository at all, which is the one
+   * shape domain expertise refuses outright.
+   *
+   * `distillation` is unvalidated here on purpose, like `map_written`'s fragment: the
+   * domain's `parseDistillation` is the one validator, and it is the only place that knows
+   * how many lessons this run has already spent.
+   */
+  z.object({
+    type: z.literal('experience_recorded'),
+    runId: z.string(),
+    requestId: z.string(),
+    distillation: z.record(z.string(), z.unknown()),
+  }),
+  /**
    * A mastery run's measured progress.
    *
    * `filesRead` is a count of distinct files the Runner observed the agent open, not a
@@ -759,6 +778,16 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
      */
     mapContext: z.string().optional(),
     /**
+     * What this persona has concluded about **this repository** on earlier runs — tier 5's
+     * durable memory, selected, ranked, bounded, rendered and fenced by the server.
+     *
+     * A field of its own rather than more text inside `mapContext`, because the two are
+     * different artifacts with different fences and different ages: a map is one subject at
+     * one revision, and this is a persona's accumulated opinion of a codebase. A reader who
+     * cannot tell them apart cannot weigh them apart either.
+     */
+    experienceContext: z.string().optional(),
+    /**
      * Start this run as a **mastery run**: its deliverable is a map, not a diff.
      *
      * Carries the subject so the Runner can frame the task, and `filesInScope` so the
@@ -1017,6 +1046,21 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
     nodesWritten: z.number().int().nonnegative().optional(),
     edgesWritten: z.number().int().nonnegative().optional(),
     superseded: z.number().int().nonnegative().optional(),
+  }),
+  /**
+   * The server's verdict on a distillation. Same shape and same reason as `map_result`.
+   *
+   * `remaining` is what a mapping agent's `superseded` is: the only honest feedback the
+   * model gets about a quota it would otherwise discover by being refused.
+   */
+  z.object({
+    type: z.literal('experience_result'),
+    requestId: z.string(),
+    ok: z.boolean(),
+    reason: z.string().optional(),
+    written: z.number().int().nonnegative().optional(),
+    superseded: z.number().int().nonnegative().optional(),
+    remaining: z.number().int().nonnegative().optional(),
   }),
   /**
    * A tree's ledger, rendered, in answer to `notes_requested`. `ledger` is empty when

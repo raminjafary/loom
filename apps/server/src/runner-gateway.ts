@@ -40,6 +40,7 @@ import {
   reconcileRunnerRuns,
   recordAgentEvent,
   recordAgentNote,
+  recordExperience,
   recordMapFragment,
   recordMasteryCheckpoint,
   resolveMapRevision,
@@ -289,6 +290,7 @@ export const createRunnerGateway = (
       baseCommitSha,
       contextLedger,
       mapContext,
+      experienceContext,
       mastery,
       reconcile,
       review,
@@ -314,6 +316,7 @@ export const createRunnerGateway = (
         // how `mastery` was lost on its first live run: the map row was created, the
         // revision resolved, and the model was never offered `record_map`.
         ...(mapContext === undefined ? {} : { mapContext }),
+        ...(experienceContext === undefined ? {} : { experienceContext }),
         /**
          * The directive is **rendered here**, not on the Runner.
          *
@@ -1004,6 +1007,42 @@ export const createRunnerGateway = (
         } catch (error) {
           send(from, {
             type: 'map_result',
+            requestId: frame.requestId,
+            ok: false,
+            reason: error instanceof Error ? error.message : String(error),
+          })
+        }
+        return
+      }
+
+      /**
+       * What a run wants remembered about this repository. Same shape as `map_written`,
+       * and the refusals matter more here than anywhere else on this switch: every one of
+       * them is a sentence the model reads, and a persona that cannot tell "you are at your
+       * quota" from "you have no envelope" will keep spending calls finding out.
+       */
+      case 'experience_recorded': {
+        try {
+          const result = await recordExperience(deps, {
+            workspaceId,
+            agentRunId: asAgentRunId(frame.runId),
+            distillation: frame.distillation,
+          })
+          send(from, {
+            type: 'experience_result',
+            requestId: frame.requestId,
+            ok: result.ok,
+            ...(result.ok
+              ? {
+                  written: result.written,
+                  superseded: result.superseded,
+                  remaining: result.remaining,
+                }
+              : { reason: result.reason }),
+          })
+        } catch (error) {
+          send(from, {
+            type: 'experience_result',
             requestId: frame.requestId,
             ok: false,
             reason: error instanceof Error ? error.message : String(error),

@@ -34,6 +34,8 @@ export type VariantScreenId = Brand<string, 'VariantScreenId'>
 export type ReplayCampaignId = Brand<string, 'ReplayCampaignId'>
 /** One vintage in a campaign, optionally forced onto a model. */
 export type ReplayCampaignArmId = Brand<string, 'ReplayCampaignArmId'>
+/** One distilled lesson a persona holds about one repository. */
+export type PersonaLessonId = Brand<string, 'PersonaLessonId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -61,3 +63,4 @@ export const asVariantScreenId = (v: string): VariantScreenId => v as VariantScr
 export const asReplayCampaignId = (v: string): ReplayCampaignId => v as ReplayCampaignId
 export const asReplayCampaignArmId = (v: string): ReplayCampaignArmId =>
   v as ReplayCampaignArmId
+export const asPersonaLessonId = (v: string): PersonaLessonId => v as PersonaLessonId

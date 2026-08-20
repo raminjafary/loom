@@ -31,6 +31,7 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
      * selected, rendered and fenced host-side for the same reason `contextLedger` is.
      */
     mapContext: z.string().optional(),
+    experienceContext: z.string().optional(),
     /**
      * Present when this run's deliverable is a map rather than a diff.
      * Its presence is what gives the agent `record_map` at all — see agent-host.ts.
@@ -105,6 +106,16 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
     nodesWritten: z.number().int().nonnegative().optional(),
     edgesWritten: z.number().int().nonnegative().optional(),
     superseded: z.number().int().nonnegative().optional(),
+  }),
+  /** The host's verdict on a distillation. */
+  z.object({
+    t: z.literal('experience_result'),
+    requestId: z.string(),
+    ok: z.boolean(),
+    reason: z.string().optional(),
+    written: z.number().int().nonnegative().optional(),
+    superseded: z.number().int().nonnegative().optional(),
+    remaining: z.number().int().nonnegative().optional(),
   }),
   /** The host's verdict on a handover. */
   z.object({
@@ -255,6 +266,18 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
     t: z.literal('map'),
     requestId: z.string(),
     fragment: z.record(z.string(), z.unknown()),
+  }),
+  /**
+   * What the agent wants the next run against this repository to know.
+   *
+   * Off the event queue like `map` and `note`, and for the extra reason those two share:
+   * a run that is about to end is the likeliest of all to be stopped before its last frame
+   * is drained, and this is the frame it most wanted to send.
+   */
+  z.object({
+    t: z.literal('experience'),
+    requestId: z.string(),
+    distillation: z.record(z.string(), z.unknown()),
   }),
   /**
    * The agent handing its work to a successor.

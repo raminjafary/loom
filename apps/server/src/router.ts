@@ -67,6 +67,8 @@ import {
   settleSessionClaim,
   takeSessionTurn,
   listExpertiseUsedByRuns,
+  listPersonaExperience,
+  retireLesson,
   listPersonaMaps,
   listRepositoryMaps,
   listWorkspaceMaps,
@@ -128,6 +130,7 @@ import {
   asPersonaRevisionId,
   asReplayCampaignId,
   asAgentRunId,
+  asPersonaLessonId,
   asSubjectMapId,
   NotFoundError,
   ValidationError,
@@ -577,6 +580,27 @@ export const router = os.router({
    * No write path for nodes or edges, deliberately — see the contract. A client that
    * could write a map could put text of its choosing into every future run's prompt.
    */
+  experience: {
+    listForPersona: os.experience.listForPersona.handler(({ context, input }) =>
+      guard(() =>
+        listPersonaExperience(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          personaId: asAgentPersonaId(input.personaId),
+        }),
+      ),
+    ),
+
+    retire: os.experience.retire.handler(({ context, input }) =>
+      guard(() =>
+        retireLesson(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          lessonId: asPersonaLessonId(input.lessonId),
+          reason: input.reason,
+        }),
+      ),
+    ),
+  },
+
   mastery: {
     listForPersona: os.mastery.listForPersona.handler(({ context, input }) =>
       guard(() =>

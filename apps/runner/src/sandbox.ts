@@ -152,6 +152,15 @@ export interface SandboxOptions {
     | { ok: false; reason: string }
   >
   /**
+   * What the agent wants remembered about this repository — tier 5's write, relayed the
+   * moment it is made. Absent for a persona with no envelope, which is what makes durable
+   * memory off by default rather than a default a row could override.
+   */
+  readonly onExperienceWrite?: (distillation: Record<string, unknown>) => Promise<
+    | { ok: true; written: number; superseded: number; remaining: number }
+    | { ok: false; reason: string }
+  >
+  /**
    * The agent handing its work to a successor.
    *
    * Present on every run, unlike `onMapWrite`: a brief is read by one successor in one
@@ -165,6 +174,8 @@ export interface SandboxOptions {
   readonly contextLedger?: string
   /** What the persona already knows about this subject, rendered server-side. */
   readonly mapContext?: string
+  /** What the persona has concluded about this repository, rendered and fenced server-side. */
+  readonly experienceContext?: string
   /** Present when the deliverable is a map rather than a diff. */
   readonly mastery?: {
     subjectKind: 'repository' | 'author' | 'corpus'
@@ -576,6 +587,9 @@ export const runAgentInSandbox = async (
       ...(options.task === undefined ? {} : { task: options.task }),
       ...(options.contextLedger === undefined ? {} : { contextLedger: options.contextLedger }),
       ...(options.mapContext === undefined ? {} : { mapContext: options.mapContext }),
+      ...(options.experienceContext === undefined
+        ? {}
+        : { experienceContext: options.experienceContext }),
       ...(options.mastery === undefined ? {} : { mastery: options.mastery }),
       ...(options.verifyVariants === undefined ? {} : { verifyVariants: options.verifyVariants }),
       ...(options.proposeVariants === undefined
@@ -725,6 +739,28 @@ export const runAgentInSandbox = async (
                   nodesWritten: result.nodesWritten,
                   edgesWritten: result.edgesWritten,
                   superseded: result.superseded,
+                }
+              : { reason: result.reason }),
+          })
+        })()
+        return
+      case 'experience':
+        // Off the event queue, for `map`'s reason and one of its own: this arrives at the
+        // very end of a run, which is exactly when a transcript backlog is longest.
+        void (async () => {
+          const result = (await options.onExperienceWrite?.(frame.distillation)) ?? {
+            ok: false,
+            reason: 'this run has no memory channel — its persona has no envelope',
+          }
+          send({
+            t: 'experience_result',
+            requestId: frame.requestId,
+            ok: result.ok,
+            ...(result.ok
+              ? {
+                  written: result.written,
+                  superseded: result.superseded,
+                  remaining: result.remaining,
                 }
               : { reason: result.reason }),
           })

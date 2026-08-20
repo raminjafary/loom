@@ -398,6 +398,37 @@ export const SubjectMapListingSchema = z.object({
   decided: z.object({ retrieved: z.number().int(), withheld: z.number().int() }),
 })
 
+/**
+ * One distilled lesson, as a human reads it.
+ *
+ * The outcome counts travel with the lesson rather than a computed score, for
+ * `MasteryViewSchema`'s reason: "outranked" is a conclusion, and the reader should be able
+ * to check it against the runs it came from. `invalidatedAt` is present and rendered rather
+ * than filtered out — a memory panel that hid what was retired would be a different memory
+ * from the one a curation pass sees.
+ */
+export const PersonaLessonSchema = z.object({
+  id: z.string(),
+  repositoryId: z.string(),
+  repositoryName: z.string(),
+  authoredByRunId: z.string().nullable(),
+  key: z.string(),
+  kind: z.enum(['convention', 'hazard', 'procedure', 'correction']),
+  title: z.string(),
+  body: z.string(),
+  paths: z.array(z.string()),
+  createdAt: z.date(),
+  invalidatedAt: z.date().nullable(),
+  invalidatedReason: z.string().nullable(),
+  outcomes: z.object({
+    decided: z.number().int(),
+    merged: z.number().int(),
+    discarded: z.number().int(),
+  }),
+})
+
+export type PersonaLesson = z.infer<typeof PersonaLessonSchema>
+
 export const MapNodeSchema = z.object({
   id: z.string(),
   key: z.string(),

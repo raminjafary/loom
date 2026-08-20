@@ -11,6 +11,7 @@ import {
 import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
 import { allowedMcpToolNames, toMcpServers } from './capabilities.js'
 import { MAP_SERVER_NAME, MAP_TOOL_NAMES } from './map-tool.js'
+import { EXPERIENCE_SERVER_NAME, EXPERIENCE_TOOL_NAMES } from './experience-tool.js'
 import { HANDOFF_SERVER_NAME, HANDOFF_TOOL_NAMES } from './handoff-tool.js'
 import { ATLAS_SERVER_NAME, ATLAS_TOOL_NAMES } from './atlas-tool.js'
 import { SELF_SERVER_NAME, SELF_TOOL_NAMES } from './self-tool.js'
@@ -197,6 +198,12 @@ export interface RunAgentOptions {
    */
   readonly mapContext?: string
   /**
+   * What this persona has concluded about this repository before — rendered and fenced
+   * server-side, for `mapContext`'s reason. Model-authored throughout, so it goes in the
+   * prompt and never into the persona's system prompt.
+   */
+  readonly experienceContext?: string
+  /**
    * Present when this run's deliverable is a map rather than a diff.
    */
   readonly mastery?: {
@@ -249,6 +256,17 @@ export interface RunAgentOptions {
    * look like from where the model sits.
    */
   readonly selfTool?: McpSdkServerConfigWithInstance
+  /**
+   * The `record_experience`, offered on the same condition as `selfTool` — tier 5 is a
+   * self-modification tier, and an absent envelope is a refusal.
+   *
+   * A separate field rather than another tool inside `selfTool`'s server, because the two
+   * write to different things and one of them is bounded per repository: bundling them
+   * would mean a persona permitted to keep memory could not be told apart from one
+   * permitted to rewrite its own instructions, in the one list where that distinction is
+   * visible to the model.
+   */
+  readonly experienceTool?: McpSdkServerConfigWithInstance
   /**
    * Hands the caller the run's delivery channel.
    *
@@ -344,6 +362,7 @@ export const buildQueryOptions = (
     | 'proposalTool'
     | 'handoffTool'
     | 'selfTool'
+    | 'experienceTool'
   >,
   settingSources: SettingSourceName[] = settingSourcesFromEnv(),
 ) => {
@@ -361,6 +380,7 @@ export const buildQueryOptions = (
   if (options.proposalTool) mcpServers[PROPOSAL_SERVER_NAME] = options.proposalTool
   if (options.handoffTool) mcpServers[HANDOFF_SERVER_NAME] = options.handoffTool
   if (options.selfTool) mcpServers[SELF_SERVER_NAME] = options.selfTool
+  if (options.experienceTool) mcpServers[EXPERIENCE_SERVER_NAME] = options.experienceTool
   if (options.questionTool) mcpServers[QUESTION_SERVER_NAME] = options.questionTool
   const skills = capabilities
     .filter((capability) => capability.kind === 'skill')
@@ -398,6 +418,7 @@ export const buildQueryOptions = (
     ...(options.proposalTool ? [SUBMIT_PROPOSALS_TOOL_NAME] : []),
     ...(options.handoffTool ? HANDOFF_TOOL_NAMES : []),
     ...(options.selfTool ? SELF_TOOL_NAMES : []),
+    ...(options.experienceTool ? EXPERIENCE_TOOL_NAMES : []),
     ...(options.questionTool ? [ASK_HUMAN_TOOL_NAME] : []),
   ]
 
@@ -457,7 +478,10 @@ export const buildQueryOptions = (
  * and not after.
  */
 export const buildPrompt = (
-  options: Pick<RunAgentOptions, 'persona' | 'task' | 'contextLedger' | 'mapContext' | 'mastery'>,
+  options: Pick<
+    RunAgentOptions,
+    'persona' | 'task' | 'contextLedger' | 'mapContext' | 'experienceContext' | 'mastery'
+  >,
 ): string => {
   const opening = options.mastery
     ? masteryOpening(options.persona.name, options.mastery, options.task)
@@ -466,11 +490,17 @@ export const buildPrompt = (
       : `You are ${options.persona.name}. Begin working now.`
 
   /**
-   * Both context blocks after the task, ledger last. The map is older and broader; the
-   * ledger is about the work happening right now, and the thing nearest the end of a
-   * prompt is the thing a model weighs most.
+   * Every context block after the task, ledger last, and the order between them is by age:
+   * the map is one subject at one revision, memory is this persona's accumulated opinion of
+   * the repository, and the ledger is about the work happening right now. The thing nearest
+   * the end of a prompt is the thing a model weighs most, so the newest goes last.
    */
-  return [opening, options.mapContext?.trim(), options.contextLedger?.trim()]
+  return [
+    opening,
+    options.mapContext?.trim(),
+    options.experienceContext?.trim(),
+    options.contextLedger?.trim(),
+  ]
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
     .join('\n\n')
 }

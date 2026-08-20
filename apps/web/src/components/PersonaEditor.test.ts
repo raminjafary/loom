@@ -5,7 +5,7 @@ import type {
   PromptTrial,
   VariantSearch,
 } from '@loom/api-contract'
-import type { CampaignReport, CampaignRow } from '@loom/client-core'
+import type { CampaignReport, CampaignRow, PersonaLesson } from '@loom/client-core'
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PersonaEditor from './PersonaEditor.vue'
@@ -934,5 +934,129 @@ describe('the variant search panel', () => {
     })
     await wrapper.get('.row-actions .link').trigger('click')
     expect(wrapper.find('.trial.search').exists()).toBe(false)
+  })
+})
+
+/**
+ * What a persona remembers.
+ *
+ * The panel is the only place a human ever sees the untrusted layer, so what these assert is
+ * what that reader needs to be told: that the lines were written by a model, what became of
+ * the runs that read each one, and that a retired lesson is still on the page with the reason
+ * it stopped being shown.
+ */
+describe('PersonaEditor — distilled experience', () => {
+  const lesson = (over: Partial<PersonaLesson> = {}): PersonaLesson => ({
+    id: 'lesson_1',
+    repositoryId: 'r1',
+    repositoryName: 'loom',
+    authoredByRunId: 'run_1',
+    key: 'seed-first',
+    kind: 'procedure',
+    title: 'Integration tests need a seeded workspace',
+    body: 'Every db test truncates workspace, so a row has to be inserted in beforeEach.',
+    paths: ['packages/db'],
+    createdAt: new Date(0),
+    invalidatedAt: null,
+    invalidatedReason: null,
+    outcomes: { decided: 0, merged: 0, discarded: 0 },
+    ...over,
+  })
+
+  const openedMemory = async (
+    lessons: PersonaLesson[],
+    retire?: (input: { lessonId: string; reason: string }) => Promise<{ invalidated: number }>,
+  ) => {
+    const wrapper = mount(PersonaEditor, {
+      props: {
+        personas: [persona()],
+        capabilities: [],
+        attachments: [],
+        revisions: [],
+        listExperience: async () => lessons,
+        ...(retire ? { retireLesson: retire } : {}),
+      },
+    })
+    await wrapper.get('.row-actions .link').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('says the lines are model output and handed on as data to verify', async () => {
+    const wrapper = await openedMemory([lesson()])
+    const text = wrapper.get('.experience').text()
+    expect(text).toContain('written by a model')
+    expect(text).toContain('never as instruction')
+  })
+
+  it('shows what became of the runs that read a lesson, rather than a score', async () => {
+    const wrapper = await openedMemory([
+      lesson({ outcomes: { decided: 4, merged: 3, discarded: 1 } }),
+    ])
+    const text = wrapper.get('.lesson-list li').text()
+    expect(text).toContain('4 decided run(s)')
+    expect(text).toContain('3 merged')
+  })
+
+  it('says plainly when nothing has read a lesson yet', async () => {
+    const wrapper = await openedMemory([lesson()])
+    expect(wrapper.get('.lesson-list li').text()).toContain('no decided run has read it yet')
+  })
+
+  it('keeps a retired lesson on the page, with why it stopped being shown', async () => {
+    const wrapper = await openedMemory([
+      lesson({
+        id: 'lesson_2',
+        invalidatedAt: new Date(1_000),
+        invalidatedReason: 'changed at abc1234',
+      }),
+    ])
+    expect(wrapper.findAll('.lesson-list.retired li')).toHaveLength(1)
+    expect(wrapper.get('.lesson-list.retired').text()).toContain('changed at abc1234')
+    // And it is not offered again as something live.
+    expect(wrapper.findAll('.lesson-list:not(.retired) li')).toHaveLength(0)
+  })
+
+  it('names the repository a lesson belongs to, because that is its whole scope', async () => {
+    const wrapper = await openedMemory([lesson({ repositoryName: 'hotel-api' })])
+    expect(wrapper.get('.lesson-scope').text()).toBe('hotel-api')
+  })
+
+  it('offers no memory section at all to a mount that does not pass the reader', async () => {
+    const wrapper = mount(PersonaEditor, {
+      props: { personas: [persona()], capabilities: [], attachments: [], revisions: [] },
+    })
+    await wrapper.get('.row-actions .link').trigger('click')
+    expect(wrapper.find('.experience').exists()).toBe(false)
+  })
+
+  it('asks for the reason in place, and will not retire without one', async () => {
+    const calls: unknown[] = []
+    const wrapper = await openedMemory([lesson()], async (input) => {
+      calls.push(input)
+      return { invalidated: 1 }
+    })
+    await wrapper.get('.lesson-head .retire').trigger('click')
+    const confirm = wrapper.get('.retire-form button')
+    expect(confirm.attributes('disabled')).toBeDefined()
+
+    await wrapper.get('.retire-form input').setValue('   ')
+    await confirm.trigger('click')
+    await flushPromises()
+    expect(calls).toEqual([])
+  })
+
+  it('retires with the reason the human typed', async () => {
+    const calls: { lessonId: string; reason: string }[] = []
+    const wrapper = await openedMemory([lesson()], async (input) => {
+      calls.push(input)
+      return { invalidated: 1 }
+    })
+    await wrapper.get('.lesson-head .retire').trigger('click')
+    await wrapper.get('.retire-form input').setValue('It was never true of main.')
+    await wrapper.get('.retire-form button').trigger('click')
+    await flushPromises()
+    expect(calls).toEqual([{ lessonId: 'lesson_1', reason: 'It was never true of main.' }])
+    expect(wrapper.get('.lesson-notice').text()).toContain('stays on record')
   })
 })

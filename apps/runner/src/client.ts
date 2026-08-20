@@ -52,6 +52,7 @@ import {
 } from './mastery-progress.js'
 import { createAtlasTool } from './atlas-tool.js'
 import { createSelfTool } from './self-tool.js'
+import { createExperienceTool } from './experience-tool.js'
 import { createProposalTool } from './proposal-tool.js'
 import { createVerdictTool } from './verdict-tool.js'
 import { createNotesTool } from './notes-tool.js'
@@ -166,6 +167,17 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
   const pendingAtlasLinks = new Map<
     string,
     (result: { ok: boolean; outcome?: string | undefined; error?: string | undefined }) => void
+  >()
+  /** `record_experience` round-trips. Same shape and bound as a map write. */
+  const pendingExperienceWrites = new Map<
+    string,
+    (result: {
+      ok: boolean
+      reason?: string | undefined
+      written?: number | undefined
+      superseded?: number | undefined
+      remaining?: number | undefined
+    }) => void
   >()
   /** `revise_own_prompt` round-trips. */
   const pendingSelfEdits = new Map<
@@ -546,6 +558,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
     steering?: boolean
     /** What the persona already knows about this subject, rendered server-side. */
     mapContext?: string
+    /** What it has concluded about this repository before, rendered and fenced server-side. */
+    experienceContext?: string
     /** Present when the deliverable is a map rather than a diff. */
     mastery?: {
       subjectKind: 'repository' | 'author' | 'corpus'
@@ -948,6 +962,45 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         ? createProposalTool(input.proposeVariants.personaName, { submit: onProposeVariants })
         : null
 
+    /**
+     * Tier 5's channel, on the same condition as tier 1's and 2's — durable memory is the
+     * fifth self-modification tier, and an absent envelope is a refusal.
+     */
+    const onExperienceWrite = (distillation: {
+      lessons: unknown[]
+    }): Promise<
+      | { ok: true; written: number; superseded: number; remaining: number }
+      | { ok: false; reason: string }
+    > => {
+      const requestId = nextNoteRequestId()
+      send({ type: 'experience_recorded', runId: input.runId, requestId, distillation })
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingExperienceWrites.delete(requestId)
+          resolve({
+            ok: false,
+            reason: 'the platform did not answer in time — nothing was remembered',
+          })
+        }, NOTE_TIMEOUT_MS)
+        pendingExperienceWrites.set(requestId, (result) => {
+          clearTimeout(timer)
+          resolve(
+            result.ok
+              ? {
+                  ok: true,
+                  written: result.written ?? 0,
+                  superseded: result.superseded ?? 0,
+                  remaining: result.remaining ?? 0,
+                }
+              : { ok: false, reason: result.reason ?? 'the platform refused it' },
+          )
+        })
+      })
+    }
+    const experienceTool = maySelfModify(input.persona.envelope ?? null)
+      ? createExperienceTool({ recordExperience: onExperienceWrite })
+      : null
+
     const selfTool = maySelfModify(input.persona.envelope ?? null)
       ? createSelfTool({
           revisePrompt: onSelfEdit,
@@ -1037,10 +1090,14 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         ...(verdictTool ? { verdictTool } : {}),
         ...(proposalTool ? { proposalTool } : {}),
         ...(selfTool ? { selfTool } : {}),
+        ...(experienceTool ? { experienceTool } : {}),
         questionTool: questionTool.server,
         ...(input.task === undefined ? {} : { task: input.task }),
         ...(input.contextLedger === undefined ? {} : { contextLedger: input.contextLedger }),
         ...(input.mapContext === undefined ? {} : { mapContext: input.mapContext }),
+        ...(input.experienceContext === undefined
+          ? {}
+          : { experienceContext: input.experienceContext }),
         ...(input.mastery === undefined ? {} : { mastery: input.mastery }),
         ...(input.resumeSessionId === undefined ? {} : { resumeSessionId: input.resumeSessionId }),
         abortController: input.abort,
@@ -1113,6 +1170,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         ...(input.task === undefined ? {} : { task: input.task }),
         ...(input.contextLedger === undefined ? {} : { contextLedger: input.contextLedger }),
         ...(input.mapContext === undefined ? {} : { mapContext: input.mapContext }),
+        ...(input.experienceContext === undefined
+          ? {}
+          : { experienceContext: input.experienceContext }),
         ...(input.mastery === undefined ? {} : { mastery: input.mastery }),
         ...(input.verifyVariants === undefined ? {} : { verifyVariants: input.verifyVariants }),
         ...(input.proposeVariants === undefined
@@ -1144,6 +1204,12 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
           ? {
               onMapWrite: (fragment: Record<string, unknown>) =>
                 onMapWrite(fragment as { nodes: unknown[]; edges: unknown[] }),
+            }
+          : {}),
+        ...(experienceTool
+          ? {
+              onExperienceWrite: (distillation: Record<string, unknown>) =>
+                onExperienceWrite(distillation as { lessons: unknown[] }),
             }
           : {}),
         // Unconditional, unlike the map channel: every run may hand over, and a
@@ -1456,6 +1522,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 // state that moves while a run works, so a resumed run gets whatever
                 // the server sends it now rather than a replay of what it had.
                 ...(frame.mapContext === undefined ? {} : { mapContext: frame.mapContext }),
+                // And its memory of this repository, on the same terms as the map above.
+                ...(frame.experienceContext === undefined
+                  ? {}
+                  : { experienceContext: frame.experienceContext }),
                 ...(frame.mastery === undefined || headSha === null
                   ? {}
                   : { mastery: { ...frame.mastery, revision: headSha } }),
@@ -1622,6 +1692,15 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
           const resolve = pendingMapWrites.get(frame.requestId)
           if (resolve) {
             pendingMapWrites.delete(frame.requestId)
+            resolve(frame)
+          }
+          return
+        }
+
+        case 'experience_result': {
+          const resolve = pendingExperienceWrites.get(frame.requestId)
+          if (resolve) {
+            pendingExperienceWrites.delete(frame.requestId)
             resolve(frame)
           }
           return

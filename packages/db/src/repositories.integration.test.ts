@@ -34,6 +34,7 @@ import {
   subjectMapRepository,
 } from './agent-repositories.js'
 import { campaignRepository, screenRepository } from './screen-repositories.js'
+import { experienceRepository } from './experience-repositories.js'
 import {
   auditAdapter,
   channelRepository,
@@ -2683,5 +2684,246 @@ describe('reverted merges', () => {
     const tallies = await variants.tallyVariantOutcomes(WS, opened.set.id)
     const arm = tallies.find((tally) => tally.variantId === candidate.id)
     expect(arm).toMatchObject({ decided: 1, merged: 1, reverted: 1 })
+  })
+})
+
+/**
+ * Distilled experience, asserted where its claims actually live.
+ *
+ * Three of the properties this feature rests on are Postgres behaviours and cannot be
+ * demonstrated against a fake: the partial unique index that makes supersession possible at
+ * all (one *live* row per key, unlimited history behind it), the transaction that keeps a
+ * persona from having no memory of a key for the instant between the two writes, and the
+ * join that scores a lesson by the dispositions of the runs it was shown to — set long
+ * after the citation row was written.
+ */
+describe('distilled experience repository', () => {
+  const experience = experienceRepository(db)
+
+  let seq = 0
+
+  const scaffold = async (workspaceId: WorkspaceId) => {
+    seq += 1
+    const [ch] = await db
+      .insert(channel)
+      .values({ workspaceId, name: `memory-${seq}`, isPrivate: false })
+      .returning({ id: channel.id })
+    const [th] = await db
+      .insert(thread)
+      .values({ workspaceId, channelId: ch!.id, isRoot: true })
+      .returning({ id: thread.id })
+    const [rn] = await db
+      .insert(runner)
+      .values({ workspaceId, name: `runner-memory-${seq}`, pairingTokenHash: `hash-memory-${seq}` })
+      .returning({ id: runner.id })
+    const [repo] = await db
+      .insert(repository)
+      .values({
+        workspaceId,
+        runnerId: rn!.id,
+        displayName: 'repo',
+        absolutePath: `/tmp/memory-${seq}`,
+        defaultBranch: 'main',
+      })
+      .returning({ id: repository.id })
+    const [persona] = await db
+      .insert(agentPersona)
+      .values({
+        workspaceId,
+        name: `rememberer-${seq}`,
+        description: 'd',
+        markdownSource: 'live',
+        model: 'claude-haiku-4-5',
+      })
+      .returning({ id: agentPersona.id })
+    return { threadId: th!.id, runnerId: rn!.id, repositoryId: repo!.id, personaId: persona!.id }
+  }
+
+  type MemoryScaffolding = Awaited<ReturnType<typeof scaffold>>
+
+  const addRun = async (
+    workspaceId: WorkspaceId,
+    s: MemoryScaffolding,
+    input: { status?: 'completed' | 'failed'; disposition?: 'merged' | 'discarded' | null } = {},
+  ) => {
+    const [run] = await db
+      .insert(agentRun)
+      .values({
+        workspaceId,
+        threadId: s.threadId,
+        repositoryId: s.repositoryId,
+        runnerId: s.runnerId,
+        persona: {
+          name: 'rememberer',
+          model: 'claude-haiku-4-5',
+          systemPrompt: 'x',
+          tools: [],
+          approvalMode: 'ask' as const,
+        },
+        status: input.status ?? 'completed',
+        branchDisposition: input.disposition ?? null,
+      })
+      .returning({ id: agentRun.id })
+    return asAgentRunId(run!.id)
+  }
+
+  const lesson = (key: string, over: Record<string, unknown> = {}) => ({
+    key,
+    kind: 'convention' as const,
+    title: `About ${key}`,
+    body: 'The reason it holds.',
+    paths: [] as string[],
+    ...over,
+  })
+
+  it('keeps one live row per key and the whole history behind it', async () => {
+    const s = await scaffold(WS)
+    const first = await addRun(WS, s)
+    const second = await addRun(WS, s)
+
+    await experience.record({
+      workspaceId: WS,
+      personaId: asAgentPersonaId(s.personaId),
+      repositoryId: asRepositoryId(s.repositoryId),
+      authoredByRunId: first,
+      lessons: [lesson('seed-first')],
+    })
+    const written = await experience.record({
+      workspaceId: WS,
+      personaId: asAgentPersonaId(s.personaId),
+      repositoryId: asRepositoryId(s.repositoryId),
+      authoredByRunId: second,
+      lessons: [lesson('seed-first', { kind: 'correction', title: 'Not so' })],
+    })
+
+    expect(written).toEqual({ written: 1, superseded: 1 })
+
+    const live = await experience.listForScope(
+      WS,
+      asAgentPersonaId(s.personaId),
+      asRepositoryId(s.repositoryId),
+    )
+    expect(live).toHaveLength(1)
+    expect(live[0]?.title).toBe('Not so')
+
+    const all = await experience.listForScope(
+      WS,
+      asAgentPersonaId(s.personaId),
+      asRepositoryId(s.repositoryId),
+      { includeInvalidated: true },
+    )
+    expect(all).toHaveLength(2)
+    expect(all.filter((entry) => entry.invalidatedAt !== null)).toHaveLength(1)
+  })
+
+  it('counts a run’s quota against what it wrote, including what it later replaced', async () => {
+    const s = await scaffold(WS)
+    const run = await addRun(WS, s)
+    await experience.record({
+      workspaceId: WS,
+      personaId: asAgentPersonaId(s.personaId),
+      repositoryId: asRepositoryId(s.repositoryId),
+      authoredByRunId: run,
+      lessons: [lesson('one'), lesson('two')],
+    })
+    await experience.record({
+      workspaceId: WS,
+      personaId: asAgentPersonaId(s.personaId),
+      repositoryId: asRepositoryId(s.repositoryId),
+      authoredByRunId: run,
+      lessons: [lesson('one', { title: 'Rewritten' })],
+    })
+    expect(await experience.countWrittenByRun(WS, run)).toBe(3)
+  })
+
+  it('scores a lesson by the dispositions of the runs it was shown to, joined at read time', async () => {
+    const s = await scaffold(WS)
+    const author = await addRun(WS, s)
+    await experience.record({
+      workspaceId: WS,
+      personaId: asAgentPersonaId(s.personaId),
+      repositoryId: asRepositoryId(s.repositoryId),
+      authoredByRunId: author,
+      lessons: [lesson('cited')],
+    })
+    const [stored] = await experience.listForScope(
+      WS,
+      asAgentPersonaId(s.personaId),
+      asRepositoryId(s.repositoryId),
+    )
+
+    const merged = await addRun(WS, s, { disposition: 'merged' })
+    const discarded = await addRun(WS, s, { disposition: 'discarded' })
+    const undecided = await addRun(WS, s)
+    for (const runId of [merged, discarded, undecided]) {
+      await experience.recordCitations({ workspaceId: WS, agentRunId: runId, lessonIds: [stored!.id] })
+    }
+    // Twice for one run: the unique index is what stops it counting twice.
+    await experience.recordCitations({ workspaceId: WS, agentRunId: merged, lessonIds: [stored!.id] })
+
+    const tally = await experience.tallyLessonOutcomes(
+      WS,
+      asAgentPersonaId(s.personaId),
+      asRepositoryId(s.repositoryId),
+    )
+    expect(tally[stored!.id]).toMatchObject({ decided: 2, merged: 1, discarded: 1 })
+  })
+
+  it('never re-stamps a lesson that is already retired', async () => {
+    const s = await scaffold(WS)
+    const run = await addRun(WS, s)
+    await experience.record({
+      workspaceId: WS,
+      personaId: asAgentPersonaId(s.personaId),
+      repositoryId: asRepositoryId(s.repositoryId),
+      authoredByRunId: run,
+      lessons: [lesson('retire-me')],
+    })
+    const [stored] = await experience.listForScope(
+      WS,
+      asAgentPersonaId(s.personaId),
+      asRepositoryId(s.repositoryId),
+    )
+
+    expect(await experience.invalidate(WS, [stored!.id], 'changed at abc1234')).toBe(1)
+    expect(await experience.invalidate(WS, [stored!.id], 'retired by a human: wrong')).toBe(0)
+
+    const [after] = await experience.listForScope(
+      WS,
+      asAgentPersonaId(s.personaId),
+      asRepositoryId(s.repositoryId),
+      { includeInvalidated: true },
+    )
+    expect(after?.invalidatedReason).toBe('changed at abc1234')
+  })
+
+  it('outlives the run that wrote it, and dies with the repository it is about', async () => {
+    const s = await scaffold(WS)
+    const run = await addRun(WS, s)
+    await experience.record({
+      workspaceId: WS,
+      personaId: asAgentPersonaId(s.personaId),
+      repositoryId: asRepositoryId(s.repositoryId),
+      authoredByRunId: run,
+      lessons: [lesson('outlives')],
+    })
+
+    await db.delete(agentRun).where(sql`${agentRun.id} = ${run}`)
+    const [orphaned] = await experience.listForScope(
+      WS,
+      asAgentPersonaId(s.personaId),
+      asRepositoryId(s.repositoryId),
+    )
+    expect(orphaned?.authoredByRunId).toBeNull()
+
+    await db.delete(repository).where(sql`${repository.id} = ${s.repositoryId}`)
+    expect(
+      await experience.listForScope(
+        WS,
+        asAgentPersonaId(s.personaId),
+        asRepositoryId(s.repositoryId),
+        { includeInvalidated: true },
+      ),
+    ).toEqual([])
   })
 })

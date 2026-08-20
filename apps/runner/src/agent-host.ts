@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline'
 import { runAgent } from './claude-agent-adapter.js'
 import { createHandoffTool } from './handoff-tool.js'
 import { createMapTool } from './map-tool.js'
+import { createExperienceTool } from './experience-tool.js'
 import { createAtlasTool } from './atlas-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
@@ -98,6 +99,17 @@ const pendingMapWrites = new Map<
     superseded?: number | undefined
   }) => void
 >()
+/** `record_experience` round-trips. */
+const pendingExperienceWrites = new Map<
+  string,
+  (result: {
+    ok: boolean
+    reason?: string | undefined
+    written?: number | undefined
+    superseded?: number | undefined
+    remaining?: number | undefined
+  }) => void
+>()
 /** `revise_own_prompt` round-trips. */
 const pendingSelfEdits = new Map<
   string,
@@ -174,6 +186,15 @@ const main = async (): Promise<void> => {
           if (resolveMap) {
             pendingMapWrites.delete(parsed.data.requestId)
             resolveMap(parsed.data)
+          }
+          return
+        }
+
+        if (parsed.data.t === 'experience_result') {
+          const resolveExperience = pendingExperienceWrites.get(parsed.data.requestId)
+          if (resolveExperience) {
+            pendingExperienceWrites.delete(parsed.data.requestId)
+            resolveExperience(parsed.data)
           }
           return
         }
@@ -413,6 +434,34 @@ const main = async (): Promise<void> => {
     : null
 
   /**
+   * The memory channel inside the container, on the same condition as `selfTool` just
+   * above and applied here for the same reason: two processes, two tool lists, and a
+   * check in one of them is a check the other does not have.
+   */
+  const experienceTool = maySelfModify(persona.envelope ?? null)
+    ? createExperienceTool({
+        recordExperience: (distillation) => {
+          const requestId = nextRequestId()
+          emit({ t: 'experience', requestId, distillation })
+          return new Promise((resolve) => {
+            pendingExperienceWrites.set(requestId, (result) =>
+              resolve(
+                result.ok
+                  ? {
+                      ok: true,
+                      written: result.written ?? 0,
+                      superseded: result.superseded ?? 0,
+                      remaining: result.remaining ?? 0,
+                    }
+                  : { ok: false, reason: result.reason ?? 'the platform refused it' },
+              ),
+            )
+          })
+        },
+      })
+    : null
+
+  /**
    * The verdict channel inside the container, present only when the host said this is
    * a verifier — the same gating `mapTool` has three lines up.
    */
@@ -480,7 +529,11 @@ const main = async (): Promise<void> => {
     ...(proposalTool ? { proposalTool } : {}),
     handoffTool,
     ...(selfTool ? { selfTool } : {}),
+    ...(experienceTool ? { experienceTool } : {}),
     ...(command.mapContext === undefined ? {} : { mapContext: command.mapContext }),
+    ...(command.experienceContext === undefined
+      ? {}
+      : { experienceContext: command.experienceContext }),
     ...(command.mastery === undefined ? {} : { mastery: command.mastery }),
     questionTool: questionTool.server,
     ...(command.resumeSessionId === undefined ? {} : { resumeSessionId: command.resumeSessionId }),

@@ -220,6 +220,11 @@ import {
   type MasteryDeps,
 } from './mastery-use-cases.js'
 import {
+  buildExperienceContext,
+  invalidateExperienceForMerge,
+  type ExperienceDeps,
+} from './experience-use-cases.js'
+import {
   buildContextLedger,
   recordPlatformNote,
   deliverNoteToActiveRuns,
@@ -230,7 +235,7 @@ import { recordSpokenTurn } from './colosseum-use-cases.js'
 import { handoffLimits, suggestHandoffOnPressure } from './handoff-use-cases.js'
 import { startThread, type Deps } from './use-cases.js'
 
-export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps {
+export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps, ExperienceDeps {
   readonly runners: RunnerRepositoryPort
   readonly repositories: RepositoryRepositoryPort
   readonly agentRuns: AgentRunRepositoryPort
@@ -5173,6 +5178,26 @@ export const startAgentRun = async (
     // Deliberately swallowed — see above.
   }
 
+  /**
+   * And what it has concluded about this repository on earlier runs.
+   *
+   * Withheld from a verifier and a proposer on exactly the grounds the map is: a verifier
+   * asked which of a persona's prompts is better must not read that persona's own notes on
+   * the subject, and a proposer's context is meant to be the record it was handed and
+   * nothing accumulated beside it.
+   */
+  let experienceContext = ''
+  if (input.verifyVariants === undefined && input.proposeVariants === undefined) try {
+    experienceContext = await buildExperienceContext(deps, {
+      workspaceId: input.workspaceId,
+      personaId: persona.id,
+      repositoryId: repository.id,
+      agentRunId: run.id,
+    })
+  } catch {
+    // Deliberately swallowed — see above.
+  }
+
   try {
     await deps.dispatch.startRun({
       runnerId: repository.runnerId,
@@ -5184,6 +5209,7 @@ export const startAgentRun = async (
       ...(input.task === undefined ? {} : { task: input.task }),
       ...(contextLedger === '' ? {} : { contextLedger }),
       ...(mapContext === '' ? {} : { mapContext }),
+      ...(experienceContext === '' ? {} : { experienceContext }),
       ...(mastery ? { mastery } : {}),
       ...(input.reconcile && parent
         ? { reconcile: { parentRunId: parent.id, branchName: input.reconcile.branchName } }
@@ -8357,6 +8383,25 @@ const runMergeEntry = async (deps: AgentDeps, entry: MergeQueueEntry): Promise<v
           'A crunch is convened over them — nothing has been said in it yet.',
       )
     }
+  } catch {
+    // Deliberately swallowed — see above.
+  }
+
+  /**
+   * And where a persona's *memory* of this repository learns the same thing.
+   *
+   * A separate try from the map's rather than a second statement inside it: the two artifacts
+   * fail independently, and a map read that threw would otherwise leave every lesson about
+   * the changed files still being handed to runs — the failure mode being least visible in
+   * exactly the artifact that is hardest to check.
+   */
+  try {
+    await invalidateExperienceForMerge(deps, {
+      workspaceId: entry.workspaceId,
+      repositoryId: repository.id,
+      changedPaths: result.changedPaths,
+      revision: result.commitSha,
+    })
   } catch {
     // Deliberately swallowed — see above.
   }

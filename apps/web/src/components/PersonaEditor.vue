@@ -22,6 +22,7 @@ import {
   compareScreenedSiblings,
   type CampaignReport,
   type CampaignRow,
+  type PersonaLesson,
   describeScreenedSiblings,
   describeRevision,
   personaHistory,
@@ -101,6 +102,21 @@ const props = defineProps<{
   }) => Promise<{ opened: boolean; campaignId: string | null; detail: string }>
   campaignReport?: (campaignId: string) => Promise<CampaignReport | null>
   cancelCampaign?: (campaignId: string) => Promise<{ cancelled: boolean; detail: string }>
+  /**
+   * What this persona remembers about each repository it has worked in — tier 5.
+   *
+   * Callbacks rather than data, for the campaigns' reason: memory is written by runs and
+   * retired by merges, so it moves for reasons that have nothing to do with the form, and
+   * putting its rows in session state would refresh a persona's memory because somebody
+   * typed in a description. There is deliberately no *write* callback: a human-authored
+   * entry in the untrusted layer would be trusted content stored in the one place the
+   * platform has promised never to trust.
+   */
+  listExperience?: (personaId: string) => Promise<PersonaLesson[]>
+  retireLesson?: (input: {
+    lessonId: string
+    reason: string
+  }) => Promise<{ invalidated: number }>
 }>()
 
 const emit = defineEmits<{
@@ -294,7 +310,9 @@ const loadCampaigns = async () => {
 watch(editingId, () => {
   campaignVintages.value = []
   campaignNotice.value = null
+  lessonNotice.value = null
   void loadCampaigns()
+  void loadExperience()
 })
 
 const openCampaignNow = async () => {
@@ -331,6 +349,69 @@ const toggleVintage = (revisionId: string) => {
     ? campaignVintages.value.filter((id) => id !== revisionId)
     : [...campaignVintages.value, revisionId]
 }
+
+/**
+ * What this persona remembers, retired lessons included.
+ *
+ * Loaded beside the campaigns and on the same trigger, because they are the same kind of
+ * thing to this component: rows about the persona that the persona's form does not own.
+ */
+const lessons = ref<PersonaLesson[]>([])
+const lessonBusy = ref(false)
+const lessonNotice = ref<string | null>(null)
+
+const loadExperience = async () => {
+  if (!props.listExperience || editingId.value === '') {
+    lessons.value = []
+    return
+  }
+  lessons.value = await props.listExperience(editingId.value)
+}
+
+/**
+ * Live first, then what has been retired — and the retired half is shown rather than hidden,
+ * because "this was believed until the merge on Tuesday" is the sentence a person opening
+ * this panel most often came for.
+ */
+const liveLessons = computed(() => lessons.value.filter((lesson) => lesson.invalidatedAt === null))
+const retiredLessons = computed(() =>
+  lessons.value.filter((lesson) => lesson.invalidatedAt !== null),
+)
+
+/**
+ * Retiring asks for the reason in place, rather than confirming and then storing an empty
+ * one. The reason is the only record of why a human disagreed with their agent's memory, so
+ * the control that collects it is the control that performs the act — a two-step confirm
+ * would make the reason optional in practice, and a browser prompt would block the page.
+ */
+const retiring = ref<string | null>(null)
+const retireReason = ref('')
+
+const beginRetire = (lessonId: string) => {
+  retiring.value = retiring.value === lessonId ? null : lessonId
+  retireReason.value = ''
+}
+
+const retireLessonNow = async (lessonId: string) => {
+  if (!props.retireLesson || lessonBusy.value || retireReason.value.trim() === '') return
+  lessonBusy.value = true
+  try {
+    await props.retireLesson({ lessonId, reason: retireReason.value.trim() })
+    lessonNotice.value =
+      'Retired. The lesson stays on record, stamped with when it stopped being shown.'
+    retiring.value = null
+    retireReason.value = ''
+    await loadExperience()
+  } finally {
+    lessonBusy.value = false
+  }
+}
+
+const describeOutcomes = (lesson: PersonaLesson): string =>
+  lesson.outcomes.decided === 0
+    ? 'no decided run has read it yet'
+    : `read by ${lesson.outcomes.decided} decided run(s): ${lesson.outcomes.merged} merged, ` +
+      `${lesson.outcomes.discarded} discarded`
 
 const CAMPAIGN_STATUS_LABEL: Record<CampaignRow['status'], string> = {
   running: 'running',
@@ -1324,6 +1405,78 @@ const harnessSummary = (persona: AgentPersona): string => {
             >.
           </p>
         </div>
+      </section>
+
+      <!--
+        Memory, below the campaign and above the history, which is where it belongs in the
+        reading order: the campaign measures what past versions of the *document* did, and
+        this is what the persona itself concluded while working. Everything here is model
+        output — the panel says so once, plainly, rather than decorating every row.
+      -->
+      <section v-if="mode === 'edit' && listExperience" class="experience">
+        <h4>What it remembers</h4>
+        <p class="hint">
+          Lessons this persona wrote about the repositories it has worked in, and which it is
+          shown again at the start of a later run there. Every line was written by a model and
+          is handed to future runs as data to verify, never as instruction. A merge that
+          changes the files a lesson names retires it automatically.
+        </p>
+
+        <p v-if="lessons.length === 0" class="hint">
+          Nothing yet. A persona keeps memory only if a human has given it an envelope, and
+          only about repositories it has actually worked in.
+        </p>
+
+        <ul v-if="liveLessons.length > 0" class="lesson-list">
+          <li v-for="lesson in liveLessons" :key="lesson.id">
+            <div class="lesson-head">
+              <strong>{{ lesson.title }}</strong>
+              <span class="lesson-kind">{{ lesson.kind }}</span>
+              <span class="lesson-scope">{{ lesson.repositoryName }}</span>
+              <button
+                v-if="retireLesson"
+                type="button"
+                class="link retire"
+                :disabled="lessonBusy"
+                @click="beginRetire(lesson.id)"
+              >
+                Retire
+              </button>
+            </div>
+            <p class="lesson-body">{{ lesson.body }}</p>
+            <p class="hint">
+              {{ describeOutcomes(lesson) }}<template v-if="lesson.paths.length > 0">
+                · {{ lesson.paths.join(', ') }}</template
+              >
+            </p>
+            <div v-if="retiring === lesson.id" class="retire-form">
+              <input
+                v-model="retireReason"
+                type="text"
+                placeholder="Why is this no longer true? It is the only record of why."
+              />
+              <button
+                type="button"
+                :disabled="lessonBusy || retireReason.trim() === ''"
+                @click="retireLessonNow(lesson.id)"
+              >
+                Retire it
+              </button>
+            </div>
+          </li>
+        </ul>
+
+        <ul v-if="retiredLessons.length > 0" class="lesson-list retired">
+          <li v-for="lesson in retiredLessons" :key="lesson.id">
+            <div class="lesson-head">
+              <strong>{{ lesson.title }}</strong>
+              <span class="lesson-scope">{{ lesson.repositoryName }}</span>
+            </div>
+            <p class="hint">No longer shown — {{ lesson.invalidatedReason }}</p>
+          </li>
+        </ul>
+
+        <p v-if="lessonNotice" class="hint lesson-notice">{{ lessonNotice }}</p>
       </section>
 
       <section v-if="mode === 'edit' && history.length > 0" class="history">

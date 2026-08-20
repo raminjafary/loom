@@ -1,4 +1,7 @@
 import type {
+  ExperienceLesson,
+  LessonDraft,
+  PersonaLessonId,
   AtlasEdgeStatus,
   DecidedRunRecord,
   LosingArmRecord,
@@ -1614,6 +1617,16 @@ export interface RunDispatchPort {
      */
     mapContext?: string
     /**
+     * What this persona has concluded about this repository before — tier 5's memory,
+     * selected, ranked, bounded, rendered and fenced server-side.
+     *
+     * Declared here for the reason `mastery` records below, which this feature walked into
+     * on its first live run: a field only spread into the call is an excess property
+     * TypeScript deliberately does not check, so the lesson was written, retrieved, and
+     * dropped at this boundary in silence.
+     */
+    experienceContext?: string
+    /**
      * Start this run as a mastery run: its deliverable is a map, and its
      * presence is what gives the run `record_map` at all.
      *
@@ -2060,6 +2073,95 @@ export interface SubjectMapRepositoryPort {
       edgesShown: number
     }[]
   >
+}
+
+/**
+ * Continuity mode's fifth tier, stored: what a persona has concluded about one
+ * repository, and which runs were shown it.
+ *
+ * Its own port rather than a corner of the map's, for the reason the Colosseum has one: a
+ * lesson is not a claim in a graph. It has no edges, no revision, no parsed half and no
+ * trial arm, and every one of those fields would be null here — while the two things it
+ * does have that a map node does not, a quota per run and a ceiling per scope, would be
+ * two more methods nothing else on that port would call.
+ */
+export interface ExperienceRepositoryPort {
+  /**
+   * Writes a run's lessons, bi-temporally.
+   *
+   * A live lesson whose key is written again is **superseded**, not updated: the old row
+   * keeps its own createdAt and gains an invalidatedAt, so "this is what the persona used
+   * to believe, and this is when it stopped" survives — which is the whole reason
+   * invalidation is a write here as it is for a map claim.
+   *
+   * Unlike `writeFragment`, an unchanged body is superseded rather than re-confirmed. A map
+   * node re-observed at a new revision is the same fact seen again; a lesson written twice
+   * is a persona concluding the same thing on a second occasion, and flattening the two
+   * would erase the only evidence that it did.
+   */
+  record(input: {
+    workspaceId: WorkspaceId
+    personaId: AgentPersonaId
+    repositoryId: RepositoryId
+    authoredByRunId: AgentRunId
+    lessons: readonly LessonDraft[]
+  }): Promise<{ written: number; superseded: number }>
+
+  /**
+   * What this persona holds about this repository. Live only by default — an invalidated
+   * lesson is history, and history is for the panel and the curation pass, never for a
+   * prompt.
+   */
+  listForScope(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    repositoryId: RepositoryId,
+    options?: { includeInvalidated?: boolean },
+  ): Promise<ExperienceLesson[]>
+
+  /** Every persona's live lessons about one repository — what a merge retires against. */
+  listForRepository(workspaceId: WorkspaceId, repositoryId: RepositoryId): Promise<ExperienceLesson[]>
+
+  /** Everything one persona holds, across repositories, for the human-facing list. */
+  listForPersona(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    options?: { includeInvalidated?: boolean },
+  ): Promise<ExperienceLesson[]>
+
+  /**
+   * How many lessons this run has already had accepted.
+   *
+   * The quota is cumulative across a run's calls, so it cannot be held on the Runner: a
+   * run that lost its socket and reconnected would start again from zero, and the tool a
+   * model can call twice is exactly the one it will.
+   */
+  countWrittenByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<number>
+
+  /** Which lessons a run was shown. Idempotent per (lesson, run) — see the table's header. */
+  recordCitations(input: {
+    workspaceId: WorkspaceId
+    agentRunId: AgentRunId
+    lessonIds: readonly PersonaLessonId[]
+  }): Promise<void>
+
+  /**
+   * What became of the runs each lesson was shown to — the map's `tallyNodeOutcomes` for
+   * lessons, joined at read time for the same reason: a disposition arrives long after the
+   * run started, and a copy onto the citation row is a second write that can be missed.
+   */
+  tallyLessonOutcomes(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    repositoryId: RepositoryId,
+  ): Promise<Record<string, { decided: number; merged: number; discarded: number; failed: number }>>
+
+  /** Retires lessons. Never a delete — see `record`. Returns how many rows it stamped. */
+  invalidate(
+    workspaceId: WorkspaceId,
+    lessonIds: readonly PersonaLessonId[],
+    reason: string,
+  ): Promise<number>
 }
 
 /**

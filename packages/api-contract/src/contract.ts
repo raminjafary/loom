@@ -38,6 +38,7 @@ import {
   ColosseumViewSchema,
   PlanReviewSchema,
   MasteryViewSchema,
+  PersonaLessonSchema,
   SubjectMapListingSchema,
   SubjectMapSchema,
   WorkerNoteSchema,
@@ -396,6 +397,36 @@ export const contract = {
 
     /** The board: a card per run in the tree, plus the path collisions to expect. */
     board: oc.input(z.object({ agentRunId: z.string() })).output(SwarmBoardSchema),
+  },
+
+  /**
+   * A persona's durable memory of a repository — continuity mode's fifth tier.
+   *
+   * Two procedures, and the asymmetry between them is the design: a human may **read** all
+   * of it and **retire** one lesson, and there is no write. A client able to add a lesson
+   * would be a client able to put text of its choosing into every future run's prompt, which
+   * is the same reasoning that keeps a map's nodes off the contract; and a *human* writing
+   * one would be worse than useless — the distilled layer is untrusted by construction, so a
+   * human-authored entry there would be trusted content stored in the one place the platform
+   * has promised never to trust. What a human knows belongs in the persona document, which is
+   * reviewable, versioned, and read as instructions rather than as data.
+   */
+  experience: {
+    /** Everything one persona remembers, retired lessons included and marked. */
+    listForPersona: oc
+      .input(z.object({ personaId: z.string() }))
+      .output(z.array(PersonaLessonSchema)),
+
+    /**
+     * A human retiring a lesson.
+     *
+     * A write, never a delete — the row keeps its trail back to the run that acted on it,
+     * and "this was believed until now" stays sayable. The reason is required for the same
+     * purpose: it is the only record of why a human disagreed with their agent's memory.
+     */
+    retire: oc
+      .input(z.object({ lessonId: z.string(), reason: z.string().min(1).max(600) }))
+      .output(z.object({ invalidated: z.number().int() })),
   },
 
   /**

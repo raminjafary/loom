@@ -37,6 +37,8 @@ import type { LoomApi } from './api.js'
 export type CampaignRow = Awaited<ReturnType<LoomApi['campaign']['listForPersona']>>[number]
 /** What one campaign measured — arms, scores, spend, and the sentence. */
 export type CampaignReport = NonNullable<Awaited<ReturnType<LoomApi['campaign']['report']>>>
+/** One lesson a persona holds about one repository, as the contract puts it on the wire. */
+export type PersonaLesson = Awaited<ReturnType<LoomApi['experience']['listForPersona']>>[number]
 import type { PushRegistration } from './push.js'
 
 /**
@@ -530,6 +532,15 @@ export interface AgentSession {
     models?: readonly string[]
   }): Promise<{ opened: boolean; campaignId: string | null; detail: string }>
   listCampaigns(personaId: string): Promise<CampaignRow[]>
+  /**
+   * What a persona remembers, and a human's one write against it.
+   *
+   * Read on demand like the campaigns and for the same reason: memory changes when runs end
+   * and when merges land, neither of which is a persona edit, so a copy in session state
+   * would be refreshed by the wrong events and stale for the right ones.
+   */
+  listExperience(personaId: string): Promise<PersonaLesson[]>
+  retireLesson(input: { lessonId: string; reason: string }): Promise<{ invalidated: number }>
   campaignReport(campaignId: string): Promise<CampaignReport | null>
   cancelCampaign(campaignId: string): Promise<{ cancelled: boolean; detail: string }>
   /**
@@ -1636,6 +1647,24 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       } catch (error) {
         patch({ error: errorMessage(error) })
         return []
+      }
+    },
+
+    async listExperience(personaId) {
+      try {
+        return await options.api.experience.listForPersona({ personaId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return []
+      }
+    },
+
+    async retireLesson(input) {
+      try {
+        return await options.api.experience.retire(input)
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return { invalidated: 0 }
       }
     },
 
