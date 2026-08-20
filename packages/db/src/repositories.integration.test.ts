@@ -23,6 +23,7 @@ import {
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { createDatabase, type Database } from './client.js'
+import { schemaStatus } from './schema-status.js'
 import {
   agentRunRepository,
   atlasRepository,
@@ -1835,5 +1836,48 @@ describe('the held-out screen', () => {
       shown,
     })
     expect((await variants.findProposerSession(WS, run))?.personaId).toBe(s.personaId)
+  })
+})
+
+/**
+ * Whether the schema this build expects is the schema the database has.
+ *
+ * The failure it exists for is the one no build can catch: a promoted revision of Loom's own
+ * source that typechecks, passes its tests, starts, binds, answers — and fails its first query
+ * because nobody ran the migration. So the negative case is the test worth having, and it is
+ * produced by actually removing the applied row rather than by stubbing a count.
+ */
+describe('schema status', () => {
+  it('names the newest migration this build ships, and confirms it is applied here', async () => {
+    const status = await schemaStatus(db)
+    expect(status.expected).toMatch(/^\d{4}_/)
+    expect(status.applied).toBe(true)
+    expect(status.detail).toContain(String(status.expected))
+  })
+
+  /**
+   * The row is deleted and put back in a `finally`, because every other test in this file runs
+   * against the same database — and a test that left it looking unmigrated would make the next
+   * reader debug the wrong thing.
+   */
+  it('says the database is behind when the newest migration is not applied', async () => {
+    const before = await schemaStatus(db)
+    const [row] = await db.execute<{ id: number; hash: string; created_at: string }>(
+      sql`select id, hash, created_at from drizzle.__drizzle_migrations order by id desc limit 1`,
+    )
+    if (!row) throw new Error('no applied migrations to remove')
+    try {
+      await db.execute(sql`delete from drizzle.__drizzle_migrations where id = ${row.id}`)
+      const behind = await schemaStatus(db)
+      expect(behind.expected).toBe(before.expected)
+      expect(behind.applied).toBe(false)
+      // The sentence names what to do, because "degraded" is not an action.
+      expect(behind.detail).toContain('Run the migrations')
+    } finally {
+      await db.execute(
+        sql`insert into drizzle.__drizzle_migrations (id, hash, created_at) values (${row.id}, ${row.hash}, ${row.created_at})`,
+      )
+    }
+    expect((await schemaStatus(db)).applied).toBe(true)
   })
 })

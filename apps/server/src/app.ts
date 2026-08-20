@@ -22,6 +22,7 @@ import {
   channelRepository,
   clearAllRunnerConnections,
   createDatabase,
+  schemaStatus,
   ensureWorkspaceMembership,
   messageRepository,
   notificationTargetRepository,
@@ -280,7 +281,38 @@ export const buildApp = async (
     }
   })
 
-  fastify.get('/healthz', async () => ({ status: 'ok' }))
+  /**
+   * Liveness *and* schema readiness, which is one endpoint on purpose.
+   *
+   * It used to answer `{ status: 'ok' }` unconditionally, which is a true statement about the
+   * process and says nothing about the deployment. Tier 3 is what made the gap matter: a
+   * promoted revision of Loom's own source can pass every check in the manifest, start, bind
+   * and answer here, and then fail its first query because nobody ran the migration. A health
+   * check that cannot see that is a health check a self-promotion walks straight past.
+   *
+   * 503 rather than 200-with-a-warning, because the caller is a supervisor or a promotion gate
+   * and both of them act on the status code. A degraded platform that reports itself healthy is
+   * how a bad revision becomes the running one.
+   */
+  fastify.get('/healthz', async (_request, reply) => {
+    let schema: Awaited<ReturnType<typeof schemaStatus>>
+    try {
+      schema = await schemaStatus(db)
+    } catch (error) {
+      // An unreachable database is the other thing this endpoint is for, and it arrives as a
+      // thrown query rather than as a false answer.
+      await reply.code(503).send({
+        status: 'degraded',
+        reason: `The database could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+      })
+      return
+    }
+    if (!schema.applied) {
+      await reply.code(503).send({ status: 'degraded', reason: schema.detail })
+      return
+    }
+    return { status: 'ok', migration: schema.expected }
+  })
 
   return {
     fastify,

@@ -1,4 +1,5 @@
 export * from './client.js'
+export * from './schema-status.js'
 export * from './repositories.js'
 export * from './agent-repositories.js'
 export * from './testing.js'

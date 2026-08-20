@@ -74,6 +74,21 @@ describe('contract over HTTP', () => {
     expect(result.time).toBeInstanceOf(Date)
   })
 
+  /**
+   * `/healthz` is what a supervisor and a promotion gate read, and it answers about the
+   * *deployment* rather than about the process: a platform that started, bound and cannot
+   * query its own schema is down, and one that reports itself healthy is how a bad revision
+   * becomes the running one.
+   */
+  it('reports the schema it expects on /healthz, not merely that it is alive', async () => {
+    const response = await fetch(baseUrl.replace('/rpc', '/healthz'))
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { status: string; migration: string | null }
+    expect(body.status).toBe('ok')
+    // The tag rather than a boolean: "which migration" is what an operator acts on.
+    expect(body.migration).toMatch(/^\d{4}_/)
+  })
+
   it('creates a channel and lists it back', async () => {
     const created = await client.channel.create({ name: 'engineering' })
     expect(created.channel.name).toBe('engineering')
