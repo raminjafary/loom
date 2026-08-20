@@ -1141,6 +1141,12 @@ export const router = os.router({
                     failed: arm.failed,
                     notScored: arm.notScored,
                     pending: arm.pending,
+                    // The per-item rows, which are what lets a client compare two candidates
+                    // to each other rather than only to the prompt in use.
+                    items: arm.items.map((item) => ({
+                      position: item.position,
+                      outcome: item.outcome,
+                    })),
                   })),
                 },
           // Named field by field like the rest, and this one is a fact about *authorship*:

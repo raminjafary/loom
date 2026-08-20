@@ -19,6 +19,8 @@ import {
   personaFormProblems,
   personaFormToMarkdown,
   personaSaveDiscrepancies,
+  compareScreenedSiblings,
+  describeScreenedSiblings,
   describeRevision,
   personaHistory,
   promptWrittenByAgent,
@@ -218,6 +220,22 @@ const askForCandidates = async () => {
     proposerBusy.value = false
   }
 }
+
+/**
+ * What the arms say about each *other* on the held-out set.
+ *
+ * The gate compares every candidate to the prompt in use and to nothing else, which is right
+ * for a gate and useless to a person choosing between two candidates: level pass rates over
+ * different items is the case where the number that decided the arms cannot decide the
+ * promotion. Computed here rather than sent from the server because it is a reading of rows
+ * the panel already has — see `compareScreenedSiblings`.
+ */
+const siblingReadings = computed(() =>
+  describeScreenedSiblings(
+    compareScreenedSiblings(search.value?.screen?.arms ?? []),
+    (variantId) => `candidate ${candidateOf(variantId)?.rationale || variantId}`,
+  ),
+)
 
 const candidateOf = (variantId: string | null) =>
   variantId === null
@@ -993,6 +1011,18 @@ const harnessSummary = (persona: AgentPersona): string => {
         <p v-else class="detail screen-detail">
           Not screened against held-out work — this persona has too little decided history to
           build a set from, so the arms below are the only measurement.
+        </p>
+        <!--
+          Sibling against sibling, which the gate never says. Below the set's own sentence and
+          above the arms, because it is a reading *of* the screen: a reader who met it first
+          would not yet know what set it was about.
+        -->
+        <p
+          v-for="reading in siblingReadings"
+          :key="reading"
+          class="detail screen-detail sibling-detail"
+        >
+          {{ reading }}
         </p>
         <ul class="arms">
           <li v-for="arm in search.arms" :key="arm.variantId ?? 'incumbent'">

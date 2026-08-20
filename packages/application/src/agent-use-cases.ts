@@ -141,6 +141,7 @@ import {
   type ReplayCheckOutcome,
   type ReplayItemRecord,
   type ScreenDecision,
+  type ScreenRunOutcome,
   type VariantScreenRunRecord,
   type PersonaVariantId,
   type PersonaVariantSet,
@@ -2192,6 +2193,15 @@ export const screenForSearch = async (
     failed: number
     notScored: number
     pending: number
+    /**
+     * What this arm did item by item, in the set's order.
+     *
+     * The counts above collapse this, and the collapse hides the comparison the gate never
+     * makes: two candidates level at 4 of 6 may have passed *different* four, which is a
+     * fact about which one to promote and is invisible in a pass rate. The rows have always
+     * been stored; nothing read them.
+     */
+    items: { position: number; outcome: ScreenRunOutcome }[]
   }[]
 } | null> => {
   const screens = await deps.screens.screensForSet(input.workspaceId, input.setId)
@@ -2200,6 +2210,8 @@ export const screenForSearch = async (
   const set = await deps.screens.findReplaySet(input.workspaceId, first.screen.replaySetId)
   if (!set) return null
   const items = await deps.screens.listReplayItems(input.workspaceId, first.screen.replaySetId)
+
+  const positionOf = new Map(items.map((item) => [item.id as string, item.position + 1]))
 
   return {
     replaySetVersion: set.version,
@@ -2215,6 +2227,18 @@ export const screenForSearch = async (
         failed: count('failed'),
         notScored: count('not-scored'),
         pending: count('pending'),
+        /**
+         * Sorted by the set's own position, not by the order the rows came back: the run
+         * rows are ordered by insertion, and a reader comparing two arms item by item needs
+         * the same index to mean the same task on both.
+         */
+        items: runs
+          .flatMap((run) => {
+            const position = positionOf.get(run.replayItemId as string)
+            // An item the set no longer has cannot be compared against anything.
+            return position === undefined ? [] : [{ position, outcome: run.outcome }]
+          })
+          .sort((a, b) => a.position - b.position),
       }
     }),
   }

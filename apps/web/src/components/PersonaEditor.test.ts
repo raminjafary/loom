@@ -500,12 +500,24 @@ describe('the variant search panel', () => {
    * *refused* has an empty arm on purpose, and a search that was *never screened* has one
    * for an entirely different reason.
    */
+  const items = (outcomes: readonly ('pending' | 'passed' | 'failed' | 'not-scored')[]) =>
+    outcomes.map((outcome, index) => ({ position: index + 1, outcome }))
+
   const screened = (over: Partial<NonNullable<VariantSearch['screen']>> = {}) => ({
     replaySetVersion: 3,
     detail: '6 held-out items (5 merged, 1 discarded), from 40 decided runs considered.',
     itemCount: 6,
     arms: [
-      { variantId: null, decision: null, reason: null, passed: 5, failed: 1, notScored: 0, pending: 0 },
+      {
+        variantId: null,
+        decision: null,
+        reason: null,
+        passed: 5,
+        failed: 1,
+        notScored: 0,
+        pending: 0,
+        items: items(['passed', 'passed', 'passed', 'passed', 'passed', 'failed']),
+      },
       {
         variantId: 'v1',
         decision: 'rejected' as const,
@@ -514,6 +526,7 @@ describe('the variant search panel', () => {
         failed: 5,
         notScored: 0,
         pending: 0,
+        items: items(['passed', 'failed', 'failed', 'failed', 'failed', 'failed']),
       },
       {
         variantId: 'v2',
@@ -523,6 +536,7 @@ describe('the variant search panel', () => {
         failed: 0,
         notScored: 0,
         pending: 0,
+        items: items(['passed', 'passed', 'passed', 'passed', 'passed', 'passed']),
       },
     ],
     ...over,
@@ -587,9 +601,36 @@ describe('the variant search panel', () => {
       search({
         screen: screened({
           arms: [
-            { variantId: null, decision: null, reason: null, passed: 6, failed: 0, notScored: 0, pending: 0 },
-            { variantId: 'v1', decision: null, reason: null, passed: 2, failed: 0, notScored: 0, pending: 4 },
-            { variantId: 'v2', decision: null, reason: null, passed: 0, failed: 0, notScored: 0, pending: 6 },
+            {
+              variantId: null,
+              decision: null,
+              reason: null,
+              passed: 6,
+              failed: 0,
+              notScored: 0,
+              pending: 0,
+              items: items(['passed', 'passed', 'passed', 'passed', 'passed', 'passed']),
+            },
+            {
+              variantId: 'v1',
+              decision: null,
+              reason: null,
+              passed: 2,
+              failed: 0,
+              notScored: 0,
+              pending: 4,
+              items: items(['passed', 'passed', 'pending', 'pending', 'pending', 'pending']),
+            },
+            {
+              variantId: 'v2',
+              decision: null,
+              reason: null,
+              passed: 0,
+              failed: 0,
+              notScored: 0,
+              pending: 6,
+              items: items(['pending', 'pending', 'pending', 'pending', 'pending', 'pending']),
+            },
           ],
         }),
       }),
@@ -598,6 +639,104 @@ describe('the variant search panel', () => {
     expect(text).toContain('4 of 6 held-out items still running')
     // A blank where a verdict is coming reads as a verdict, so it must say it is coming.
     expect(text).toContain('screening')
+  })
+
+  /**
+   * The comparison the gate never makes. Both readings are here because they are the two a
+   * pass rate hides, and the second is the one that changes what a human does: a search that
+   * found two answers is arguably not finished.
+   */
+  it('says which candidate passed everything a sibling did and more', async () => {
+    const wrapper = await openedSearch(search({ screen: screened() }))
+    const text = wrapper.get('.trial.search').text()
+    expect(text).toContain('passed every held-out item')
+    expect(text).toContain('items 2, 3, 4, 5, 6 as well')
+  })
+
+  it('says when two candidates are good at different things, which no pass rate can', async () => {
+    const wrapper = await openedSearch(
+      search({
+        screen: screened({
+          arms: [
+            {
+              variantId: null,
+              decision: null,
+              reason: null,
+              passed: 3,
+              failed: 3,
+              notScored: 0,
+              pending: 0,
+              items: items(['passed', 'passed', 'passed', 'failed', 'failed', 'failed']),
+            },
+            {
+              variantId: 'v1',
+              decision: 'admitted' as const,
+              reason: 'Admitted.',
+              passed: 3,
+              failed: 3,
+              notScored: 0,
+              pending: 0,
+              items: items(['passed', 'passed', 'passed', 'failed', 'failed', 'failed']),
+            },
+            {
+              variantId: 'v2',
+              decision: 'admitted' as const,
+              reason: 'Admitted.',
+              passed: 3,
+              failed: 3,
+              notScored: 0,
+              pending: 0,
+              items: items(['failed', 'failed', 'failed', 'passed', 'passed', 'passed']),
+            },
+          ],
+        }),
+      }),
+    )
+    const text = wrapper.get('.trial.search').text()
+    expect(text).toContain('good at different things')
+    expect(text).toContain('pass rate cannot choose between them')
+  })
+
+  it('compares nothing while an arm is still being screened', async () => {
+    const wrapper = await openedSearch(
+      search({
+        screen: screened({
+          arms: [
+            {
+              variantId: null,
+              decision: null,
+              reason: null,
+              passed: 6,
+              failed: 0,
+              notScored: 0,
+              pending: 0,
+              items: items(['passed', 'passed', 'passed', 'passed', 'passed', 'passed']),
+            },
+            {
+              variantId: 'v1',
+              decision: null,
+              reason: null,
+              passed: 1,
+              failed: 0,
+              notScored: 0,
+              pending: 5,
+              items: items(['passed', 'pending', 'pending', 'pending', 'pending', 'pending']),
+            },
+            {
+              variantId: 'v2',
+              decision: null,
+              reason: null,
+              passed: 6,
+              failed: 0,
+              notScored: 0,
+              pending: 0,
+              items: items(['passed', 'passed', 'passed', 'passed', 'passed', 'passed']),
+            },
+          ],
+        }),
+      }),
+    )
+    expect(wrapper.findAll('.sibling-detail')).toHaveLength(0)
   })
 
   it('still offers to promote a rejected candidate — the screen gates measurement, not choice', async () => {

@@ -1009,6 +1009,21 @@ export const VariantSearchSchema = z.object({
           /** On the wire for the reason a `pending` verdict is on an Inbox card: a blank where
            * a verdict is coming reads as a verdict. */
           pending: z.number().int(),
+          /**
+           * What this arm did item by item, in the set's order.
+           *
+           * The counts beside it collapse exactly the comparison the gate never makes: two
+           * candidates level at 4 of 6 may have passed different four, and which items a
+           * candidate is good at is a fact about which one to promote. `screenPareto` reads
+           * these; nothing else does.
+           */
+          items: z.array(
+            z.object({
+              /** The item's place in the set, from 1. Comparable across arms. */
+              position: z.number().int(),
+              outcome: z.enum(['pending', 'passed', 'failed', 'not-scored']),
+            }),
+          ),
         }),
       ),
     })
