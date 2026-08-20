@@ -83,6 +83,29 @@ export const MAX_REPLAY_ITEMS = 8
 export const MIN_REPLAY_ITEMS = 4
 
 /**
+ * How many candidates one item may help gate before it retires.
+ *
+ * Three, which is `MAX_VARIANTS_PER_SET` — one search's worth. The rule is the classic
+ * held-out discipline and the reason is the classic overfitting channel: a rejected
+ * candidate's reason is archived, a proposer reads that buffer, and the next candidates are
+ * written against the very items that refused the last ones. Nothing about the set is
+ * secret after it has gated a search, so a set reused across searches stops being held out
+ * and starts being the thing candidates are fitted to. The screen would keep reporting
+ * numbers, and they would get better while nothing improved.
+ *
+ * Retirement is by **rule rather than by accident**. Today's assembly happens to build a
+ * fresh version per search, but it draws from the same recent history, so two consecutive
+ * searches see nearly the same tasks — a new row over the same items is not a new screen.
+ * Counting gates per source run is what makes the refresh real.
+ *
+ * The consequence is deliberate and worth stating: a persona whose recent history has all
+ * been gated gets **no screen** until it does new work, and the arms decide as they did
+ * before there was a screen. A screen that recycles its items is worse than no screen,
+ * because it reads as evidence.
+ */
+export const MAX_GATES_PER_ITEM = 3
+
+/**
  * The most items one observed outcome may contribute, before the ceiling relaxes.
  *
  * Half, because half is the weakest bound that still forbids a monoculture: a set may say
@@ -112,6 +135,13 @@ export type ReplayExclusion =
   /** Eligible, and over `MAX_REPLAY_ITEMS`. The only exclusion that is a *bound* rather than a gap. */
   | 'over-cap'
   /**
+   * This run's task has already gated `MAX_GATES_PER_ITEM` candidates, so it is retired.
+   *
+   * Not a gap and not a bound: it is the one exclusion that exists to keep the set *held
+   * out*. See `MAX_GATES_PER_ITEM`.
+   */
+  | 'already-screened'
+  /**
    * Eligible, recent enough that recency alone would have taken it, and passed over because
    * its observed outcome already held `STRATUM_CEILING` of the set.
    *
@@ -131,6 +161,16 @@ export interface DecidedRunRecord {
   readonly wasMeasured: boolean
   /** What a human, or the definition of done, said about the branch. */
   readonly outcome: ReplayOutcome
+  /**
+   * How many candidates this run's task has already helped gate, across every set version
+   * it has appeared in.
+   *
+   * Counted from the screens themselves rather than kept as a counter on the set: a set is
+   * one assembly of a history that keeps moving, and the question "has this task already
+   * decided about somebody's prompt" is about the task, not about the row it was written
+   * into. A derived count also cannot drift out of step with the screens it describes.
+   */
+  readonly gatedCandidates: number
   /** Ordering key. Newest first is the caller's job; this is only carried through. */
   readonly decidedAt: Date
 }
@@ -175,6 +215,14 @@ const isEligible = (
   }
   if (record.task === null || record.task.trim().length === 0) {
     return { ok: false, reason: 'no-task' }
+  }
+  /**
+   * Last, because the gaps above are facts about whether this run can be replayed at all,
+   * and this is a fact about whether it should be. A run that is both unusable and retired
+   * is reported as unusable — the more basic thing a reader can act on.
+   */
+  if (record.gatedCandidates >= MAX_GATES_PER_ITEM) {
+    return { ok: false, reason: 'already-screened' }
   }
   return { ok: true }
 }
@@ -280,6 +328,7 @@ const EXCLUSION_WORDS: Record<ReplayExclusion, string> = {
   'no-task': 'had no task text to replay',
   'was-an-arm': 'were arms of an earlier measurement',
   'over-cap': `were eligible and over the cap of ${MAX_REPLAY_ITEMS}`,
+  'already-screened': `had already gated ${MAX_GATES_PER_ITEM} candidates and are retired from the set`,
   'stratum-full': `were recent and eligible, and passed over so no one outcome held more than ${STRATUM_CEILING} of the set`,
 }
 

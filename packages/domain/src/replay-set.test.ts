@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_REPLAY_ITEMS,
+  MAX_GATES_PER_ITEM,
   MIN_REPLAY_ITEMS,
   STRATUM_CEILING,
   assembleReplaySet,
@@ -27,6 +28,7 @@ const run = (overrides: Partial<DecidedRunRecord> & { runId: string }): DecidedR
   task: 'Do the thing.',
   wasMeasured: false,
   outcome: 'merged',
+  gatedCandidates: 0,
   decidedAt: new Date(1_000),
   ...overrides,
 })
@@ -153,6 +155,28 @@ describe('assembleReplaySet', () => {
     expect(draft.items).toHaveLength(MAX_REPLAY_ITEMS)
     expect(draft.items.every((item) => item.observedOutcome === 'failed')).toBe(true)
     expect(draft.excluded.every((entry) => entry.reason === 'over-cap')).toBe(true)
+  })
+
+  it('retires a task that has already gated a search\'s worth of candidates', () => {
+    const draft = assembleReplaySet([
+      run({ runId: 'fresh', gatedCandidates: MAX_GATES_PER_ITEM - 1 }),
+      run({ runId: 'spent', gatedCandidates: MAX_GATES_PER_ITEM }),
+      run({ runId: 'very-spent', gatedCandidates: MAX_GATES_PER_ITEM + 4 }),
+    ])
+    expect(draft.items.map((item) => item.sourceRunId)).toEqual(['fresh'])
+    expect(draft.excluded.map((entry) => entry.reason)).toEqual([
+      'already-screened',
+      'already-screened',
+    ])
+    // Retired runs are not eligible, so a reader cannot mistake them for something the cap cut.
+    expect(draft.eligible).toBe(1)
+  })
+
+  it('reports being retired as a gap of its own, not as a bound', () => {
+    const detail = describeReplaySet(
+      assembleReplaySet([run({ runId: 'spent', gatedCandidates: MAX_GATES_PER_ITEM })]),
+    )
+    expect(detail).toContain(`had already gated ${MAX_GATES_PER_ITEM} candidates`)
   })
 
   it('trims the task, because the replayed instruction is the item', () => {

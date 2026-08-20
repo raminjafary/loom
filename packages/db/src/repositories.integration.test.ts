@@ -1385,6 +1385,61 @@ describe('the held-out screen', () => {
     expect(records.map((r) => r.baseCommitSha === null || r.task === null)).toEqual([true, true])
   })
 
+  it('counts the candidates a run has already gated, and only the decided ones', async () => {
+    const s = await scaffold(WS, 'screened-6b')
+    const runId = await addRun(WS, s, { personaName: 'screened-6b' })
+    const set = await screens.openReplaySet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      draft: {
+        items: [
+          {
+            sourceRunId: runId,
+            repositoryId: s.repositoryId,
+            commitSha: 'abc123',
+            task: 'Do the thing.',
+            observedOutcome: 'merged' as const,
+          },
+        ],
+        excluded: [],
+        eligible: 1,
+        considered: 1,
+      },
+      detail: 'one item',
+    })
+    const opened = await variants.openSet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      candidates: [
+        { markdownSource: 'a', rationale: 'r' },
+        { markdownSource: 'b', rationale: 'r' },
+      ],
+    })
+    await screens.openScreens({
+      workspaceId: WS,
+      setId: opened.set.id,
+      replaySetId: set.set.id,
+      variantIds: opened.variants.map((v) => v.id),
+      itemIds: set.items.map((i) => i.id),
+    })
+
+    // Screens exist and none has decided: nothing has been gated yet.
+    const before = await screens.listDecidedRunsForPersona(WS, 'screened-6b', 50)
+    expect(before[0]?.gatedCandidates).toBe(0)
+
+    const rows = await screens.screensForSet(WS, opened.set.id)
+    const incumbent = rows.find((row) => row.screen.variantId === null)!
+    await screens.decideScreen(WS, incumbent.screen.id, { decision: 'admitted', reason: 'x' })
+    // The control is not a gate — counting it would retire every set one candidate early.
+    expect((await screens.listDecidedRunsForPersona(WS, 'screened-6b', 50))[0]?.gatedCandidates).toBe(0)
+
+    for (const row of rows.filter((entry) => entry.screen.variantId !== null)) {
+      await screens.decideScreen(WS, row.screen.id, { decision: 'rejected', reason: 'worse' })
+    }
+    const after = await screens.listDecidedRunsForPersona(WS, 'screened-6b', 50)
+    expect(after[0]?.gatedCandidates).toBe(2)
+  })
+
   it('versions a set per persona, from one', async () => {
     const s = await scaffold(WS, 'screened-7')
     const draft = {

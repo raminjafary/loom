@@ -155,6 +155,29 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
          * waits on the tool call that opened the search.
          */
         wasMeasured: sql<boolean>`(${variantUse.id} is not null or ${promptTrialUse.id} is not null)`,
+        /**
+         * How many candidates this run's task has already gated, across every set version it
+         * has been an item of.
+         *
+         * A scalar subquery rather than a join, because the two left joins above already
+         * multiply rows and a third would make this a count of the product. Derived rather
+         * than a counter column: the screens are the record, and a counter is a second copy
+         * of a fact that can be missed — the reason `agent_run.branch_disposition` is read
+         * rather than copied onto an arm.
+         *
+         * Only *decided* candidate screens count. An open screen has gated nothing yet, and
+         * the incumbent's screen is not a gate at all — it is the control the gate compares
+         * against, so counting it would retire every set one candidate early.
+         */
+        gatedCandidates: sql<number>`(
+          select count(*)::int
+          from ${replayItem} as gated_item
+          join ${variantScreen} as gating_screen
+            on gating_screen.replay_set_id = gated_item.replay_set_id
+           and gating_screen.variant_id is not null
+           and gating_screen.decision is not null
+          where gated_item.source_run_id = ${agentRun.id}
+        )`,
       })
       .from(agentRun)
       .leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
@@ -183,6 +206,7 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
         baseCommitSha: row.baseCommitSha,
         task: row.task,
         wasMeasured: row.wasMeasured,
+        gatedCandidates: row.gatedCandidates,
         /**
          * Context, never the score — see `ReplayOutcome`. Three values, and the one
          * collapse worth naming: a run decided only by a *failing definition of done*, with
