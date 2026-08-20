@@ -892,6 +892,8 @@ describe('contract completeness', () => {
       'plan',
       'atlas',
       'cost',
+      // How much human judgement the workspace spent, against the work that needed it.
+      'supervision',
       'persona',
       'capability',
       'personaGroup',
@@ -932,6 +934,7 @@ describe('contract completeness', () => {
     // and a client that could set it could launder its own text into the trusted
     // section of every later worker's prompt.
     expect(Object.keys(contract.workerNote)).toEqual(['listByTree', 'write', 'board'])
+    expect(Object.keys(contract.supervision)).toEqual(['ledger'])
     expect(Object.keys(contract.persona)).toEqual([
       'list',
       'get',

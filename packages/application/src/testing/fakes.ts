@@ -228,6 +228,13 @@ export const fakeAudit = (s: FakeStore): AuditPort => ({
     s.audits.push(event)
     return event
   },
+
+  async listSince({ workspaceId, since, limit }) {
+    return s.audits
+      .filter((event) => event.workspaceId === workspaceId && event.createdAt >= since)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit)
+  },
 })
 
 export const fakeEvents = (s: FakeStore): EventPublisherPort => ({

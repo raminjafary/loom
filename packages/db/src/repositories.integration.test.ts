@@ -2230,6 +2230,116 @@ describe('model outcomes per persona', () => {
 })
 
 /**
+ * The supervision ledger's two reads.
+ *
+ * Both are counts over windows, and both are the kind of query that returns a plausible
+ * number when it is wrong: the audit stream includes acts by the platform itself, and the
+ * denominator must not include work nobody was ever going to rule on.
+ */
+describe('the supervision ledger', () => {
+  const audits = auditAdapter(db)
+  const runsRepo = agentRunRepository(db)
+  let seq = 0
+
+  const scaffold = async (workspaceId: WorkspaceId) => {
+    seq += 1
+    const [ch] = await db
+      .insert(channel)
+      .values({ workspaceId, name: `supervision-${seq}`, isPrivate: false })
+      .returning({ id: channel.id })
+    const [th] = await db
+      .insert(thread)
+      .values({ workspaceId, channelId: ch!.id, isRoot: true })
+      .returning({ id: thread.id })
+    const [rn] = await db
+      .insert(runner)
+      .values({
+        workspaceId,
+        name: `runner-supervision-${seq}`,
+        pairingTokenHash: `hash-supervision-${seq}`,
+      })
+      .returning({ id: runner.id })
+    const [repo] = await db
+      .insert(repository)
+      .values({
+        workspaceId,
+        runnerId: rn!.id,
+        displayName: 'repo',
+        absolutePath: `/tmp/supervision-${seq}`,
+        defaultBranch: 'main',
+      })
+      .returning({ id: repository.id })
+    return { threadId: th!.id, runnerId: rn!.id, repositoryId: repo!.id }
+  }
+
+  it('reads back every audited act in the window, whoever acted', async () => {
+    const since = new Date(Date.now() - 60_000)
+    await audits.record({
+      workspaceId: WS,
+      actor: userActor(asUserId('user_1')),
+      action: 'agent_run.discarded',
+      subjectType: 'agent_run',
+      subjectId: 'run_1',
+      metadata: { personaName: 'swe' },
+    })
+    await audits.record({
+      workspaceId: WS,
+      actor: agentRunActor(asAgentRunId('00000000-0000-0000-0000-000000000001')),
+      action: 'persona.self_revised',
+      subjectType: 'agent_persona',
+      subjectId: 'p_1',
+    })
+
+    const events = await audits.listSince({ workspaceId: WS, since, limit: 100 })
+    expect(events.map((event) => event.action)).toEqual([
+      'persona.self_revised',
+      'agent_run.discarded',
+    ])
+    // Unclassified on purpose: which acts are supervision lives in the domain, and a query
+    // that filtered would drift from the table that interprets it.
+    expect(events.map((event) => event.actor.kind)).toEqual(['agent_run', 'user'])
+    // The window is a real bound, not decoration.
+    expect(
+      await audits.listSince({ workspaceId: WS, since: new Date(Date.now() + 60_000), limit: 100 }),
+    ).toEqual([])
+  })
+
+  it('counts decided runs in the window, and never a screening run', async () => {
+    const s = await scaffold(WS)
+    const add = async (input: {
+      disposition: 'merged' | null
+      relation?: string
+      completedAt?: Date
+    }) => {
+      await db.insert(agentRun).values({
+        workspaceId: WS,
+        threadId: s.threadId,
+        repositoryId: s.repositoryId,
+        runnerId: s.runnerId,
+        persona: {
+          name: 'swe',
+          model: 'claude-haiku-4-5',
+          systemPrompt: 'x',
+          tools: [],
+          approvalMode: 'ask' as const,
+        },
+        status: 'completed',
+        branchDisposition: input.disposition,
+        ...(input.relation === undefined ? {} : { relation: input.relation }),
+        completedAt: input.completedAt ?? new Date(),
+      })
+    }
+    await add({ disposition: 'merged' })
+    await add({ disposition: 'merged', relation: 'screen' })
+    await add({ disposition: null })
+    await add({ disposition: 'merged', completedAt: new Date(Date.now() - 10 * 60_000) })
+
+    const since = new Date(Date.now() - 60_000)
+    expect(await runsRepo.countDecidedRunsSince(WS, since)).toBe(1)
+  })
+})
+
+/**
  * A merged branch that came back out.
  *
  * The arithmetic is `reverted-merges.test.ts`. What is only testable here is the pair of

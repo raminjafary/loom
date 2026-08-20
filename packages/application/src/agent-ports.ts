@@ -610,6 +610,15 @@ export interface AgentRunRepositoryPort {
     personaName: string,
     limit: number,
   ): Promise<DivergenceSet>
+  /**
+   * How many runs reached a decision since a moment — the supervision ledger's denominator.
+   *
+   * The same "decided" every measurement in this codebase uses: a human ruled, the run
+   * failed, or its branch failed the repository's definition of done. Counted in the database
+   * because the population grows for the life of the workspace, and screening runs are
+   * excluded because nobody was ever going to rule on one.
+   */
+  countDecidedRunsSince(workspaceId: WorkspaceId, since: Date): Promise<number>
   /** Bumped by the Runner's periodic heartbeat frame. */
   /**
    * Liveness, and — when the Runner sampled it — how full the run's context window is

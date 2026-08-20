@@ -6,7 +6,7 @@ import type {
   ThreadRepositoryPort,
 } from '@loom/application'
 import { NotFoundError, asChannelId } from '@loom/domain'
-import { and, asc, count, desc, eq, gt, inArray, lt, max, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gt, gte, inArray, lt, max, or, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
   decodeCursor,
@@ -295,5 +295,22 @@ export const auditAdapter = (db: Database): AuditPort => ({
       .returning()
     if (!row) throw new Error('audit insert returned no row')
     return toAuditEvent(row)
+  },
+
+  async listSince(input) {
+    const rows = await db
+      .select()
+      .from(auditEvent)
+      .where(
+        and(
+          eq(auditEvent.workspaceId, input.workspaceId),
+          gte(auditEvent.createdAt, input.since),
+        ),
+      )
+      // By `seq`, not by timestamp: acts arrive in the same millisecond and the ledger's
+      // bound has to cut a window at a defined place — `message.seq`'s reason exactly.
+      .orderBy(desc(auditEvent.seq))
+      .limit(input.limit)
+    return rows.map(toAuditEvent)
   },
 })

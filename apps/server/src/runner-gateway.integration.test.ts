@@ -2555,6 +2555,52 @@ describe('runner-gateway: serialized merge queue', () => {
     socket.close()
   })
 
+  /**
+   * The supervision ledger, end to end.
+   *
+   * The act being counted is one the platform did not record at all until this ledger needed
+   * it: the run row says a branch was kept and has never said who kept it or when. So this
+   * asserts through the endpoint that a person's disposition became a countable act, and that
+   * the queue's own merge — the platform's work, not a person's — did not.
+   */
+  it('counts a human disposition as supervision, and the platform"s own acts as neither', async () => {
+    const { socket, runnerId } = await pairFakeRunner('supervision')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'supervision' })
+
+    const before = await client.supervision.ledger()
+    const kept = await finishRun(socket, created.rootThread.id, repo.id, 'loom/kept-by-hand')
+    await client.agentRun.keep({ agentRunId: kept.id })
+
+    const after = await client.supervision.ledger()
+    expect(after.byKind.disposition).toBe(before.byKind.disposition + 1)
+    expect(after.decidedRuns).toBeGreaterThanOrEqual(1)
+    // The ratio is stated with its denominator and no verdict about it.
+    expect(after.detail).toContain('human acts per decided run')
+    expect(after.detail).toContain('nothing here can tell you which')
+
+    // The merge itself is the platform's act on a person's request; the request already
+    // counted when it was queued, and the merge must not count again.
+    const dispositionsAfterKeep = after.byKind.disposition
+    const merging = await finishRun(socket, created.rootThread.id, repo.id, 'loom/merged-by-queue')
+    await client.mergeQueue.enqueue({ agentRunId: merging.id })
+    const swept = sweep()
+    await answerMerge(socket, { ok: true, commitSha: 'aaaa1111', verified: false })
+    await swept
+
+    const merged = await client.supervision.ledger()
+    // Exactly one more: the enqueue. Not two.
+    expect(merged.byKind.disposition).toBe(dispositionsAfterKeep + 1)
+    /**
+     * And starting a run is a human act that is *not* supervision — somebody asking for work
+     * is not somebody judging it. It lands in `uncounted`, which is on the wire so a reader
+     * can see the rate's own bound instead of trusting that everything was counted.
+     */
+    expect(merged.uncounted).toBeGreaterThan(0)
+
+    socket.close()
+  })
+
   it('merges in queue order, one at a time, never two branches at once', async () => {
     const { socket, runnerId } = await pairFakeRunner('merge-order')
     const repo = await bindViaFakeRunner(socket, runnerId)

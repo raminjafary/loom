@@ -1267,6 +1267,36 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
     }
   },
 
+  async countDecidedRunsSince(workspaceId, since) {
+    const [row] = await db
+      .select({ decided: sql<number>`count(*)::int` })
+      .from(agentRun)
+      .leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+      .where(
+        and(
+          eq(agentRun.workspaceId, workspaceId),
+          /**
+           * Written against the column rather than through `gte` on a `coalesce`: drizzle
+           * cannot infer a parameter's type inside a raw expression, and the driver was
+           * handed a Date where it wanted a timestamp literal. `completed_at` is null only
+           * on a run that has not finished, and an unfinished run is not decided.
+           */
+          or(
+            gte(agentRun.completedAt, since),
+            and(isNull(agentRun.completedAt), gte(agentRun.createdAt, since)),
+          ),
+          /**
+           * A screening run is not work anybody was going to rule on, so it belongs in
+           * neither half of the ratio — the same exclusion the routing table and the replay
+           * set make.
+           */
+          sql`(${agentRun.relation} is null or ${agentRun.relation} <> 'screen')`,
+          decidedRun,
+        ),
+      )
+    return row?.decided ?? 0
+  },
+
   async recordHeartbeat(workspaceId, id, context) {
     await db
       .update(agentRun)

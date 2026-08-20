@@ -708,6 +708,44 @@ export const contract = {
       .output(CostSummarySchema),
   },
 
+  /**
+   * How much human judgement this workspace is spending, against the work that needed it.
+   *
+   * Read-only, and there is deliberately no target: the number that matters is a trend of
+   * acts per decided run, and a ratio falling while the work rises is either trust being
+   * earned or attention being withdrawn. Nothing here can tell those apart, and a platform
+   * that scored an operator on it would be optimising the thing it is supposed to measure.
+   */
+  supervision: {
+    ledger: oc.output(
+      z.object({
+        /** The window this reading covers — a rate is meaningless without it. */
+        since: z.date(),
+        /** `describeSupervision`'s sentence: the ratio, the spread, and no verdict. */
+        detail: z.string(),
+        total: z.number().int(),
+        byKind: z.object({
+          approval: z.number().int(),
+          disposition: z.number().int(),
+          promotion: z.number().int(),
+          veto: z.number().int(),
+          envelope: z.number().int(),
+        }),
+        /** Of the envelope acts, how many actually moved a ceiling. */
+        envelopeChanges: z.number().int(),
+        /** The denominator: runs that reached a decision in the same window. */
+        decidedRuns: z.number().int(),
+        /**
+         * Audited human acts that are not supervision of an agent's work, and acts by the
+         * platform itself. Both on the wire so a reader can see the rate's own bound rather
+         * than trusting that everything was counted.
+         */
+        uncounted: z.number().int(),
+        automatic: z.number().int(),
+      }),
+    ),
+  },
+
   /** The Phase 1 subset — markdown+frontmatter, read/CRUD only. */
   persona: {
     list: oc.output(z.array(AgentPersonaSchema)),

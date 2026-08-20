@@ -85,6 +85,7 @@ import {
   listPersonaRevisions,
   divergenceForPersona,
   promptTrialFor,
+  supervisionLedgerFor,
   listVariantSearches,
   promoteVariant,
   discardVariantSearch,
@@ -923,6 +924,34 @@ export const router = os.router({
           windowHours: input.windowHours ?? null,
         }),
       ),
+    ),
+  },
+
+  supervision: {
+    ledger: os.supervision.ledger.handler(({ context }) =>
+      guard(async () => {
+        const { ledger, detail, since } = await supervisionLedgerFor(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          now: new Date(),
+        })
+        // Field by field, as everywhere else here: a spread skips the excess-property check.
+        return {
+          since,
+          detail,
+          total: ledger.total,
+          byKind: {
+            approval: ledger.byKind.approval,
+            disposition: ledger.byKind.disposition,
+            promotion: ledger.byKind.promotion,
+            veto: ledger.byKind.veto,
+            envelope: ledger.byKind.envelope,
+          },
+          envelopeChanges: ledger.envelopeChanges,
+          decidedRuns: ledger.decidedRuns,
+          uncounted: ledger.uncounted,
+          automatic: ledger.automatic,
+        }
+      }),
     ),
   },
 

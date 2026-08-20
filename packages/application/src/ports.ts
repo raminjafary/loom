@@ -181,6 +181,23 @@ export interface AuditPort {
     subjectId: string
     metadata?: Record<string, unknown>
   }): Promise<AuditEvent>
+
+  /**
+   * Every audited act since a moment, for the supervision ledger.
+   *
+   * The rows unclassified: which actions are supervision, and of what kind, is
+   * `SUPERVISION_ACTIONS` in the domain, and the read must not hold a second opinion about
+   * it — a query that filtered by action list would drift from the table that interprets it,
+   * and the drift would show up as a rate that moved for no reason.
+   *
+   * Append-only and workspace-scoped, so `since` is the whole window: this table is never
+   * updated, which is what makes a count over it reproducible.
+   */
+  listSince(input: {
+    workspaceId: WorkspaceId
+    since: Date
+    limit: number
+  }): Promise<AuditEvent[]>
 }
 
 export type DomainEvent =

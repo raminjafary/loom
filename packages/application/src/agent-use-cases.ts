@@ -44,8 +44,10 @@ import {
   isHuman,
   parseEgressHost,
   describeDivergence,
+  describeSupervision,
   isPricedModel,
   isUsableRevertSha,
+  tallySupervision,
   isMergeQueueEntryTerminal,
   escalateAfterFailure,
   isRiskyTool,
@@ -128,6 +130,7 @@ import {
   type McpTransport,
   type MergeFailureReason,
   type DivergenceSet,
+  type SupervisionLedger,
   type MergeQueueEntry,
   type MergeQueueEntryId,
   type ReviewBlocker,
@@ -969,6 +972,30 @@ export const updatePersona = async (
       `A persona's name cannot be changed — "${existing.name}" is how @mention, the delegation roster and the merge queue address it. Create a new persona instead.`,
     )
   }
+  /**
+   * A human's edit of a persona is a supervision act, and the one that matters most is a
+   * change to the **envelope** — the ceiling on what an agent may make of itself. It is
+   * recorded here rather than left to be read off the revision history because the ledger
+   * counts acts by kind, and "somebody saved this persona" and "somebody widened what it may
+   * do to itself" are different amounts of supervision.
+   *
+   * Parsed from both sides rather than compared as text: reordering the frontmatter is not a
+   * change to the ceiling.
+   */
+  const envelopeChanged =
+    JSON.stringify(parsePersonaMarkdown(existing.markdownSource).envelope ?? null) !==
+    JSON.stringify(parsed.envelope ?? null)
+  if (existing.markdownSource !== input.markdownSource) {
+    await deps.audit.record({
+      workspaceId: input.workspaceId,
+      actor: input.actor,
+      action: 'persona.updated',
+      subjectType: 'agent_persona',
+      subjectId: input.personaId,
+      metadata: { personaName: existing.name, envelopeChanged },
+    })
+  }
+
   return deps.personas.update(
     input.workspaceId,
     input.personaId,
@@ -1038,6 +1065,60 @@ export const promptTrialFor = async (
   if (!revision) return null
   const tallies = await deps.personas.tallyTrialOutcomes(input.workspaceId, revision.id)
   return { revisionId: revision.id, effect: summarizePromptEffect(tallies) }
+}
+
+/**
+ * How far back one reading of the supervision ledger looks, and its row bound.
+ *
+ * Thirty days, because the thing being measured is a rate and a week of a quiet workspace is
+ * mostly noise. The row cap is generous against that: an active workspace's audit stream is
+ * dominated by acts this ledger does not count, and a bound that clipped the window would
+ * make the rate depend on how chatty the *rest* of the log was.
+ */
+export const SUPERVISION_WINDOW_DAYS = 30
+export const SUPERVISION_ROW_LIMIT = 5_000
+
+/**
+ * What a person spent on judgement in the last window, against the work that needed it.
+ *
+ * Two reads and no writes. The classification lives in the domain and the query knows nothing
+ * about it, so a new audit action changes the rate only when somebody deliberately adds it to
+ * `SUPERVISION_ACTIONS` — see that table for why absorbing them silently would be the one way
+ * this instrument could lie about its own subject.
+ */
+export const supervisionLedgerFor = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; now: Date },
+): Promise<{ ledger: SupervisionLedger; detail: string; since: Date }> => {
+  const since = new Date(input.now.getTime() - SUPERVISION_WINDOW_DAYS * 24 * 60 * 60 * 1_000)
+  const [events, decidedRuns] = await Promise.all([
+    deps.audit.listSince({
+      workspaceId: input.workspaceId,
+      since,
+      limit: SUPERVISION_ROW_LIMIT,
+    }),
+    deps.agentRuns.countDecidedRunsSince(input.workspaceId, since),
+  ])
+
+  const ledger = tallySupervision(
+    events.map((event) => ({
+      action: event.action,
+      actorKind: event.actor.kind,
+      at: event.createdAt,
+      personaName:
+        typeof event.metadata.personaName === 'string' ? event.metadata.personaName : null,
+      /**
+       * Read off the metadata rather than re-derived: whether a save moved the ceiling was
+       * true at the moment it was written, and the persona has moved on since.
+       */
+      envelopeChanged:
+        typeof event.metadata.envelopeChanged === 'boolean'
+          ? event.metadata.envelopeChanged
+          : null,
+    })),
+    decidedRuns,
+  )
+  return { ledger, detail: describeSupervision(ledger), since }
 }
 
 /**
@@ -6817,6 +6898,34 @@ export const setModelRoutingEnabled = async (
 }
 
 /**
+ * Records that a person ruled on a branch.
+ *
+ * The disposition itself lives on the run, and the run says *what* was decided and never
+ * *who* decided it or when — which is enough for the fitness (a merge is a merge whoever
+ * merged it) and not enough for the supervision ledger, whose whole subject is the rate at
+ * which humans spend decisions. Fitness reads the column; the ledger reads this stream.
+ *
+ * The persona is carried in the metadata because the interesting denominator is per persona:
+ * a workspace's supervision rate is an average over agents that are trusted very differently.
+ */
+const recordDisposition = async (
+  deps: AgentDeps,
+  workspaceId: WorkspaceId,
+  actor: Actor,
+  run: AgentRun,
+  disposition: 'kept' | 'discarded' | 'pushed',
+): Promise<void> => {
+  await deps.audit.record({
+    workspaceId,
+    actor,
+    action: `agent_run.${disposition}`,
+    subjectType: 'agent_run',
+    subjectId: run.id,
+    metadata: { personaName: run.persona.name, branchName: run.branchName },
+  })
+}
+
+/**
  * Keeps a finished run's branch as-is — no push,
  * no host action; "merge" needs the push policy and isn't built yet.
  */
@@ -6826,6 +6935,7 @@ export const keepAgentRun = async (
 ): Promise<AgentRun> => {
   const run = await requireDisposableRun(deps, input)
   const updated = await deps.agentRuns.setBranchDisposition(input.workspaceId, run.id, 'kept')
+  await recordDisposition(deps, input.workspaceId, input.actor, run, 'kept')
   await postRunSystemMessage(deps, run, `Branch ${run.branchName ?? '(unknown)'} kept.`)
   return updated
 }
@@ -6852,6 +6962,7 @@ export const discardAgentRun = async (
   await deps.blobs.deletePrefix(transcriptPrefix(run.id)).catch(() => {})
 
   const updated = await deps.agentRuns.setBranchDisposition(input.workspaceId, run.id, 'discarded')
+  await recordDisposition(deps, input.workspaceId, input.actor, run, 'discarded')
   await postRunSystemMessage(deps, run, `Branch ${run.branchName ?? '(unknown)'} discarded.`)
   return updated
 }
@@ -6882,6 +6993,7 @@ export const pushAgentRun = async (
   if (!result.ok) throw new ValidationError(result.error)
 
   const updated = await deps.agentRuns.setBranchDisposition(input.workspaceId, run.id, 'pushed')
+  await recordDisposition(deps, input.workspaceId, input.actor, run, 'pushed')
   const outcome = result.prUrl
     ? `PR opened: ${result.prUrl}`
     : result.compareUrl
