@@ -1352,6 +1352,7 @@ onBeforeUnmount(() => {
       @atlas-contend="(edgeId) => void contendAtlasProposal(edgeId)"
       @atlas-decide="(input) => void decideAtlasProposal(input)"
       :run-control="agentSnapshot.runControl"
+      :self-deployment="agentSnapshot.selfDeployment"
       @set-handoff-policy="(input) => void agent.setHandoffPolicy(input)"
       @colosseum-select="(sessionId) => void selectColosseumSession(sessionId)"
       @colosseum-refresh="() => void refreshColosseum()"

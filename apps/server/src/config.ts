@@ -1,4 +1,4 @@
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 
@@ -85,6 +85,19 @@ const EnvSchema = z.object({
   // is exactly what the event-tiering design says does not survive ten concurrent swarm
   // runs.
   BLOB_STORAGE_ROOT: z.string().default('.loom-blobs'),
+  /**
+   * Where the running-revision pointer is, for the surface that shows what is serving.
+   *
+   * The same default `tools/self-promote.mts` uses, and read rather than written here: the
+   * server never promotes itself — a platform that moved its own pointer from inside a request
+   * handler would be the process that has to survive the swap performing it.
+   *
+   * Outside the repository by default, because a pointer inside the tree being replaced is one
+   * `git clean -fd` deletes during the recovery it exists to serve.
+   */
+  LOOM_DEPLOYMENT_STATE: z
+    .string()
+    .default(join(homedir(), '.loom', 'revisions', 'deployment.json')),
   MERGE_STUCK_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
   /**
    * How long one of the screening runs may stay claimed or unfinished before its item is

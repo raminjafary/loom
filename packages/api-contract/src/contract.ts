@@ -27,6 +27,7 @@ import {
   RunVerificationSchema,
   VerificationCheckSchema,
   RunControlSchema,
+  SelfRevisionSchema,
   RunnerSchema,
   CostSummarySchema,
   SwarmBoardSchema,
@@ -1183,6 +1184,32 @@ export const contract = {
    */
   runControl: {
     get: oc.output(RunControlSchema),
+
+    /**
+     * Which revision of Loom's own source is serving, and what a rollback would put back.
+     *
+     * A read with no write beside it, and that asymmetry is the design rather than an omission:
+     * promoting is a separate process, because the code being replaced must not be the code
+     * deciding, and a server that moved its own pointer from inside a request handler would be
+     * the process that has to survive the swap performing it.
+     *
+     * Three answers, and the third is the one worth carrying. `deployment: null` is an
+     * installation that has never promoted — the ordinary state, not a problem. `problem` is a
+     * pointer file that exists and cannot be trusted, and reporting that as "nothing promoted"
+     * would let an operator read a broken pointer as a clean install at exactly the moment they
+     * need to know otherwise.
+     */
+    selfDeployment: oc.output(
+      z.object({
+        deployment: z
+          .object({
+            running: SelfRevisionSchema.nullable(),
+            previous: SelfRevisionSchema.nullable(),
+          })
+          .nullable(),
+        problem: z.string().nullable(),
+      }),
+    ),
 
     pauseAll: oc.output(
       z.object({ control: RunControlSchema, cancelledRunIds: z.array(z.string()) }),

@@ -1024,6 +1024,20 @@ export const VariantSearchSchema = z.object({
     .nullable(),
 })
 
+/**
+ * One built revision of Loom's own source.
+ *
+ * `retained` and `health` are on the wire because they are what makes the pointer actionable
+ * rather than decorative: a way back whose build has been released is not a way back, and a
+ * revision that never answered as a running process is one a promotion would have refused.
+ */
+export const SelfRevisionSchema = z.object({
+  commit: z.string(),
+  builtAt: z.date(),
+  retained: z.boolean(),
+  health: z.enum(['unchecked', 'healthy', 'unhealthy']),
+})
+
 export const AgentPersonaSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
@@ -1428,6 +1442,16 @@ export interface DelegationPreview {
 export type DelegationRefusal = z.infer<typeof DelegationRefusalSchema>
 export type AgentRun = z.infer<typeof AgentRunSchema>
 export type RunControl = z.infer<typeof RunControlSchema>
+export type SelfRevision = z.infer<typeof SelfRevisionSchema>
+/**
+ * What `runControl.selfDeployment` answers. Named because a surface has three states to render
+ * and only two of them are a deployment: nothing promoted, a pointer it could not read, and a
+ * revision that is serving.
+ */
+export interface SelfDeploymentView {
+  readonly deployment: { readonly running: SelfRevision | null; readonly previous: SelfRevision | null } | null
+  readonly problem: string | null
+}
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>
 export type NotificationTransport = z.infer<typeof NotificationTransportSchema>
 export type NotificationConfig = z.infer<typeof NotificationConfigSchema>

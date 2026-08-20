@@ -96,6 +96,7 @@ import {
   setRepositoryVerificationChecks,
   listRunVerifications,
   warmRepositoryCache,
+  readSelfDeployment,
   startAgentRun,
   startVariantProposer,
   steerSwarm,
@@ -1447,6 +1448,35 @@ export const router = os.router({
   runControl: {
     get: os.runControl.get.handler(({ context }) =>
       guard(() => getRunControl(context.deps, { workspaceId: context.principal.workspaceId })),
+    ),
+
+    /**
+     * Named field by field like every other projection here — and this one is the case the rule
+     * exists for: a `retained` dropped on the wire turns "there is no way back" into a panel
+     * that offers one.
+     */
+    selfDeployment: os.runControl.selfDeployment.handler(({ context }) =>
+      guard(async () => {
+        const result = await readSelfDeployment(context.deps)
+        if (!result.ok) return { deployment: null, problem: result.reason }
+        if (result.deployment === null) return { deployment: null, problem: null }
+        const wire = (revision: (typeof result.deployment)['running']) =>
+          revision === null
+            ? null
+            : {
+                commit: revision.commit,
+                builtAt: revision.builtAt,
+                retained: revision.retained,
+                health: revision.health,
+              }
+        return {
+          deployment: {
+            running: wire(result.deployment.running),
+            previous: wire(result.deployment.previous),
+          },
+          problem: null,
+        }
+      }),
     ),
 
     pauseAll: os.runControl.pauseAll.handler(({ context }) =>

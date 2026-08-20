@@ -26,6 +26,7 @@ import type {
   Repository,
   ResponseStyle,
   RunControl,
+  SelfDeploymentView,
   Runner,
   SwarmBoard,
   WorkerNote,
@@ -188,6 +189,12 @@ export interface AgentSnapshot {
   // Global kill switch — null until `init` has read it, so the UI
   // can tell "not loaded yet" apart from "loaded, not paused".
   readonly runControl: RunControl | null
+  /**
+   * Which revision of Loom's own source is serving. Null while it has not been read — which is
+   * not the same as a read that said nothing has been promoted, and the settings panel renders
+   * those two differently.
+   */
+  readonly selfDeployment: SelfDeploymentView | null
   // Notifications. Null until `init` has read it; a
   // `transport: null` value means this deployment has none configured, which a
   // client must show as such rather than as "not subscribed".
@@ -746,6 +753,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     inspectedRun: null,
     inspectedApprovals: [],
     runControl: null,
+    selfDeployment: null,
     notificationConfig: null,
     loading: false,
     error: null,
@@ -1076,6 +1084,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       capabilityAttachments,
       delegationMatrix,
       personaRevisions,
+      selfDeployment,
     ] = await Promise.all([
       options.api.runner.list(),
       options.api.repository.list(),
@@ -1090,6 +1099,13 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       options.api.capability.listAttachments(),
       options.api.personaGroup.delegationMatrix(),
       options.api.persona.revisions({}),
+      /**
+       * Swallowed on failure rather than failing the load. Which revision of Loom's own source
+       * is serving is a fact about the platform and not a thing the workspace needs to open, so
+       * a deployment whose pointer cannot be read gets a settings panel that says so rather than
+       * an app that will not start.
+       */
+      options.api.runControl.selfDeployment().catch(() => null),
     ])
     patch({
       runners,
@@ -1104,6 +1120,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       capabilities,
       capabilityAttachments,
       personaRevisions,
+      selfDeployment,
     })
     rememberPersonaNames([
       ...fromRuns(activeRuns),

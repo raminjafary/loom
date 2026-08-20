@@ -75,6 +75,18 @@ describe('contract over HTTP', () => {
   })
 
   /**
+   * The running-revision pointer, on an installation that has never promoted one — which is
+   * every installation until it does, and is not a problem. The distinction this asserts is the
+   * one that matters: `deployment: null` with no `problem` is a clean install, and a broken
+   * pointer would arrive as a `problem` rather than as the same empty answer.
+   */
+  it('reports no promoted revision, distinctly from a pointer it could not read', async () => {
+    const result = await client.runControl.selfDeployment()
+    expect(result.deployment).toBeNull()
+    expect(result.problem).toBeNull()
+  })
+
+  /**
    * `/healthz` is what a supervisor and a promotion gate read, and it answers about the
    * *deployment* rather than about the process: a platform that started, bound and cannot
    * query its own schema is down, and one that reports itself healthy is how a bad revision
@@ -922,6 +934,7 @@ describe('contract completeness', () => {
     ])
     expect(Object.keys(contract.runControl)).toEqual([
       'get',
+      'selfDeployment',
       'pauseAll',
       'resume',
       'setHandoffPolicy',

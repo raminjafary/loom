@@ -53,6 +53,7 @@ import { webPushNotificationPort } from './notifications.js'
 import { router } from './router.js'
 import { subscriptionTokenMinter } from './subscription-token.js'
 import { fileBlobStorage } from './blob-storage.js'
+import { fileSelfDeploymentStore } from './self-deployment-store.js'
 import { createRunnerGateway } from './runner-gateway.js'
 
 export interface App {
@@ -125,6 +126,7 @@ export const buildApp = async (
     personaGroups: personaGroupRepository(db),
     runControl: workspaceRunControlRepository(db),
     blobs: fileBlobStorage(config.BLOB_STORAGE_ROOT),
+    selfDeployment: fileSelfDeploymentStore(config.LOOM_DEPLOYMENT_STATE),
     notifications,
     notificationTargets,
     limits: {

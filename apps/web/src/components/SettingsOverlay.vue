@@ -16,6 +16,7 @@ import type {
   PersonaGroup,
   Repository,
   RunControl,
+  SelfDeploymentView,
   Runner,
   VerificationCheck,
 } from '@loom/api-contract'
@@ -95,6 +96,12 @@ const props = defineProps<{
   atlasProposals: AtlasEdge[]
   /** The workspace's own policy row — where the handoff threshold and cap live. */
   runControl: RunControl | null
+  /**
+   * Which revision of Loom's own source is serving. Null while the session has not read it —
+   * distinct from a read that came back saying nothing has been promoted, which is the panel's
+   * own quiet line.
+   */
+  selfDeployment: SelfDeploymentView | null
 }>()
 
 const repositoryNames = computed(() =>
@@ -325,6 +332,55 @@ onMounted(() => scrim.value?.focus())
               which is the gate that replaced the per-tool approvals when the teams became
               autonomous. Off, workers start the moment a plan is submitted, and steering is
               the only way to change it afterwards.
+            </p>
+          </section>
+
+          <!--
+            What is actually running, which until now nothing said. Read-only on purpose and the
+            asymmetry is the design: promoting a revision of Loom's own source is a separate
+            process, because the code being replaced must not be the code deciding — so this
+            panel reports and offers no button.
+
+            Absent is the ordinary state and gets one quiet line rather than a warning: an
+            installation that has never promoted is running whatever a human installed, which is
+            not a problem to be solved.
+          -->
+          <section class="policy">
+            <h4>Platform revision</h4>
+            <p v-if="selfDeployment?.problem" class="hint danger">
+              The deployment pointer could not be read, so what is serving cannot be confirmed
+              from here: {{ selfDeployment.problem }}
+            </p>
+            <template v-else-if="selfDeployment?.deployment?.running">
+              <p class="hint">
+                Serving
+                <code>{{ selfDeployment.deployment.running.commit.slice(0, 12) }}</code>, built
+                {{ selfDeployment.deployment.running.builtAt.toLocaleString() }}.
+              </p>
+              <p class="hint">
+                <template v-if="selfDeployment.deployment.previous?.retained">
+                  The way back is
+                  <code>{{ selfDeployment.deployment.previous.commit.slice(0, 12) }}</code>, still
+                  built and on disk — a rollback is a pointer move.
+                </template>
+                <template v-else-if="selfDeployment.deployment.previous">
+                  <!--
+                    A recorded predecessor whose build is gone is *not* a way back, and saying
+                    "previous: abc123" without that would offer a rollback that cannot happen.
+                  -->
+                  <code>{{ selfDeployment.deployment.previous.commit.slice(0, 12) }}</code> is
+                  recorded as the predecessor but its build has been released, so there is
+                  nothing to roll back to.
+                </template>
+                <template v-else>
+                  There is no earlier revision kept, so recovery from here is a checkout at a
+                  known-good commit rather than a rollback.
+                </template>
+              </p>
+            </template>
+            <p v-else class="hint">
+              No revision of Loom's own source has been promoted here — this deployment is
+              running whatever was installed by hand.
             </p>
           </section>
         </template>

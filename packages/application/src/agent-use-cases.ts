@@ -72,6 +72,7 @@ import {
   tallyScreenScore,
   proposeVariantSet,
   describeProposerProvenance,
+  parseDeployment,
   proposerBrief,
   proposerEligibility,
   proposerSubjectEligibility,
@@ -79,6 +80,8 @@ import {
   MAX_PROPOSER_REFUSALS,
   type LosingArm,
   type ProposerShown,
+  type SelfDeployment,
+  type SelfStateRule,
   type RefusedCandidate,
   renderVerifierTask,
   resolveVerifierChoice,
@@ -180,7 +183,7 @@ import type {
   RunVerificationRepositoryPort,
   WorkspaceRunControlRepositoryPort,
 } from './agent-ports.js'
-import type { BlobStoragePort } from './ports.js'
+import type { BlobStoragePort, SelfDeploymentStorePort } from './ports.js'
 import type { NotificationDeps } from './notification-use-cases.js'
 import { conveneCrunchForDrift } from './colosseum-use-cases.js'
 import { findAtlasLeads } from './atlas-use-cases.js'
@@ -227,6 +230,15 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
   readonly planSubtasks: PlanSubtaskRepositoryPort
   /** The raw transcript tier's store. */
   readonly blobs: BlobStoragePort
+  /**
+   * The running-revision pointer, read-only in practice.
+   *
+   * Optional, and that is the honest shape rather than a convenience: a deployment that has
+   * never promoted a revision of Loom's own source has no pointer, and every test harness in
+   * this repository is such a deployment. A required port would make the absence of a file into
+   * a wiring error.
+   */
+  readonly selfDeployment?: SelfDeploymentStorePort
   readonly dispatch: RunDispatchPort
   readonly limits: RunLimits
 }
@@ -1436,6 +1448,35 @@ const startVariantVerifier = async (
      * already been answered.
      */
   }
+}
+
+/**
+ * Which revision of Loom's own source is serving, and what the way back is.
+ *
+ * A read and never a write. The platform does not promote itself: the swap is a separate process
+ * for the reason the rollback drill establishes — the code being replaced must not be the code
+ * deciding — and a server that moved its own pointer from inside a request handler would be the
+ * process that has to survive the swap performing it.
+ *
+ * Three answers rather than two, and the third is the one worth having. `null` is a deployment
+ * that has never promoted, which is every installation until it does and is not a problem. A
+ * *refusal* is a pointer file that exists and cannot be trusted — and surfacing that as "nothing
+ * promoted" would be the worst of the three, because an operator would read a broken pointer as
+ * a clean install at exactly the moment they needed to know otherwise.
+ */
+export const readSelfDeployment = async (
+  deps: AgentDeps,
+): Promise<
+  | { ok: true; deployment: SelfDeployment | null }
+  | { ok: false; rule: SelfStateRule; reason: string }
+> => {
+  if (!deps.selfDeployment) return { ok: true, deployment: null }
+  const text = await deps.selfDeployment.read()
+  if (text === null) return { ok: true, deployment: null }
+  const parsed = parseDeployment(text)
+  return parsed.ok
+    ? { ok: true, deployment: parsed.deployment }
+    : { ok: false, rule: parsed.rule, reason: parsed.reason }
 }
 
 const PROPOSER_PERSONA_NAME = 'variant-proposer'
