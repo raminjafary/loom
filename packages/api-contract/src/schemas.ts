@@ -933,6 +933,70 @@ export const PersonaRevisionSchema = z.object({
 })
 
 /**
+ * One persona's evolution, walked.
+ *
+ * A discriminated union rather than two arrays, because the reading order is the point: a
+ * revision and the search that followed it happened in one sequence, and a panel given two
+ * lists would have to re-derive that sequence to render it.
+ */
+export const EvolutionEntrySchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('revision'),
+    at: z.date(),
+    revisionId: z.string(),
+    authorKind: z.enum(['human', 'agent_run', 'platform']),
+    authorRunId: z.string().nullable(),
+    rationale: z.string(),
+    /** Which part of the document moved — parsed from the two snapshots, never summarized. */
+    components: z.array(
+      z.enum(['body', 'tools', 'model', 'envelope', 'approval-mode', 'budget', 'delegates', 'name']),
+    ),
+    /** Empty when nothing measured this edit, which is every human edit and every tier-2 one. */
+    arms: z.array(
+      z.object({ label: z.string(), decided: z.number().int(), kept: z.number().int() }),
+    ),
+    trialDecidedAt: z.date().nullable(),
+    /** The sentence, rendered server-side: "captured, and nothing measured it" is the feature. */
+    detail: z.string(),
+  }),
+  z.object({
+    kind: z.literal('search'),
+    at: z.date(),
+    setId: z.string(),
+    status: z.enum(['open', 'settled']),
+    proposedByRunId: z.string().nullable(),
+    candidates: z.array(
+      z.object({
+        variantId: z.string(),
+        rationale: z.string(),
+        outcome: z.enum(['refused', 'measured', 'promoted', 'not-kept']),
+        reason: z.string().nullable(),
+        decided: z.number().int(),
+        kept: z.number().int(),
+      }),
+    ),
+    verifierPickedVariantId: z.string().nullable(),
+    settledAt: z.date().nullable(),
+    detail: z.string(),
+  }),
+])
+
+export const PersonaLineageSchema = z.object({
+  personaId: z.string(),
+  personaName: z.string(),
+  entries: z.array(EvolutionEntrySchema),
+  /**
+   * The headline, and the reason the walk exists: eleven edits with two measurements behind
+   * them is a different situation from eleven with eleven, and both look identical in a list
+   * of revisions.
+   */
+  measured: z.number().int(),
+  unmeasured: z.number().int(),
+})
+
+export type PersonaLineage = z.infer<typeof PersonaLineageSchema>
+
+/**
  * What the runs so far say about an agent's edit.
  *
  * `verdict` is `undecided` until both arms have enough finished runs, and that is the

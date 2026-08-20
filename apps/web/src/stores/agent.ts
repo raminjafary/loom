@@ -114,6 +114,8 @@ export const useAgentStore = defineStore('agent', () => {
     cancelCampaign: (campaignId: string) => session.cancelCampaign(campaignId),
     /** Memory — pass-throughs for the campaigns' reason, and read on the same trigger. */
     listExperience: (personaId: string) => session.listExperience(personaId),
+    /** The evolution walk — a pass-through for the same reason memory and campaigns are. */
+    personaEvolution: (personaId: string) => session.personaEvolution(personaId),
     retireLesson: (input: { lessonId: string; reason: string }) => session.retireLesson(input),
     setModelRoutingEnabled: (enabled: boolean) => session.setModelRoutingEnabled(enabled),
     unbindRepository: (input: { repositoryId: string; acknowledge?: boolean }) =>

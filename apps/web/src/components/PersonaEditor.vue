@@ -24,6 +24,7 @@ import {
   type CampaignReport,
   type CampaignRow,
   type PersonaLesson,
+  type PersonaLineage,
   describeScreenedSiblings,
   describeRevision,
   personaHistory,
@@ -114,6 +115,12 @@ const props = defineProps<{
    * entry in the untrusted layer would be trusted content stored in the one place the
    * platform has promised never to trust.
    */
+  /**
+   * How this persona got to be what it is. A callback, like memory and campaigns, and for
+   * the sharpest version of their reason: this is the only read here that costs several
+   * round trips, so it is fetched when a person opens the persona and never on a keystroke.
+   */
+  personaEvolution?: (personaId: string) => Promise<PersonaLineage | null>
   listExperience?: (personaId: string) => Promise<PersonaLesson[]>
   retireLesson?: (input: {
     lessonId: string
@@ -342,6 +349,7 @@ watch(editingId, () => {
   lessonNotice.value = null
   void loadCampaigns()
   void loadExperience()
+  void loadEvolution()
 })
 
 const openCampaignNow = async () => {
@@ -388,6 +396,20 @@ const toggleVintage = (revisionId: string) => {
 const lessons = ref<PersonaLesson[]>([])
 const lessonBusy = ref(false)
 const lessonNotice = ref<string | null>(null)
+
+const lineage = ref<PersonaLineage | null>(null)
+
+const loadEvolution = async () => {
+  if (!props.personaEvolution || editingId.value === '') {
+    lineage.value = null
+    return
+  }
+  lineage.value = await props.personaEvolution(editingId.value)
+}
+
+/** A revision and a search can share a timestamp; neither id is unique across the two kinds. */
+const entryKey = (entry: PersonaLineage['entries'][number]): string =>
+  entry.kind === 'revision' ? `rev-${entry.revisionId}` : `set-${entry.setId}`
 
 const loadExperience = async () => {
   if (!props.listExperience || editingId.value === '') {
@@ -1524,6 +1546,49 @@ const harnessSummary = (persona: AgentPersona): string => {
         </ul>
 
         <p v-if="lessonNotice" class="hint lesson-notice">{{ lessonNotice }}</p>
+      </section>
+
+      <!--
+        The walk, above the plain revision list it subsumes: the list says what this persona
+        used to say, and this says what changed, who changed it and what measured it. The
+        counts lead, because "eleven edits, two of them measured" is the sentence a person
+        opening this panel came for and it is invisible in a list of dates.
+      -->
+      <section v-if="mode === 'edit' && lineage && lineage.entries.length > 0" class="evolution">
+        <h4>How it got here</h4>
+        <p class="hint evolution-headline">
+          {{ lineage.measured + lineage.unmeasured }} recorded
+          {{ lineage.measured + lineage.unmeasured === 1 ? 'change' : 'changes' }} to this
+          persona, {{ lineage.measured }} of which something measured. An edit nothing measured
+          is not a failed one — it is one the loop never had an opinion about.
+        </p>
+        <ol class="lineage">
+          <li v-for="entry in lineage.entries" :key="entryKey(entry)" :class="entry.kind">
+            <div class="lineage-head">
+              <span class="when">{{ new Date(entry.at).toLocaleDateString() }}</span>
+              <span v-if="entry.kind === 'revision'" class="components">
+                {{ entry.components.length === 0 ? 'unparsed' : entry.components.join(' · ') }}
+              </span>
+              <span v-else class="components">search</span>
+              <span
+                v-if="entry.kind === 'revision' && entry.authorKind === 'agent_run'"
+                class="by agent"
+                >by the agent</span
+              >
+            </div>
+            <p class="lineage-detail">{{ entry.detail }}</p>
+            <p v-if="entry.kind === 'revision' && entry.rationale" class="hint">
+              “{{ entry.rationale }}”
+            </p>
+            <ul v-if="entry.kind === 'search'" class="lineage-candidates">
+              <li v-for="candidate in entry.candidates" :key="candidate.variantId">
+                <span class="outcome" :class="candidate.outcome">{{ candidate.outcome }}</span>
+                {{ candidate.rationale || '(no rationale given)' }}
+                <span v-if="candidate.reason" class="hint">— {{ candidate.reason }}</span>
+              </li>
+            </ul>
+          </li>
+        </ol>
       </section>
 
       <section v-if="mode === 'edit' && history.length > 0" class="history">

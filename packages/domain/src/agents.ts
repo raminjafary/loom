@@ -241,6 +241,15 @@ export interface PersonaRevision {
   readonly replacedByUserId: UserId | null
   /** What the author said they were doing. Empty for a human's edit, which has a diff. */
   readonly rationale: string
+  /**
+   * When a human settled the trial on this edit, or null.
+   *
+   * Null means two different things and the reader has to be able to tell them apart from
+   * elsewhere: no trial was ever opened (every human edit, and every tier-2 change), or one
+   * is running now. The column has always existed; it reaches the domain because the
+   * evolution walk is the first reader that needs to say which edits were measured at all.
+   */
+  readonly trialDecidedAt: Date | null
   readonly createdAt: Date
 }
 

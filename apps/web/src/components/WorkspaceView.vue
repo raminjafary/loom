@@ -1419,6 +1419,7 @@ onBeforeUnmount(() => {
       :campaign-report="agent.campaignReport"
       :cancel-campaign="agent.cancelCampaign"
       :list-experience="agent.listExperience"
+      :persona-evolution="agent.personaEvolution"
       :retire-lesson="agent.retireLesson"
       @register="(input) => agent.registerCapability(input)"
       @remove="(capabilityId) => agent.removeCapability(capabilityId)"

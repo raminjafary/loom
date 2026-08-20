@@ -1209,6 +1209,20 @@ export interface PersonaVariantRepositoryPort {
     workspaceId: WorkspaceId,
   ): Promise<{ set: PersonaVariantSet; variants: PersonaVariant[] }[]>
 
+  /**
+   * Every search this persona has had, settled ones included, newest first.
+   *
+   * Distinct from `listOpenSets`, which answers "is a measurement running": this answers
+   * "what has been tried", which is a history rather than a state. Bounded by the caller
+   * because a persona a year into a search-per-week is a page nobody scrolls, and the walk
+   * that reads it is opened on demand rather than polled.
+   */
+  listSetsForPersona(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    limit: number,
+  ): Promise<{ set: PersonaVariantSet; variants: PersonaVariant[] }[]>
+
   /** Which arm a run went on. `variantId` absent is the incumbent — the prompt in use. */
   recordVariantUse(input: {
     workspaceId: WorkspaceId

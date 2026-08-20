@@ -39,6 +39,7 @@ import {
   PlanReviewSchema,
   MasteryViewSchema,
   PersonaLessonSchema,
+  PersonaLineageSchema,
   SubjectMapListingSchema,
   SubjectMapSchema,
   WorkerNoteSchema,
@@ -963,6 +964,15 @@ export const contract = {
     revisions: oc
       .input(z.object({ personaId: z.string().optional() }))
       .output(z.array(PersonaRevisionSchema)),
+
+    /**
+     * How this persona got to be what it is: every edit, what part of it moved, and what — if
+     * anything — measured it, interleaved with the searches in the order they happened.
+     *
+     * Its own procedure rather than a field on `revisions`, because it costs several reads and
+     * a revision list is loaded by every editor mount. This is opened deliberately.
+     */
+    evolution: oc.input(z.object({ personaId: z.string() })).output(PersonaLineageSchema),
 
     /**
      * Puts a superseded prompt back — the half of tier 1 that makes the other half safe.

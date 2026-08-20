@@ -68,6 +68,7 @@ import {
   takeSessionTurn,
   listExpertiseUsedByRuns,
   listPersonaExperience,
+  personaEvolution,
   retireLesson,
   listPersonaMaps,
   listRepositoryMaps,
@@ -122,6 +123,7 @@ import {
   type PersonaRevision,
   type MergeQueueEntry,
   type WorkerNote,
+  describeEvolutionEntry,
 } from '@loom/domain'
 import {
   asAgentPersonaId,
@@ -1338,6 +1340,53 @@ export const router = os.router({
           personaId: asAgentPersonaId(input.personaId),
         })
         return { ok: true as const }
+      }),
+    ),
+
+    /**
+     * The walk. The sentence per entry is rendered here rather than in the client for the
+     * reason every other rendered sentence in this platform is: "captured, and nothing
+     * measured it" is the honest phrasing, and a client free to write its own is free to
+     * write "recorded".
+     */
+    evolution: os.persona.evolution.handler(({ context, input }) =>
+      guard(async () => {
+        const lineage = await personaEvolution(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          personaId: asAgentPersonaId(input.personaId),
+        })
+        return {
+          personaId: lineage.personaId as string,
+          personaName: lineage.personaName,
+          measured: lineage.measured,
+          unmeasured: lineage.unmeasured,
+          entries: lineage.entries.map((entry) =>
+            entry.kind === 'revision'
+              ? {
+                  kind: 'revision' as const,
+                  at: entry.at,
+                  revisionId: entry.revisionId as string,
+                  authorKind: entry.authorKind,
+                  authorRunId: entry.authorRunId as string | null,
+                  rationale: entry.rationale,
+                  components: [...entry.components],
+                  arms: entry.arms.map((arm) => ({ ...arm })),
+                  trialDecidedAt: entry.trialDecidedAt,
+                  detail: describeEvolutionEntry(entry),
+                }
+              : {
+                  kind: 'search' as const,
+                  at: entry.at,
+                  setId: entry.setId as string,
+                  status: entry.status,
+                  proposedByRunId: entry.proposedByRunId as string | null,
+                  candidates: entry.candidates.map((candidate) => ({ ...candidate })),
+                  verifierPickedVariantId: entry.verifierPickedVariantId,
+                  settledAt: entry.settledAt,
+                  detail: describeEvolutionEntry(entry),
+                },
+          ),
+        }
       }),
     ),
 

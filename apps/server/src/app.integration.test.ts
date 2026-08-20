@@ -1023,6 +1023,8 @@ describe('contract completeness', () => {
       // The history an agent's self-edit writes, and the revert
       // that makes writing without asking an acceptable trade.
       'revisions',
+      // The walk over that history — what changed, and what measured any of it.
+      'evolution',
       'revert',
       // Whether the edit was an improvement, and a human settling it.
       'trial',

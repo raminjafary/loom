@@ -2160,6 +2160,44 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
     }))
   },
 
+  async listSetsForPersona(workspaceId, personaId, limit) {
+    const setRows = await db
+      .select()
+      .from(personaVariantSet)
+      .where(
+        and(
+          eq(personaVariantSet.workspaceId, workspaceId),
+          eq(personaVariantSet.personaId, personaId),
+        ),
+      )
+      .orderBy(desc(personaVariantSet.createdAt))
+      .limit(limit)
+    if (setRows.length === 0) return []
+
+    // One query for every candidate of every set returned, grouped in memory — the same
+    // shape `listOpenSets` uses, and the same reason: a query per set would be a round trip
+    // per search in a history that is read all at once.
+    const variantRows = await db
+      .select()
+      .from(personaVariant)
+      .where(
+        and(
+          eq(personaVariant.workspaceId, workspaceId),
+          inArray(
+            personaVariant.setId,
+            setRows.map((row) => row.id),
+          ),
+        ),
+      )
+      .orderBy(personaVariant.position)
+    return setRows.map((setRow) => ({
+      set: toPersonaVariantSet(setRow as PersonaVariantSetRow),
+      variants: variantRows
+        .filter((row) => row.setId === setRow.id)
+        .map((row) => toPersonaVariant(row as PersonaVariantRow)),
+    }))
+  },
+
   async openProposerSession(input) {
     await db
       .insert(personaProposerSession)

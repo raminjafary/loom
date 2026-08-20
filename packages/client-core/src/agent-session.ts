@@ -46,6 +46,8 @@ export type CampaignReport = NonNullable<Awaited<ReturnType<LoomApi['campaign'][
 export type BriefSource = NonNullable<
   Parameters<LoomApi['persona']['startProposer']>[0]['source']
 >
+/** One persona's evolution, walked, as the contract puts it on the wire. */
+export type PersonaLineage = Awaited<ReturnType<LoomApi['persona']['evolution']>>
 /** One lesson a persona holds about one repository, as the contract puts it on the wire. */
 export type PersonaLesson = Awaited<ReturnType<LoomApi['experience']['listForPersona']>>[number]
 import type { PushRegistration } from './push.js'
@@ -553,6 +555,12 @@ export interface AgentSession {
    * and when merges land, neither of which is a persona edit, so a copy in session state
    * would be refreshed by the wrong events and stale for the right ones.
    */
+  /**
+   * The evolution walk — read on demand and never held in session state, because it is a
+   * history rather than a state: it changes when a run edits a persona or a human settles a
+   * search, neither of which is something a panel should re-fetch on a keystroke.
+   */
+  personaEvolution(personaId: string): Promise<PersonaLineage | null>
   listExperience(personaId: string): Promise<PersonaLesson[]>
   retireLesson(input: { lessonId: string; reason: string }): Promise<{ invalidated: number }>
   campaignReport(campaignId: string): Promise<CampaignReport | null>
@@ -1661,6 +1669,15 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       } catch (error) {
         patch({ error: errorMessage(error) })
         return []
+      }
+    },
+
+    async personaEvolution(personaId) {
+      try {
+        return await options.api.persona.evolution({ personaId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return null
       }
     },
 

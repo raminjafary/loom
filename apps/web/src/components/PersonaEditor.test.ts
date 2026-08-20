@@ -5,7 +5,12 @@ import type {
   PromptTrial,
   VariantSearch,
 } from '@loom/api-contract'
-import type { CampaignReport, CampaignRow, PersonaLesson } from '@loom/client-core'
+import type {
+  CampaignReport,
+  CampaignRow,
+  PersonaLesson,
+  PersonaLineage,
+} from '@loom/client-core'
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PersonaEditor from './PersonaEditor.vue'
@@ -1087,5 +1092,110 @@ describe('PersonaEditor — distilled experience', () => {
     await flushPromises()
     expect(calls).toEqual([{ lessonId: 'lesson_1', reason: 'It was never true of main.' }])
     expect(wrapper.get('.lesson-notice').text()).toContain('stays on record')
+  })
+})
+
+
+/**
+ * The evolution walk.
+ *
+ * What the panel has to get right is the part the walk exists for: the headline counts, and
+ * an entry that says an edit was captured and nothing measured it. The sentences come from
+ * the server, so what is testable here is that the panel renders them rather than
+ * paraphrasing — a client that wrote its own would be free to write "recorded".
+ */
+describe('PersonaEditor — how it got here', () => {
+  const lineage = (over: Partial<PersonaLineage> = {}): PersonaLineage => ({
+    personaId: 'p1',
+    personaName: 'swe',
+    measured: 1,
+    unmeasured: 2,
+    entries: [
+      {
+        kind: 'revision',
+        at: new Date(3_000),
+        revisionId: 'rev_1',
+        authorKind: 'agent_run',
+        authorRunId: 'run_1',
+        rationale: 'The tests are the definition of done here.',
+        components: ['tools'],
+        arms: [],
+        trialDecidedAt: null,
+        detail: '**Captured, and nothing measured it** — the trial measures a prompt body.',
+      },
+      {
+        kind: 'search',
+        at: new Date(2_000),
+        setId: 'set_1',
+        status: 'settled',
+        proposedByRunId: 'run_9',
+        candidates: [
+          {
+            variantId: 'v1',
+            rationale: 'terser',
+            outcome: 'refused',
+            reason: 'Rejected by the held-out screen: it passed 2 of 6 items.',
+            decided: 0,
+            kept: 0,
+          },
+        ],
+        verifierPickedVariantId: null,
+        settledAt: new Date(2_500),
+        detail: 'A search over 1 candidates ended with none kept.',
+      },
+    ],
+    ...over,
+  })
+
+  const openedWalk = async (walk: PersonaLineage | null) => {
+    const wrapper = mount(PersonaEditor, {
+      props: {
+        personas: [persona()],
+        capabilities: [],
+        attachments: [],
+        revisions: [],
+        personaEvolution: async () => walk,
+      },
+    })
+    await wrapper.get('.row-actions .link').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('leads with how many changes there were and how many anything measured', async () => {
+    const wrapper = await openedWalk(lineage())
+    const text = wrapper.get('.evolution-headline').text()
+    expect(text).toContain('3 recorded changes')
+    expect(text).toContain('1 of which something measured')
+  })
+
+  it('renders the server’s sentence rather than a paraphrase of it', async () => {
+    const wrapper = await openedWalk(lineage())
+    expect(wrapper.get('.lineage').text()).toContain('Captured, and nothing measured it')
+  })
+
+  it('shows which component moved, so a reader can scan rather than read', async () => {
+    const wrapper = await openedWalk(lineage())
+    expect(wrapper.get('.lineage li.revision .components').text()).toBe('tools')
+  })
+
+  it('shows a refused candidate as refused, with what the screen said', async () => {
+    const wrapper = await openedWalk(lineage())
+    const candidate = wrapper.get('.lineage-candidates li')
+    expect(candidate.get('.outcome').text()).toBe('refused')
+    expect(candidate.text()).toContain('passed 2 of 6 items')
+  })
+
+  it('shows nothing at all for a persona nothing has ever changed', async () => {
+    const wrapper = await openedWalk(lineage({ entries: [], measured: 0, unmeasured: 0 }))
+    expect(wrapper.find('.evolution').exists()).toBe(false)
+  })
+
+  it('offers no walk to a mount that does not pass the reader', async () => {
+    const wrapper = mount(PersonaEditor, {
+      props: { personas: [persona()], capabilities: [], attachments: [], revisions: [] },
+    })
+    await wrapper.get('.row-actions .link').trigger('click')
+    expect(wrapper.find('.evolution').exists()).toBe(false)
   })
 })

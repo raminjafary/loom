@@ -660,6 +660,7 @@ export interface PersonaRevisionRow {
   replacedByRunId: string | null
   replacedByUserId: string | null
   rationale: string
+  trialDecidedAt: Date | null
   createdAt: Date
 }
 
@@ -682,6 +683,7 @@ export const toPersonaRevision = (row: PersonaRevisionRow): PersonaRevision => (
   replacedByRunId: row.replacedByRunId === null ? null : asAgentRunId(row.replacedByRunId),
   replacedByUserId: row.replacedByUserId === null ? null : asUserId(row.replacedByUserId),
   rationale: row.rationale,
+  trialDecidedAt: row.trialDecidedAt,
   createdAt: row.createdAt,
 })
 
