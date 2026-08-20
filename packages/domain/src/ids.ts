@@ -30,6 +30,10 @@ export type ReplaySetId = Brand<string, 'ReplaySetId'>
 export type ReplayItemId = Brand<string, 'ReplayItemId'>
 /** One arm's screening against a held-out set — a candidate, or the prompt in use. */
 export type VariantScreenId = Brand<string, 'VariantScreenId'>
+/** A campaign: vintages of one persona replayed against one set, at real cost. */
+export type ReplayCampaignId = Brand<string, 'ReplayCampaignId'>
+/** One vintage in a campaign, optionally forced onto a model. */
+export type ReplayCampaignArmId = Brand<string, 'ReplayCampaignArmId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -54,3 +58,6 @@ export const asPersonaVariantSetId = (v: string): PersonaVariantSetId => v as Pe
 export const asReplaySetId = (v: string): ReplaySetId => v as ReplaySetId
 export const asReplayItemId = (v: string): ReplayItemId => v as ReplayItemId
 export const asVariantScreenId = (v: string): VariantScreenId => v as VariantScreenId
+export const asReplayCampaignId = (v: string): ReplayCampaignId => v as ReplayCampaignId
+export const asReplayCampaignArmId = (v: string): ReplayCampaignArmId =>
+  v as ReplayCampaignArmId

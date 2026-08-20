@@ -3,12 +3,19 @@ import {
   asAgentRunId,
   asPersonaVariantId,
   asPersonaVariantSetId,
+  asReplayCampaignArmId,
+  asReplayCampaignId,
   asReplayItemId,
   asReplaySetId,
   asRepositoryId,
   asVariantScreenId,
   asWorkspaceId,
   type DecidedRunRecord,
+  type CampaignStatus,
+  type PersonaRevisionId,
+  type ReplayCampaignArmRecord,
+  type ReplayCampaignRecord,
+  type ReplayCampaignRunRecord,
   type ReplayItemRecord,
   type ReplayOutcome,
   type ReplaySetRecord,
@@ -18,7 +25,7 @@ import {
   type VariantScreenRecord,
   type VariantScreenRunRecord,
 } from '@loom/domain'
-import type { ScreenRepositoryPort } from '@loom/application'
+import type { CampaignRepositoryPort, ScreenRepositoryPort } from '@loom/application'
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
@@ -26,6 +33,9 @@ import {
   personaVariant,
   personaVariantSet,
   promptTrialUse,
+  replayCampaign,
+  replayCampaignArm,
+  replayCampaignRun,
   replayItem,
   replaySet,
   runVerification,
@@ -124,6 +134,74 @@ const toScreenRun = (row: {
   outcome: row.outcome as ScreenRunOutcome,
   reason: row.reason,
   model: row.model,
+  finishedAt: row.finishedAt,
+})
+
+const toCampaign = (row: {
+  id: string
+  workspaceId: string
+  personaId: string
+  replaySetId: string
+  label: string
+  status: string
+  capUsd: number | null
+  openedByUserId: string | null
+  haltReason: string | null
+  createdAt: Date
+  finishedAt: Date | null
+}): ReplayCampaignRecord => ({
+  id: asReplayCampaignId(row.id),
+  workspaceId: asWorkspaceId(row.workspaceId),
+  personaId: asAgentPersonaId(row.personaId),
+  replaySetId: asReplaySetId(row.replaySetId),
+  label: row.label,
+  status: row.status as CampaignStatus,
+  capUsd: row.capUsd,
+  openedByUserId: row.openedByUserId,
+  haltReason: row.haltReason,
+  createdAt: row.createdAt,
+  finishedAt: row.finishedAt,
+})
+
+const toCampaignArm = (row: {
+  id: string
+  campaignId: string
+  position: number
+  revisionId: string | null
+  markdownSource: string
+  label: string
+  model: string | null
+}): ReplayCampaignArmRecord => ({
+  id: asReplayCampaignArmId(row.id),
+  campaignId: asReplayCampaignId(row.campaignId),
+  position: row.position,
+  revisionId: row.revisionId === null ? null : (row.revisionId as PersonaRevisionId),
+  markdownSource: row.markdownSource,
+  label: row.label,
+  model: row.model,
+})
+
+const toCampaignRun = (row: {
+  id: string
+  armId: string
+  replayItemId: string
+  claimedAt: Date | null
+  agentRunId: string | null
+  outcome: string
+  reason: string | null
+  model: string | null
+  costUsd: number | null
+  finishedAt: Date | null
+}): ReplayCampaignRunRecord => ({
+  id: row.id,
+  armId: asReplayCampaignArmId(row.armId),
+  replayItemId: asReplayItemId(row.replayItemId),
+  claimedAt: row.claimedAt,
+  agentRunId: row.agentRunId === null ? null : asAgentRunId(row.agentRunId),
+  outcome: row.outcome as ScreenRunOutcome,
+  reason: row.reason,
+  model: row.model,
+  costUsd: row.costUsd,
   finishedAt: row.finishedAt,
 })
 
@@ -568,5 +646,224 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
     return rows
       .filter((row) => row.variantId !== null && row.decision === 'admitted')
       .map((row) => asPersonaVariantId(row.variantId as string))
+  },
+})
+
+/**
+ * The campaign's storage.
+ *
+ * In this file rather than a fourth one because it shares the machinery it was generalized
+ * from: the same replay sets, the same claim-then-attach two-step, the same `screenOutcomeFor`
+ * scoring. What it does not share is the gate — a campaign decides nothing — which is why the
+ * rows live in their own tables and not in `variant_screen`.
+ */
+export const campaignRepository = (db: Database): CampaignRepositoryPort => ({
+  async open(input) {
+    return db.transaction(async (tx) => {
+      const [campaignRow] = await tx
+        .insert(replayCampaign)
+        .values({
+          workspaceId: input.workspaceId,
+          personaId: input.personaId,
+          replaySetId: input.replaySetId,
+          label: input.label,
+          capUsd: input.capUsd,
+          openedByUserId: input.openedByUserId,
+        })
+        .returning()
+      if (!campaignRow) throw new Error('replay_campaign insert returned nothing')
+
+      const armRows = await tx
+        .insert(replayCampaignArm)
+        .values(
+          input.arms.map((arm, index) => ({
+            workspaceId: input.workspaceId,
+            campaignId: campaignRow.id,
+            position: index,
+            revisionId: arm.revisionId,
+            markdownSource: arm.markdownSource,
+            label: arm.label,
+            model: arm.model,
+          })),
+        )
+        .returning()
+
+      if (input.itemIds.length > 0) {
+        await tx.insert(replayCampaignRun).values(
+          armRows.flatMap((armRow) =>
+            input.itemIds.map((itemId) => ({
+              workspaceId: input.workspaceId,
+              armId: armRow.id,
+              replayItemId: itemId,
+            })),
+          ),
+        )
+      }
+
+      return {
+        campaign: toCampaign(campaignRow),
+        arms: armRows.map(toCampaignArm),
+      }
+    })
+  },
+
+  async findById(workspaceId, campaignId) {
+    const [row] = await db
+      .select()
+      .from(replayCampaign)
+      .where(
+        and(eq(replayCampaign.workspaceId, workspaceId), eq(replayCampaign.id, campaignId)),
+      )
+      .limit(1)
+    return row ? toCampaign(row) : null
+  },
+
+  async listByPersona(workspaceId, personaId, limit) {
+    const rows = await db
+      .select()
+      .from(replayCampaign)
+      .where(
+        and(eq(replayCampaign.workspaceId, workspaceId), eq(replayCampaign.personaId, personaId)),
+      )
+      .orderBy(desc(replayCampaign.createdAt))
+      .limit(limit)
+    return rows.map(toCampaign)
+  },
+
+  async listRunning() {
+    const rows = await db
+      .select({ workspaceId: replayCampaign.workspaceId, id: replayCampaign.id })
+      .from(replayCampaign)
+      .where(eq(replayCampaign.status, 'running'))
+    return rows.map((row) => ({
+      workspaceId: asWorkspaceId(row.workspaceId),
+      campaignId: asReplayCampaignId(row.id),
+    }))
+  },
+
+  async armsForCampaign(workspaceId, campaignId) {
+    const armRows = await db
+      .select()
+      .from(replayCampaignArm)
+      .where(
+        and(
+          eq(replayCampaignArm.workspaceId, workspaceId),
+          eq(replayCampaignArm.campaignId, campaignId),
+        ),
+      )
+      .orderBy(asc(replayCampaignArm.position))
+    if (armRows.length === 0) return []
+
+    const runRows = await db
+      .select()
+      .from(replayCampaignRun)
+      .where(
+        inArray(
+          replayCampaignRun.armId,
+          armRows.map((row) => row.id),
+        ),
+      )
+      .orderBy(asc(replayCampaignRun.createdAt), asc(replayCampaignRun.id))
+
+    return armRows.map((armRow) => ({
+      arm: toCampaignArm(armRow),
+      runs: runRows.filter((row) => row.armId === armRow.id).map(toCampaignRun),
+    }))
+  },
+
+  async claimCampaignRun(workspaceId, campaignRunId) {
+    /** The screen's claim, for its reason: two sweeps ticking at once is the ordinary case. */
+    const [row] = await db
+      .update(replayCampaignRun)
+      .set({ claimedAt: new Date() })
+      .where(
+        and(
+          eq(replayCampaignRun.workspaceId, workspaceId),
+          eq(replayCampaignRun.id, campaignRunId),
+          isNull(replayCampaignRun.claimedAt),
+        ),
+      )
+      .returning({ id: replayCampaignRun.id })
+    return row !== undefined
+  },
+
+  async attachCampaignRun(workspaceId, campaignRunId, agentRunId) {
+    await db
+      .update(replayCampaignRun)
+      .set({ agentRunId })
+      .where(
+        and(
+          eq(replayCampaignRun.workspaceId, workspaceId),
+          eq(replayCampaignRun.id, campaignRunId),
+        ),
+      )
+  },
+
+  async releaseCampaignRun(workspaceId, campaignRunId) {
+    await db
+      .update(replayCampaignRun)
+      .set({ claimedAt: null })
+      .where(
+        and(
+          eq(replayCampaignRun.workspaceId, workspaceId),
+          eq(replayCampaignRun.id, campaignRunId),
+          isNull(replayCampaignRun.agentRunId),
+        ),
+      )
+  },
+
+  async recordCampaignRunOutcome(workspaceId, campaignRunId, input) {
+    await db
+      .update(replayCampaignRun)
+      .set({
+        outcome: input.outcome,
+        reason: input.reason,
+        model: input.model,
+        costUsd: input.costUsd,
+        finishedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(replayCampaignRun.workspaceId, workspaceId),
+          eq(replayCampaignRun.id, campaignRunId),
+          // Only a pending row: a recorded outcome is one a reader has already been shown.
+          eq(replayCampaignRun.outcome, 'pending'),
+        ),
+      )
+  },
+
+  async spentOnCampaign(workspaceId, campaignId) {
+    /**
+     * Summed from the campaign's own rows rather than from the runs' table: a run deleted
+     * later must not make a campaign look cheaper than it was, which is the same reason
+     * `replay_item` snapshots its commit and its task.
+     */
+    const [row] = await db
+      .select({ spent: sql<number>`coalesce(sum(${replayCampaignRun.costUsd}), 0)::double precision` })
+      .from(replayCampaignRun)
+      .innerJoin(replayCampaignArm, eq(replayCampaignArm.id, replayCampaignRun.armId))
+      .where(
+        and(
+          eq(replayCampaignRun.workspaceId, workspaceId),
+          eq(replayCampaignArm.campaignId, campaignId),
+        ),
+      )
+    return row?.spent ?? 0
+  },
+
+  async close(workspaceId, campaignId, input) {
+    const [row] = await db
+      .update(replayCampaign)
+      .set({ status: input.status, haltReason: input.reason, finishedAt: new Date() })
+      .where(
+        and(
+          eq(replayCampaign.workspaceId, workspaceId),
+          eq(replayCampaign.id, campaignId),
+          // First close wins, so two sweeps cannot write two endings.
+          eq(replayCampaign.status, 'running'),
+        ),
+      )
+      .returning()
+    return row ? toCampaign(row) : null
   },
 })

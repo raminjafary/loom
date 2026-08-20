@@ -120,6 +120,18 @@ const EnvSchema = z.object({
    * something the platform started for itself.
    */
   SCREEN_MAX_STARTS_PER_TICK: z.coerce.number().int().positive().default(2),
+  /**
+   * The same two settings for **campaigns**, separately, because the spend is different in
+   * kind.
+   *
+   * A screening run replaces something more expensive; a campaign's runs are new money spent
+   * on measuring the platform's own behaviour. So the default start rate is **one** per tick
+   * — half the screen's — which is not about safety margins but about queue position: nothing
+   * a person is waiting for should sit behind an experiment. The stuck timeout matches the
+   * screen's, since the unit is the same whole agent run.
+   */
+  CAMPAIGN_STUCK_TIMEOUT_MS: z.coerce.number().int().positive().default(21_600_000),
+  CAMPAIGN_MAX_STARTS_PER_TICK: z.coerce.number().int().nonnegative().default(1),
 })
 
 export type Config = z.infer<typeof EnvSchema>

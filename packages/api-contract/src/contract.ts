@@ -709,6 +709,101 @@ export const contract = {
   },
 
   /**
+   * Campaigns: one persona's vintages replayed against a set of its own past work, at real
+   * cost, scored by the repository's definition of done.
+   *
+   * Nothing here gates or promotes. A campaign is an instrument — it answers "has this
+   * persona actually grown", "how much of the small-versus-frontier gap does a document
+   * recover", "does a map lift a small model more than the one that built it" — and its
+   * output is a score a person reads. Opening one is a human act because it is deliberate
+   * spend, and it carries a cap that **halts** it rather than degrading, after which every
+   * surface reports the score as partial.
+   */
+  campaign: {
+    open: oc
+      .input(
+        z.object({
+          personaId: z.string(),
+          label: z.string().min(1).max(200),
+          /** Dollars. Null is uncapped, which a workspace should be very deliberate about. */
+          capUsd: z.number().positive().nullable(),
+          /** Vintages to measure beside the document in use, as revision ids. */
+          revisionIds: z.array(z.string()).max(3),
+          /**
+           * Models to run the *current* document on, beside its own — the small-versus-
+           * frontier question, and the only reason a model belongs in a campaign.
+           */
+          models: z.array(z.string()).max(3).optional(),
+        }),
+      )
+      .output(
+        z.object({
+          opened: z.boolean(),
+          campaignId: z.string().nullable(),
+          /**
+           * What was opened, or why nothing was — a refusal is an output here rather than an
+           * error, because every one of them is something a person has to act on.
+           */
+          detail: z.string(),
+        }),
+      ),
+
+    /** Newest first. The rows only; a score is `report`. */
+    listForPersona: oc.input(z.object({ personaId: z.string() })).output(
+      z.array(
+        z.object({
+          id: z.string(),
+          label: z.string(),
+          status: z.enum(['running', 'finished', 'halted', 'cancelled']),
+          capUsd: z.number().nullable(),
+          haltReason: z.string().nullable(),
+          createdAt: z.date(),
+          finishedAt: z.date().nullable(),
+        }),
+      ),
+    ),
+
+    /** What one campaign measured: the arms, their scores, and the sentence. */
+    report: oc.input(z.object({ campaignId: z.string() })).output(
+      z
+        .object({
+          label: z.string(),
+          status: z.enum(['running', 'finished', 'halted', 'cancelled']),
+          /**
+           * `describeCampaign`'s paragraph. It leads with "partial" for a halted or cancelled
+           * campaign, and it reports no growth figure — a difference between two vintages is a
+           * difference in the document and in everything else that moved between them.
+           */
+          detail: z.string(),
+          capUsd: z.number().nullable(),
+          spentUsd: z.number(),
+          arms: z.array(
+            z.object({
+              armId: z.string(),
+              label: z.string(),
+              /** Null is the document in use — the control every other arm is described against. */
+              revisionId: z.string().nullable(),
+              passed: z.number().int(),
+              failed: z.number().int(),
+              notScored: z.number().int(),
+              pending: z.number().int(),
+              scored: z.number().int(),
+              passRate: z.number(),
+              /** What actually answered this arm's items. A score belongs to a (document, model). */
+              models: z.array(z.string()),
+            }),
+          ),
+        })
+        .nullable(),
+    ),
+
+    /** A person stops it. The partial score is kept — the money bought something. */
+    cancel: oc
+      .input(z.object({ campaignId: z.string() }))
+      .output(z.object({ cancelled: z.boolean(), detail: z.string() })),
+  },
+
+  /**
    * How much human judgement this workspace is spending, against the work that needed it.
    *
    * Read-only, and there is deliberately no target: the number that matters is a trend of

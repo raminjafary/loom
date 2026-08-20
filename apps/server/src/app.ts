@@ -1,5 +1,6 @@
 import {
   advanceMergeQueue,
+  advanceCampaignQueue,
   advanceScreenQueue,
   advanceVerificationQueue,
   curateIdleWorkspaces,
@@ -29,6 +30,7 @@ import {
   personaGroupRepository,
   personaRepository,
   personaVariantRepository,
+  campaignRepository,
   screenRepository,
   repositoryRepository,
   runnerRepository,
@@ -123,6 +125,7 @@ export const buildApp = async (
     personas: personaRepository(db),
     personaVariants: personaVariantRepository(db),
     screens: screenRepository(db),
+    campaigns: campaignRepository(db),
     personaGroups: personaGroupRepository(db),
     runControl: workspaceRunControlRepository(db),
     blobs: fileBlobStorage(config.BLOB_STORAGE_ROOT),
@@ -206,6 +209,17 @@ export const buildApp = async (
             await advanceScreenQueue(deps, {
               screenStuckMs: config.SCREEN_STUCK_TIMEOUT_MS,
               maxStartsPerTick: config.SCREEN_MAX_STARTS_PER_TICK,
+            })
+            /**
+             * Campaigns after screens, and with their own smaller start budget: a screen is
+             * spend that replaces more expensive spend, while a campaign is money spent on
+             * measuring the platform itself. Behind the screen in this sequence for the same
+             * reason it is behind everything else — nothing a person is waiting for should
+             * queue behind an experiment.
+             */
+            await advanceCampaignQueue(deps, {
+              campaignStuckMs: config.CAMPAIGN_STUCK_TIMEOUT_MS,
+              maxStartsPerTick: config.CAMPAIGN_MAX_STARTS_PER_TICK,
             })
             /**
              * Curation, last and only while nothing is running.

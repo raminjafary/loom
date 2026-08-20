@@ -83,9 +83,13 @@ import {
   listUnread,
   markChannelRead,
   listPersonaRevisions,
+  campaignReport,
+  cancelReplayCampaign,
   divergenceForPersona,
+  openReplayCampaign,
   promptTrialFor,
   supervisionLedgerFor,
+  MAX_CAMPAIGNS_LISTED,
   listVariantSearches,
   promoteVariant,
   discardVariantSearch,
@@ -122,6 +126,7 @@ import {
   asPersonaVariantId,
   parsePersonaMarkdown,
   asPersonaRevisionId,
+  asReplayCampaignId,
   asAgentRunId,
   asSubjectMapId,
   NotFoundError,
@@ -924,6 +929,93 @@ export const router = os.router({
           windowHours: input.windowHours ?? null,
         }),
       ),
+    ),
+  },
+
+  campaign: {
+    open: os.campaign.open.handler(({ context, input }) =>
+      guard(async () => {
+        const result = await openReplayCampaign(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          personaId: asAgentPersonaId(input.personaId),
+          label: input.label,
+          capUsd: input.capUsd,
+          revisionIds: input.revisionIds.map(asPersonaRevisionId),
+          ...(input.models === undefined ? {} : { models: input.models }),
+        })
+        return result.ok
+          ? { opened: true, campaignId: result.campaign.id as string, detail: result.detail }
+          : { opened: false, campaignId: null, detail: result.reason }
+      }),
+    ),
+
+    listForPersona: os.campaign.listForPersona.handler(({ context, input }) =>
+      guard(async () => {
+        const campaigns = await context.deps.campaigns.listByPersona(
+          context.principal.workspaceId,
+          asAgentPersonaId(input.personaId),
+          MAX_CAMPAIGNS_LISTED,
+        )
+        return campaigns.map((campaign) => ({
+          id: campaign.id as string,
+          label: campaign.label,
+          status: campaign.status,
+          capUsd: campaign.capUsd,
+          haltReason: campaign.haltReason,
+          createdAt: campaign.createdAt,
+          finishedAt: campaign.finishedAt,
+        }))
+      }),
+    ),
+
+    report: os.campaign.report.handler(({ context, input }) =>
+      guard(async () => {
+        const found = await campaignReport(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          campaignId: asReplayCampaignId(input.campaignId),
+        })
+        if (!found) return null
+        // Field by field, like every other mapping here: a spread skips the excess check.
+        return {
+          label: found.campaign.label,
+          status: found.campaign.status,
+          detail: found.detail,
+          capUsd: found.campaign.capUsd,
+          spentUsd: found.spentUsd,
+          arms: found.arms.map((arm) => ({
+            armId: arm.armId,
+            label: arm.label,
+            revisionId: arm.revisionId,
+            passed: arm.passed,
+            failed: arm.failed,
+            notScored: arm.notScored,
+            pending: arm.pending,
+            scored: arm.scored,
+            passRate: arm.passRate,
+            models: [...arm.models],
+          })),
+        }
+      }),
+    ),
+
+    cancel: os.campaign.cancel.handler(({ context, input }) =>
+      guard(async () => {
+        const result = await cancelReplayCampaign(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          campaignId: asReplayCampaignId(input.campaignId),
+        })
+        return result.ok
+          ? {
+              cancelled: true,
+              detail:
+                'The campaign is stopped. Its score is kept and is reported as partial; runs ' +
+                'already in flight are left to finish, because cancelling them would spend the ' +
+                'money and discard the answer.',
+            }
+          : { cancelled: false, detail: result.reason }
+      }),
     ),
   },
 

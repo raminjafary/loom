@@ -33,7 +33,7 @@ import {
   personaVariantRepository,
   subjectMapRepository,
 } from './agent-repositories.js'
-import { screenRepository } from './screen-repositories.js'
+import { campaignRepository, screenRepository } from './screen-repositories.js'
 import {
   auditAdapter,
   channelRepository,
@@ -2226,6 +2226,194 @@ describe('model outcomes per persona', () => {
 
   it('says nothing about a persona nothing has run as', async () => {
     expect(await personas.tallyModelOutcomes(WS, 'never-existed')).toEqual([])
+  })
+})
+
+/**
+ * The campaign's storage.
+ *
+ * Three claims only this layer can make: one running campaign per persona is an index rather
+ * than a hope, spend is summed from the campaign's own rows so a deleted run cannot make it
+ * look cheaper, and a campaign closes once — so two sweeps cannot write two endings, and a
+ * halt cannot later be reported as a finish.
+ */
+describe('campaigns', () => {
+  const campaigns = campaignRepository(db)
+  const screens = screenRepository(db)
+  let seq = 0
+
+  const scaffold = async (workspaceId: WorkspaceId) => {
+    seq += 1
+    const [ch] = await db
+      .insert(channel)
+      .values({ workspaceId, name: `campaign-${seq}`, isPrivate: false })
+      .returning({ id: channel.id })
+    const [th] = await db
+      .insert(thread)
+      .values({ workspaceId, channelId: ch!.id, isRoot: true })
+      .returning({ id: thread.id })
+    const [rn] = await db
+      .insert(runner)
+      .values({
+        workspaceId,
+        name: `runner-campaign-${seq}`,
+        pairingTokenHash: `hash-campaign-${seq}`,
+      })
+      .returning({ id: runner.id })
+    const [repo] = await db
+      .insert(repository)
+      .values({
+        workspaceId,
+        runnerId: rn!.id,
+        displayName: 'repo',
+        absolutePath: `/tmp/campaign-${seq}`,
+        defaultBranch: 'main',
+      })
+      .returning({ id: repository.id })
+    const [persona] = await db
+      .insert(agentPersona)
+      .values({
+        workspaceId,
+        name: `campaigned-${seq}`,
+        description: 'd',
+        markdownSource: 'live',
+        model: 'claude-haiku-4-5',
+      })
+      .returning({ id: agentPersona.id })
+    const [sourceRun] = await db
+      .insert(agentRun)
+      .values({
+        workspaceId,
+        threadId: th!.id,
+        repositoryId: repo!.id,
+        runnerId: rn!.id,
+        persona: {
+          name: `campaigned-${seq}`,
+          model: 'claude-haiku-4-5',
+          systemPrompt: 'x',
+          tools: [],
+          approvalMode: 'ask' as const,
+        },
+        status: 'completed',
+        branchDisposition: 'merged',
+        completedAt: new Date(),
+      })
+      .returning({ id: agentRun.id })
+
+    const set = await screens.openReplaySet({
+      workspaceId,
+      personaId: asAgentPersonaId(persona!.id),
+      draft: {
+        items: [0, 1].map((index) => ({
+          sourceRunId: asAgentRunId(sourceRun!.id),
+          repositoryId: asRepositoryId(repo!.id),
+          commitSha: `commit${index}`,
+          task: `Task ${index}.`,
+          observedOutcome: 'merged' as const,
+        })),
+        excluded: [],
+        eligible: 2,
+        considered: 2,
+      },
+      detail: 'two items',
+    })
+    return {
+      threadId: th!.id,
+      personaId: asAgentPersonaId(persona!.id),
+      replaySetId: set.set.id,
+      itemIds: set.items.map((item) => item.id),
+    }
+  }
+
+  const open = async (s: Awaited<ReturnType<typeof scaffold>>, label: string) =>
+    campaigns.open({
+      workspaceId: WS,
+      personaId: s.personaId,
+      replaySetId: s.replaySetId,
+      label,
+      capUsd: 5,
+      openedByUserId: 'user_1',
+      arms: [
+        {
+          revisionId: null,
+          markdownSource: 'the document in use',
+          label: 'the document in use',
+          model: null,
+        },
+        {
+          revisionId: null,
+          markdownSource: 'an older document',
+          label: 'vintage of 2026-01-04',
+          model: 'claude-opus-5',
+        },
+      ],
+      itemIds: s.itemIds,
+    })
+
+  it('opens a campaign with one pending run per arm and item', async () => {
+    const s = await scaffold(WS)
+    const opened = await open(s, 'growth, august')
+    expect(opened.arms).toHaveLength(2)
+    const arms = await campaigns.armsForCampaign(WS, opened.campaign.id)
+    expect(arms.map((entry) => entry.runs.length)).toEqual([2, 2])
+    expect(arms.every((entry) => entry.runs.every((run) => run.outcome === 'pending'))).toBe(true)
+    // The arm's own document is snapshotted, so a deleted revision cannot orphan a score.
+    expect(arms[1]?.arm.markdownSource).toBe('an older document')
+    expect(arms[1]?.arm.model).toBe('claude-opus-5')
+    expect(opened.campaign.openedByUserId).toBe('user_1')
+  })
+
+  it('refuses a second running campaign for one persona', async () => {
+    const s = await scaffold(WS)
+    await open(s, 'first')
+    await expect(open(s, 'second')).rejects.toThrow()
+  })
+
+  it('sums spend from its own rows, and closes exactly once', async () => {
+    const s = await scaffold(WS)
+    const opened = await open(s, 'spending')
+    const [arm] = await campaigns.armsForCampaign(WS, opened.campaign.id)
+    const [first, second] = arm!.runs
+
+    expect(await campaigns.claimCampaignRun(WS, first!.id)).toBe(true)
+    // A second claim on the same row loses, which is what stops two sweeps starting two runs.
+    expect(await campaigns.claimCampaignRun(WS, first!.id)).toBe(false)
+
+    await campaigns.recordCampaignRunOutcome(WS, first!.id, {
+      outcome: 'passed',
+      reason: null,
+      model: 'claude-haiku-4-5-20251001',
+      costUsd: 0.4,
+    })
+    await campaigns.recordCampaignRunOutcome(WS, second!.id, {
+      outcome: 'failed',
+      reason: null,
+      model: 'claude-haiku-4-5-20251001',
+      costUsd: 0.6,
+    })
+    // A recorded row is not rewritten: the gate has already been shown that outcome.
+    await campaigns.recordCampaignRunOutcome(WS, second!.id, {
+      outcome: 'passed',
+      reason: 'later',
+      model: 'claude-opus-5',
+      costUsd: 9,
+    })
+    expect(await campaigns.spentOnCampaign(WS, opened.campaign.id)).toBeCloseTo(1.0)
+
+    const halted = await campaigns.close(WS, opened.campaign.id, {
+      status: 'halted',
+      reason: 'the cap is reached',
+    })
+    expect(halted?.status).toBe('halted')
+    // And a later sweep cannot turn a halt into a finish.
+    expect(
+      await campaigns.close(WS, opened.campaign.id, { status: 'finished', reason: null }),
+    ).toBeNull()
+    expect((await campaigns.findById(WS, opened.campaign.id))?.status).toBe('halted')
+    // A closed campaign leaves the running slot free for the next one.
+    expect((await campaigns.listRunning()).map((row) => row.campaignId)).not.toContain(
+      opened.campaign.id,
+    )
   })
 })
 

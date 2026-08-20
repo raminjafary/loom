@@ -141,6 +141,16 @@ import {
   type PersonaRevision,
   type PersonaRevisionId,
   type PersonaVariant,
+  asAgentRunId,
+  asUserId,
+  campaignMayStart,
+  describeCampaign,
+  userActor,
+  type CampaignArmTally,
+  type ReplayCampaignId,
+  type ReplayCampaignArmRecord,
+  type ReplayCampaignRecord,
+  type ReplayCampaignRunRecord,
   type ReplayCheckOutcome,
   type ReplayItemRecord,
   type ScreenDecision,
@@ -186,6 +196,7 @@ import type {
   AtlasRepositoryPort,
   PersonaRepositoryPort,
   PersonaVariantRepositoryPort,
+  CampaignRepositoryPort,
   ScreenRepositoryPort,
   PlanSubtaskRecord,
   PlanSubtaskRepositoryPort,
@@ -233,6 +244,11 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
   /** The searching half — candidate prompts and the search they belong to. */
   readonly personaVariants: PersonaVariantRepositoryPort
   readonly screens: ScreenRepositoryPort
+  /**
+   * The campaign's rows — the screen's machinery generalized to measure a vintage rather
+   * than to refuse a candidate. A separate port because nothing on it decides anything.
+   */
+  readonly campaigns: CampaignRepositoryPort
   readonly personaGroups: PersonaGroupRepositoryPort
   readonly runControl: WorkspaceRunControlRepositoryPort
   /** The venue — a session is not a run and not a map, so it has its own port. */
@@ -1065,6 +1081,539 @@ export const promptTrialFor = async (
   if (!revision) return null
   const tallies = await deps.personas.tallyTrialOutcomes(input.workspaceId, revision.id)
   return { revisionId: revision.id, effect: summarizePromptEffect(tallies) }
+}
+
+/**
+ * How many vintages one campaign may hold, beside the control.
+ *
+ * Three, and the bound is money rather than statistics: a campaign is `arms × items` real
+ * runs, so four arms over eight items is thirty-two runs of a real agent against a real
+ * repository. A wider campaign is two campaigns, run in sequence, which is also the honest
+ * way to spend — the second one starts knowing what the first cost.
+ */
+export const MAX_CAMPAIGN_VINTAGES = 3
+
+/** How many campaigns a panel reads back. Newest first; older ones are a query away. */
+export const MAX_CAMPAIGNS_LISTED = 10
+
+/**
+ * Opens a campaign: one persona's vintages against a fresh set of its own decided work.
+ *
+ * **A human act, always.** A campaign is deliberate spend rather than spend it replaces, so
+ * nothing in the loop may open one — the same rule that keeps promotion human, applied to the
+ * only other place this platform can decide to spend on itself. The opener is recorded, and
+ * the sweep starts every run of the campaign *as that person*, exactly as the merge queue
+ * merges a branch as whoever queued it: a standing instruction with a cap attached.
+ *
+ * Refusals are outputs rather than exceptions, for `startVariantProposer`'s reason: every one
+ * of them is something a human has to act on, and a sentence beside the button is where it can
+ * be acted on.
+ */
+export const openReplayCampaign = async (
+  deps: AgentDeps,
+  input: {
+    workspaceId: WorkspaceId
+    actor: Actor
+    personaId: AgentPersonaId
+    label: string
+    capUsd: number | null
+    /**
+     * Which vintages to measure, newest first, as `persona_revision` ids. Empty means the
+     * document in use alone, which is a legitimate campaign: a baseline to compare a later
+     * one against.
+     */
+    revisionIds: readonly PersonaRevisionId[]
+    /**
+     * Models to run the *current* document on, beside its own. This is the small-versus-
+     * frontier question and the only reason a model belongs in a campaign at all: two
+     * documents on two different models compare nothing.
+     */
+    models?: readonly string[]
+  },
+): Promise<
+  | { ok: true; campaign: ReplayCampaignRecord; detail: string }
+  | { ok: false; reason: string }
+> => {
+  if (!isHuman(input.actor)) {
+    return {
+      ok: false,
+      reason:
+        'A campaign is deliberate spend — arms times items of real runs — so a person opens ' +
+        'one. Nothing in the loop may decide to spend on measuring itself.',
+    }
+  }
+
+  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+  if (!persona) return { ok: false, reason: 'That persona no longer exists.' }
+
+  if (input.revisionIds.length > MAX_CAMPAIGN_VINTAGES) {
+    return {
+      ok: false,
+      reason:
+        `That is ${input.revisionIds.length} vintages and the limit is ${MAX_CAMPAIGN_VINTAGES}. ` +
+        'Each one is a full pass over the set, so a wider campaign is two campaigns — and the ' +
+        'second one starts knowing what the first cost.',
+    }
+  }
+  for (const model of input.models ?? []) {
+    if (!isPricedModel(model)) {
+      return {
+        ok: false,
+        reason:
+          `Unknown model "${model}" — spend on it could not be metered, so the campaign's cap ` +
+          'could not be enforced.',
+      }
+    }
+  }
+
+  const running = await deps.campaigns.listByPersona(
+    input.workspaceId,
+    input.personaId,
+    MAX_CAMPAIGNS_LISTED,
+  )
+  if (running.some((campaign) => campaign.status === 'running')) {
+    return {
+      ok: false,
+      reason:
+        `A campaign for "${persona.name}" is already running. Two at once would deal twice the ` +
+        'runs against the same repository, and the second would be measuring a busy machine.',
+    }
+  }
+
+  /**
+   * A fresh set, assembled exactly as the screen assembles one — same eligibility, same
+   * ceiling on any one outcome, same retirement rule. A campaign that built its set some
+   * other way would produce scores nothing else in this platform could be compared with.
+   */
+  const history = await deps.screens.listDecidedRunsForPersona(
+    input.workspaceId,
+    persona.name,
+    REPLAY_HISTORY_WINDOW,
+  )
+  const draft = assembleReplaySet(history)
+  const detail = describeReplaySet(draft)
+  if (draft.items.length < MIN_REPLAY_ITEMS) {
+    return {
+      ok: false,
+      reason:
+        `There is not enough of this persona's own work to replay: ${detail} A campaign needs ` +
+        `${MIN_REPLAY_ITEMS} items, and it cannot borrow them from another persona — the whole ` +
+        'measurement is "how does this document do on the work this persona actually gets".',
+    }
+  }
+
+  const revisions = await deps.personas.listRevisions(input.workspaceId, input.personaId)
+  const byId = new Map(revisions.map((revision) => [revision.id as string, revision]))
+  const missing = input.revisionIds.filter((id) => !byId.has(id as string))
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: `${missing.length} of those vintages no longer exist in this persona's history.`,
+    }
+  }
+
+  /**
+   * The control first, then the vintages, then the model arms. Order is the reading order in
+   * the report, and the control leads because every other arm is described against it.
+   */
+  const arms = [
+    {
+      revisionId: null,
+      markdownSource: persona.markdownSource,
+      label: 'the document in use',
+      model: null,
+    },
+    ...input.revisionIds.map((id) => {
+      const revision = byId.get(id as string)!
+      return {
+        revisionId: id,
+        markdownSource: revision.markdownSource,
+        label: `vintage of ${revision.createdAt.toISOString().slice(0, 10)}`,
+        model: null,
+      }
+    }),
+    ...(input.models ?? []).map((model) => ({
+      revisionId: null,
+      markdownSource: persona.markdownSource,
+      label: `the document in use on ${model}`,
+      model,
+    })),
+  ]
+
+  const set = await deps.screens.openReplaySet({
+    workspaceId: input.workspaceId,
+    personaId: input.personaId,
+    draft,
+    detail,
+  })
+  const opened = await deps.campaigns.open({
+    workspaceId: input.workspaceId,
+    personaId: input.personaId,
+    replaySetId: set.set.id,
+    label: input.label,
+    capUsd: input.capUsd,
+    openedByUserId: input.actor.kind === 'user' ? input.actor.userId : null,
+    arms,
+    itemIds: set.items.map((item) => item.id),
+  })
+
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'persona.campaign_opened',
+    subjectType: 'agent_persona',
+    subjectId: input.personaId,
+    metadata: {
+      campaignId: opened.campaign.id,
+      personaName: persona.name,
+      arms: arms.length,
+      items: set.items.length,
+      capUsd: input.capUsd,
+    },
+  })
+
+  return {
+    ok: true,
+    campaign: opened.campaign,
+    detail:
+      `${arms.length} arms over ${set.items.length} items — up to ` +
+      `${arms.length * set.items.length} runs. ${detail}`,
+  }
+}
+
+/**
+ * A person stops a campaign early.
+ *
+ * Cancelled rather than deleted, and its score is kept: a campaign stopped halfway measured
+ * something, and throwing that away would mean the money bought nothing. Every surface then
+ * reports the score as partial — the same rule a halted campaign gets, because "we ran out of
+ * budget" and "somebody stopped it" produce exactly the same kind of number.
+ *
+ * Runs already in flight are left alone. Cancelling them would spend the money and discard
+ * the answer, and they are ordinary runs a human can cancel individually if they want to.
+ */
+export const cancelReplayCampaign = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; campaignId: ReplayCampaignId },
+): Promise<{ ok: true; campaign: ReplayCampaignRecord } | { ok: false; reason: string }> => {
+  if (!isHuman(input.actor)) {
+    return { ok: false, reason: 'Only a person stops a campaign.' }
+  }
+  const closed = await deps.campaigns.close(input.workspaceId, input.campaignId, {
+    status: 'cancelled',
+    reason: 'A person stopped the campaign before every arm ran every item.',
+  })
+  if (!closed) {
+    return {
+      ok: false,
+      reason:
+        'That campaign is not running — it has already finished, halted on its cap, or been ' +
+        'cancelled. Its score stands either way.',
+    }
+  }
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'persona.campaign_cancelled',
+    subjectType: 'agent_persona',
+    subjectId: closed.personaId,
+    metadata: { campaignId: closed.id, label: closed.label },
+  })
+  return { ok: true, campaign: closed }
+}
+
+/**
+ * Advances every running campaign: score what finished, write off what cannot finish, start
+ * what the cap still allows.
+ *
+ * `advanceScreenQueue`'s shape, and deliberately so — the differences are the two things a
+ * campaign has that a screen does not:
+ *
+ * - **A cap.** Checked before every start, because the answer changes as the campaign spends.
+ *   Reaching it halts the campaign with the score it has, and every surface then says the
+ *   score is partial. See `campaignMayStart` for the one bounded way the cap is exceeded.
+ * - **No gate at the end.** When every arm has reported the campaign is simply `finished`.
+ *   Nothing is admitted, nothing is promoted, nothing is refused; a person reads it.
+ *
+ * Best-effort throughout, like every sweep here: a campaign that cannot be advanced is left
+ * running rather than closed, because a measurement must never fail a workspace.
+ */
+export const advanceCampaignQueue = async (
+  deps: AgentDeps,
+  options: { campaignStuckMs: number; maxStartsPerTick: number },
+): Promise<void> => {
+  const running = await deps.campaigns.listRunning().catch(() => [])
+  let budget = options.maxStartsPerTick
+  for (const { workspaceId, campaignId } of running) {
+    if (budget <= 0) return
+    try {
+      budget -= await advanceCampaign(deps, workspaceId, campaignId, {
+        campaignStuckMs: options.campaignStuckMs,
+        maxStarts: Math.max(0, budget),
+      })
+    } catch {
+      // Left running on purpose: the next tick tries again, and a campaign closed by an
+      // error would report a partial score as if a cap had been reached.
+    }
+  }
+}
+
+const advanceCampaign = async (
+  deps: AgentDeps,
+  workspaceId: WorkspaceId,
+  campaignId: ReplayCampaignId,
+  options: { campaignStuckMs: number; maxStarts: number },
+): Promise<number> => {
+  const campaign = await deps.campaigns.findById(workspaceId, campaignId)
+  if (!campaign || campaign.status !== 'running') return 0
+
+  const arms = await deps.campaigns.armsForCampaign(workspaceId, campaignId)
+  if (arms.length === 0) {
+    await deps.campaigns.close(workspaceId, campaignId, {
+      status: 'halted',
+      reason: 'the campaign had no arms',
+    })
+    return 0
+  }
+
+  const items = await deps.screens.listReplayItems(workspaceId, campaign.replaySetId)
+  const itemById = new Map(items.map((item) => [item.id as string, item]))
+  const persona = await deps.personas.findById(workspaceId, campaign.personaId)
+
+  /**
+   * The thread every campaign run posts into, taken from the newest run of this persona.
+   *
+   * A campaign is opened from a panel rather than from a thread, and a run has to live
+   * somewhere a human can watch it. The alternative — a thread of its own per campaign —
+   * is a channel nobody is subscribed to.
+   */
+  const threadId =
+    persona === null ? null : await campaignThread(deps, workspaceId, persona.name)
+
+  let attempted = 0
+  const now = Date.now()
+
+  for (const { arm, runs } of arms) {
+    for (const campaignRun of runs) {
+      if (campaignRun.outcome !== 'pending') continue
+
+      // 1. Score what has finished, with what it cost.
+      if (campaignRun.agentRunId) {
+        const outcome = await resolveCampaignRunOutcome(deps, workspaceId, campaignRun.agentRunId)
+        if (outcome) {
+          await deps.campaigns.recordCampaignRunOutcome(workspaceId, campaignRun.id, outcome)
+          continue
+        }
+      }
+
+      // 2. Write off what can never finish, naming which of the reasons it was.
+      const claimedAt = campaignRun.claimedAt?.getTime()
+      const tooOld = claimedAt !== undefined && now - claimedAt > options.campaignStuckMs
+      if (tooOld || persona === null || threadId === null) {
+        await deps.campaigns.recordCampaignRunOutcome(workspaceId, campaignRun.id, {
+          outcome: 'not-scored',
+          model: null,
+          costUsd: null,
+          reason: tooOld
+            ? `the campaign run did not finish within ${Math.round(options.campaignStuckMs / 60_000)} min`
+            : persona === null
+              ? 'the persona being measured no longer exists'
+              : 'this persona has no thread to run in',
+        })
+        continue
+      }
+      if (campaignRun.agentRunId || campaignRun.claimedAt) continue
+
+      // 3. Start what the cap still allows.
+      if (attempted >= options.maxStarts) continue
+      const spent = await deps.campaigns.spentOnCampaign(workspaceId, campaignId)
+      const permitted = campaignMayStart({ capUsd: campaign.capUsd, spentUsd: spent })
+      if (!permitted.ok) {
+        await deps.campaigns.close(workspaceId, campaignId, {
+          status: 'halted',
+          reason: permitted.reason,
+        })
+        return attempted
+      }
+
+      const item = itemById.get(campaignRun.replayItemId as string)
+      if (!item) continue
+      const armPrompt = parsePersonaMarkdown(arm.markdownSource).systemPrompt
+      if (armPrompt.length === 0) continue
+
+      if (!(await deps.campaigns.claimCampaignRun(workspaceId, campaignRun.id))) continue
+      attempted += 1
+      try {
+        const run = await startAgentRun(deps, {
+          workspaceId,
+          /**
+           * As the person who opened it — the merge queue's precedent: the human authorized
+           * these runs, with a cap, when they opened the campaign. A platform actor here
+           * would be the sweep granting itself permission to spend.
+           */
+          actor:
+            campaign.openedByUserId === null
+              ? systemActor()
+              : userActor(asUserId(campaign.openedByUserId)),
+          threadId,
+          repositoryId: item.repositoryId,
+          personaId: campaign.personaId,
+          /**
+           * `screen`, and not a relation of its own. A campaign run *is* a screening run in
+           * every sense that matters to the rest of the platform — a substituted prompt, a
+           * pinned commit, an outcome that is a measurement rather than work — and every
+           * exclusion query already reads this relation. A new relation would mean finding
+           * all of them again, and the one that was missed would fold a campaign's output
+           * back into the population it measures.
+           */
+          relation: 'screen',
+          task: item.task,
+          screen: { commitSha: item.commitSha, systemPrompt: armPrompt },
+          ...(arm.model === null ? {} : { model: arm.model }),
+        })
+        await deps.campaigns.attachCampaignRun(workspaceId, campaignRun.id, run.id)
+      } catch {
+        // Released rather than scored — "we have not tried yet" is not a measurement.
+        await deps.campaigns.releaseCampaignRun(workspaceId, campaignRun.id)
+      }
+    }
+  }
+
+  /** Finished when every row has an outcome. Nothing is decided; the campaign just closes. */
+  const after = await deps.campaigns.armsForCampaign(workspaceId, campaignId)
+  const everyRun = after.flatMap((entry) => entry.runs)
+  if (everyRun.length > 0 && everyRun.every((run) => run.outcome !== 'pending')) {
+    await deps.campaigns.close(workspaceId, campaignId, { status: 'finished', reason: null })
+  }
+  return attempted
+}
+
+/**
+ * Which thread a campaign's runs live in: the newest thread this persona has run in.
+ *
+ * Not a new thread per campaign, because a thread nobody is subscribed to is a measurement
+ * nobody sees. Null when the persona has never run anywhere, which writes the campaign off
+ * rather than inventing a channel.
+ */
+const campaignThread = async (
+  deps: AgentDeps,
+  workspaceId: WorkspaceId,
+  personaName: string,
+): Promise<ThreadId | null> => {
+  const recent = await deps.screens.listDecidedRunsForPersona(workspaceId, personaName, 1)
+  const first = recent[0]
+  if (!first) return null
+  const run = await deps.agentRuns.findById(workspaceId, asAgentRunId(first.runId))
+  return run?.threadId ?? null
+}
+
+/**
+ * What one finished campaign run said, and what it cost — or null while it is still going.
+ *
+ * `resolveScreenRunOutcome` with the cost attached: a campaign checks a cap, so the spend has
+ * to land on the row beside the outcome. Same terminal-and-verified rule, because reading a
+ * pending verification would score every item unscored the moment its run ended.
+ */
+const resolveCampaignRunOutcome = async (
+  deps: AgentDeps,
+  workspaceId: WorkspaceId,
+  agentRunId: AgentRunId,
+): Promise<{
+  outcome: ReplayCheckOutcome
+  reason: string | null
+  model: string | null
+  costUsd: number | null
+} | null> => {
+  const run = await deps.agentRuns.findById(workspaceId, agentRunId)
+  if (!run) {
+    return {
+      outcome: 'not-scored',
+      reason: 'the campaign run is gone',
+      model: null,
+      /**
+       * Null rather than zero: a run that vanished did not cost nothing, it cost something
+       * nobody can read any more, and a zero here would understate a campaign's spend.
+       */
+      costUsd: null,
+    }
+  }
+  if (run.status !== 'completed' && run.status !== 'failed' && run.status !== 'cancelled') {
+    return null
+  }
+  const [verification] = await deps.runVerifications.listByRuns(workspaceId, [agentRunId])
+  if (verification && verification.status === 'pending') return null
+  return {
+    ...screenOutcomeFor({
+      runStatus: run.status,
+      verificationStatus:
+        verification && verification.status !== 'pending' ? verification.status : null,
+    }),
+    model: run.persona.model,
+    costUsd: run.totalCostUsd,
+  }
+}
+
+/**
+ * What a campaign has measured, for the panel — arms, scores, and the sentence.
+ *
+ * Read-only, and it computes nothing the sweep decided: the status on the row is what says
+ * whether a score is partial, so a reader cannot be shown a complete-looking number for a
+ * campaign that was halted.
+ */
+export const campaignReport = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; campaignId: ReplayCampaignId },
+): Promise<{
+  campaign: ReplayCampaignRecord
+  arms: CampaignArmTally[]
+  detail: string
+  spentUsd: number
+} | null> => {
+  const campaign = await deps.campaigns.findById(input.workspaceId, input.campaignId)
+  if (!campaign) return null
+  const [arms, items, spentUsd] = await Promise.all([
+    deps.campaigns.armsForCampaign(input.workspaceId, input.campaignId),
+    deps.screens.listReplayItems(input.workspaceId, campaign.replaySetId),
+    deps.campaigns.spentOnCampaign(input.workspaceId, input.campaignId),
+  ])
+
+  const tallies = arms.map(({ arm, runs }) => campaignTally(arm, runs))
+  return {
+    campaign,
+    arms: tallies,
+    detail: describeCampaign({
+      status: campaign.status,
+      arms: tallies,
+      composition: items.map((item) => item.observedOutcome),
+      haltReason: campaign.haltReason,
+    }),
+    spentUsd,
+  }
+}
+
+/** One arm's rows reduced to its score. The screen's tally, plus the pending count. */
+const campaignTally = (
+  arm: ReplayCampaignArmRecord,
+  runs: readonly ReplayCampaignRunRecord[],
+): CampaignArmTally => {
+  const reported = runs.filter((run) => run.outcome !== 'pending')
+  const tally = tallyScreenScore({
+    variantId: null,
+    outcomes: reported.map((run) => run.outcome as ReplayCheckOutcome),
+    models: reported.map((run) => run.model),
+  })
+  return {
+    armId: arm.id as string,
+    label: arm.label,
+    revisionId: arm.revisionId === null ? null : (arm.revisionId as string),
+    scored: tally.scored,
+    passed: tally.passed,
+    failed: tally.failed,
+    notScored: tally.notScored,
+    pending: runs.length - reported.length,
+    passRate: tally.passRate,
+    models: tally.models,
+  }
 }
 
 /**
@@ -4418,7 +4967,22 @@ export const startAgentRun = async (
     repositoryId: input.repositoryId,
     runnerId: repository.runnerId,
     persona: personaSpec,
-    ...(parent ? { parentRunId: parent.id, relation: input.relation ?? 'delegation' } : {}),
+    /**
+     * A relation without a parent is allowed for exactly one case: a **measurement run**.
+     *
+     * A screening run hangs off the run that proposed its search, but a campaign's runs are
+     * started by a sweep on a human's standing instruction and have nothing to hang off. The
+     * relation still has to be stored, because `relation = 'screen'` is what every exclusion
+     * query reads — the replay set's own material, the routing table, the failing-check
+     * histogram, the divergence set — and a parentless measurement run without it would fold
+     * a measurement's output back into the population it measures. Nothing else reads a
+     * relation without an edge: the tree and the graph both draw from `parentRunId`.
+     */
+    ...(parent
+      ? { parentRunId: parent.id, relation: input.relation ?? 'delegation' }
+      : input.relation === 'screen'
+        ? { relation: 'screen' as const }
+        : {}),
     // Recorded so a re-planning turn can read back the goal and the plan. Stored before
     // dispatch: a run that fails to start still answers "what was it asked to do", which is
     // the question a human asks about exactly those runs.

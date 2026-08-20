@@ -4,10 +4,15 @@ import type {
   LosingArmRecord,
   ModelObservation,
   ProposerShown,
+  CampaignStatus,
   DivergenceSet,
+  ReplayCampaignArmRecord,
+  ReplayCampaignRecord,
+  ReplayCampaignRunRecord,
   RefusedCandidateRecord,
   WeaknessRecord,
   ReplayCheckOutcome,
+  ReplayCampaignId,
   ReplayItemId,
   ReplayItemRecord,
   ReplaySetDraft,
@@ -1052,6 +1057,101 @@ export interface ScreenRepositoryPort {
     personaId: AgentPersonaId,
     limit: number,
   ): Promise<{ candidates: RefusedCandidateRecord[]; total: number }>
+}
+
+/**
+ * The campaign's persistence — the screen's machinery generalized to "run any vintage against
+ * any set", which is what a growth question needs and a gate does not.
+ *
+ * A separate port rather than more methods on `ScreenRepositoryPort` for the reason the tables
+ * are separate: nothing here decides anything, so nothing here may be reachable from the code
+ * path that gates a candidate's arm.
+ */
+export interface CampaignRepositoryPort {
+  /**
+   * Writes a campaign with its arms and one pending run per (arm, item), in one transaction.
+   *
+   * The arms carry their own `markdownSource` because a vintage's row can be deleted with its
+   * persona, and an arm that lost its document mid-campaign would report a score for a prompt
+   * nobody can produce again.
+   */
+  open(input: {
+    workspaceId: WorkspaceId
+    personaId: AgentPersonaId
+    replaySetId: ReplaySetId
+    label: string
+    capUsd: number | null
+    /** Whose instruction it is; the sweep starts its runs as this person. See the table. */
+    openedByUserId: string | null
+    arms: readonly {
+      revisionId: PersonaRevisionId | null
+      markdownSource: string
+      label: string
+      model: string | null
+    }[]
+    itemIds: readonly ReplayItemId[]
+  }): Promise<{ campaign: ReplayCampaignRecord; arms: ReplayCampaignArmRecord[] }>
+
+  findById(
+    workspaceId: WorkspaceId,
+    campaignId: ReplayCampaignId,
+  ): Promise<ReplayCampaignRecord | null>
+
+  /** Newest first, for the panel. Bounded, and the bound is the caller's to state. */
+  listByPersona(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    limit: number,
+  ): Promise<ReplayCampaignRecord[]>
+
+  /** Campaigns the sweep still has work for. Across workspaces, like every other sweep read. */
+  listRunning(): Promise<{ workspaceId: WorkspaceId; campaignId: ReplayCampaignId }[]>
+
+  /** Every arm with its per-item runs, for the sweep and for the report. */
+  armsForCampaign(
+    workspaceId: WorkspaceId,
+    campaignId: ReplayCampaignId,
+  ): Promise<{ arm: ReplayCampaignArmRecord; runs: ReplayCampaignRunRecord[] }[]>
+
+  /** The screen's claim-then-attach two-step, for its reason. */
+  claimCampaignRun(workspaceId: WorkspaceId, campaignRunId: string): Promise<boolean>
+  attachCampaignRun(
+    workspaceId: WorkspaceId,
+    campaignRunId: string,
+    agentRunId: AgentRunId,
+  ): Promise<void>
+  releaseCampaignRun(workspaceId: WorkspaceId, campaignRunId: string): Promise<void>
+
+  /**
+   * Records what one item said about one arm, with the model that answered and what it cost.
+   *
+   * The cost is copied onto the row rather than joined from the run, so a campaign's spend
+   * survives its runs being deleted — the same snapshot argument `replay_item` makes about a
+   * commit and a task.
+   */
+  recordCampaignRunOutcome(
+    workspaceId: WorkspaceId,
+    campaignRunId: string,
+    input: {
+      outcome: ReplayCheckOutcome
+      reason: string | null
+      model: string | null
+      costUsd: number | null
+    },
+  ): Promise<void>
+
+  /** What this campaign has spent so far, from its own rows. The cap is checked against it. */
+  spentOnCampaign(workspaceId: WorkspaceId, campaignId: ReplayCampaignId): Promise<number>
+
+  /**
+   * Ends a campaign, and only one that is running — so two sweeps cannot write two endings,
+   * and a halted campaign cannot later be reported as finished.
+   */
+  close(
+    workspaceId: WorkspaceId,
+    campaignId: ReplayCampaignId,
+    input: { status: Exclude<CampaignStatus, 'running'>; reason: string | null },
+  ): Promise<ReplayCampaignRecord | null>
 }
 
 export interface PersonaVariantRepositoryPort {

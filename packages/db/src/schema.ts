@@ -1915,6 +1915,147 @@ export const replayItem = pgTable(
 )
 
 /**
+ * A campaign: one persona's vintages replayed against one held-out set, on purpose and at
+ * real cost.
+ *
+ * Its own tables rather than more columns on `variant_screen`, and the reason is the same one
+ * that gave the waiting-subtask its own table: these rows mean a different thing. A screen's
+ * row is a *refusal decision* about a candidate and is read by the gate; a campaign's row is a
+ * *measurement* of a document that may be a year old, is read by nothing that gates, and is
+ * meant to be compared with another campaign's row long after this search is forgotten.
+ * Overloading the screen would put a nullable `revision_id` on the table whose whole
+ * invariant is one arm per candidate per search.
+ *
+ * `cap_usd` is a hard ceiling, not a note: a campaign's runs are new spend rather than spend
+ * it replaces, so reaching the cap **halts** the campaign — `status = 'halted'` — and every
+ * surface then reports its score as partial. See `campaignMayStart` for the one bounded way
+ * the cap can be crossed, which is stated rather than papered over.
+ */
+export const replayCampaign = pgTable(
+  'replay_campaign',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    /** The set every arm is replayed against. Shared, or two arms measured two problems. */
+    replaySetId: uuid('replay_set_id')
+      .notNull()
+      .references(() => replaySet.id, { onDelete: 'cascade' }),
+    /** What a human called it. A campaign is read months later; an id is not a name. */
+    label: text('label').notNull(),
+    /** `running | finished | halted | cancelled` — see `CampaignStatus`. */
+    status: text('status').notNull().default('running'),
+    capUsd: doublePrecision('cap_usd'),
+    /**
+     * Who authorized the spend, as plain text with **no foreign key** — the convention
+     * `merge_queue_entry.enqueued_by_user_id` and `audit_event.actor_user_id` both use.
+     *
+     * Load-bearing rather than decorative: the sweep starts this campaign's runs *as that
+     * person*, exactly as the merge queue merges a branch as the person who queued it. A
+     * campaign is a standing instruction with a cap attached, and the authority for its runs
+     * is the human who gave it. A platform actor here would be the sweep granting itself
+     * permission to spend.
+     */
+    openedByUserId: text('opened_by_user_id'),
+    /** Why it stopped early, when it did. Recorded, never implied. */
+    haltReason: text('halt_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('replay_campaign_workspace_idx').on(t.workspaceId, t.createdAt),
+    /**
+     * One running campaign per persona.
+     *
+     * Not the measurement slot the search and the trial share — a campaign gates nothing, so
+     * it cannot invalidate anybody's arms. It is a spend limit: two campaigns on one persona
+     * would deal twice the runs against the same repository at once, and the honest place to
+     * refuse that is the index rather than a check somebody remembers to write.
+     */
+    uniqueIndex('replay_campaign_running_idx')
+      .on(t.personaId)
+      .where(sql`${t.status} = 'running'`),
+  ],
+)
+
+/**
+ * One arm: a vintage of the persona, optionally forced onto a particular model.
+ *
+ * `revision_id` null is **the document in use** — the control every growth question is asked
+ * against. `model` null runs the persona's own model, which is what a vintage comparison
+ * needs; a model is set only when the model *is* the variable, which is the small-versus-
+ * frontier question and nothing else.
+ *
+ * The markdown is snapshotted here rather than read through `persona_revision` at run time,
+ * for the reason `replay_item` snapshots its commit: a revision row can be deleted with its
+ * persona, and an arm that lost its document mid-campaign would report a score for a prompt
+ * nobody can produce again.
+ */
+export const replayCampaignArm = pgTable(
+  'replay_campaign_arm',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => replayCampaign.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    revisionId: uuid('revision_id').references((): AnyPgColumn => personaRevision.id, {
+      onDelete: 'set null',
+    }),
+    /** The vintage's own document, as it was. Snapshotted — see above. */
+    markdownSource: text('markdown_source').notNull(),
+    label: text('label').notNull(),
+    model: text('model'),
+  },
+  (t) => [uniqueIndex('replay_campaign_arm_position_idx').on(t.campaignId, t.position)],
+)
+
+/**
+ * What one item said about one arm. `variant_screen_run`'s shape, and deliberately so: the
+ * scoring rule is `screenOutcomeFor` in both, and two tables that scored differently would
+ * produce two kinds of number that look alike.
+ */
+export const replayCampaignRun = pgTable(
+  'replay_campaign_run',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    armId: uuid('arm_id')
+      .notNull()
+      .references(() => replayCampaignArm.id, { onDelete: 'cascade' }),
+    replayItemId: uuid('replay_item_id')
+      .notNull()
+      .references(() => replayItem.id, { onDelete: 'cascade' }),
+    /** Claimed before the run exists, released if the start fails — the screen's two-step. */
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    outcome: text('outcome').notNull().default('pending'),
+    reason: text('reason'),
+    /** What answered it, from the run's own snapshot. A score belongs to a (document, model). */
+    model: text('model'),
+    /** This run's metered spend, copied on scoring so the cap is checked in one query. */
+    costUsd: doublePrecision('cost_usd'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('replay_campaign_run_item_idx').on(t.armId, t.replayItemId),
+    index('replay_campaign_run_workspace_idx').on(t.workspaceId, t.createdAt),
+  ],
+)
+
+/**
  * One arm's screening: a candidate, or the prompt in use.
  *
  * `variant_id` null is the **incumbent**, and it is not optional — a candidate is compared

@@ -4,6 +4,7 @@ import type { Envelope } from './envelope.js'
 import type { ResponseStyle } from './response-styles.js'
 import type { VerificationCheck } from './verification.js'
 import type { ReplayCheckOutcome, ReplayOutcome, ScreenDecision } from './replay-set.js'
+import type { CampaignStatus } from './replay-campaign.js'
 import type {
   AgentPersonaId,
   AgentRunId,
@@ -12,6 +13,8 @@ import type {
   PersonaRevisionId,
   PersonaVariantId,
   PersonaVariantSetId,
+  ReplayCampaignArmId,
+  ReplayCampaignId,
   ReplayItemId,
   ReplaySetId,
   RepositoryId,
@@ -342,6 +345,53 @@ export interface VariantScreenRecord {
 
 /** `pending` until the branch has been through the definition of done; then the vocabulary. */
 export type ScreenRunOutcome = 'pending' | ReplayCheckOutcome
+
+/**
+ * A campaign row: one persona's vintages replayed against one set, at real cost.
+ *
+ * `capUsd` is a ceiling that halts rather than a budget note — see `replay-campaign.ts` for
+ * why a halted campaign's score is reported as partial everywhere.
+ */
+export interface ReplayCampaignRecord {
+  readonly id: ReplayCampaignId
+  readonly workspaceId: WorkspaceId
+  readonly personaId: AgentPersonaId
+  readonly replaySetId: ReplaySetId
+  readonly label: string
+  readonly status: CampaignStatus
+  readonly capUsd: number | null
+  /** Whose standing instruction this is — the sweep starts its runs as this person. */
+  readonly openedByUserId: string | null
+  readonly haltReason: string | null
+  readonly createdAt: Date
+  readonly finishedAt: Date | null
+}
+
+/** One arm: a vintage's document, optionally forced onto a model. Null revision is the control. */
+export interface ReplayCampaignArmRecord {
+  readonly id: ReplayCampaignArmId
+  readonly campaignId: ReplayCampaignId
+  readonly position: number
+  readonly revisionId: PersonaRevisionId | null
+  readonly markdownSource: string
+  readonly label: string
+  readonly model: string | null
+}
+
+/** What one item said about one arm. `VariantScreenRunRecord`'s shape, and for its reason. */
+export interface ReplayCampaignRunRecord {
+  readonly id: string
+  readonly armId: ReplayCampaignArmId
+  readonly replayItemId: ReplayItemId
+  readonly claimedAt: Date | null
+  readonly agentRunId: AgentRunId | null
+  readonly outcome: ScreenRunOutcome
+  readonly reason: string | null
+  readonly model: string | null
+  /** This run's metered spend, copied on scoring so the cap is one query rather than a join. */
+  readonly costUsd: number | null
+  readonly finishedAt: Date | null
+}
 
 export interface VariantScreenRunRecord {
   readonly id: string

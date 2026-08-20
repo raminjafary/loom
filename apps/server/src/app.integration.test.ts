@@ -295,6 +295,73 @@ describe('removal over HTTP', () => {
   })
 
   /**
+   * Campaigns, over the wire.
+   *
+   * The refusal is the half worth asserting here: a campaign is `arms × items` of real runs,
+   * so the platform must refuse to open one it cannot measure anything with — and say why, in
+   * a sentence beside the button rather than as an error.
+   */
+  it('refuses to open a campaign for a persona with no work to replay, and says why', async () => {
+    const persona = await client.persona.create({
+      markdownSource: [
+        '---',
+        'name: uncampaignable',
+        'description: has done nothing yet',
+        'model: claude-haiku-4-5-20251001',
+        'tools: [Read]',
+        '---',
+        'Do nothing.',
+      ].join('\n'),
+    })
+
+    const opened = await client.campaign.open({
+      personaId: persona.id,
+      label: 'growth, august',
+      capUsd: 5,
+      revisionIds: [],
+    })
+    expect(opened.opened).toBe(false)
+    expect(opened.campaignId).toBeNull()
+    expect(opened.detail).toContain('not enough of this persona')
+    // And nothing was written: a refused campaign is not a campaign with no arms.
+    expect(await client.campaign.listForPersona({ personaId: persona.id })).toEqual([])
+
+    await client.persona.delete({ personaId: persona.id })
+  })
+
+  it('refuses an unpriced model rather than opening a campaign it could not cap', async () => {
+    const persona = await client.persona.create({
+      markdownSource: [
+        '---',
+        'name: unpriced-campaign',
+        'description: for the refusal',
+        'model: claude-haiku-4-5-20251001',
+        'tools: [Read]',
+        '---',
+        'Do nothing.',
+      ].join('\n'),
+    })
+    const opened = await client.campaign.open({
+      personaId: persona.id,
+      label: 'gap, august',
+      capUsd: 5,
+      revisionIds: [],
+      models: ['some-local-thing'],
+    })
+    expect(opened.opened).toBe(false)
+    expect(opened.detail).toContain('could not be metered')
+    await client.persona.delete({ personaId: persona.id })
+  })
+
+  it('reads nothing for a campaign that does not exist, and refuses to cancel it', async () => {
+    const absent = '00000000-0000-0000-0000-000000000042'
+    expect(await client.campaign.report({ campaignId: absent })).toBeNull()
+    const cancelled = await client.campaign.cancel({ campaignId: absent })
+    expect(cancelled.cancelled).toBe(false)
+    expect(cancelled.detail).toContain('not running')
+  })
+
+  /**
    * The divergence set, over the wire.
    *
    * A fresh persona is the state worth asserting here, because it is the one a reader would
@@ -892,6 +959,8 @@ describe('contract completeness', () => {
       'plan',
       'atlas',
       'cost',
+      // Vintages replayed against a persona's own past work, at real cost. An instrument.
+      'campaign',
       // How much human judgement the workspace spent, against the work that needed it.
       'supervision',
       'persona',
@@ -934,6 +1003,12 @@ describe('contract completeness', () => {
     // and a client that could set it could launder its own text into the trusted
     // section of every later worker's prompt.
     expect(Object.keys(contract.workerNote)).toEqual(['listByTree', 'write', 'board'])
+    expect(Object.keys(contract.campaign)).toEqual([
+      'open',
+      'listForPersona',
+      'report',
+      'cancel',
+    ])
     expect(Object.keys(contract.supervision)).toEqual(['ledger'])
     expect(Object.keys(contract.persona)).toEqual([
       'list',
