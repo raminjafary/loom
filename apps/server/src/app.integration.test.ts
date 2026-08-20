@@ -295,6 +295,36 @@ describe('removal over HTTP', () => {
   })
 
   /**
+   * The divergence set, over the wire.
+   *
+   * A fresh persona is the state worth asserting here, because it is the one a reader would
+   * otherwise misread: nothing comparable is not agreement, and the sentence has to say so.
+   * Which rows count is `repositories.integration.test.ts`, against real SQL.
+   */
+  it('reports no divergence for a persona nothing has ruled on, without calling it agreement', async () => {
+    const persona = await client.persona.create({
+      markdownSource: [
+        '---',
+        'name: undivergent',
+        'description: has done nothing yet',
+        'model: claude-haiku-4-5-20251001',
+        'tools: [Read]',
+        '---',
+        'Do nothing.',
+      ].join('\n'),
+    })
+
+    const found = await client.persona.divergence({ personaId: persona.id })
+    expect(found).toMatchObject({ comparable: 0, passedAndDiscarded: 0, failedAndMerged: 0 })
+    expect(found?.detail).toContain('nothing the two could have disagreed about')
+    expect(found?.runs).toEqual([])
+
+    await client.persona.delete({ personaId: persona.id })
+    // A persona deleted between two clicks is not an error — the panel reads null.
+    expect(await client.persona.divergence({ personaId: persona.id })).toBeNull()
+  })
+
+  /**
    * The persona form reads the format through this procedure rather than owning a
    * parser. What it must never do is answer differently
    * from a save — a form populated by a lenient preview would show settings the write
@@ -917,6 +947,8 @@ describe('contract completeness', () => {
       'revert',
       // Whether the edit was an improvement, and a human settling it.
       'trial',
+      // Where the checks and the humans disagreed — read by a person, acted on by nobody.
+      'divergence',
       'keepRevision',
       // The searching half — several candidates, and the two ways a human
       // ends a search. `promoteVariant` is the only one that writes a prompt.

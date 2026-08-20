@@ -41,7 +41,7 @@ import {
   type WorkspaceRunControl,
 } from '@loom/domain'
 import { createHash, randomBytes } from 'node:crypto'
-import { and, count, desc, eq, gte, ilike, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { Database } from './client.js'
 import {
@@ -1191,6 +1191,79 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
       checks: checkRows
         .filter((row): row is typeof row & { name: string } => row.name !== null)
         .map((row) => ({ name: row.name, failures: row.failures })),
+    }
+  },
+
+  /**
+   * Runs where the definition of done and the human disagreed, both directions.
+   *
+   * Pure SQL over columns that already exist: `agent_run.branch_disposition` is the human's
+   * word and `run_verification.status` is the machine's, and the interesting rows are the
+   * ones where they point opposite ways.
+   *
+   * The denominator is counted over the same join with the disagreement predicate dropped,
+   * because a rate needs the population a disagreement was *possible* in — a run nobody ruled
+   * on, or one no check ran against, cannot disagree with anything, and counting it would make
+   * an unconfigured repository look like one whose humans always agree.
+   *
+   * Screening runs are excluded, as everywhere else: their prompt is substituted, so their
+   * outcome is a fact about a candidate rather than about the persona doing the work.
+   */
+  async divergenceSet(workspaceId, personaName, limit) {
+    const comparable = and(
+      eq(agentRun.workspaceId, workspaceId),
+      sql`${agentRun.persona} ->> 'name' = ${personaName}`,
+      sql`(${agentRun.relation} is null or ${agentRun.relation} <> 'screen')`,
+      inArray(runVerification.status, ['passed', 'failed']),
+      isNotNull(agentRun.branchDisposition),
+    )
+    const disagreed = sql`(
+      (${runVerification.status} = 'passed' and ${agentRun.branchDisposition} = 'discarded')
+      or (${runVerification.status} = 'failed' and ${agentRun.branchDisposition} in ('merged', 'pushed'))
+    )`
+
+    const [rows, [counted]] = await Promise.all([
+      db
+        .select({
+          runId: agentRun.id,
+          task: agentRun.task,
+          verdict: runVerification.status,
+          decidedAt: sql<Date>`coalesce(${agentRun.completedAt}, ${agentRun.createdAt})`,
+          failingCheck: sql<
+            string | null
+          >`jsonb_path_query_first(${runVerification.checks}, '$[*] ? (@.status == "failed")') ->> 'name'`,
+        })
+        .from(agentRun)
+        .innerJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+        .where(and(comparable, disagreed))
+        .orderBy(desc(sql`coalesce(${agentRun.completedAt}, ${agentRun.createdAt})`), asc(agentRun.id))
+        .limit(limit),
+      db
+        .select({
+          comparable: sql<number>`count(*)::int`,
+          passedAndDiscarded: sql<number>`count(*) filter (where ${runVerification.status} = 'passed' and ${agentRun.branchDisposition} = 'discarded')::int`,
+          failedAndMerged: sql<number>`count(*) filter (where ${runVerification.status} = 'failed' and ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+        })
+        .from(agentRun)
+        .innerJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+        .where(comparable),
+    ])
+
+    return {
+      runs: rows.map((row) => ({
+        runId: row.runId,
+        task: row.task ?? '',
+        kind:
+          row.verdict === 'passed'
+            ? ('passed-and-discarded' as const)
+            : ('failed-and-merged' as const),
+        // Null on the passing direction by construction: nothing failed there.
+        failingCheck: row.verdict === 'passed' ? null : row.failingCheck,
+        decidedAt: new Date(row.decidedAt),
+      })),
+      passedAndDiscarded: counted?.passedAndDiscarded ?? 0,
+      failedAndMerged: counted?.failedAndMerged ?? 0,
+      comparable: counted?.comparable ?? 0,
     }
   },
 

@@ -1386,6 +1386,54 @@ describe('the held-out screen', () => {
     expect(records.map((r) => r.baseCommitSha === null || r.task === null)).toEqual([true, true])
   })
 
+  it('finds the runs where the checks and the human disagreed, both directions', async () => {
+    const s = await scaffold(WS, 'divergent-1')
+    const ruled = async (input: {
+      verdict: 'passed' | 'failed'
+      disposition: 'merged' | 'discarded' | null
+      personaName?: string
+      relation?: string
+      failing?: string
+    }) => {
+      const runId = await addRun(WS, s, {
+        personaName: input.personaName ?? 'divergent-1',
+        disposition: input.disposition,
+        ...(input.relation ? { relation: input.relation } : {}),
+      })
+      await db.insert(runVerification).values({
+        workspaceId: WS,
+        agentRunId: runId,
+        repositoryId: s.repositoryId,
+        branchName: 'loom/x',
+        status: input.verdict,
+        checks:
+          input.verdict === 'failed'
+            ? [{ name: input.failing ?? 'boundary', status: 'failed', detail: 'boom', durationMs: 4 }]
+            : [{ name: 'tests', status: 'passed', detail: null, durationMs: 4 }],
+      })
+      return runId
+    }
+
+    const thrownAway = await ruled({ verdict: 'passed', disposition: 'discarded' })
+    const takenAnyway = await ruled({ verdict: 'failed', disposition: 'merged' })
+    // Agreement, in both directions: the population, not the set.
+    await ruled({ verdict: 'passed', disposition: 'merged' })
+    await ruled({ verdict: 'failed', disposition: 'discarded' })
+    // Nobody ruled on this one, so it could not have disagreed with anything.
+    await ruled({ verdict: 'passed', disposition: null })
+    // Not this persona's, and not live traffic.
+    await ruled({ verdict: 'passed', disposition: 'discarded', personaName: 'somebody-else' })
+    await ruled({ verdict: 'passed', disposition: 'discarded', relation: 'screen' })
+
+    const set = await runs.divergenceSet(WS, 'divergent-1', 20)
+    expect(set).toMatchObject({ passedAndDiscarded: 1, failedAndMerged: 1, comparable: 4 })
+    expect(set.runs.map((run) => run.runId).sort()).toEqual([thrownAway, takenAnyway].sort())
+    const failedAndMerged = set.runs.find((run) => run.kind === 'failed-and-merged')
+    expect(failedAndMerged?.failingCheck).toBe('boundary')
+    // Nothing failed on the other direction, so no check is named there.
+    expect(set.runs.find((run) => run.kind === 'passed-and-discarded')?.failingCheck).toBeNull()
+  })
+
   it('mines the failing-check histogram over this persona\'s own decided runs', async () => {
     const s = await scaffold(WS, 'weakness-1')
     const failing = async (name: string | null, personaName = 'weakness-1', relation?: string) => {
@@ -1471,14 +1519,20 @@ describe('the held-out screen', () => {
       status: 'failed',
       checks: [{ name: 'boundary', status: 'failed', detail: 'boom', durationMs: 9 }],
     })
-    const [first, second] = candidate.runs
-    await screens.attachScreenRun(WS, first!.id, screeningRun)
-    await screens.recordScreenRunOutcome(WS, first!.id, {
+    /**
+     * By item rather than by the order the runs came back in: `screensForSet` orders its runs
+     * by insertion, which is not the set's order, and a test that assumed it agreed with
+     * `position` failed on the row ids alone.
+     */
+    const runFor = (itemIndex: number) =>
+      candidate.runs.find((entry) => entry.replayItemId === set.items[itemIndex]!.id)!
+    await screens.attachScreenRun(WS, runFor(0).id, screeningRun)
+    await screens.recordScreenRunOutcome(WS, runFor(0).id, {
       outcome: 'failed',
       reason: null,
       model: 'claude-sonnet-5',
     })
-    await screens.recordScreenRunOutcome(WS, second!.id, {
+    await screens.recordScreenRunOutcome(WS, runFor(1).id, {
       outcome: 'passed',
       reason: null,
       model: 'claude-sonnet-5',

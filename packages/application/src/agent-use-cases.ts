@@ -43,6 +43,7 @@ import {
   detectPathOverlaps,
   isHuman,
   parseEgressHost,
+  describeDivergence,
   isPricedModel,
   isUsableRevertSha,
   isMergeQueueEntryTerminal,
@@ -126,6 +127,7 @@ import {
   type CapabilitySpec,
   type McpTransport,
   type MergeFailureReason,
+  type DivergenceSet,
   type MergeQueueEntry,
   type MergeQueueEntryId,
   type ReviewBlocker,
@@ -1035,6 +1037,39 @@ export const promptTrialFor = async (
   if (!revision) return null
   const tallies = await deps.personas.tallyTrialOutcomes(input.workspaceId, revision.id)
   return { revisionId: revision.id, effect: summarizePromptEffect(tallies) }
+}
+
+/**
+ * How many disagreements one read carries.
+ *
+ * Twenty, which is more than the six a proposer's brief would ever be shown: this is read by
+ * a person looking for a pattern, and a pattern is what a handful of rows cannot show. The
+ * counts beside it are unbounded, so the sample never has to imply completeness.
+ */
+export const MAX_DIVERGENT_RUNS = 20
+
+/**
+ * Where the checks and the humans disagreed about this persona's work, with the sentence.
+ *
+ * Returns null for a persona that no longer exists rather than throwing: this is a read
+ * beside a panel, and a persona deleted between two clicks is not an error.
+ *
+ * By name once resolved, because a run carries a persona *snapshot* — the same resolution
+ * `startVariantProposer` and the replay set both make, and for the same reason: an id on the
+ * run would answer for a row that may since have been renamed or replaced.
+ */
+export const divergenceForPersona = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<{ set: DivergenceSet; detail: string } | null> => {
+  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+  if (!persona) return null
+  const set = await deps.agentRuns.divergenceSet(
+    input.workspaceId,
+    persona.name,
+    MAX_DIVERGENT_RUNS,
+  )
+  return { set, detail: describeDivergence(set) }
 }
 
 /**

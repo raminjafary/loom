@@ -826,6 +826,46 @@ export const contract = {
       .output(PromptTrialSchema.nullable()),
 
     /**
+     * Where the definition of done and the humans disagreed about this persona's work.
+     *
+     * Read by a person, and that is the point: the two directions mean opposite things —
+     * work that passed and was discarded is a fact about the prompt, work that failed and
+     * was kept is usually a fact about the checks — and the platform does not act on either.
+     * A disagreement is not a mistake by either side, so nothing here scores anything.
+     *
+     * Null when the persona is gone, which a panel reads as "nothing to show" rather than
+     * as an error.
+     */
+    divergence: oc
+      .input(z.object({ personaId: z.string() }))
+      .output(
+        z
+          .object({
+            /** `describeDivergence`'s sentence — the rate with its denominator and the lean. */
+            detail: z.string(),
+            passedAndDiscarded: z.number().int(),
+            failedAndMerged: z.number().int(),
+            /**
+             * Runs where both a verdict and a disposition exist. Not "decided runs": a run
+             * nobody ruled on cannot disagree with anything, and counting it would make a
+             * repository with no checks look like one whose humans always agree.
+             */
+            comparable: z.number().int(),
+            /** Newest first, and bounded — the counts above are not. */
+            runs: z.array(
+              z.object({
+                runId: z.string(),
+                task: z.string(),
+                kind: z.enum(['passed-and-discarded', 'failed-and-merged']),
+                failingCheck: z.string().nullable(),
+                decidedAt: z.date(),
+              }),
+            ),
+          })
+          .nullable(),
+      ),
+
+    /**
      * A human keeps the edit and ends the trial. Rejecting it is `revert`, which ends the
      * trial too — both outcomes are a human act, and the platform never settles one on
      * their behalf however lopsided the evidence gets.

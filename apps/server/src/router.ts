@@ -83,6 +83,7 @@ import {
   listUnread,
   markChannelRead,
   listPersonaRevisions,
+  divergenceForPersona,
   promptTrialFor,
   listVariantSearches,
   promoteVariant,
@@ -1021,6 +1022,31 @@ export const router = os.router({
           }),
         ),
       ),
+    ),
+
+    divergence: os.persona.divergence.handler(({ context, input }) =>
+      guard(async () => {
+        const found = await divergenceForPersona(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          personaId: asAgentPersonaId(input.personaId),
+        })
+        if (!found) return null
+        return {
+          detail: found.detail,
+          passedAndDiscarded: found.set.passedAndDiscarded,
+          failedAndMerged: found.set.failedAndMerged,
+          comparable: found.set.comparable,
+          // Field by field rather than spread: an excess-property check does not fire on a
+          // spread, which is how fields have gone missing across a port here before.
+          runs: found.set.runs.map((run) => ({
+            runId: run.runId,
+            task: run.task,
+            kind: run.kind,
+            failingCheck: run.failingCheck,
+            decidedAt: run.decidedAt,
+          })),
+        }
+      }),
     ),
 
     trial: os.persona.trial.handler(({ context, input }) =>

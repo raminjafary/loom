@@ -4,6 +4,7 @@ import type {
   LosingArmRecord,
   ModelObservation,
   ProposerShown,
+  DivergenceSet,
   RefusedCandidateRecord,
   WeaknessRecord,
   ReplayCheckOutcome,
@@ -596,6 +597,19 @@ export interface AgentRunRepositoryPort {
     personaName: string,
     limit: number,
   ): Promise<WeaknessRecord>
+  /**
+   * Runs where the definition of done and the human disagreed, newest first, with the counts
+   * both directions and the population a disagreement was possible in.
+   *
+   * By persona name, for `tallyFailingChecks`'s reason. Read by people rather than by a
+   * proposer, deliberately — see `divergence-set.ts` for why wiring it into the brief now
+   * would destroy the comparison it exists for.
+   */
+  divergenceSet(
+    workspaceId: WorkspaceId,
+    personaName: string,
+    limit: number,
+  ): Promise<DivergenceSet>
   /** Bumped by the Runner's periodic heartbeat frame. */
   /**
    * Liveness, and — when the Runner sampled it — how full the run's context window is
