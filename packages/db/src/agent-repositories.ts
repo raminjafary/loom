@@ -1968,6 +1968,70 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
   },
 
   /** The same joins and the same `decidedRun` as both trials. See `decidedRun`. */
+  async listLosingArms(workspaceId, personaId, limit) {
+    /**
+     * A settled search that promoted something else, or promoted nothing at all. Both are a
+     * loss for this candidate, and `promoted_variant_id is distinct from` covers the null
+     * case in one predicate rather than leaving a discarded search's arms out of the buffer.
+     */
+    const where = and(
+      eq(personaVariant.workspaceId, workspaceId),
+      eq(personaVariant.personaId, personaId),
+      eq(personaVariantSet.status, 'settled'),
+      sql`${personaVariantSet.promotedVariantId} is distinct from ${personaVariant.id}`,
+    )
+    const [rows, [counted]] = await Promise.all([
+      db
+        .select({
+          variantId: personaVariant.id,
+          markdownSource: personaVariant.markdownSource,
+          rationale: personaVariant.rationale,
+          settledAt: personaVariantSet.settledAt,
+          createdAt: personaVariantSet.createdAt,
+          decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
+          kept: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+        })
+        .from(personaVariant)
+        .innerJoin(personaVariantSet, eq(personaVariantSet.id, personaVariant.setId))
+        /**
+         * Left joins all the way down: an arm that was never dealt a run is still a losing
+         * arm, and it is arguably the most useful kind for a proposer — a candidate a human
+         * discarded without spending anything on it. Inner joins would silently drop it.
+         */
+        .leftJoin(variantUse, eq(variantUse.variantId, personaVariant.id))
+        .leftJoin(agentRun, eq(agentRun.id, variantUse.agentRunId))
+        .leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+        .where(where)
+        .groupBy(
+          personaVariant.id,
+          personaVariant.markdownSource,
+          personaVariant.rationale,
+          personaVariantSet.settledAt,
+          personaVariantSet.createdAt,
+          personaVariant.position,
+        )
+        .orderBy(desc(personaVariantSet.settledAt), personaVariant.position)
+        .limit(limit),
+      db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(personaVariant)
+        .innerJoin(personaVariantSet, eq(personaVariantSet.id, personaVariant.setId))
+        .where(where),
+    ])
+
+    return {
+      arms: rows.map((row) => ({
+        variantId: asPersonaVariantId(row.variantId),
+        markdownSource: row.markdownSource,
+        rationale: row.rationale,
+        decided: row.decided,
+        kept: row.kept,
+        settledAt: row.settledAt ?? row.createdAt,
+      })),
+      total: counted?.total ?? 0,
+    }
+  },
+
   async tallyVariantOutcomes(workspaceId, setId) {
     const rows = await db
       .select({

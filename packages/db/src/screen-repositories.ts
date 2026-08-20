@@ -22,6 +22,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
   agentRun,
+  personaVariant,
   personaVariantSet,
   promptTrialUse,
   replayItem,
@@ -400,6 +401,56 @@ export const screenRepository = (db: Database): ScreenRepositoryPort => ({
           isNull(variantScreen.decision),
         ),
       )
+  },
+
+  async listRefusedCandidates(workspaceId, personaId, limit) {
+    /**
+     * By persona id here, unlike `listDecidedRunsForPersona`'s name: a candidate is a row
+     * that belongs to a persona row, not a snapshot carried by a run, so the id is the
+     * thing that identifies it and a rename does not orphan its own history.
+     */
+    const where = and(
+      eq(variantScreen.workspaceId, workspaceId),
+      eq(personaVariant.personaId, personaId),
+      eq(variantScreen.decision, 'rejected'),
+    )
+    const [rows, [counted]] = await Promise.all([
+      db
+        .select({
+          variantId: personaVariant.id,
+          markdownSource: personaVariant.markdownSource,
+          rationale: personaVariant.rationale,
+          reason: variantScreen.reason,
+          decidedAt: variantScreen.decidedAt,
+          createdAt: variantScreen.createdAt,
+        })
+        .from(variantScreen)
+        .innerJoin(personaVariant, eq(personaVariant.id, variantScreen.variantId))
+        .where(where)
+        .orderBy(desc(variantScreen.decidedAt))
+        .limit(limit),
+      db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(variantScreen)
+        .innerJoin(personaVariant, eq(personaVariant.id, variantScreen.variantId))
+        .where(where),
+    ])
+
+    return {
+      candidates: rows.map((row) => ({
+        variantId: asPersonaVariantId(row.variantId),
+        markdownSource: row.markdownSource,
+        rationale: row.rationale,
+        /**
+         * A rejected screen always has a reason — `decideScreen` writes both in one
+         * statement — but the column is nullable because an undecided row has neither, so
+         * the fallback is here rather than a non-null assertion.
+         */
+        reason: row.reason ?? '',
+        refusedAt: row.decidedAt ?? row.createdAt,
+      })),
+      total: counted?.total ?? 0,
+    }
   },
 
   async admittedVariantIds(workspaceId, setId) {

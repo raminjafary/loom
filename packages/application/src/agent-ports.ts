@@ -1,6 +1,8 @@
 import type {
   AtlasEdgeStatus,
   DecidedRunRecord,
+  LosingArmRecord,
+  RefusedCandidateRecord,
   ReplayCheckOutcome,
   ReplayItemId,
   ReplayItemRecord,
@@ -951,6 +953,23 @@ export interface ScreenRepositoryPort {
     workspaceId: WorkspaceId,
     setId: PersonaVariantSetId,
   ): Promise<PersonaVariantId[] | null>
+
+  /**
+   * The refusal half of the buffer a proposer reads: candidates this screen killed, newest
+   * first, with the sentence it killed them with.
+   *
+   * Across searches rather than within one, because that is the whole value of it — a
+   * proposer's point is knowing what this persona has already got wrong, and a single
+   * search's refusals are what the run that proposed them already knew.
+   *
+   * `total` is returned beside the bounded rows so the brief can say "6 of 19 shown". A
+   * count of what exists is the only thing that makes a bound honest.
+   */
+  listRefusedCandidates(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    limit: number,
+  ): Promise<{ candidates: RefusedCandidateRecord[]; total: number }>
 }
 
 export interface PersonaVariantRepositoryPort {
@@ -1015,6 +1034,24 @@ export interface PersonaVariantRepositoryPort {
     workspaceId: WorkspaceId,
     setId: PersonaVariantSetId,
   ): Promise<VariantArmTally[]>
+
+  /**
+   * The other half of that buffer: candidates that were measured and not kept.
+   *
+   * A losing arm is a candidate of a **settled** search that was not the one promoted — so
+   * an open search contributes nothing, which is right: an arm still being measured has not
+   * lost, and handing it to a proposer as a failure would be reporting a verdict nobody
+   * reached.
+   *
+   * The tally uses the same "decided" as `tallyVariantOutcomes`, because a proposer told an
+   * arm kept 1 of 5 has to be reading the figure the panel showed the human who discarded
+   * it.
+   */
+  listLosingArms(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    limit: number,
+  ): Promise<{ arms: LosingArmRecord[]; total: number }>
 
   /** Notes which session the verifier is running as, so its verdict can be resolved. */
   recordVerifierRun(

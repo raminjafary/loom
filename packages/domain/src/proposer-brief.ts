@@ -84,6 +84,31 @@ export interface RefusedCandidate {
   readonly refusedAt: Date
 }
 
+/**
+ * What storage hands back for a losing arm, before the body is parsed out of it.
+ *
+ * `markdownSource` is a complete persona document, which is what a candidate always was —
+ * the parse to a body happens in the use case, the same place tier 1's superseded prompts
+ * are parsed, so the repositories stay ignorant of the persona format.
+ */
+export interface LosingArmRecord {
+  readonly variantId: string
+  readonly markdownSource: string
+  readonly rationale: string
+  readonly decided: number
+  readonly kept: number
+  readonly settledAt: Date
+}
+
+/** The same split for a screen refusal: a document, and the sentence that refused it. */
+export interface RefusedCandidateRecord {
+  readonly variantId: string
+  readonly markdownSource: string
+  readonly rationale: string
+  readonly reason: string
+  readonly refusedAt: Date
+}
+
 export interface ProposerEvidence {
   readonly personaName: string
   /** The persona document in use — what a candidate is measured against, not instructions. */

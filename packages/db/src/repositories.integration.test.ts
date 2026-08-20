@@ -1649,4 +1649,123 @@ describe('the held-out screen', () => {
       false,
     )
   })
+
+  /**
+   * The buffer a proposer reads. Both halves are queries over rows that already existed and
+   * that nothing read, so what is worth asserting is which rows they refuse to count: an arm
+   * that is still being measured has not lost, and an admitted candidate was not refused.
+   */
+  it('offers refused candidates with the sentence that refused them, and counts what it withheld', async () => {
+    const s = await scaffold(WS, 'buffer-1')
+    const set = await screens.openReplaySet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      draft: { items: [], excluded: [], eligible: 0, considered: 0 },
+      detail: 'none',
+    })
+    const opened = await variants.openSet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      candidates: [
+        { markdownSource: 'refused one', rationale: 'terser' },
+        { markdownSource: 'admitted one', rationale: 'louder' },
+      ],
+    })
+    await screens.openScreens({
+      workspaceId: WS,
+      setId: opened.set.id,
+      replaySetId: set.set.id,
+      variantIds: opened.variants.map((v) => v.id),
+      itemIds: [],
+    })
+    /**
+     * By identity rather than by position: `screensForSet` does not promise the arms come
+     * back in the order they were proposed, and a test that assumes it does asserts a
+     * coupling between two orderings neither side guarantees.
+     */
+    const refusedVariantId = opened.variants.find((v) => v.markdownSource === 'refused one')!.id
+    const rows = await screens.screensForSet(WS, opened.set.id)
+    const candidates = rows.filter((row) => row.screen.variantId !== null)
+    const toRefuse = candidates.find((row) => row.screen.variantId === refusedVariantId)!
+    const toAdmit = candidates.find((row) => row.screen.variantId !== refusedVariantId)!
+    await screens.decideScreen(WS, toRefuse.screen.id, {
+      decision: 'rejected',
+      reason: 'Rejected by the held-out screen: it passed 2 of 6 items (33%).',
+    })
+    await screens.decideScreen(WS, toAdmit.screen.id, { decision: 'admitted', reason: 'no worse' })
+
+    const buffer = await screens.listRefusedCandidates(WS, s.personaId, 10)
+    expect(buffer.total).toBe(1)
+    expect(buffer.candidates).toHaveLength(1)
+    expect(buffer.candidates[0]?.variantId).toBe(refusedVariantId)
+    expect(buffer.candidates[0]?.reason).toContain('passed 2 of 6 items')
+    expect(buffer.candidates[0]?.rationale).toBe('terser')
+
+    // The incumbent is never in it: it has no candidate row to be refused.
+    expect(buffer.candidates.every((row) => row.markdownSource !== 'live')).toBe(true)
+
+    // Bounded rows, unbounded count — which is what lets a brief say "1 of 1 shown".
+    const bounded = await screens.listRefusedCandidates(WS, s.personaId, 0)
+    expect(bounded.candidates).toHaveLength(0)
+    expect(bounded.total).toBe(1)
+  })
+
+  it('counts a candidate as losing only once its search has settled, and includes one never dealt a run', async () => {
+    const s = await scaffold(WS, 'buffer-2')
+    const opened = await variants.openSet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      candidates: [
+        { markdownSource: 'promoted', rationale: 'kept' },
+        { markdownSource: 'lost with runs', rationale: 'measured' },
+        { markdownSource: 'lost with none', rationale: 'never dealt' },
+      ],
+    })
+    const [promoted, measured] = opened.variants
+
+    // An open search has no losers yet: nothing has been decided about any of these.
+    expect((await variants.listLosingArms(WS, s.personaId, 10)).total).toBe(0)
+
+    const kept = await addRun(WS, s, { personaName: 'buffer-2', disposition: 'merged' })
+    const dropped = await addRun(WS, s, { personaName: 'buffer-2', disposition: 'discarded' })
+    for (const runId of [kept, dropped]) {
+      await variants.recordVariantUse({
+        workspaceId: WS,
+        setId: opened.set.id,
+        variantId: measured!.id,
+        agentRunId: runId,
+      })
+    }
+    await variants.settleSet(WS, opened.set.id, { promotedVariantId: promoted!.id })
+
+    const losing = await variants.listLosingArms(WS, s.personaId, 10)
+    expect(losing.total).toBe(2)
+    const bodies = losing.arms.map((arm) => arm.markdownSource)
+    expect(bodies).toContain('lost with runs')
+    // An arm nobody spent anything on is still a loss, and arguably the most useful kind.
+    expect(bodies).toContain('lost with none')
+    expect(bodies).not.toContain('promoted')
+
+    const withRuns = losing.arms.find((arm) => arm.markdownSource === 'lost with runs')
+    expect(withRuns?.decided).toBe(2)
+    expect(withRuns?.kept).toBe(1)
+    const withNone = losing.arms.find((arm) => arm.markdownSource === 'lost with none')
+    expect(withNone?.decided).toBe(0)
+    expect(withNone?.kept).toBe(0)
+  })
+
+  it('counts every arm of a discarded search as losing, because nothing was promoted', async () => {
+    const s = await scaffold(WS, 'buffer-3')
+    const opened = await variants.openSet({
+      workspaceId: WS,
+      personaId: s.personaId,
+      candidates: [
+        { markdownSource: 'a', rationale: 'r' },
+        { markdownSource: 'b', rationale: 'r' },
+      ],
+    })
+    await variants.settleSet(WS, opened.set.id, { promotedVariantId: null })
+    const losing = await variants.listLosingArms(WS, s.personaId, 10)
+    expect(losing.total).toBe(2)
+  })
 })
