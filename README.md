@@ -1,21 +1,25 @@
-# Loom — a self-hosted workspace for swarms of AI coding agents
+# Loom — a platform for swarms of AI coding agents that measures them rather than trusting them
 
 [![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
 ![tests](https://img.shields.io/badge/tests-1%2C825-brightgreen)
 
-**Run many AI coding agents at once on your own hardware. Each gets its own git clone and
-container sandbox. You stay in the loop only where it matters: approving a risky command,
-answering a blocked run, and deciding what merges.**
+**Run ten coding agents at once, each in its own git clone and container. Nothing any of them
+says about its own work is taken as evidence: spend is counted at the network boundary, "done"
+is the repository's own checks with the verdict derived server-side, and a change to an agent's
+instructions has to win a measurement before it becomes what the next run is told.**
 
 One agent in a terminal is a solved problem. **Ten of them is not.** Who reviews ten branches?
 What stops two agents editing the same file? Where does shared context live so the fifth agent
-knows what the second learned? What is a person actually asked to decide — and what did the
-whole thing cost?
+knows what the second learned? What is a person actually asked to decide, what did the whole
+thing cost — and when an agent reports that it is finished, what checked?
 
-Loom is an answer to those five questions, built as a **multi-agent orchestration platform** for
-real software work rather than a demo:
+Loom is an answer to those questions, built as a **multi-agent orchestration platform** for real
+software work rather than a demo. One idea runs through the whole of it: **an agent's claim about
+its own work is never the evidence for it.** What settles it instead is something outside the
+agent — the repository's tests, a byte count at the proxy, a set of held-out work, a second
+session that was never shown who wrote what, or a human reading the exact command:
 
 - 🧵 **A planner that decomposes** a goal into a DAG of subtasks, with sub-planners for their own
   areas and workers that share a notes ledger
@@ -29,6 +33,13 @@ real software work rather than a demo:
   sandbox, with the verdict derived server-side so an agent cannot certify its own work
 - 💸 **Authoritative cost metering and enforced budget caps**, measured at the network boundary
   rather than taken from a model's self-report
+- 🕸️ **An egress boundary an agent cannot talk around** — a container with no credentials and no
+  network reaches the outside only through a proxy that decides per host, records what it decided,
+  and tells a refused run where a grant would have to come from. That path is also why the spend
+  figure is a measurement rather than a report
+- 🔁 **A swarm you can steer while it is running**, and a handoff brief when a run fills its
+  context — a plan changes mid-flight without being restarted, and a successor opens with what its
+  predecessor learned rather than with the task text a second time
 - 🧠 **Persona memory and self-improving prompts that are measured, not assumed** — an agent may
   rewrite its own instructions inside a ceiling a human sets, and the platform runs both versions
   to find out whether the edit actually helped. Candidates come from a session that is *not* the
@@ -41,10 +52,6 @@ real software work rather than a demo:
 - ⚔️ **[The Colosseum](#expertise-and-the-colosseum): agents that put questions to each other,
   where nothing is settled by agreement** — two agents who mastered different parts of a system
   know different things, and the arbiter is the repository's own tests and history, not a vote
-
-**Self-hosted and private by design.** Your code never leaves your machine except as model API
-calls, and those go through a proxy you run. No SaaS, no telemetry, no cloud dependency beyond
-the model itself.
 
 Built in TypeScript on Node 22, Postgres, Valkey, Fastify, oRPC, Vue 3 and the Claude Agent SDK
 — with every layer behind a port, so the execution backend, the store, the transport and the UI
@@ -96,6 +103,7 @@ nine cents.
 | ⚔️ | **The Colosseum** | Two agents that learned different things put questions to each other in a bounded, recorded session — settled by a check the repository can answer, never by agreement |
 | ♻️ | **Self-editing inside a ceiling** | An envelope bounds what a persona may become; edits go on trial against what they replaced, judged by outcomes rather than by a model's opinion |
 | 🎯 | **A held-out screen before a candidate costs anything** | A proposed prompt is replayed against past decided work at the commit each run opened at. One that does worse than the prompt in use is refused an arm, so no live run is spent on it |
+| 🪞 | **Candidates from a session that is not the run being edited** | A separate read-only proposer is shown which arms lost and which candidates the screen refused, and submits through the same validator a self-edit uses — a run grading its own transcript writes the prompt that flatters its own last hour |
 | ⏮️ | **A rehearsed rollback** | A scripted drill promotes a knowingly-broken change to Loom's own source and recovers from it — with the recovery running from a checkout pinned before the change, so the broken code cannot take part in its own repair |
 | 🖼️ | **Two canvases** | Design a team on a canvas that will not draw an edge the runtime would refuse, and watch a live graph of what each run is doing now |
 | ⚡ | **Warm dependency trees** | Optional: runs open with `node_modules` already in place instead of spending a model turn installing |

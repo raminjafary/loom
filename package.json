@@ -2,7 +2,7 @@
   "name": "loom",
   "private": true,
   "license": "MIT",
-  "description": "A self-hosted workspace for swarms of AI coding agents — clone-per-run isolation, container sandboxes, human-in-the-loop approval, and a merge queue.",
+  "description": "A multi-agent platform for AI coding agents that measures them rather than trusting them — clone-per-run isolation, container sandboxes, approval on the exact command, a repository-owned definition of done, metering at the network boundary, and prompt changes that have to win a measurement.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/raminjafary/loom.git"
