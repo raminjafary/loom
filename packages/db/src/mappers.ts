@@ -532,6 +532,7 @@ const AGENT_RUN_RELATIONS: readonly AgentRunRelation[] = [
   'verify',
   'handoff',
   'screen',
+  'escalate',
 ]
 
 const toAgentRunRelation = (value: string | null): AgentRunRelation | null => {

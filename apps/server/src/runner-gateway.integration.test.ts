@@ -3047,6 +3047,173 @@ describe('runner-gateway: the verification harness', () => {
     socket.close()
   })
 
+  /**
+   * Routing's headline: a branch that failed this repository's checks is retried once, one tier
+   * up.
+   *
+   * The claims only this level can make are about the *shape* of the retry rather than the rule,
+   * which the domain tests own. An escalation runs at a higher tier than the run it retries, so
+   * `attenuateChildPersona` would refuse it by definition if it were treated as a delegation —
+   * and the retry has to land in the same tree, on the same task text, or a human reads a
+   * duplicate worker instead of one task paid for twice on purpose.
+   */
+  it('retries a branch that failed its checks once, at the next model tier up', async () => {
+    const { socket, runnerId } = await pairFakeRunner('verify-escalate')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    await client.repository.setVerificationChecks({
+      repositoryId: repo.id,
+      checks: [{ name: 'build', command: 'pnpm build' }],
+    })
+    const created = await client.channel.create({ name: 'verify-escalate' })
+    /**
+     * A priced persona, because routing is arithmetic on the tier table: an unpriced model has
+     * no "one tier up" and no way to estimate a retry, and the platform says so rather than
+     * guessing. That refusal is asserted below.
+     */
+    const cheap = await client.persona.create({
+      markdownSource: [
+        '---',
+        `name: escalating-worker-${Date.now()}`,
+        'description: A worker on the cheapest tier.',
+        'model: claude-haiku-4-5-20251001',
+        'tools: [Read]',
+        'harness:',
+        '  budgetCapUsd: 5',
+        '---',
+        '',
+        'Do the work.',
+      ].join('\n'),
+    })
+
+    const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+    const run = await client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: cheap.id,
+      task: 'ESCALATION-TASK-CANARY: make the build pass.',
+    })
+    await startRun
+    socket.send(
+      JSON.stringify({
+        type: 'run_workspace_ready',
+        runId: run.id,
+        clonePath: '/tmp/loom/escalate-1',
+        branchName: 'loom/escalate-1',
+      }),
+    )
+    socket.send(
+      JSON.stringify({
+        type: 'agent_event',
+        runId: run.id,
+        seq: 1,
+        event: { kind: 'run_completed', totalCostUsd: 0.02, result: 'done' },
+      }),
+    )
+    for (let i = 0; i < 40; i += 1) {
+      if ((await client.agentRun.get({ agentRunId: run.id })).status === 'completed') break
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+
+    // The retry is dispatched from inside the sweep, so its start frame is what proves it ran.
+    const retryStart = nextFrame(
+      socket,
+      (v) => v.type === 'start_run' && (v.persona as { model?: string }).model === 'claude-sonnet-5',
+      10_000,
+    )
+    const swept = sweep()
+    await answerVerify(socket, {
+      status: 'ran',
+      commitSha: 'beef1234567890',
+      checks: [{ name: 'build', status: 'failed', detail: 'error TS2345', durationMs: 10 }],
+    })
+    await swept
+
+    const frame = await retryStart
+    // The same task text, because it is the same task. A retry that re-derived the instruction
+    // would be measuring a different one.
+    expect(String(frame.task)).toContain('ESCALATION-TASK-CANARY')
+
+    const children = await client.agentRun.listChildren({ agentRunId: run.id })
+    const retry = children.find((child) => child.relation === 'escalate')
+    expect(retry).toBeDefined()
+    // One tier up, and the persona is the same one — only the model moved.
+    expect(retry?.persona.model).toBe('claude-sonnet-5')
+    expect(retry?.persona.name).toBe(cheap.name)
+
+    // And the thread says what it is doing with the money, in the failed run's own words.
+    const page = await client.message.list({ threadId: created.rootThread.id })
+    const said = page.messages.map((message) => String(message.body.text ?? '')).join('\n')
+    expect(said).toContain('one tier up, never two')
+
+    socket.close()
+  })
+
+  /**
+   * And the refusal, at the same level: an unpriced model has no tier above it and no way to
+   * estimate a retry, so nothing is retried and the thread says why. Asserted here rather than
+   * only in the domain because "we did not spend more money on this, because" is the half an
+   * operator reading a failed branch actually needs, and it reaches them through a message.
+   */
+  it('says why a failed branch is not being retried when the model has no tier', async () => {
+    const { socket, runnerId } = await pairFakeRunner('verify-no-escalate')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    await client.repository.setVerificationChecks({
+      repositoryId: repo.id,
+      checks: [{ name: 'build', command: 'pnpm build' }],
+    })
+    const created = await client.channel.create({ name: 'verify-no-escalate' })
+    /**
+     * With a task, because a run that recorded none cannot be retried at all — there is nothing
+     * to re-issue — and that path is deliberately silent rather than a sentence about model
+     * tiers. What this asserts is the *other* refusal: `test-model` is not in the tier table, so
+     * there is no "one tier up" and no way to estimate a retry.
+     */
+    const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+    const run = await client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: testPersonaId,
+      task: 'Make the build pass.',
+    })
+    await startFrame
+    socket.send(
+      JSON.stringify({
+        type: 'run_workspace_ready',
+        runId: run.id,
+        clonePath: '/tmp/loom/escalate-2',
+        branchName: 'loom/escalate-2',
+      }),
+    )
+    socket.send(
+      JSON.stringify({
+        type: 'agent_event',
+        runId: run.id,
+        seq: 1,
+        event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'done' },
+      }),
+    )
+    for (let i = 0; i < 40; i += 1) {
+      if ((await client.agentRun.get({ agentRunId: run.id })).status === 'completed') break
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+
+    const swept = sweep()
+    await answerVerify(socket, {
+      status: 'ran',
+      commitSha: 'cafe1234567890',
+      checks: [{ name: 'build', status: 'failed', detail: 'error TS2345', durationMs: 10 }],
+    })
+    await swept
+
+    expect(await client.agentRun.listChildren({ agentRunId: run.id })).toHaveLength(0)
+    const page = await client.message.list({ threadId: created.rootThread.id })
+    const said = page.messages.map((message) => String(message.body.text ?? '')).join('\n')
+    expect(said).toContain('not** being retried')
+    expect(said).toContain('not in the tier table')
+
+    socket.close()
+  })
+
   // A repository with no definition of done has nothing to say about a branch, and a
   // row per run saying so would be noise on every surface that reads them.
   it('records nothing at all for a repository with no checks', async () => {

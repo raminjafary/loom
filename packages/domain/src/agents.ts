@@ -596,6 +596,17 @@ export type AgentRunRelation =
    * is where a human watching a search will look for what it is spending.
    */
   | 'screen'
+  /**
+   * The same task, retried once at a higher model tier because its branch failed the
+   * repository's definition of done.
+   *
+   * Its own relation for the reason `verify` and `screen` give, and for one more that is
+   * specific to it: an escalation is the *same* work, so counting it as delegation would make
+   * one task look like two in every aggregation — the cost panel, the board, the fitness that
+   * routing itself reads. A tree that showed a retry as a second worker would be describing a
+   * fan-out nobody asked for.
+   */
+  | 'escalate'
 
 export interface AgentRun {
   readonly id: AgentRunId

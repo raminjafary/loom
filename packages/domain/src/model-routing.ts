@@ -119,8 +119,14 @@ export const escalateAfterFailure = (input: {
   readonly ceilingModel: string | null
   /** What the failed attempt actually cost, for the estimate. */
   readonly spentUsd: number | null
-  /** What is left of the cap this run is measured against. Null is an uncapped run. */
-  readonly budgetRemainingUsd: number | null
+  /**
+   * The cap the **retry** would run under, not what is left of the failed attempt's.
+   *
+   * Each run is capped separately, so the question is not "was there money left over" but
+   * "does the cap the retry runs under allow what the retry is expected to cost". Null is an
+   * uncapped run.
+   */
+  readonly budgetCapUsd: number | null
 }): EscalationVerdict => {
   if (input.outcome !== 'checks-failed') {
     return {
@@ -187,18 +193,18 @@ export const escalateAfterFailure = (input: {
 
   const estimatedCostUsd = scaleCostForTier({ from: input.model, to: next, spentUsd: input.spentUsd })
   if (
-    input.budgetRemainingUsd !== null &&
+    input.budgetCapUsd !== null &&
     estimatedCostUsd !== null &&
-    estimatedCostUsd > input.budgetRemainingUsd
+    estimatedCostUsd > input.budgetCapUsd
   ) {
     return {
       ok: false,
       rule: 'over-budget',
       reason:
         `A retry on "${next}" is estimated at $${estimatedCostUsd.toFixed(4)} from what the ` +
-        `first attempt actually spent, and $${input.budgetRemainingUsd.toFixed(4)} is left. A ` +
-        'retry the cap kills halfway is worse than none: it spends most of the money and ' +
-        'produces nothing.',
+        `first attempt actually spent, and the cap it would run under is ` +
+        `$${input.budgetCapUsd.toFixed(4)}. A retry the cap kills halfway is worse than none: ` +
+        'it spends most of the money and produces nothing.',
     }
   }
 

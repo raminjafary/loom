@@ -1284,6 +1284,13 @@ export const AgentRunRelationSchema = z.enum([
    * human seeing them in the tree without a name for what they are reads a runaway swarm.
    */
   'screen',
+  /**
+   * The same task, retried once at a higher model tier after its branch failed the
+   * repository's definition of done. On the wire for `verify`'s reason and one of its own: a
+   * card that looks like a second worker on the same subtask reads as a swarm duplicating
+   * itself, when it is one task being paid for twice on purpose.
+   */
+  'escalate',
 ])
 
 export const AgentRunSchema = z.object({

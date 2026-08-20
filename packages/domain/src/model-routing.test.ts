@@ -25,7 +25,7 @@ const escalate = (over: {
   attempt?: number
   ceilingModel?: string | null
   spentUsd?: number | null
-  budgetRemainingUsd?: number | null
+  budgetCapUsd?: number | null
 } = {}) =>
   escalateAfterFailure({
     outcome: over.outcome ?? 'checks-failed',
@@ -33,7 +33,7 @@ const escalate = (over: {
     attempt: over.attempt ?? 1,
     ceilingModel: over.ceilingModel === undefined ? null : over.ceilingModel,
     spentUsd: over.spentUsd === undefined ? 0.2 : over.spentUsd,
-    budgetRemainingUsd: over.budgetRemainingUsd === undefined ? 5 : over.budgetRemainingUsd,
+    budgetCapUsd: over.budgetCapUsd === undefined ? 5 : over.budgetCapUsd,
   })
 
 const refusal = (verdict: ReturnType<typeof escalate>) => {
@@ -132,13 +132,13 @@ describe('escalateAfterFailure', () => {
    * produces nothing.
    */
   it('refuses when the estimate exceeds what is left of the cap', () => {
-    const verdict = refusal(escalate({ spentUsd: 0.5, budgetRemainingUsd: 1 }))
+    const verdict = refusal(escalate({ spentUsd: 0.5, budgetCapUsd: 1 }))
     expect(verdict.rule).toBe('over-budget')
     expect(verdict.reason).toContain('1.0000')
   })
 
   it('escalates on an uncapped run without inventing a limit', () => {
-    expect(escalate({ spentUsd: 1000, budgetRemainingUsd: null }).ok).toBe(true)
+    expect(escalate({ spentUsd: 1000, budgetCapUsd: null }).ok).toBe(true)
   })
 })
 

@@ -45,8 +45,10 @@ import {
   parseEgressHost,
   isPricedModel,
   isMergeQueueEntryTerminal,
+  escalateAfterFailure,
   isRiskyTool,
   maySelfModify,
+  modelTierRank,
   isTerminalRunStatus,
   validateMessageText,
   MAX_NOTE_BODY_LENGTH,
@@ -3795,7 +3797,14 @@ export const startAgentRun = async (
     parent &&
     input.relation !== 'reconcile' &&
     input.relation !== 'steer' &&
-    input.relation !== 'verify'
+    input.relation !== 'verify' &&
+    /**
+     * An escalation is exempt for the reason a steering run is, arriving from the other side:
+     * it is not a hop but the *same* task, retried. Counting it as depth would make a retry
+     * impossible for exactly the workers most likely to need one — the deepest ones — and
+     * would make a two-level plan un-retryable at its leaves.
+     */
+    input.relation !== 'escalate'
   ) {
     const depth = await resolveDelegationDepth(deps, parent)
     if (depth + 1 > deps.limits.maxDelegationDepth) {
@@ -4128,7 +4137,25 @@ export const startAgentRun = async (
    * exactly the personas most likely to run one, since a narrow Haiku worker's snapshot
    * cannot grant the read-only Opus session that judges its prompts.
    */
-  if (parent && input.relation !== 'reconcile' && input.relation !== 'verify') {
+  /**
+   * `escalate` is exempt, and here the exemption is not a convenience — it is the feature.
+   *
+   * An escalation exists to run the same task at a *higher* model tier than the attempt that
+   * failed, so attenuation against that attempt would refuse every escalation there is, by
+   * definition. What bounds it instead is the thing that should: the envelope ceiling and the
+   * cap, both checked by `escalateAfterFailure` before this is called, and neither of them the
+   * failed run's own snapshot.
+   *
+   * The rest of the argument is `verify`'s, line for line: the platform starts it, the persona
+   * comes from the registry rather than from the parent, the task is text the platform already
+   * had, and the parent contributes nothing but the ids that put it in the right tree.
+   */
+  if (
+    parent &&
+    input.relation !== 'reconcile' &&
+    input.relation !== 'verify' &&
+    input.relation !== 'escalate'
+  ) {
     const verdict = attenuateChildPersona(parent.persona, personaSpec)
     if (!verdict.ok) throw new ValidationError(verdict.reason)
   }
@@ -7635,6 +7662,123 @@ const runVerificationJob = async (
   // human was already told when the run finished; a branch that failed contradicts it.
   if (summary.status === 'failed') {
     await notifyRun(deps, run, 'verification_failed', { detail: line })
+    await escalateFailedRun(deps, run)
+  }
+}
+
+/**
+ * The retry, one tier up, after a branch failed this repository's definition of done.
+ *
+ * Started from here rather than from a sweep because this is the moment the signal exists: the
+ * verdict has just been derived server-side, from checks the model had no part in, which is the
+ * only evidence this platform has that a model was too small for a task. A sweep would arrive
+ * later with the same information and one more place for it to be read differently.
+ *
+ * **Best-effort throughout, and it can never fail the verification.** `startVariantVerifier`'s
+ * discipline, for a reason that is if anything stronger: the verdict is already recorded, the
+ * human has already been notified, and a retry is an optimisation on top of a story that is
+ * complete without it. A workspace at its concurrency limit gets the failure it already had.
+ *
+ * The refusal is *said* rather than swallowed, though — a run that could have been retried and
+ * was not is a decision, and "we did not spend more money on this, because" is the half an
+ * operator reading a failed branch actually wants.
+ */
+const escalateFailedRun = async (deps: AgentDeps, run: AgentRun): Promise<void> => {
+  try {
+    const personas = await deps.personas.listByWorkspace(run.workspaceId)
+    const persona = personas.find((entry) => entry.name === run.persona.name)
+    if (!persona || run.task === null || run.task.trim() === '') {
+      /**
+       * Silent, unlike the refusals below, and the difference is whether an operator could act.
+       * A run with no recorded task cannot be retried at all — there is nothing to re-issue —
+       * and a persona that has been deleted or renamed is not a routing decision. Neither is a
+       * sentence about model tiers.
+       */
+      return
+    }
+
+    /**
+     * The ceiling: the envelope's, narrowed by the parent's tier for a delegated child.
+     *
+     * Both, because they bound different things and the smaller has to win. An envelope is what
+     * a human said this persona may become; a parent's tier is what the delegation chain
+     * granted — and an escalation that stepped over either would be a widening arriving through
+     * a retry, which is the one route `attenuateChildPersona` is not watching here.
+     */
+    const parent =
+      run.parentRunId === null
+        ? null
+        : await deps.agentRuns.findById(run.workspaceId, run.parentRunId)
+    const envelopeCeiling = run.persona.envelope?.model ?? null
+    const parentCeiling = parent === null ? null : parent.persona.model
+    const ceilings = [envelopeCeiling, parentCeiling].filter(
+      (value): value is string => value !== null,
+    )
+    const ceilingModel =
+      ceilings.length === 0
+        ? null
+        : ceilings.reduce((narrowest, next) =>
+            (modelTierRank(next) ?? Number.POSITIVE_INFINITY) <
+            (modelTierRank(narrowest) ?? Number.POSITIVE_INFINITY)
+              ? next
+              : narrowest,
+          )
+
+    const verdict = escalateAfterFailure({
+      outcome: 'checks-failed',
+      model: run.persona.model,
+      // The whole of the "once" rule: a run that is itself an escalation is attempt two.
+      attempt: run.relation === 'escalate' ? 2 : 1,
+      ceilingModel,
+      spentUsd: run.totalCostUsd,
+      budgetCapUsd: persona.harnessBudgetCapUsd ?? null,
+    })
+
+    if (!verdict.ok) {
+      await postRunSystemMessage(
+        deps,
+        run,
+        `This branch is **not** being retried at a higher model tier: ${verdict.reason}`,
+      )
+      return
+    }
+
+    const retry = await startAgentRun(deps, {
+      workspaceId: run.workspaceId,
+      // As the failed run itself: `startAgentRun` only lets a run spawn children of itself,
+      // which is also what puts the retry in the tree a human is already reading.
+      actor: agentRunActor(run.id),
+      threadId: run.threadId,
+      repositoryId: run.repositoryId,
+      personaId: persona.id,
+      parentRunId: run.id,
+      relation: 'escalate',
+      model: verdict.model,
+      task: run.task,
+    })
+
+    await deps.audit.record({
+      workspaceId: run.workspaceId,
+      actor: agentRunActor(run.id),
+      action: 'run.escalated',
+      subjectType: 'agent_run',
+      subjectId: retry.id,
+      metadata: {
+        fromModel: run.persona.model,
+        toModel: verdict.model,
+        failedRunId: run.id,
+        // The estimate as well as the models: "what did we expect this to cost" is the question
+        // asked of a routing decision months later, and prose about it is not an answer.
+        estimatedCostUsd: verdict.estimatedCostUsd,
+      },
+    })
+
+    await postRunSystemMessage(deps, run, verdict.detail)
+  } catch {
+    /**
+     * Swallowed. The verification is recorded and the human notified; a retry that could not
+     * start is a saving nobody made rather than a broken verdict.
+     */
   }
 }
 
