@@ -44,6 +44,12 @@
  *   is no set worth the name, and the honest behaviour is to abstain and let the arms do
  *   what they already did. Failing open is right here specifically *because* the screen has
  *   no positive authority: the thing it falls back to is the real fitness, not nothing.
+ * - **No single observed outcome may take more than half the set.** Recency alone has an
+ *   inversion in it: a bad week fills the set with failures, the incumbent scores low on
+ *   them, and the bar a candidate must clear drops *exactly* when the set has stopped
+ *   representing what this persona does well. `STRATUM_CEILING` bounds one outcome's share
+ *   and `screenGate` names the mix it decided against, so a low bar is legible rather than
+ *   silent. The ceiling relaxes rather than shrinking a set — see `assembleReplaySet`.
  *
  * ## The bias this has, stated rather than discovered later
  *
@@ -76,6 +82,21 @@ export const MAX_REPLAY_ITEMS = 8
  */
 export const MIN_REPLAY_ITEMS = 4
 
+/**
+ * The most items one observed outcome may contribute, before the ceiling relaxes.
+ *
+ * Half, because half is the weakest bound that still forbids a monoculture: a set may say
+ * "mostly failures" — that is information about what this persona has been asked to do
+ * lately — and may not *be* only failures while other work was available to include.
+ *
+ * It is a **ceiling on the share, not a quota**. Nothing here manufactures balance: a
+ * history that really is all one outcome yields a set that is all one outcome, because the
+ * alternative — shrinking the set to keep it balanced — drops it under `MIN_REPLAY_ITEMS`
+ * and abstains the screen altogether. An unbalanced set whose composition the gate states
+ * is strictly better than no screen at all.
+ */
+export const STRATUM_CEILING = Math.ceil(MAX_REPLAY_ITEMS / 2)
+
 /** Why a decided run did not become an item. Every one of these is counted and reported. */
 export type ReplayExclusion =
   /** No `baseCommitSha` — the run predates the column, or never got a clone. */
@@ -90,6 +111,15 @@ export type ReplayExclusion =
   | 'was-an-arm'
   /** Eligible, and over `MAX_REPLAY_ITEMS`. The only exclusion that is a *bound* rather than a gap. */
   | 'over-cap'
+  /**
+   * Eligible, recent enough that recency alone would have taken it, and passed over because
+   * its observed outcome already held `STRATUM_CEILING` of the set.
+   *
+   * Kept apart from `over-cap` because the two say different things to a reader: `over-cap`
+   * means "older than what we took", and this means "newer than something we took, and left
+   * out on purpose". Folding them together would report a bound that was never the reason.
+   */
+  | 'stratum-full'
 
 /** What a decided run offers a replay set. Shaped as the storage layer can aggregate it. */
 export interface DecidedRunRecord {
@@ -152,15 +182,28 @@ const isEligible = (
 /**
  * Builds a held-out set from this persona's decided runs.
  *
- * **Deterministic, and it does not sample.** The selection is "the most recent eligible
- * runs, newest first, up to the cap" — an ordering the caller supplies and this function
- * only respects. Randomness would make a set unreproducible from the journal, which is the
- * same objection portable expertise raises against a random trial arm; and preferring the
- * newest is the choice that keeps the tasks representative of what this persona is
- * currently asked to do.
+ * **Deterministic, and it does not sample.** Randomness would make a set unreproducible
+ * from the journal, which is the same objection portable expertise raises against a random
+ * trial arm. A tie in `decidedAt` is broken by run id, so two assemblies of the same
+ * history produce the same set rather than whatever order the query returned.
  *
- * A tie in `decidedAt` is broken by run id, so two assemblies of the same history produce
- * the same set rather than whatever order the query returned.
+ * Selection is recency **under a ceiling on any one observed outcome's share**, in two
+ * passes over the same newest-first ordering:
+ *
+ * 1. Take the newest eligible runs, skipping any whose outcome already holds
+ *    `STRATUM_CEILING` items.
+ * 2. If slots remain — nothing else was available to fill them — take the skipped runs,
+ *    newest first, until the set is full.
+ *
+ * Pass 2 is why this is a ceiling and not a quota, and it is the load-bearing half. Without
+ * it, a persona whose last twenty runs all failed would get a four-item set instead of an
+ * eight-item one, and the screen abstains under `MIN_REPLAY_ITEMS` — the ceiling would have
+ * disabled the gate in precisely the situation the gate is for. With it, that persona gets
+ * a full set of failures and `screenGate` says so in the sentence that decides.
+ *
+ * Recency stays the default because it keeps the tasks representative of what this persona
+ * is currently asked to do; the ceiling only prevents one week's outcome from being the
+ * whole measurement.
  */
 export const assembleReplaySet = (
   records: readonly DecidedRunRecord[],
@@ -179,7 +222,32 @@ export const assembleReplaySet = (
     return byTime !== 0 ? byTime : a.runId.localeCompare(b.runId)
   })
 
-  const items = ordered.slice(0, MAX_REPLAY_ITEMS).map(
+  const held = new Map<ReplayOutcome, number>()
+  const taken: DecidedRunRecord[] = []
+  const passedOver: DecidedRunRecord[] = []
+  for (const record of ordered) {
+    if (taken.length >= MAX_REPLAY_ITEMS) break
+    if ((held.get(record.outcome) ?? 0) >= STRATUM_CEILING) {
+      passedOver.push(record)
+      continue
+    }
+    held.set(record.outcome, (held.get(record.outcome) ?? 0) + 1)
+    taken.push(record)
+  }
+  const relaxed = passedOver.splice(0, Math.max(0, MAX_REPLAY_ITEMS - taken.length))
+  taken.push(...relaxed)
+
+  /**
+   * Back into the set's own order once selection is done. The items are positioned
+   * newest-first because a reader scanning them should see the persona's current work
+   * first; the two passes above are about *which* runs, never about their order.
+   */
+  const selected = taken.sort((a, b) => {
+    const byTime = b.decidedAt.getTime() - a.decidedAt.getTime()
+    return byTime !== 0 ? byTime : a.runId.localeCompare(b.runId)
+  })
+
+  const items = selected.map(
     (record): ReplayItem => ({
       sourceRunId: record.runId,
       repositoryId: record.repositoryId,
@@ -189,8 +257,19 @@ export const assembleReplaySet = (
       observedOutcome: record.outcome,
     }),
   )
-  for (const record of ordered.slice(MAX_REPLAY_ITEMS)) {
-    excluded.push({ runId: record.runId, reason: 'over-cap' })
+
+  /**
+   * What recency alone would have taken, so an exclusion can say which of the two bounds
+   * actually left a run out — the cap, or the ceiling.
+   */
+  const byRecency = new Set(ordered.slice(0, MAX_REPLAY_ITEMS).map((record) => record.runId))
+  const chosen = new Set(selected.map((record) => record.runId))
+  for (const record of ordered) {
+    if (chosen.has(record.runId)) continue
+    excluded.push({
+      runId: record.runId,
+      reason: byRecency.has(record.runId) ? 'stratum-full' : 'over-cap',
+    })
   }
 
   return { items, excluded, eligible: eligible.length, considered: records.length }
@@ -201,6 +280,25 @@ const EXCLUSION_WORDS: Record<ReplayExclusion, string> = {
   'no-task': 'had no task text to replay',
   'was-an-arm': 'were arms of an earlier measurement',
   'over-cap': `were eligible and over the cap of ${MAX_REPLAY_ITEMS}`,
+  'stratum-full': `were recent and eligible, and passed over so no one outcome held more than ${STRATUM_CEILING} of the set`,
+}
+
+/**
+ * The set's outcome mix, as a fragment: `3 merged, 3 discarded, 2 failed`.
+ *
+ * One function because two callers must not disagree about it — the sentence stamped on the
+ * set at assembly (`describeReplaySet`) and the sentence a gate archives with a rejection
+ * (`screenGate`) are read side by side by whoever asks whether a bar was honest.
+ *
+ * Ordered by count, then by name, so the same mix reads the same way every time.
+ */
+export const describeOutcomeMix = (outcomes: readonly ReplayOutcome[]): string => {
+  const counts = new Map<ReplayOutcome, number>()
+  for (const outcome of outcomes) counts.set(outcome, (counts.get(outcome) ?? 0) + 1)
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([outcome, count]) => `${count} ${outcome}`)
+    .join(', ')
 }
 
 /**
@@ -220,14 +318,7 @@ export const describeReplaySet = (draft: ReplaySetDraft): string => {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([reason, count]) => `${count} ${EXCLUSION_WORDS[reason]}`)
 
-  const outcomes = new Map<ReplayOutcome, number>()
-  for (const item of draft.items) {
-    outcomes.set(item.observedOutcome, (outcomes.get(item.observedOutcome) ?? 0) + 1)
-  }
-  const shape = [...outcomes.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([outcome, count]) => `${count} ${outcome}`)
-    .join(', ')
+  const shape = describeOutcomeMix(draft.items.map((item) => item.observedOutcome))
 
   const head =
     draft.items.length === 0
@@ -354,14 +445,25 @@ export interface ScreenGateVerdict {
  *    nothing about the prompt. Rejecting here would let an infrastructure failure kill a
  *    candidate, which is the failure mode where a loop quietly stops proposing anything.
  * 4. **Strictly worse → rejected.** Everything else is admitted, ties included.
+ *
+ * The set arrives as its **composition** rather than as a count, and both decisions that
+ * compare rates name it. A pass rate is only readable against the work it was measured on:
+ * "the prompt in use passed 2 of 6" means one thing on a set of merged work and another on a
+ * set of six runs a human threw away, and the second is a bar low enough that a candidate
+ * clearing it has proved very little. Since the composition and the count now come from one
+ * argument, a reason cannot state a mix that disagrees with the set it gated.
  */
 export const screenGate = (input: {
-  readonly itemCount: number
+  /** Every item's observed outcome, in the set's order. Its length is the item count. */
+  readonly composition: readonly ReplayOutcome[]
   readonly candidate: ScreenTally
   readonly incumbent: ScreenTally
 }): ScreenGateVerdict => {
-  const { itemCount, candidate, incumbent } = input
+  const { candidate, incumbent } = input
+  const itemCount = input.composition.length
   const asPercent = (rate: number) => `${Math.round(rate * 100)}%`
+  const mix = describeOutcomeMix(input.composition)
+  const wasMadeOf = ` The set was ${mix} when the work was originally run.`
 
   if (itemCount < MIN_REPLAY_ITEMS) {
     return {
@@ -395,7 +497,8 @@ export const screenGate = (input: {
         `Rejected by the held-out screen: it passed ${candidate.passed} of ${candidate.scored} ` +
         `items (${asPercent(candidate.passRate)}) where the prompt in use passed ` +
         `${incumbent.passed} of ${incumbent.scored} (${asPercent(incumbent.passRate)}). It was ` +
-        'not given an arm, so no live run was spent on it.',
+        'not given an arm, so no live run was spent on it.' +
+        wasMadeOf,
     }
   }
   return {
@@ -404,6 +507,7 @@ export const screenGate = (input: {
       `Admitted by the held-out screen: it passed ${candidate.passed} of ${candidate.scored} ` +
       `items (${asPercent(candidate.passRate)}) against ${asPercent(incumbent.passRate)} for the ` +
       'prompt in use. The screen decides whether a candidate is measured and never whether it ' +
-      'is promoted — a person still settles the search.',
+      'is promoted — a person still settles the search.' +
+      wasMadeOf,
   }
 }

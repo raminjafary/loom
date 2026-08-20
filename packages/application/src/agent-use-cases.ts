@@ -135,6 +135,7 @@ import {
   type PersonaRevisionId,
   type PersonaVariant,
   type ReplayCheckOutcome,
+  type ReplayItemRecord,
   type ScreenDecision,
   type VariantScreenRunRecord,
   type PersonaVariantId,
@@ -1840,7 +1841,7 @@ const advanceScreensForSet = async (
     }
   }
 
-  await decideScreens(deps, workspaceId, setId, items.length)
+  await decideScreens(deps, workspaceId, setId, items)
   return attempted
 }
 
@@ -1903,7 +1904,8 @@ const decideScreens = async (
   deps: AgentDeps,
   workspaceId: WorkspaceId,
   setId: PersonaVariantSetId,
-  itemCount: number,
+  /** The set's items, in order — the gate names what the set was made of in its reason. */
+  items: readonly ReplayItemRecord[],
 ): Promise<void> => {
   const screens = await deps.screens.screensForSet(workspaceId, setId)
   const complete = (runs: readonly VariantScreenRunRecord[]) =>
@@ -1925,7 +1927,7 @@ const decideScreens = async (
     if (candidate.screen.decision !== null) continue
     if (!complete(candidate.runs)) continue
     const verdict = screenGate({
-      itemCount,
+      composition: items.map((item) => item.observedOutcome),
       candidate: tallyOf(candidate.runs),
       incumbent: incumbentTally,
     })

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_REPLAY_ITEMS,
   MIN_REPLAY_ITEMS,
+  STRATUM_CEILING,
   assembleReplaySet,
   describeReplaySet,
   screenGate,
@@ -9,6 +10,7 @@ import {
   tallyScreenScore,
   type DecidedRunRecord,
   type ReplayCheckOutcome,
+  type ReplayOutcome,
 } from './replay-set.js'
 
 /**
@@ -31,6 +33,10 @@ const run = (overrides: Partial<DecidedRunRecord> & { runId: string }): DecidedR
 
 const tally = (variantId: string | null, outcomes: readonly ReplayCheckOutcome[]) =>
   tallyScreenScore({ variantId, outcomes })
+
+/** A set of `count` items, all of one observed outcome — the gate reads only the mix. */
+const mixOf = (count: number, outcome: ReplayOutcome = 'merged'): ReplayOutcome[] =>
+  Array.from({ length: count }, () => outcome)
 
 describe('assembleReplaySet', () => {
   it('takes the most recent eligible runs, newest first', () => {
@@ -87,6 +93,64 @@ describe('assembleReplaySet', () => {
     expect(draft.considered).toBe(many.length)
   })
 
+  it('does not let one outcome hold more than half the set while other work was available', () => {
+    // Eight failures, newest; three merged runs behind them. Recency alone takes the eight.
+    const history = [
+      ...Array.from({ length: 8 }, (_, index) =>
+        run({ runId: `f${index}`, outcome: 'failed' as const, decidedAt: new Date(200 - index) }),
+      ),
+      ...Array.from({ length: 3 }, (_, index) =>
+        run({ runId: `m${index}`, outcome: 'merged' as const, decidedAt: new Date(100 - index) }),
+      ),
+    ]
+    const draft = assembleReplaySet(history)
+    const mix = draft.items.filter((item) => item.observedOutcome === 'merged')
+    expect(draft.items).toHaveLength(MAX_REPLAY_ITEMS)
+    expect(mix).toHaveLength(3)
+    // The three failures that lost their slots say why they lost them.
+    expect(draft.excluded).toEqual([
+      { runId: 'f5', reason: 'stratum-full' },
+      { runId: 'f6', reason: 'stratum-full' },
+      { runId: 'f7', reason: 'stratum-full' },
+    ])
+  })
+
+  it('distinguishes what the ceiling passed over from what the cap left behind', () => {
+    const history = [
+      ...Array.from({ length: 6 }, (_, index) =>
+        run({ runId: `f${index}`, outcome: 'failed' as const, decidedAt: new Date(200 - index) }),
+      ),
+      ...Array.from({ length: 6 }, (_, index) =>
+        run({ runId: `m${index}`, outcome: 'merged' as const, decidedAt: new Date(100 - index) }),
+      ),
+    ]
+    const draft = assembleReplaySet(history)
+    const outcomes = draft.items.map((item) => item.observedOutcome)
+    expect(outcomes.filter((outcome) => outcome === 'failed')).toHaveLength(STRATUM_CEILING)
+    expect(outcomes.filter((outcome) => outcome === 'merged')).toHaveLength(STRATUM_CEILING)
+    // f4 and f5 were newer than two items in the set; m4 and m5 were older than everything in it.
+    expect(draft.excluded).toEqual([
+      { runId: 'f4', reason: 'stratum-full' },
+      { runId: 'f5', reason: 'stratum-full' },
+      { runId: 'm4', reason: 'over-cap' },
+      { runId: 'm5', reason: 'over-cap' },
+    ])
+  })
+
+  it('fills a set from one outcome rather than shrinking under the floor', () => {
+    // The ceiling relaxes only once every other stratum is exhausted. A persona whose last
+    // twenty runs all failed gets a full set of failures — a four-item set would abstain the
+    // screen in exactly the situation the screen is for.
+    const draft = assembleReplaySet(
+      Array.from({ length: 20 }, (_, index) =>
+        run({ runId: `f${index}`, outcome: 'failed' as const, decidedAt: new Date(500 - index) }),
+      ),
+    )
+    expect(draft.items).toHaveLength(MAX_REPLAY_ITEMS)
+    expect(draft.items.every((item) => item.observedOutcome === 'failed')).toBe(true)
+    expect(draft.excluded.every((entry) => entry.reason === 'over-cap')).toBe(true)
+  })
+
   it('trims the task, because the replayed instruction is the item', () => {
     const draft = assembleReplaySet([run({ runId: 'r1', task: '  Fix the parser.\n' })])
     expect(draft.items[0]?.task).toBe('Fix the parser.')
@@ -121,6 +185,22 @@ describe('describeReplaySet', () => {
     expect(detail).toContain('1 did not record the commit they opened at')
   })
 
+  it('names what the ceiling passed over, not only what the cap cut', () => {
+    const detail = describeReplaySet(
+      assembleReplaySet([
+        ...Array.from({ length: 6 }, (_, index) =>
+          run({ runId: `f${index}`, outcome: 'failed' as const, decidedAt: new Date(200 - index) }),
+        ),
+        ...Array.from({ length: 6 }, (_, index) =>
+          run({ runId: `m${index}`, outcome: 'merged' as const, decidedAt: new Date(100 - index) }),
+        ),
+      ]),
+    )
+    expect(detail).toContain('4 failed, 4 merged when they were run')
+    expect(detail).toContain(`passed over so no one outcome held more than ${STRATUM_CEILING}`)
+    expect(detail).toContain(`over the cap of ${MAX_REPLAY_ITEMS}`)
+  })
+
   it('says plainly that there is no set, rather than describing an empty one', () => {
     expect(describeReplaySet(assembleReplaySet([run({ runId: 'a', task: null })]))).toContain(
       'No held-out items',
@@ -148,7 +228,7 @@ describe('screenGate', () => {
 
   it('rejects a candidate that is strictly worse than the prompt in use, and says the numbers', () => {
     const verdict = screenGate({
-      itemCount: items,
+      composition: mixOf(items),
       candidate: tally('v1', passes(2, 6)),
       incumbent: tally(null, passes(5, 6)),
     })
@@ -161,7 +241,7 @@ describe('screenGate', () => {
 
   it('admits a tie, because refusing one would make the proxy the decider', () => {
     const verdict = screenGate({
-      itemCount: items,
+      composition: mixOf(items),
       candidate: tally('v1', passes(4, 6)),
       incumbent: tally(null, passes(4, 6)),
     })
@@ -170,7 +250,7 @@ describe('screenGate', () => {
 
   it('admits a better candidate and still says a person settles the search', () => {
     const verdict = screenGate({
-      itemCount: items,
+      composition: mixOf(items),
       candidate: tally('v1', passes(6, 6)),
       incumbent: tally(null, passes(3, 6)),
     })
@@ -180,7 +260,7 @@ describe('screenGate', () => {
 
   it('abstains below the floor rather than gating on a set that is not one', () => {
     const verdict = screenGate({
-      itemCount: MIN_REPLAY_ITEMS - 1,
+      composition: mixOf(MIN_REPLAY_ITEMS - 1),
       candidate: tally('v1', passes(0, 3)),
       incumbent: tally(null, passes(3, 3)),
     })
@@ -190,7 +270,7 @@ describe('screenGate', () => {
 
   it('admits when the control could not be scored — a baseline nobody measured refuses nothing', () => {
     const verdict = screenGate({
-      itemCount: items,
+      composition: mixOf(items),
       candidate: tally('v1', passes(0, 6)),
       incumbent: tally(null, ['not-scored', 'not-scored', 'not-scored', 'not-scored']),
     })
@@ -200,7 +280,7 @@ describe('screenGate', () => {
 
   it('admits when the candidate could not be scored, because that is about the runs', () => {
     const verdict = screenGate({
-      itemCount: items,
+      composition: mixOf(items),
       candidate: tally('v1', ['not-scored', 'not-scored']),
       incumbent: tally(null, passes(6, 6)),
     })
@@ -208,10 +288,28 @@ describe('screenGate', () => {
     expect(verdict.reason).toContain('not about the prompt')
   })
 
+  it('names what the set was made of, so a reader can see how low the bar was', () => {
+    const discarded = screenGate({
+      composition: mixOf(items, 'discarded'),
+      candidate: tally('v1', passes(1, 6)),
+      incumbent: tally(null, passes(2, 6)),
+    })
+    expect(discarded.decision).toBe('rejected')
+    expect(discarded.reason).toContain(`The set was ${items} discarded when the work was`)
+
+    const admitted = screenGate({
+      composition: [...mixOf(5, 'merged'), ...mixOf(3, 'failed')],
+      candidate: tally('v1', passes(5, 6)),
+      incumbent: tally(null, passes(3, 6)),
+    })
+    expect(admitted.decision).toBe('admitted')
+    expect(admitted.reason).toContain('The set was 5 merged, 3 failed when the work was')
+  })
+
   it('compares rates and not counts, so a candidate scored on fewer items is judged fairly', () => {
     // Four of five beats six of nine. Comparing raw passes would have rejected it.
     const verdict = screenGate({
-      itemCount: items,
+      composition: mixOf(items),
       candidate: tally('v1', passes(4, 5)),
       incumbent: tally(null, passes(6, 9)),
     })
@@ -221,9 +319,9 @@ describe('screenGate', () => {
   it('has exactly two decisions — a screen with a third answer would be deciding something else', () => {
     const decisions = new Set(
       [
-        screenGate({ itemCount: items, candidate: tally('v1', passes(0, 6)), incumbent: tally(null, passes(6, 6)) }),
-        screenGate({ itemCount: items, candidate: tally('v1', passes(6, 6)), incumbent: tally(null, passes(0, 6)) }),
-        screenGate({ itemCount: 1, candidate: tally('v1', passes(0, 1)), incumbent: tally(null, passes(1, 1)) }),
+        screenGate({ composition: mixOf(items), candidate: tally('v1', passes(0, 6)), incumbent: tally(null, passes(6, 6)) }),
+        screenGate({ composition: mixOf(items), candidate: tally('v1', passes(6, 6)), incumbent: tally(null, passes(0, 6)) }),
+        screenGate({ composition: mixOf(1), candidate: tally('v1', passes(0, 1)), incumbent: tally(null, passes(1, 1)) }),
       ].map((verdict) => verdict.decision),
     )
     expect([...decisions].sort()).toEqual(['admitted', 'rejected'])
