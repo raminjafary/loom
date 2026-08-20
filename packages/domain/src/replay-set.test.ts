@@ -334,6 +334,61 @@ describe('screenGate', () => {
     expect(admitted.reason).toContain('The set was 5 merged, 3 failed when the work was')
   })
 
+  it('refuses an arm to a tying candidate that is materially longer, on cost', () => {
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(4, 6)),
+      incumbent: tally(null, passes(4, 6)),
+      bodyLengths: { candidate: 1_400, incumbent: 1_000 },
+    })
+    expect(verdict.decision).toBe('rejected')
+    expect(verdict.reason).toContain('40% longer')
+    expect(verdict.reason).toContain('paid on every run of this persona')
+  })
+
+  it('admits a tie inside the margin, because the rule is about length and not punctuation', () => {
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(4, 6)),
+      incumbent: tally(null, passes(4, 6)),
+      bodyLengths: { candidate: 1_050, incumbent: 1_000 },
+    })
+    expect(verdict.decision).toBe('admitted')
+  })
+
+  it('says a tying candidate is the cheaper one when it is shorter', () => {
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(4, 6)),
+      incumbent: tally(null, passes(4, 6)),
+      bodyLengths: { candidate: 600, incumbent: 1_000 },
+    })
+    expect(verdict.decision).toBe('admitted')
+    expect(verdict.reason).toContain('cheaper thing to run')
+  })
+
+  it('never trades a measured improvement against a token count', () => {
+    // A better candidate is admitted however long it is: that trade belongs to the arms,
+    // which compare cost against real dispositions, and ultimately to a person.
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(5, 6)),
+      incumbent: tally(null, passes(4, 6)),
+      bodyLengths: { candidate: 4_000, incumbent: 1_000 },
+    })
+    expect(verdict.decision).toBe('admitted')
+  })
+
+  it('skips the tiebreak when a body could not be read rather than guessing', () => {
+    const verdict = screenGate({
+      composition: mixOf(items),
+      candidate: tally('v1', passes(4, 6)),
+      incumbent: tally(null, passes(4, 6)),
+      bodyLengths: null,
+    })
+    expect(verdict.decision).toBe('admitted')
+  })
+
   it('compares rates and not counts, so a candidate scored on fewer items is judged fairly', () => {
     // Four of five beats six of nine. Comparing raw passes would have rejected it.
     const verdict = screenGate({

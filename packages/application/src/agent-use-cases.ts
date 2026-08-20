@@ -1980,7 +1980,7 @@ const advanceScreensForSet = async (
     }
   }
 
-  await decideScreens(deps, workspaceId, setId, items)
+  await decideScreens(deps, workspaceId, setId, items, { found, persona })
   return attempted
 }
 
@@ -2043,6 +2043,26 @@ const resolveScreenRunOutcome = async (
 }
 
 /**
+ * The two bodies' lengths, or null when either cannot be read.
+ *
+ * Null rather than zero, and null rather than the whole document's length: the gate's rule is
+ * about the **prompt body**, which is what a run pays for on every turn, and a persona's
+ * frontmatter is configuration the candidate does not get to change.
+ */
+const bodyLengthsFor = (
+  arms: { found: { variants: readonly PersonaVariant[] }; persona: AgentPersona | null },
+  variantId: PersonaVariantId | null,
+): { candidate: number; incumbent: number } | null => {
+  if (arms.persona === null || variantId === null) return null
+  const variant = arms.found.variants.find((entry) => entry.id === variantId)
+  if (!variant) return null
+  const candidate = parsePersonaMarkdown(variant.markdownSource).systemPrompt
+  const incumbent = parsePersonaMarkdown(arms.persona.markdownSource).systemPrompt
+  if (candidate.length === 0 || incumbent.length === 0) return null
+  return { candidate: candidate.length, incumbent: incumbent.length }
+}
+
+/**
  * Decides every candidate arm whose items have all reported, and settles a search in which
  * no candidate survived.
  *
@@ -2057,6 +2077,14 @@ const decideScreens = async (
   setId: PersonaVariantSetId,
   /** The set's items, in order — the gate names what the set was made of in its reason. */
   items: readonly ReplayItemRecord[],
+  /**
+   * The documents the arms are made of, for the gate's cost tiebreak.
+   *
+   * Passed in rather than re-read: the sweep already loaded both to *start* the screening
+   * runs, and a second read could disagree with the prompts that actually ran — the persona
+   * is read as it is now, which is the candour `screenArmPrompt` already states.
+   */
+  arms: { found: { variants: readonly PersonaVariant[] }; persona: AgentPersona | null },
 ): Promise<void> => {
   const screens = await deps.screens.screensForSet(workspaceId, setId)
   const complete = (runs: readonly VariantScreenRunRecord[]) =>
@@ -2087,6 +2115,7 @@ const decideScreens = async (
       composition: items.map((item) => item.observedOutcome),
       candidate: tallyOf(candidate.runs),
       incumbent: incumbentTally,
+      bodyLengths: bodyLengthsFor(arms, candidate.screen.variantId),
     })
     await deps.screens.decideScreen(workspaceId, candidate.screen.id, verdict)
     await deps.audit.record({

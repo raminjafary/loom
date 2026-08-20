@@ -54,6 +54,13 @@ The prompt in use.
 
 const VARIANT_MARKDOWN = PERSONA_MARKDOWN.replace('The prompt in use.', 'A candidate prompt.')
 
+/** Same intent, three times the tokens — which is what the tiebreak is about. */
+const LONG_VARIANT_MARKDOWN = PERSONA_MARKDOWN.replace(
+  'The prompt in use.',
+  'A candidate prompt that says the same thing at considerably greater length, ' +
+    'and then says it again in case the first time was not enough, and then once more.',
+)
+
 const screenRun = (
   screenId: string,
   itemIndex: number,
@@ -111,6 +118,8 @@ const harness = (options: {
   personaExists?: boolean
   claimSucceeds?: boolean
   startThrows?: boolean
+  /** A candidate document whose body is far longer than the persona's, for the tiebreak. */
+  longCandidate?: boolean
 }) => {
   const recordScreenRunOutcome = vi.fn(async () => {})
   const decideScreen = vi.fn(async () => {})
@@ -145,7 +154,10 @@ const harness = (options: {
           status: 'open',
         },
         variants: [
-          { id: CANDIDATE, markdownSource: VARIANT_MARKDOWN },
+          {
+            id: CANDIDATE,
+            markdownSource: options.longCandidate ? LONG_VARIANT_MARKDOWN : VARIANT_MARKDOWN,
+          },
         ],
       })),
       settleSet,
@@ -309,6 +321,29 @@ describe('advanceScreenQueue: deciding', () => {
     expect(callsOf(recordScreenRunOutcome)[0]?.[2]).toMatchObject({
       outcome: 'passed',
       model: 'claude-haiku-4-5-20251001',
+    })
+  })
+
+  it('refuses an arm to a tying candidate whose body is materially longer', async () => {
+    // The cost the screen can see without spending anything: a longer prompt is paid on
+    // every future run of the persona, and the candidate here bought nothing with it.
+    const { deps, decideScreen } = harness({
+      screens: [
+        {
+          screen: screen('s_inc', null),
+          runs: scored('s_inc', ['passed', 'passed', 'failed', 'failed']),
+        },
+        {
+          screen: screen('s_cand', CANDIDATE),
+          runs: scored('s_cand', ['passed', 'passed', 'failed', 'failed']),
+        },
+      ],
+      longCandidate: true,
+    })
+    await advanceScreenQueue(deps, { screenStuckMs: 3_600_000, maxStartsPerTick: 4 })
+    expect(callsOf(decideScreen)[0]?.[2]).toMatchObject({
+      decision: 'rejected',
+      reason: expect.stringContaining('longer'),
     })
   })
 

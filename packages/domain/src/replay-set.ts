@@ -36,10 +36,18 @@
  *
  * ## And the two this file adds, because building it forced them
  *
- * - **A tie is admitted.** The arms resolve a tie *against* the candidate. The screen
- *   resolves it *for* the candidate, because its only authority is to refuse a measurement,
- *   and "no worse than the prompt in use" is not a reason to refuse one. Rejecting ties
- *   would quietly promote the proxy to the decider.
+ * - **A tie is admitted — unless the candidate is materially longer.** The arms resolve a tie
+ *   *against* the candidate. The screen resolves it *for* the candidate, because its only
+ *   authority is to refuse a measurement, and "no worse than the prompt in use" is not a
+ *   reason to refuse one. Rejecting ties outright would quietly promote the proxy to the
+ *   decider.
+ *
+ *   The one exception is length, and it is the trial's own rule rather than a new one: every
+ *   comparison in this platform breaks a tie on **cost**, and a longer prompt is the single
+ *   cost the screen can see without spending anything — it is paid on every future run of
+ *   that persona, forever, for a measured gain of nothing. So a candidate that ties on the
+ *   set and is more than `COMPACTNESS_MARGIN` longer than the prompt in use is refused an
+ *   arm, and one that ties while being shorter is admitted with that said out loud.
  * - **A screen that cannot say anything admits everything.** Below `MIN_REPLAY_ITEMS` there
  *   is no set worth the name, and the honest behaviour is to abstain and let the arms do
  *   what they already did. Failing open is right here specifically *because* the screen has
@@ -119,6 +127,16 @@ export const MAX_GATES_PER_ITEM = 3
  * is strictly better than no screen at all.
  */
 export const STRATUM_CEILING = Math.ceil(MAX_REPLAY_ITEMS / 2)
+
+/**
+ * How much longer a tying candidate may be before the screen refuses it an arm.
+ *
+ * A tenth, because the rule is about a *materially* longer prompt and not about whitespace:
+ * two bodies within a tenth of each other are the same size for every purpose that matters,
+ * and a gate that refused a candidate for eleven extra characters would be measuring the
+ * author's punctuation.
+ */
+export const COMPACTNESS_MARGIN = 0.1
 
 /** Why a decided run did not become an item. Every one of these is counted and reported. */
 export type ReplayExclusion =
@@ -563,7 +581,9 @@ const crossModelComparison = (
  *    arm are the same defect one level down and abstain the same way. Unknown models do not
  *    trigger it: a set of screens from before the stamp existed is silent about what ran,
  *    and silence is not disagreement.
- * 5. **Strictly worse → rejected.** Everything else is admitted, ties included.
+ * 5. **Strictly worse → rejected.**
+ * 6. **Level, and materially longer → rejected.** The cost tiebreak; see the header. Every
+ *    other tie is admitted.
  *
  * The set arrives as its **composition** rather than as a count, and both decisions that
  * compare rates name it. A pass rate is only readable against the work it was measured on:
@@ -577,6 +597,15 @@ export const screenGate = (input: {
   readonly composition: readonly ReplayOutcome[]
   readonly candidate: ScreenTally
   readonly incumbent: ScreenTally
+  /**
+   * The two prompt bodies' lengths, for the cost tiebreak — null when either is unknown.
+   *
+   * Null skips the tiebreak rather than guessing at it: a candidate whose document could not
+   * be read is not a candidate that failed a length comparison, and the gate's whole
+   * discipline is that a fact about the platform's own reading never becomes a verdict about
+   * a prompt.
+   */
+  readonly bodyLengths?: { readonly candidate: number; readonly incumbent: number } | null
 }): ScreenGateVerdict => {
   const { candidate, incumbent } = input
   const itemCount = input.composition.length
@@ -628,6 +657,32 @@ export const screenGate = (input: {
         wasMadeOf,
     }
   }
+  /**
+   * Level on the set, and the only cost this screen can see without spending anything.
+   *
+   * Checked after the pass-rate comparison and never instead of it: a candidate that scores
+   * *better* is admitted however long it is, because the screen has no authority to trade a
+   * measured improvement against a token count — that trade is the arms' (they compare cost
+   * against real dispositions) and ultimately a human's.
+   */
+  const lengths = input.bodyLengths ?? null
+  const level = candidate.passRate === incumbent.passRate
+  if (level && lengths !== null && lengths.incumbent > 0) {
+    const ratio = lengths.candidate / lengths.incumbent
+    if (ratio > 1 + COMPACTNESS_MARGIN) {
+      return {
+        decision: 'rejected',
+        reason:
+          `Rejected by the held-out screen: it scored exactly what the prompt in use scored ` +
+          `(${asPercent(candidate.passRate)} on ${candidate.scored} items) and its body is ` +
+          `${Math.round((ratio - 1) * 100)}% longer — ${lengths.candidate} characters against ` +
+          `${lengths.incumbent}. That length is paid on every run of this persona from now on, ` +
+          'for no measured gain. A shorter candidate that ties is admitted; this one is ' +
+          `archived with the reason, so a proposer reads it.${wasMadeOf}`,
+      }
+    }
+  }
+
   return {
     decision: 'admitted',
     reason:
@@ -635,6 +690,10 @@ export const screenGate = (input: {
       `items (${asPercent(candidate.passRate)}) against ${asPercent(incumbent.passRate)} for the ` +
       'prompt in use. The screen decides whether a candidate is measured and never whether it ' +
       'is promoted — a person still settles the search.' +
+      (level && lengths !== null && lengths.candidate < lengths.incumbent
+        ? ` It is also shorter than the prompt in use — ${lengths.candidate} characters against ` +
+          `${lengths.incumbent} — which is the cheaper thing to run on every future run.`
+        : '') +
       wasMadeOf,
   }
 }
