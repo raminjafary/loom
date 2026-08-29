@@ -13,15 +13,26 @@
  *
  * ## What a variant is, and the one decision that makes it safe
  *
- * **A variant is a tier-1 edit that has not been made.** Every candidate body goes through
- * `revisePromptBody` — the same validator, the same envelope check, the same round trip,
- * the same refusal to open with a frontmatter delimiter. Nothing here re-implements any of
- * that, and that is the whole safety argument: a variant cannot reach a configuration a
- * tier-1 edit could not, because it *is* one, held back from the persona row.
+ * **A variant is a self-edit that has not been made.** Every candidate body goes through
+ * `revisePromptBody` and every candidate tool list through `reviseToolList` — the same
+ * validators, the same envelope check, the same round trip, the same refusal to open with a
+ * frontmatter delimiter. Nothing here re-implements any of that, and that is the whole
+ * safety argument: a variant cannot reach a configuration a self-edit could not, because it
+ * *is* one, held back from the persona row.
  *
- * So a variant carries a complete persona document rather than a body. Promotion is then a
- * write of a document that was already validated against the persona it belongs to, not a
- * re-derivation at the moment a human clicks.
+ * So a variant carries a complete persona document rather than a body — which is what lets
+ * the second component exist at all. Promotion is then a write of a document that was
+ * already validated against the persona it belongs to, not a re-derivation at the moment a
+ * human clicks.
+ *
+ * ## Why tool lists are arms and not merely permitted
+ *
+ * Tier 2 has always let an agent change its own tool list and nothing has ever measured one:
+ * the prompt trial measures a prompt body, and a tool list is not one, so every such edit is
+ * on the record reading "captured, and nothing measured it". The screen, the arms, the
+ * verifier and the promotion gate are all written against a *document*, so making a tool list
+ * an arm needs no new machinery and no new authority — only a validator dispatch and a set
+ * that says which component it varies.
  *
  * ## Why the search is serialized per persona
  *
@@ -53,6 +64,7 @@ import type { PersonaVariantId } from './ids.js'
 import { describeRevertedMerges } from './reverted-merges.js'
 import {
   revisePromptBody,
+  reviseToolList,
   type SelfEditVerdict,
   type SupersededPrompt,
 } from './self-edit.js'
@@ -77,38 +89,79 @@ export const MAX_VARIANTS_PER_SET = 3
  */
 export const MIN_VARIANTS_PER_SET = 2
 
-export interface VariantProposal {
-  readonly body: string
-  /** Why this candidate is different from its siblings — what it would make a run do. */
-  readonly rationale: string
-}
+/**
+ * Which part of the persona document a search varies.
+ *
+ * Two, because two tiers of self-editing exist: tier 1 writes a prompt body and tier 2 writes
+ * a tool list. Anything else on the document is what the envelope bounds, and a tier that
+ * could set those would be an agent moving inside its ceiling by moving the ceiling's axes —
+ * so there is no third value to add here without first adding a tier that could reach it.
+ */
+export type VariantComponent = 'body' | 'tools'
+
+export type VariantProposal =
+  | {
+      readonly kind: 'body'
+      readonly body: string
+      /** Why this candidate is different from its siblings — what it would make a run do. */
+      readonly rationale: string
+    }
+  | {
+      readonly kind: 'tools'
+      /** The complete list this candidate would hold — not a delta, exactly as tier 2 takes it. */
+      readonly tools: readonly string[]
+      readonly rationale: string
+    }
 
 export type VariantSetRule =
   /** Fewer than `MIN_VARIANTS_PER_SET` — that is a tier-1 edit, not a search. */
   | 'too-few'
   | 'too-many'
-  /** Two candidates in the same set are byte-identical, so one arm measures nothing. */
+  /** Two candidates in the same set produce the same document, so one arm measures nothing. */
   | 'duplicate'
   /** A measurement of this persona is already running (a trial, or another search). */
   | 'already-measuring'
-  /** One of the candidates was refused by tier 1's own rules — carries that reason. */
+  /** One of the candidates was refused by the tier that owns it — carries that reason. */
   | 'candidate-refused'
+  /** Candidates in one set vary different components — see `proposeVariantSet`. */
+  | 'mixed-components'
 
 export type VariantSetVerdict =
   | {
       readonly ok: true
+      /**
+       * What every candidate in this set varies.
+       *
+       * Stored on the set rather than derived per candidate, because it is a property of the
+       * *search*: it is what the verdict will be read as evidence about, and what the
+       * provenance line a human reads before promoting has to name.
+       */
+      readonly component: VariantComponent
       /** In the order proposed, each with the complete document that would be promoted. */
       readonly candidates: readonly { readonly markdown: string; readonly body: string; readonly rationale: string }[]
     }
   | { readonly ok: false; readonly rule: VariantSetRule; readonly reason: string }
 
 /**
- * Validates a set of candidate prompts.
+ * Validates a set of candidates.
  *
  * `measurementOpen` is the caller's answer to "is anything already being measured for this
  * persona" — a prompt trial from tier 1, or an earlier search. Passed in rather than looked
  * up here because the domain has no storage, and refused rather than queued: continuity
  * mode is explicit that a refusal reaches the agent as a request a human could grant.
+ *
+ * ## Why a set varies one component and never two
+ *
+ * A search over three candidates where one rewrites the prompt and one swaps a tool spends
+ * the single measurement slot a persona has on two questions and answers neither. Each arm
+ * would still be compared against the incumbent honestly — that part survives — but the
+ * *search* is what gets read afterwards, by the evolution walk, by the provenance line, and
+ * by clause-level attribution across lineages, and none of those can say what a mixed set
+ * was searching over.
+ *
+ * This is the same exclusivity rule the proposer's brief sources take, for the same reason:
+ * a comparison needs something it is a comparison *against*, and a set carrying everything
+ * leaves no arm to be that.
  */
 export const proposeVariantSet = (input: {
   readonly currentMarkdown: string
@@ -162,25 +215,46 @@ export const proposeVariantSet = (input: {
     }
   }
 
-  const bodies = new Set<string>()
+  const component = input.proposals[0]?.kind ?? 'body'
+  if (input.proposals.some((proposal) => proposal.kind !== component)) {
+    return {
+      ok: false,
+      rule: 'mixed-components',
+      reason:
+        'Those candidates do not vary the same thing — some change the prompt and some change ' +
+        'the tool list. One search measures one question, because a persona is measured one ' +
+        'way at a time and a mixed set spends that slot on two. Send the prompts, settle that ' +
+        'search, then send the tool lists.',
+    }
+  }
+
+  const seen = new Set<string>()
   const candidates: { markdown: string; body: string; rationale: string }[] = []
 
   for (const [index, proposal] of input.proposals.entries()) {
     /**
-     * Tier 1's validator, per candidate — the reuse this file exists to make. It also
-     * supplies the checks nobody would think to repeat here: the envelope, the round trip,
-     * the refusal to open with `---`, and "identical to the prompt you already have".
+     * The validator of the tier that owns this component, per candidate — the reuse this
+     * file exists to make. Each supplies the checks nobody would think to repeat here: the
+     * envelope, the round trip, "identical to what you already have", and for a body the
+     * refusal to open with `---`.
      *
      * `revisionsThisRun` is passed straight through so the per-run cap covers a search as
      * well: a run may propose one set or make one edit, never both. A model that has
      * already rewritten its prompt has learned nothing since.
      */
-    const verdict: SelfEditVerdict = revisePromptBody({
-      currentMarkdown: input.currentMarkdown,
-      body: proposal.body,
-      revisionsThisRun: input.revisionsThisRun,
-      ...(input.supersededPrompts ? { supersededPrompts: input.supersededPrompts } : {}),
-    })
+    const verdict: SelfEditVerdict =
+      proposal.kind === 'body'
+        ? revisePromptBody({
+            currentMarkdown: input.currentMarkdown,
+            body: proposal.body,
+            revisionsThisRun: input.revisionsThisRun,
+            ...(input.supersededPrompts ? { supersededPrompts: input.supersededPrompts } : {}),
+          })
+        : reviseToolList({
+            currentMarkdown: input.currentMarkdown,
+            tools: [...proposal.tools],
+            revisionsThisRun: input.revisionsThisRun,
+          })
     if (!verdict.ok) {
       return {
         ok: false,
@@ -188,17 +262,35 @@ export const proposeVariantSet = (input: {
         reason: `Candidate ${index + 1} of ${input.proposals.length} was refused, so nothing was recorded: ${verdict.reason}`,
       }
     }
-    if (bodies.has(verdict.body)) {
+    /**
+     * Compared on what the component *means*, not on the document.
+     *
+     * A document comparison looks like the general rule and is wrong for tools: the
+     * serializer preserves the order it is given, so `[Read, Grep]` and `[Grep, Read]` are
+     * two different documents and one arm measured twice. What makes two tool lists the same
+     * candidate is holding the same tools, so that is the key.
+     */
+    const key =
+      proposal.kind === 'body'
+        ? verdict.body
+        : [...new Set(proposal.tools.map((tool) => tool.trim()).filter((t) => t.length > 0))]
+            .sort()
+            .join(' ')
+    if (seen.has(key)) {
       return {
         ok: false,
         rule: 'duplicate',
         reason:
-          `Candidate ${index + 1} is character-for-character one of the others. Two identical ` +
-          'arms measure nothing and cost twice — send prompts that differ in what they would ' +
-          'make a future run *do*, not in how they are worded.',
+          component === 'body'
+            ? `Candidate ${index + 1} is character-for-character one of the others. Two identical ` +
+              'arms measure nothing and cost twice — send prompts that differ in what they would ' +
+              'make a future run *do*, not in how they are worded.'
+            : `Candidate ${index + 1} holds the same tools as one of the others. Order is not a ` +
+              'difference — two arms with the same tools measure nothing and cost twice. Send ' +
+              'lists that differ in what a future run could actually reach for.',
       }
     }
-    bodies.add(verdict.body)
+    seen.add(key)
     candidates.push({
       markdown: verdict.markdown,
       body: verdict.body,
@@ -206,7 +298,7 @@ export const proposeVariantSet = (input: {
     })
   }
 
-  return { ok: true, candidates }
+  return { ok: true, component, candidates }
 }
 
 /**
@@ -315,7 +407,19 @@ const EMPTY = (variantId: PersonaVariantId | null): VariantArmTally => ({
 export const summarizeVariantSearch = (
   tallies: readonly VariantArmTally[],
   candidateIds: readonly PersonaVariantId[],
+  /**
+   * What the search varies, which only the phrasing depends on — every threshold, every
+   * comparison and the leader are identical either way, because a document is a document.
+   * Defaulted so a caller that has not been taught about the second component says the thing
+   * that was true when there was only one.
+   */
+  component: VariantComponent = 'body',
 ): VariantSearchEffect => {
+  const incumbentNoun = component === 'tools' ? 'the tools it has now' : 'the prompt in use'
+  const heldNoun =
+    component === 'tools' ? 'the tools this persona actually holds' : 'the prompt this persona actually has'
+  const alreadyNoun =
+    component === 'tools' ? 'the tools this persona already holds' : 'the prompt this persona already has'
   const tallyFor = (id: PersonaVariantId | null) =>
     tallies.find((tally) => tally.variantId === id) ?? EMPTY(id)
 
@@ -359,7 +463,7 @@ export const summarizeVariantSearch = (
   const verification =
     describeVerificationFailures(
       { label: 'the candidates', ...aggregate(candidates) },
-      { label: 'the prompt in use', ...incumbentTally },
+      { label: incumbentNoun, ...incumbentTally },
     ) +
     // See `describeRevertedMerges`: reported beside the merge rate, never scored against an arm.
     describeRevertedMerges(
@@ -369,7 +473,7 @@ export const summarizeVariantSearch = (
         merged: candidates.reduce((sum, arm) => sum + arm.merged, 0),
       },
       {
-        label: 'the prompt in use',
+        label: incumbentNoun,
         reverted: incumbentTally.reverted,
         merged: incumbentTally.merged,
       },
@@ -381,8 +485,8 @@ export const summarizeVariantSearch = (
       leader: null,
       detail:
         `Still measuring: ${undecided} of ${arms.length} arms have fewer than ` +
-        `${MIN_DECIDED_RUNS_PER_ARM} finished runs. Every candidate is compared against the ` +
-        'prompt this persona actually has, so the comparison waits for that arm too.' +
+        `${MIN_DECIDED_RUNS_PER_ARM} finished runs. Every candidate is compared against ` +
+        `${heldNoun}, so the comparison waits for that arm too.` +
         verification,
     }
   }
@@ -392,7 +496,7 @@ export const summarizeVariantSearch = (
       arms,
       leader: null,
       detail:
-        'Measured, and none of the candidates beat the prompt this persona already has ' +
+        `Measured, and none of the candidates beat ${alreadyNoun} ` +
         `(${arms.map((arm) => asPercent(arm.successRate)).join(' / ')} merged). Discarding ` +
         'the search keeps every candidate on the record, which is what stops the next one ' +
         `proposing a version this workspace already paid to reject.${verification}`,
@@ -404,7 +508,7 @@ export const summarizeVariantSearch = (
   const because =
     term === 'outcomes'
       ? `it got work merged ${asPercent(winner.successRate)} of the time against ` +
-        `${asPercent(incumbent.successRate)} for the prompt in use`
+        `${asPercent(incumbent.successRate)} for ${incumbentNoun}`
       : term === 'verification'
         ? 'outcomes are level and it leaves fewer branches failing this repository\'s ' +
           'definition of done'
@@ -415,7 +519,7 @@ export const summarizeVariantSearch = (
     leader,
     detail:
       `One candidate is ahead: ${because}. Promoting it is a human's act — the loop ranks ` +
-      `and never swaps a prompt on your behalf.${verification}`,
+      `and never changes ${incumbentNoun} on your behalf.${verification}`,
   }
 }
 

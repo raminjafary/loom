@@ -164,6 +164,7 @@ import {
   type PersonaVariantSet,
   type PersonaVariantSetId,
   type VariantProposal,
+  type VariantComponent,
   type VariantSearchEffect,
   type PersonaSpec,
   type AppliedDeltaOp,
@@ -1859,6 +1860,7 @@ export const proposeOwnVariants = async (
       workspaceId: input.workspaceId,
       personaId: persona.id,
       proposedByRunId: input.agentRunId,
+      variedComponent: verdict.component,
       candidates: verdict.candidates.map((candidate) => ({
         markdownSource: candidate.markdown,
         rationale: candidate.rationale,
@@ -1890,6 +1892,7 @@ export const proposeOwnVariants = async (
       personaName: persona.name,
       setId: opened.set.id,
       candidates: opened.variants.length,
+      variedComponent: verdict.component,
     },
   })
 
@@ -1920,12 +1923,14 @@ export const proposeOwnVariants = async (
     variantIds: opened.variants.map((variant) => variant.id),
   })
 
+  const noun = verdict.component === 'tools' ? 'candidate tool lists' : 'candidate prompts'
+  const held = verdict.component === 'tools' ? 'the tools it holds now' : 'the prompt it has now'
   return {
     ok: true,
     outcome:
-      `Recorded ${opened.variants.length} candidate prompts for "${persona.name}". None of ` +
-      'them is live: the next runs of this persona alternate between them and the prompt it ' +
-      'has now, and a human promotes whichever the outcomes favour — or discards all of ' +
+      `Recorded ${opened.variants.length} ${noun} for "${persona.name}". None of ` +
+      `them is live: the next runs of this persona alternate between them and ${held}, ` +
+      'and a human promotes whichever the outcomes favour — or discards all of ' +
       'them. ' +
       /**
        * Two different last sentences, because the two paths end in different places. Telling a
@@ -2892,6 +2897,7 @@ export const variantSearchFor = async (
     effect: summarizeVariantSearch(
       tallies,
       open.variants.map((variant) => variant.id),
+      open.set.variedComponent,
     ),
   }
 }
@@ -3006,6 +3012,8 @@ export const listVariantSearches = async (
   {
     personaId: AgentPersonaId
     setId: PersonaVariantSetId
+    /** What this search varies, read off the set rather than re-derived from the candidates. */
+    variedComponent: VariantComponent
     candidates: PersonaVariant[]
     effect: VariantSearchEffect
     /** The second opinion, or null until the verifier has one. */
@@ -3033,10 +3041,12 @@ export const listVariantSearches = async (
       const effect = summarizeVariantSearch(
         await deps.personaVariants.tallyVariantOutcomes(input.workspaceId, entry.set.id),
         entry.variants.map((variant) => variant.id),
+        entry.set.variedComponent,
       )
       return {
         personaId: entry.set.personaId,
         setId: entry.set.id,
+        variedComponent: entry.set.variedComponent,
         candidates: entry.variants,
         effect,
         /**
@@ -3107,12 +3117,30 @@ export const promoteVariant = async (
   const variant = open?.variants.find((entry) => entry.id === input.variantId)
   if (!open || !variant) throw new NotFoundError('PersonaVariant')
 
-  const applied = revisePromptBody({
-    currentMarkdown: persona.markdownSource,
-    body: parsePersonaMarkdown(variant.markdownSource).systemPrompt,
-    // A human's act, not a run's: tier 1's one-edit-per-run cap does not apply.
-    revisionsThisRun: 0,
-  })
+  /**
+   * Re-applied through the validator of the tier that owns what this search varied, never
+   * through tier 1 for both.
+   *
+   * The candidate is a whole document and the incumbent has been free to move since it was
+   * written, so the promotion re-derives the change against the persona as it is now. Reading
+   * only the body off a tool-list candidate would apply the half that did not change and drop
+   * the half that did — the promotion would report success and the tool list would be exactly
+   * what it was, which is the failure that leaves no trace to find it by.
+   */
+  const candidate = parsePersonaMarkdown(variant.markdownSource)
+  const applied =
+    open.set.variedComponent === 'tools'
+      ? reviseToolList({
+          currentMarkdown: persona.markdownSource,
+          tools: [...candidate.tools],
+          revisionsThisRun: 0,
+        })
+      : revisePromptBody({
+          currentMarkdown: persona.markdownSource,
+          body: candidate.systemPrompt,
+          // A human's act, not a run's: tier 1's one-edit-per-run cap does not apply.
+          revisionsThisRun: 0,
+        })
   if (!applied.ok) {
     throw new ValidationError(
       `That candidate can no longer be applied to "${persona.name}": ${applied.reason}`,
@@ -4413,22 +4441,34 @@ const assignPromptTrial = async (
  * Assigns this run to one arm of an open variant search, or to nothing when no search is
  * running.
  *
- * `variantId: null` is the **incumbent** — the prompt the persona actually has, which is
- * the control group and needs no substitution at all. A candidate substitutes its body into
- * *this run's snapshot only*: the persona row is untouched for the whole search, because a
- * search that changed the thing it was measuring would be measuring something else.
+ * `variantId: null` is the **incumbent** — the document the persona actually has, which is
+ * the control group and needs no substitution at all. A candidate substitutes into *this
+ * run's snapshot only*: the persona row is untouched for the whole search, because a search
+ * that changed the thing it was measuring would be measuring something else.
  *
- * Returns null on anything missing or unreadable, and the run proceeds on the live prompt.
+ * **Both components substitute, and which one moved is a fact about the candidate rather
+ * than a flag.** A tool-list arm carries the incumbent's body and a body arm carries the
+ * incumbent's tools, so taking both from the chosen document is the same operation in either
+ * case — and the alternative, substituting the prompt and leaving the tools, is a search
+ * whose arms are identical while every surface reports three of them.
+ *
+ * Returns null on anything missing or unreadable, and the run proceeds on the live document.
  * Same discipline as `assignPromptTrial`, and the same reason: The loop adds no
  * authority, and a measurement that could refuse a run would have taken some.
  */
 const assignVariantSearch = async (
   deps: AgentDeps,
-  input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+  input: {
+    workspaceId: WorkspaceId
+    personaId: AgentPersonaId
+    /** The persona as it stands, for the envelope re-check below. */
+    markdownSource: string
+  },
 ): Promise<{
   setId: PersonaVariantSetId
   variantId: PersonaVariantId | null
   systemPrompt?: string
+  tools?: string[]
 } | null> => {
   try {
     const open = await deps.personaVariants.findOpenSet(input.workspaceId, input.personaId)
@@ -4459,10 +4499,31 @@ const assignVariantSearch = async (
 
     const chosen = open.variants.find((variant) => variant.id === variantId)
     if (!chosen) return { setId: open.set.id, variantId: null }
+    const candidate = parsePersonaMarkdown(chosen.markdownSource)
+
+    /**
+     * The candidate was checked against the envelope when it was proposed, and the envelope
+     * is a human's to move — so it is checked again here, against the ceiling as it is now.
+     * A narrowed envelope drops the arm to the incumbent rather than dispatching a run past
+     * a ceiling somebody deliberately lowered mid-search.
+     */
+    const live = parsePersonaMarkdown(input.markdownSource)
+    const fits = envelopeAllows(live.envelope, {
+      name: live.name,
+      tools: candidate.tools,
+      model: live.model,
+      budgetCapUsd: live.harnessBudgetCapUsd,
+      approvalMode: live.harnessApprovalMode,
+      planner: live.harnessPlanner,
+      delegates: live.harnessDelegates,
+    })
+    if (!fits.ok) return { setId: open.set.id, variantId: null }
+
     return {
       setId: open.set.id,
       variantId,
-      systemPrompt: parsePersonaMarkdown(chosen.markdownSource).systemPrompt,
+      systemPrompt: candidate.systemPrompt,
+      tools: candidate.tools,
     }
   } catch {
     return null
@@ -4788,6 +4849,7 @@ export const startAgentRun = async (
   const search = trial || input.screen ? null : await assignVariantSearch(deps, {
     workspaceId: input.workspaceId,
     personaId: input.personaId,
+    markdownSource: persona.markdownSource,
   })
 
   const baseSpec: PersonaSpec = {
@@ -4807,7 +4869,12 @@ export const startAgentRun = async (
       input.budgetCapUsd !== undefined && isHuman(input.actor)
         ? input.budgetCapUsd
         : persona.harnessBudgetCapUsd,
-    tools: persona.tools,
+    /**
+     * The arm's tools, when a search is over tool lists. `persona.tools` is both the
+     * incumbent arm and the case where no search is running, so the fallback is the same
+     * value either way.
+     */
+    tools: search?.tools ?? persona.tools,
     approvalMode: persona.harnessApprovalMode,
     planner: persona.harnessPlanner,
     delegates: persona.harnessDelegates,

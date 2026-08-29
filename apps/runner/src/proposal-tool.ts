@@ -1,5 +1,6 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { MAX_PROMPT_BODY_CHARS } from '@loom/domain'
+import type { WireVariantProposal } from '@loom/runner-protocol'
 import { z } from 'zod'
 
 /**
@@ -28,7 +29,7 @@ export const SUBMIT_PROPOSALS_TOOL_NAME = `mcp__${PROPOSAL_SERVER_NAME}__submit_
 
 export interface ProposalToolCallbacks {
   readonly submit: (input: {
-    variants: { body: string; rationale: string }[]
+    variants: WireVariantProposal[]
   }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
 }
 
@@ -82,6 +83,7 @@ export const createProposalTool = (personaName: string, callbacks: ProposalToolC
     async (args) => {
       const result = await callbacks.submit({
         variants: args.variants.map((variant) => ({
+          kind: 'body' as const,
           body: variant.prompt,
           rationale: variant.why,
         })),

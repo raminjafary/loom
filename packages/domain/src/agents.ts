@@ -5,6 +5,7 @@ import type { ResponseStyle } from './response-styles.js'
 import type { VerificationCheck } from './verification.js'
 import type { ReplayCheckOutcome, ReplayOutcome, ScreenDecision } from './replay-set.js'
 import type { CampaignStatus } from './replay-campaign.js'
+import type { VariantComponent } from './prompt-variants.js'
 import type {
   AgentPersonaId,
   AgentRunId,
@@ -268,6 +269,13 @@ export interface PersonaVariantSet {
   /** The run that proposed it. Null once that run is deleted; the search still stands. */
   readonly proposedByRunId: AgentRunId | null
   readonly status: 'open' | 'settled'
+  /**
+   * Which part of the document every candidate varies — the one question this search asks.
+   *
+   * Read rather than derived, so a settled search can still say what it was a search over
+   * after the incumbent it was compared against has moved on.
+   */
+  readonly variedComponent: VariantComponent
   readonly promotedVariantId: PersonaVariantId | null
   readonly settledAt: Date | null
   readonly settledByUserId: UserId | null

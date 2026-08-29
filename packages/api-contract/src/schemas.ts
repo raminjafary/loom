@@ -964,6 +964,8 @@ export const EvolutionEntrySchema = z.discriminatedUnion('kind', [
     at: z.date(),
     setId: z.string(),
     status: z.enum(['open', 'settled']),
+    /** What every candidate varied — the one question this search asked. */
+    variedComponent: z.enum(['body', 'tools']),
     proposedByRunId: z.string().nullable(),
     candidates: z.array(
       z.object({
@@ -1037,6 +1039,13 @@ export const PromptTrialSchema = z.object({
 export const VariantSearchSchema = z.object({
   personaId: z.string(),
   setId: z.string(),
+  /**
+   * What this search varies — the one question it asks.
+   *
+   * A panel that showed a tool-list search as a wall of identical prompt bodies would be
+   * showing the reader everything except the thing that differs.
+   */
+  variedComponent: z.enum(['body', 'tools']),
   detail: z.string(),
   leader: z.string().nullable(),
   candidates: z.array(
@@ -1044,6 +1053,8 @@ export const VariantSearchSchema = z.object({
       variantId: z.string(),
       /** The candidate's prompt body — what a run on this arm is actually told. */
       body: z.string(),
+      /** The candidate's tool list — what a run on this arm may reach for. */
+      tools: z.array(z.string()),
       rationale: z.string(),
     }),
   ),

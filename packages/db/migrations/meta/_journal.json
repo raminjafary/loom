@@ -484,6 +484,13 @@
       "when": 1787236934117,
       "tag": "0068_clammy_electro",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1788001346182,
+      "tag": "0069_shocking_shockwave",
+      "breakpoints": true
     }
   ]
 }

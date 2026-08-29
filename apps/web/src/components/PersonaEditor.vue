@@ -1302,10 +1302,17 @@ const harnessSummary = (persona: AgentPersona): string => {
               The candidate's own text, because promoting one is agreeing to it. A panel
               that showed only its score would be asking a human to approve a document
               they had not read.
+
+              A tool-list search shows the list instead: every candidate in one carries the
+              same body, so "read it" would open three identical prompts and hide the one
+              thing that differs.
             -->
             <details v-if="arm.variantId !== null">
-              <summary>read it</summary>
-              <pre>{{ candidateOf(arm.variantId)?.body }}</pre>
+              <summary>{{ search.variedComponent === 'tools' ? 'see the tools' : 'read it' }}</summary>
+              <pre v-if="search.variedComponent === 'tools'">{{
+                candidateOf(arm.variantId)?.tools.join(', ') || 'no tools'
+              }}</pre>
+              <pre v-else>{{ candidateOf(arm.variantId)?.body }}</pre>
             </details>
             <!--
               A rejected candidate can still be promoted, and that is deliberate: the screen

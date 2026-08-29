@@ -135,6 +135,7 @@ describe('buildLineage', () => {
       at: new Date(3_000),
       setId: asPersonaVariantSetId('set_1'),
       status: 'settled',
+      variedComponent: 'body',
       proposedByRunId: asAgentRunId('run_9'),
       candidates: [],
       verifierPickedVariantId: null,
@@ -186,6 +187,7 @@ describe('describeEvolutionEntry', () => {
       at: new Date(3_000),
       setId: asPersonaVariantSetId('set_1'),
       status: 'settled',
+      variedComponent: 'body',
       proposedByRunId: null,
       candidates: [
         { variantId: 'v1', rationale: 'terser', outcome: 'refused', reason: 'passed 2 of 6', decided: 0, kept: 0 },
@@ -198,5 +200,50 @@ describe('describeEvolutionEntry', () => {
     expect(text).toContain('ended with one promoted')
     expect(text).toContain('refused 1 of them an arm')
     expect(text).toContain('counted in nothing')
+  })
+
+  /**
+   * Two searches over one persona no longer mean the same thing, so the sentence has to say
+   * which. A walk that rendered both as "candidate prompts" would put a reader back where
+   * this file found them — reading a list of dates.
+   */
+  it('says which component a search varied', () => {
+    const over = (variedComponent: 'body' | 'tools') =>
+      describeEvolutionEntry({
+        kind: 'search',
+        at: new Date(3_000),
+        setId: asPersonaVariantSetId('set_1'),
+        status: 'open',
+        variedComponent,
+        proposedByRunId: null,
+        candidates: [
+          { variantId: 'v1', rationale: 'narrower', outcome: 'measured', reason: null, decided: 0, kept: 0 },
+          { variantId: 'v2', rationale: 'wider', outcome: 'measured', reason: null, decided: 0, kept: 0 },
+        ],
+        verifierPickedVariantId: null,
+        settledAt: null,
+      })
+    expect(over('tools')).toContain('2 candidate tool lists')
+    expect(over('body')).toContain('2 candidate prompts')
+  })
+
+  /**
+   * A tool-list edit is still unmeasured — the trial measures a prompt body — but it is no
+   * longer *unmeasurable*, and the sentence a reader acts on has to say which of those it is.
+   */
+  it('tells a tool-list edit that a search is what would measure it', () => {
+    const text = describeEvolutionEntry({
+      kind: 'revision',
+      at: new Date(1_000),
+      revisionId: asPersonaRevisionId('rev_1'),
+      authorKind: 'agent_run',
+      authorRunId: null,
+      rationale: 'wanted Grep',
+      components: ['tools'],
+      arms: [],
+      trialDecidedAt: null,
+    })
+    expect(text).toContain('Captured, and nothing measured it')
+    expect(text).toContain('A tool list can be put on trial')
   })
 })

@@ -1,0 +1,1 @@
+ALTER TABLE "persona_variant_set" ADD COLUMN "varied_component" text DEFAULT 'body' NOT NULL;

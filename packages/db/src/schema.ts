@@ -1857,6 +1857,20 @@ export const personaVariantSet = pgTable(
     }),
     /** 'open' | 'settled'. A settled search is history; an open one is being measured. */
     status: text('status').notNull().default('open'),
+    /**
+     * Which part of the persona document every candidate in this set varies — 'body' or
+     * 'tools'.
+     *
+     * Stored rather than derived, because deriving it means parsing every candidate against
+     * the incumbent *as it is now*, and the incumbent moves. A set settled months ago has to
+     * still be able to say what it was a search over, which is the same reason a run carries
+     * its own persona snapshot.
+     *
+     * Defaulted to 'body' rather than made nullable: every set written before this column
+     * existed was a search over prompt bodies, because that was the only kind there was, so
+     * the default states a fact rather than guessing at one.
+     */
+    variedComponent: text('varied_component').notNull().default('body'),
     /** Which candidate a human promoted, or null when they discarded the search. */
     promotedVariantId: uuid('promoted_variant_id'),
     /**

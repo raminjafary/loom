@@ -2065,6 +2065,7 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
           workspaceId: input.workspaceId,
           personaId: input.personaId,
           proposedByRunId: input.proposedByRunId ?? null,
+          variedComponent: input.variedComponent,
         })
         .returning()
       if (!setRow) throw new Error('variant set insert returned nothing')

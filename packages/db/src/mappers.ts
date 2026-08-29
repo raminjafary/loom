@@ -693,6 +693,7 @@ export interface PersonaVariantSetRow {
   personaId: string
   proposedByRunId: string | null
   status: string
+  variedComponent?: string
   promotedVariantId: string | null
   settledAt: Date | null
   settledByUserId: string | null
@@ -717,6 +718,13 @@ export const toPersonaVariantSet = (row: PersonaVariantSetRow): PersonaVariantSe
   personaId: asAgentPersonaId(row.personaId),
   proposedByRunId: row.proposedByRunId === null ? null : asAgentRunId(row.proposedByRunId),
   status: row.status === 'open' ? 'open' : 'settled',
+  /**
+   * Narrowed the same way `status` is, and toward the same kind of safe answer: anything
+   * unrecognized reads as `body`, which is what every set written before the column existed
+   * actually was. Reading a corrupt row as `tools` would make the panel claim a tool list was
+   * measured when a prompt was.
+   */
+  variedComponent: row.variedComponent === 'tools' ? 'tools' : 'body',
   promotedVariantId:
     row.promotedVariantId === null ? null : asPersonaVariantId(row.promotedVariantId),
   settledAt: row.settledAt,

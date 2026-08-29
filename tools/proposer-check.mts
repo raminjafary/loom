@@ -239,8 +239,8 @@ const main = async () => {
     workspaceId,
     agentRunId: asAgentRunId(subjectRun.id),
     proposals: [
-      { body: LOSER_ALPHA, rationale: 'ALPHA-RATIONALE: rewrite first, read later.' },
-      { body: LOSER_BETA, rationale: 'BETA-RATIONALE: tests are noise.' },
+      { kind: 'body' as const, body: LOSER_ALPHA, rationale: 'ALPHA-RATIONALE: rewrite first, read later.' },
+      { kind: 'body' as const, body: LOSER_BETA, rationale: 'BETA-RATIONALE: tests are noise.' },
     ],
   })
   check(seeded.ok === true, `a search was opened to lose${seeded.ok ? '' : `: ${seeded.reason}`}`)

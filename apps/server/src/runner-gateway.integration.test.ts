@@ -7034,8 +7034,8 @@ The prompt it started with.`
         runId: proposeRun.id,
         requestId: 'variants-1',
         variants: [
-          { body: 'CANDIDATE ALPHA. Read the tests first.', rationale: 'tests before code' },
-          { body: 'CANDIDATE BETA. Write the smallest diff.', rationale: 'small diffs land' },
+          { kind: 'body', body: 'CANDIDATE ALPHA. Read the tests first.', rationale: 'tests before code' },
+          { kind: 'body', body: 'CANDIDATE BETA. Write the smallest diff.', rationale: 'small diffs land' },
         ],
       }),
     )
@@ -7123,6 +7123,137 @@ The prompt it started with.`
   })
 
   /**
+   * The same search, over tool lists — tier 2 becoming measured rather than merely permitted.
+   *
+   * Two things here can only be shown over the real protocol, and both are places a field
+   * goes missing silently. The arms have to be *real*: three runs dispatched with three
+   * different tool lists and the same prompt, which is the opposite of what a search over
+   * bodies produces and the only evidence that the component reached the dispatch. And the
+   * promotion has to write the tool list: reading the body off a tool candidate and applying
+   * that is a promotion that reports success and changes nothing, which no unit test of
+   * either half would catch.
+   */
+  it('deals runs out between candidate tool lists, and promotes the list rather than the prompt', async () => {
+    const { socket, runnerId } = await pairFakeRunner('tool-variants')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'tool-variants' })
+    const persona = await client.persona.create({
+      markdownSource: `---
+name: self-editor-tools
+description: A persona a human has allowed to change its own tools.
+model: test-model
+tools: [Read]
+envelope:
+  tools: [Read, Grep, Glob]
+---
+
+The prompt it started with.`,
+    })
+
+    const firstFrame = nextFrame(socket, (v) => v.type === 'start_run')
+    const proposeRun = await client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: persona.id,
+    })
+    await firstFrame
+
+    /**
+     * A set that varies two things is refused before anything is written — the persona has
+     * one measurement slot and a mixed set spends it on two questions.
+     */
+    const mixed = nextFrame(
+      socket,
+      (v) => v.type === 'persona_prompt_result' && v.requestId === 'tool-variants-mixed',
+    )
+    socket.send(
+      JSON.stringify({
+        type: 'persona_variants_proposed',
+        runId: proposeRun.id,
+        requestId: 'tool-variants-mixed',
+        variants: [
+          { kind: 'body', body: 'A DIFFERENT PROMPT.', rationale: 'terser' },
+          { kind: 'tools', tools: ['Read', 'Grep'], rationale: 'grep instead of guessing' },
+        ],
+      }),
+    )
+    expect(String((await mixed).outcome)).toContain('One search measures one question')
+
+    const proposed = nextFrame(
+      socket,
+      (v) => v.type === 'persona_prompt_result' && v.requestId === 'tool-variants-1',
+    )
+    socket.send(
+      JSON.stringify({
+        type: 'persona_variants_proposed',
+        runId: proposeRun.id,
+        requestId: 'tool-variants-1',
+        variants: [
+          { kind: 'tools', tools: ['Read', 'Grep'], rationale: 'grep instead of guessing' },
+          { kind: 'tools', tools: ['Read', 'Glob'], rationale: 'find the file first' },
+        ],
+      }),
+    )
+    const proposedFrame = await proposed
+    expect(proposedFrame.ok).toBe(true)
+    expect(String(proposedFrame.outcome)).toContain('candidate tool lists')
+
+    // The persona still holds what it held: a search holds every candidate back.
+    const untouched = (await client.persona.list()).find((p) => p.id === persona.id)
+    expect(untouched?.tools).toEqual(['Read'])
+
+    const armTools: string[][] = []
+    const armPrompts: string[] = []
+    for (let i = 0; i < 3; i += 1) {
+      const frame = nextFrame(socket, (v) => v.type === 'start_run')
+      await client.agentRun.start({
+        threadId: created.rootThread.id,
+        repositoryId: repo.id,
+        personaId: persona.id,
+      })
+      const spec = (await frame).persona as { tools: string[]; systemPrompt: string }
+      armTools.push(spec.tools)
+      armPrompts.push(spec.systemPrompt)
+    }
+
+    // The tools it has goes first — nothing is live yet — then each candidate once.
+    expect(armTools).toEqual([['Read'], ['Read', 'Grep'], ['Read', 'Glob']])
+    // And the prompt is the same on every arm, which is what makes the tool list the variable.
+    expect(new Set(armPrompts).size).toBe(1)
+
+    const searchFor = async (personaId: string) =>
+      (await client.persona.variantSearches()).find((entry) => entry.personaId === personaId) ??
+      null
+    const search = await searchFor(persona.id)
+    expect(search?.variedComponent).toBe('tools')
+    expect(search?.candidates.map((candidate) => candidate.tools)).toEqual([
+      ['Read', 'Grep'],
+      ['Read', 'Glob'],
+    ])
+    expect(search?.detail).toContain('Still measuring')
+
+    /**
+     * The promotion writes the tool list. Asserted on the persona's own `tools`, not on the
+     * markdown, because the markdown is what a promotion happens to produce and the tools are
+     * what every future run of this persona is actually given.
+     */
+    const promoted = await client.persona.promoteVariant({
+      personaId: persona.id,
+      variantId: search!.candidates[1]!.variantId,
+    })
+    expect(promoted.tools).toEqual(['Read', 'Glob'])
+    expect(promoted.markdownSource).toContain('The prompt it started with')
+    expect(await searchFor(persona.id)).toBeNull()
+
+    const history = await client.persona.revisions({ personaId: persona.id })
+    expect(history).toHaveLength(1)
+    expect(history[0]?.replacedByKind).toBe('human')
+    expect(history[0]?.rationale).toContain('find the file first')
+
+    socket.close()
+  })
+
+  /**
    * The surrogate verifier, over the real protocol.
    *
    * Three claims, and every one of them is about what the verifier is *not* given. It is a
@@ -7184,8 +7315,8 @@ The prompt it started with.`
         runId: proposeRun.id,
         requestId: 'variants-v1',
         variants: [
-          { body: 'CANDIDATE ALPHA.', rationale: 'ALPHA-RATIONALE-CANARY' },
-          { body: 'CANDIDATE BETA.', rationale: 'BETA-RATIONALE-CANARY' },
+          { kind: 'body', body: 'CANDIDATE ALPHA.', rationale: 'ALPHA-RATIONALE-CANARY' },
+          { kind: 'body', body: 'CANDIDATE BETA.', rationale: 'BETA-RATIONALE-CANARY' },
         ],
       }),
     )
@@ -7288,8 +7419,8 @@ The prompt it started with.`
         runId: run.id,
         requestId: 'variants-2',
         variants: [
-          { body: 'CANDIDATE ONE.', rationale: 'one' },
-          { body: 'CANDIDATE TWO.', rationale: 'two' },
+          { kind: 'body', body: 'CANDIDATE ONE.', rationale: 'one' },
+          { kind: 'body', body: 'CANDIDATE TWO.', rationale: 'two' },
         ],
       }),
     )
@@ -7307,8 +7438,8 @@ The prompt it started with.`
         runId: run.id,
         requestId: 'variants-3',
         variants: [
-          { body: 'CANDIDATE THREE.', rationale: 'three' },
-          { body: 'CANDIDATE FOUR.', rationale: 'four' },
+          { kind: 'body', body: 'CANDIDATE THREE.', rationale: 'three' },
+          { kind: 'body', body: 'CANDIDATE FOUR.', rationale: 'four' },
         ],
       }),
     )
@@ -7335,8 +7466,8 @@ The prompt it started with.`
         runId: run.id,
         requestId: 'variants-4',
         variants: [
-          { body: 'CANDIDATE FIVE.', rationale: 'five' },
-          { body: 'CANDIDATE SIX.', rationale: 'six' },
+          { kind: 'body', body: 'CANDIDATE FIVE.', rationale: 'five' },
+          { kind: 'body', body: 'CANDIDATE SIX.', rationale: 'six' },
         ],
       }),
     )
@@ -7392,8 +7523,8 @@ The prompt it started with.`
         runId: subjectRun.id,
         requestId: 'seed-1',
         variants: [
-          { body: 'LOSER ALPHA.', rationale: 'ALPHA-RATIONALE' },
-          { body: 'LOSER BETA.', rationale: 'BETA-RATIONALE' },
+          { kind: 'body', body: 'LOSER ALPHA.', rationale: 'ALPHA-RATIONALE' },
+          { kind: 'body', body: 'LOSER BETA.', rationale: 'BETA-RATIONALE' },
         ],
       }),
     )
@@ -7454,8 +7585,8 @@ The prompt it started with.`
         runId: frame.runId,
         requestId: 'proposal-1',
         variants: [
-          { body: 'PROPOSED ALPHA.', rationale: 'It checks the suite first.' },
-          { body: 'PROPOSED BETA.', rationale: 'It writes the test first.' },
+          { kind: 'body', body: 'PROPOSED ALPHA.', rationale: 'It checks the suite first.' },
+          { kind: 'body', body: 'PROPOSED BETA.', rationale: 'It writes the test first.' },
         ],
       }),
     )

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
-import type { WireAgentEvent, WirePersonaSpec } from '@loom/runner-protocol'
+import type { WireAgentEvent, WirePersonaSpec, WireVariantProposal } from '@loom/runner-protocol'
 import {
   DEP_CACHE_DIR,
   depCacheEnv,
@@ -129,7 +129,7 @@ export interface SandboxOptions {
   }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
   /** The agent proposing candidate prompts, answered on the host. */
   readonly onProposeVariants?: (edit: {
-    variants: { body: string; rationale: string }[]
+    variants: WireVariantProposal[]
   }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
   /** The verifier submitting its verdict, answered on the host. */
   readonly onVerdict?: (verdict: {

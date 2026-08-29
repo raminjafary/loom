@@ -74,6 +74,7 @@ import type {
   PromptArmTally,
   PersonaVariant,
   PersonaVariantSet,
+  VariantComponent,
   PersonaVariantId,
   PersonaVariantSetId,
   VariantArmTally,
@@ -1185,6 +1186,12 @@ export interface PersonaVariantRepositoryPort {
     workspaceId: WorkspaceId
     personaId: AgentPersonaId
     proposedByRunId?: AgentRunId
+    /**
+     * What every candidate varies. Declared here rather than left to the default, because a
+     * field only spread into a call is an excess property TypeScript does not check — this
+     * port has silently dropped two of those already.
+     */
+    variedComponent: VariantComponent
     candidates: readonly { markdownSource: string; rationale: string }[]
   }): Promise<{ set: PersonaVariantSet; variants: PersonaVariant[] }>
 

@@ -1,4 +1,5 @@
 import { parsePersonaMarkdown } from './persona-markdown.js'
+import type { VariantComponent } from './prompt-variants.js'
 import { parsedPromptBody } from './self-edit.js'
 import type { AgentPersonaId, AgentRunId, PersonaRevisionId, PersonaVariantSetId } from './ids.js'
 
@@ -136,12 +137,20 @@ export interface RevisionEntry {
   readonly trialDecidedAt: Date | null
 }
 
-/** One search over candidate prompts, from what was proposed to what a human did about it. */
+/** One search over candidates, from what was proposed to what a human did about it. */
 export interface SearchEntry {
   readonly kind: 'search'
   readonly at: Date
   readonly setId: PersonaVariantSetId
   readonly status: 'open' | 'settled'
+  /**
+   * What this search varied — the one question it asked.
+   *
+   * Rendered rather than assumed, because two searches over the same persona now mean
+   * different things, and a timeline that showed them identically would put the reader back
+   * where this walk found them: reading a list of dates.
+   */
+  readonly variedComponent: VariantComponent
   /** The session that wrote the candidates — a proposer, or the run being edited. */
   readonly proposedByRunId: AgentRunId | null
   readonly candidates: readonly {
@@ -282,12 +291,13 @@ export const describeEvolutionEntry = (entry: EvolutionEntry): string => {
   if (entry.kind === 'search') {
     const refused = entry.candidates.filter((candidate) => candidate.outcome === 'refused').length
     const promoted = entry.candidates.find((candidate) => candidate.outcome === 'promoted')
+    const over = entry.variedComponent === 'tools' ? 'candidate tool lists' : 'candidate prompts'
     const head =
       entry.status === 'open'
-        ? `A search over ${entry.candidates.length} candidates is running.`
+        ? `A search over ${entry.candidates.length} ${over} is running.`
         : promoted
-          ? `A search over ${entry.candidates.length} candidates ended with one promoted.`
-          : `A search over ${entry.candidates.length} candidates ended with none kept.`
+          ? `A search over ${entry.candidates.length} ${over} ended with one promoted.`
+          : `A search over ${entry.candidates.length} ${over} ended with none kept.`
     const screened =
       refused === 0
         ? ''
@@ -310,7 +320,11 @@ export const describeEvolutionEntry = (entry: EvolutionEntry): string => {
     dealt === 0
       ? entry.authorKind === 'human'
         ? ' Nothing measured it, which is what a human edit is: a decision rather than a hypothesis.'
-        : ' **Captured, and nothing measured it** — the trial measures a prompt body, so an edit that changed anything else is on record and untested.'
+        : entry.components.includes('tools')
+          ? ' **Captured, and nothing measured it** — the trial measures a prompt body, and this ' +
+            'was an edit rather than a search. A tool list can be put on trial: propose two or ' +
+            'three and the same screen, arms and promotion gate apply.'
+          : ' **Captured, and nothing measured it** — the trial measures a prompt body, so an edit that changed anything else is on record and untested.'
       : ` Measured over ${dealt} decided ${dealt === 1 ? 'run' : 'runs'}: ` +
         `${entry.arms.map((arm) => `${arm.label} kept ${arm.kept} of ${arm.decided}`).join(', ')}.` +
         (entry.trialDecidedAt === null ? ' A human has not settled it yet.' : '')

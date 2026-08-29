@@ -27,11 +27,13 @@ export const SELF_SERVER_NAME = 'loom_self'
 export const REVISE_PROMPT_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__revise_own_prompt`
 export const REVISE_TOOLS_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__revise_own_tools`
 export const PROPOSE_VARIANTS_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__propose_own_variants`
+export const PROPOSE_TOOL_VARIANTS_TOOL_NAME = `mcp__${SELF_SERVER_NAME}__propose_own_tool_variants`
 
 export const SELF_TOOL_NAMES = [
   REVISE_PROMPT_TOOL_NAME,
   REVISE_TOOLS_TOOL_NAME,
   PROPOSE_VARIANTS_TOOL_NAME,
+  PROPOSE_TOOL_VARIANTS_TOOL_NAME,
 ] as const
 
 export interface SelfToolCallbacks {
@@ -56,14 +58,22 @@ export interface SelfToolCallbacks {
     rationale: string
   }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
   /**
-   * The searching half — several candidate prompts, none of them live.
+   * The searching half — several candidates, none of them live.
    *
    * Separate from `revisePrompt` rather than an option on it, because the two do different
    * things to the persona: an edit changes what every future run is told now, and a search
    * changes nothing until a human settles it.
+   *
+   * A candidate says which tier it belongs to rather than being sorted by which field it
+   * carries, because the two are validated against different ceilings — and the two tools
+   * below never mix them in one call, so a set is one question by construction on this side
+   * as well as by refusal on the server's.
    */
   readonly proposeVariants: (input: {
-    variants: { body: string; rationale: string }[]
+    variants: (
+      | { kind: 'body'; body: string; rationale: string }
+      | { kind: 'tools'; tools: string[]; rationale: string }
+    )[]
   }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
 }
 
@@ -216,7 +226,82 @@ export const createSelfTool = (callbacks: SelfToolCallbacks) => {
     async (args) => {
       const result = await callbacks.proposeVariants({
         variants: args.variants.map((variant) => ({
+          kind: 'body' as const,
           body: variant.prompt,
+          rationale: variant.why,
+        })),
+      })
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: result.ok ? result.outcome : `No search was opened: ${result.error}`,
+          },
+        ],
+        ...(result.ok ? {} : { isError: true }),
+      }
+    },
+  )
+
+  /**
+   * The same search, over tool lists.
+   *
+   * A second tool rather than a mode on the one above, for the reason tier 2 is a second
+   * tool rather than a field on tier 1: what crosses the wire here is a list of names and
+   * never prose, so there is no document for a candidate to reach into. It also makes the
+   * server's exclusivity rule unreachable by accident — a model cannot mix a prompt and a
+   * tool list into one set without calling two tools, which it has no reason to do.
+   *
+   * Its risk is the one tier 2 has: a model asked what tools it wants will want more. So
+   * the description spends its length on the fact that a bigger list is a hypothesis like
+   * any other and loses like any other, and on the envelope being the thing that decides.
+   */
+  const proposeToolVariants = tool(
+    'propose_own_tool_variants',
+    'Propose two or three DIFFERENT candidate tool lists for this persona and let the ' +
+      'platform find out which one actually works better. Nothing changes now: later runs ' +
+      'of this persona are dealt out between your candidates and the tools it holds today, ' +
+      'and a human promotes whichever produced the better outcomes — or discards them all. ' +
+      'Use this when you can see more than one plausible set of tools for the work this ' +
+      'persona does and you genuinely do not know which is right — a narrower list that ' +
+      'forces a better habit, or a wider one that removes a detour you kept taking. If you ' +
+      'already know, revise_own_tools is the honest call and it takes effect immediately. ' +
+      'Each candidate is the COMPLETE list, not a change to one. More tools is a guess like ' +
+      'any other and loses like any other: a list that wins is one that got more work ' +
+      'merged, not one that could reach further. Anything outside this persona\'s envelope ' +
+      'is refused, so ask for what you would actually use. ' +
+      'Your own run keeps the tools it started with, and one run may open one search.',
+    {
+      variants: z
+        .array(
+          z.object({
+            tools: z
+              .array(z.string().min(1).max(200))
+              .min(1)
+              .max(100)
+              .describe(
+                'One complete candidate tool list, by name. Not a change to the list you ' +
+                  'have — the whole list this persona would hold.',
+              ),
+            why: z
+              .string()
+              .min(1)
+              .max(600)
+              .describe(
+                'What this list lets a future run do differently, and what you expect that ' +
+                  'to change. A human reads this beside the measured outcomes.',
+              ),
+          }),
+        )
+        .min(2)
+        .max(3)
+        .describe('Two or three candidates. They must hold genuinely different tools.'),
+    },
+    async (args) => {
+      const result = await callbacks.proposeVariants({
+        variants: args.variants.map((variant) => ({
+          kind: 'tools' as const,
+          tools: variant.tools,
           rationale: variant.why,
         })),
       })
@@ -235,6 +320,6 @@ export const createSelfTool = (callbacks: SelfToolCallbacks) => {
   return createSdkMcpServer({
     name: SELF_SERVER_NAME,
     version: '1.0.0',
-    tools: [revisePrompt, reviseTools, proposeVariants],
+    tools: [revisePrompt, reviseTools, proposeVariants, proposeToolVariants],
   })
 }

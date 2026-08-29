@@ -148,6 +148,31 @@ export const WorkerNoteInputSchema = z.object({
   paths: z.array(z.string()).optional(),
 })
 
+/**
+ * One candidate in a variant search — a prompt body, or a tool list.
+ *
+ * Defined once and shared by both protocols that carry it: server↔Runner below, and the
+ * Runner↔sandbox protocol next door. Two copies of a discriminated union is how one side
+ * grows a case the other rejects, and the failure would arrive as a parse error on the
+ * frame rather than anywhere near the tool that sent it.
+ *
+ * Discriminated rather than inferred from which field is present, because the two are
+ * validated server-side by different tiers against different ceilings, and "which tier is
+ * this" is not something to reconstruct from an absent key.
+ */
+export const VariantProposalSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('body'),
+    body: z.string().max(40_000),
+    rationale: z.string().max(600),
+  }),
+  z.object({
+    kind: z.literal('tools'),
+    tools: z.array(z.string().max(200)).max(100),
+    rationale: z.string().max(600),
+  }),
+])
+
 export const AgentEventSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('assistant_text'), text: z.string() }),
   z.object({
@@ -393,23 +418,28 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
     rationale: z.string().max(600),
   }),
   /**
-   * A run proposing several candidate prompts instead of making one edit.
+   * A run proposing several candidates instead of making one edit.
    *
    * No persona id, for the reason `persona_prompt_revised` carries none: the target is the
    * persona the run *is*, resolved server-side from its own snapshot.
    *
+   * **A candidate is discriminated on the wire rather than inferred from which field is
+   * present.** A prompt candidate carries prose and a tool candidate carries a list of
+   * names, and the two are validated by different tiers with different ceilings — so which
+   * one this is has to be a value the schema refuses to leave ambiguous, not something the
+   * server works out from an absent key. The same reason tier 2 takes a structure and never
+   * markdown: an agent editing configuration is never handed the text of the configuration.
+   *
    * The count and the lengths are transport sanity checks only. What decides whether a
    * search may open at all — the envelope, the round trip on every candidate, the per-run
-   * cap, whether this persona is already being measured — is `proposeVariantSet`,
-   * server-side, where the stored markdown and the open sets are.
+   * cap, whether the set varies one thing, whether this persona is already being measured —
+   * is `proposeVariantSet`, server-side, where the stored markdown and the open sets are.
    */
   z.object({
     type: z.literal('persona_variants_proposed'),
     runId: z.string(),
     requestId: z.string(),
-    variants: z
-      .array(z.object({ body: z.string().max(40_000), rationale: z.string().max(600) }))
-      .max(8),
+    variants: z.array(VariantProposalSchema).max(8),
   }),
   /**
    * A surrogate verifier's verdict on a variant search.
@@ -1128,3 +1158,4 @@ export type WirePersonaSpec = z.infer<typeof PersonaSpecSchema>
 export type WireCapabilitySpec = z.infer<typeof CapabilitySpecSchema>
 export type WirePlanSubtask = z.infer<typeof PlanSubtaskSchema>
 export type WireWorkerNoteInput = z.infer<typeof WorkerNoteInputSchema>
+export type WireVariantProposal = z.infer<typeof VariantProposalSchema>

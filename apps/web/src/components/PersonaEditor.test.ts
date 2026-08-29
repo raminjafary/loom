@@ -382,6 +382,7 @@ describe('the variant search panel', () => {
   const search = (over: Partial<VariantSearch> = {}): VariantSearch => ({
     personaId: 'p1',
     setId: 's1',
+    variedComponent: 'body',
     detail: 'One candidate is ahead.',
     leader: 'v2',
     verifier: null,
@@ -389,8 +390,8 @@ describe('the variant search panel', () => {
     /** Null is the older path: a run of this persona wrote these about its own work. */
     proposer: null,
     candidates: [
-      { variantId: 'v1', body: 'READ THE TESTS FIRST.', rationale: 'tests before code' },
-      { variantId: 'v2', body: 'WRITE THE SMALLEST DIFF.', rationale: 'small diffs land' },
+      { variantId: 'v1', body: 'READ THE TESTS FIRST.', tools: ['Read'], rationale: 'tests before code' },
+      { variantId: 'v2', body: 'WRITE THE SMALLEST DIFF.', tools: ['Read'], rationale: 'small diffs land' },
     ],
     arms: [
       {
@@ -1128,6 +1129,7 @@ describe('PersonaEditor — how it got here', () => {
         at: new Date(2_000),
         setId: 'set_1',
         status: 'settled',
+        variedComponent: 'body',
         proposedByRunId: 'run_9',
         candidates: [
           {

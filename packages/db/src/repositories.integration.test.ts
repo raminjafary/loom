@@ -792,6 +792,7 @@ describe('prompt trial outcomes', () => {
       variants.openSet({
         workspaceId,
         personaId: s.personaId as never,
+        variedComponent: 'body',
         candidates: [
           { markdownSource: 'alpha doc', rationale: 'alpha' },
           { markdownSource: 'beta doc', rationale: 'beta' },
@@ -1355,6 +1356,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1496,6 +1498,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1576,6 +1579,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1655,6 +1659,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1680,6 +1685,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1739,6 +1745,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1785,6 +1792,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1827,6 +1835,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1862,6 +1871,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -1899,6 +1909,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'refused one', rationale: 'terser' },
         { markdownSource: 'admitted one', rationale: 'louder' },
@@ -1964,6 +1975,7 @@ describe('the held-out screen', () => {
       const opened = await variants.openSet({
         workspaceId: WS,
         personaId: s.personaId,
+        variedComponent: 'body',
         candidates: [{ markdownSource: body, rationale: 'terser' }],
       })
       await screens.openScreens({
@@ -2012,6 +2024,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'promoted', rationale: 'kept' },
         { markdownSource: 'lost with runs', rationale: 'measured' },
@@ -2056,6 +2069,7 @@ describe('the held-out screen', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [
         { markdownSource: 'a', rationale: 'r' },
         { markdownSource: 'b', rationale: 'r' },
@@ -2743,6 +2757,7 @@ describe('reverted merges', () => {
     const opened = await variants.openSet({
       workspaceId: WS,
       personaId: s.personaId,
+      variedComponent: 'body',
       candidates: [{ markdownSource: 'a', rationale: 'r' }],
     })
     const candidate = opened.variants[0]!

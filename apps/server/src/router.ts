@@ -1252,13 +1252,18 @@ export const router = os.router({
         return searches.map((found) => ({
           personaId: found.personaId as string,
           setId: found.setId as string,
+          variedComponent: found.variedComponent,
           detail: found.effect.detail,
           leader: found.effect.leader === null ? null : (found.effect.leader as string),
-          candidates: found.candidates.map((candidate) => ({
-            variantId: candidate.id as string,
-            body: parsePersonaMarkdown(candidate.markdownSource).systemPrompt,
-            rationale: candidate.rationale,
-          })),
+          candidates: found.candidates.map((candidate) => {
+            const parsed = parsePersonaMarkdown(candidate.markdownSource)
+            return {
+              variantId: candidate.id as string,
+              body: parsed.systemPrompt,
+              tools: parsed.tools,
+              rationale: candidate.rationale,
+            }
+          }),
           verifier:
             found.verifier === null
               ? null
@@ -1379,6 +1384,7 @@ export const router = os.router({
                   at: entry.at,
                   setId: entry.setId as string,
                   status: entry.status,
+                  variedComponent: entry.variedComponent,
                   proposedByRunId: entry.proposedByRunId as string | null,
                   candidates: entry.candidates.map((candidate) => ({ ...candidate })),
                   verifierPickedVariantId: entry.verifierPickedVariantId,

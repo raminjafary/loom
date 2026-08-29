@@ -107,6 +107,7 @@ export const personaEvolution = async (
       at: set.createdAt,
       setId: set.id,
       status: set.status,
+      variedComponent: set.variedComponent,
       proposedByRunId: set.proposedByRunId,
       candidates: variants.map((variant) => {
         const screen = screenFor(variant.id as string)

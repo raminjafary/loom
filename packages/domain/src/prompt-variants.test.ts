@@ -33,8 +33,25 @@ const PERSONA = [
 
 const NO_ENVELOPE = PERSONA.replace('envelope:\n  tools: [Read]\n', '')
 
+/** A ceiling wide enough that a tool list has somewhere to move inside it. */
+const TOOLED = [
+  '---',
+  'name: worker',
+  'description: Does the work.',
+  'model: claude-haiku-4-5-20251001',
+  'tools: [Read]',
+  'envelope:',
+  '  tools: [Read, Grep, Glob, Bash]',
+  '---',
+  '',
+  'The prompt it has now.',
+].join('\n')
+
 const proposals = (...bodies: string[]) =>
-  bodies.map((body, i) => ({ body, rationale: `reason ${i + 1}` }))
+  bodies.map((body, i) => ({ kind: 'body' as const, body, rationale: `reason ${i + 1}` }))
+
+const toolProposals = (...lists: string[][]) =>
+  lists.map((tools, i) => ({ kind: 'tools' as const, tools, rationale: `reason ${i + 1}` }))
 
 const A = asPersonaVariantId('v-a')
 const B = asPersonaVariantId('v-b')
@@ -130,6 +147,95 @@ describe('proposeVariantSet', () => {
     })
     expect(verdict.ok).toBe(false)
     if (!verdict.ok) expect(verdict.rule).toBe('duplicate')
+  })
+
+  /**
+   * Tier 2 becomes measured. The candidates are documents with different tool lists and the
+   * same body, so everything downstream — the screen, the arms, the verifier, promotion —
+   * applies without knowing a second component exists.
+   */
+  it('accepts tool lists as candidates and varies only the tool list', () => {
+    const verdict = proposeVariantSet({
+      currentMarkdown: TOOLED,
+      proposals: toolProposals(['Read', 'Grep'], ['Read', 'Bash']),
+      revisionsThisRun: 0,
+      measurementOpen: false,
+    })
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    expect(verdict.component).toBe('tools')
+    expect(verdict.candidates[0]?.markdown).toContain('tools: [Read, Grep]')
+    expect(verdict.candidates[1]?.markdown).toContain('tools: [Read, Bash]')
+    // The body is untouched on both, which is what makes the tool list the only variable.
+    expect(verdict.candidates[0]?.body).toBe(verdict.candidates[1]?.body)
+    expect(verdict.candidates[0]?.body).toContain('The prompt it has now.')
+  })
+
+  it('reports which component a set of prompts varies', () => {
+    const verdict = proposeVariantSet({
+      currentMarkdown: PERSONA,
+      proposals: proposals('Try being terse.', 'Try reading the tests first.'),
+      revisionsThisRun: 0,
+      measurementOpen: false,
+    })
+    expect(verdict.ok).toBe(true)
+    if (verdict.ok) expect(verdict.component).toBe('body')
+  })
+
+  /**
+   * The safety argument, restated for the second tier: a tool variant is a tier-2 edit that
+   * has not been made, so tier 2's ceiling is its ceiling. A candidate cannot acquire a tool
+   * the envelope does not already permit by going through the search door.
+   */
+  it('refuses a tool list outside the envelope, exactly as tier 2 would', () => {
+    const verdict = proposeVariantSet({
+      currentMarkdown: TOOLED,
+      proposals: toolProposals(['Read', 'Grep'], ['Read', 'Write']),
+      revisionsThisRun: 0,
+      measurementOpen: false,
+    })
+    expect(verdict.ok).toBe(false)
+    if (!verdict.ok) {
+      expect(verdict.rule).toBe('candidate-refused')
+      expect(verdict.reason).toContain('Candidate 2 of 2')
+      expect(verdict.reason).toContain('outside your envelope')
+    }
+  })
+
+  /**
+   * Order is not a difference. Two lists holding the same tools serialize to the same
+   * document, and a name-by-name comparison is exactly what would miss it.
+   */
+  it('refuses two tool lists that differ only in order', () => {
+    const verdict = proposeVariantSet({
+      currentMarkdown: TOOLED,
+      proposals: toolProposals(['Read', 'Grep'], ['Grep', 'Read']),
+      revisionsThisRun: 0,
+      measurementOpen: false,
+    })
+    expect(verdict.ok).toBe(false)
+    if (!verdict.ok) {
+      expect(verdict.rule).toBe('duplicate')
+      expect(verdict.reason).toContain('Order is not a difference')
+    }
+  })
+
+  /**
+   * A persona is measured one way at a time, so a set that varies two things spends that one
+   * slot on two questions and answers neither.
+   */
+  it('refuses a set whose candidates vary different components', () => {
+    const verdict = proposeVariantSet({
+      currentMarkdown: TOOLED,
+      proposals: [...proposals('Try being terse.'), ...toolProposals(['Read', 'Grep'])],
+      revisionsThisRun: 0,
+      measurementOpen: false,
+    })
+    expect(verdict.ok).toBe(false)
+    if (!verdict.ok) {
+      expect(verdict.rule).toBe('mixed-components')
+      expect(verdict.reason).toContain('One search measures one question')
+    }
   })
 
   /**
@@ -317,6 +423,22 @@ describe('summarizeVariantSearch', () => {
     expect(effect.arms[1]?.standing).toBe('worse')
     expect(effect.leader).toBeNull()
     expect(effect.detail).toContain('most often the build check')
+  })
+
+  /**
+   * Every threshold and the leader are identical either way — a document is a document. What
+   * changes is the noun, and a tool-list search reported as being about "the prompt in use"
+   * would be describing the one thing that did not vary.
+   */
+  it('names what the incumbent arm actually is', () => {
+    const tallies = [tally(null, { merged: 1 }), tally(A, { merged: 5 })]
+    const prompts = summarizeVariantSearch(tallies, [A], 'body')
+    const tools = summarizeVariantSearch(tallies, [A], 'tools')
+    expect(prompts.leader).toBe(A)
+    expect(tools.leader).toBe(A)
+    expect(prompts.detail).toContain('the prompt in use')
+    expect(tools.detail).toContain('the tools it has now')
+    expect(tools.detail).not.toContain('prompt')
   })
 
   it('handles a set nothing has run yet without dividing by zero', () => {

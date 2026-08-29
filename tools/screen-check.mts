@@ -181,8 +181,8 @@ const main = async () => {
     workspaceId,
     agentRunId: asAgentRunId(proposer.id),
     proposals: [
-      { body: 'A FIRST CANDIDATE.', rationale: 'terser' },
-      { body: 'A SECOND CANDIDATE.', rationale: 'more explicit' },
+      { kind: 'body' as const, body: 'A FIRST CANDIDATE.', rationale: 'terser' },
+      { kind: 'body' as const, body: 'A SECOND CANDIDATE.', rationale: 'more explicit' },
     ],
   })
   check('the search opened', proposed.ok === true, proposed.ok ? '' : proposed.reason)

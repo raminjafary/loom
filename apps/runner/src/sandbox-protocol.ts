@@ -1,4 +1,4 @@
-import { AgentEventSchema, PersonaSpecSchema } from '@loom/runner-protocol'
+import { AgentEventSchema, PersonaSpecSchema, VariantProposalSchema } from '@loom/runner-protocol'
 import { z } from 'zod'
 
 /**
@@ -319,9 +319,7 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
   z.object({
     t: z.literal('variants_propose'),
     requestId: z.string(),
-    variants: z
-      .array(z.object({ body: z.string().max(40_000), rationale: z.string().max(600) }))
-      .max(8),
+    variants: z.array(VariantProposalSchema).max(8),
   }),
   /**
    * The verifier's verdict on a variant search, answered on the host.

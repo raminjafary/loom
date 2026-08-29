@@ -11,6 +11,7 @@ import {
   type RunnerFrame,
   type WireAgentEvent,
   type WirePersonaSpec,
+  type WireVariantProposal,
 } from '@loom/runner-protocol'
 import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
@@ -933,7 +934,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
     }
     /** The searching half, on the same round trip and the same pending map. */
     const onProposeVariants = (edit: {
-      variants: { body: string; rationale: string }[]
+      variants: WireVariantProposal[]
     }): Promise<{ ok: true; outcome: string } | { ok: false; error: string }> => {
       const requestId = nextNoteRequestId()
       send({ type: 'persona_variants_proposed', runId: input.runId, requestId, ...edit })
