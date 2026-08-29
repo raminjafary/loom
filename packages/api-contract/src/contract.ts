@@ -1481,6 +1481,19 @@ export const contract = {
     setPlanReviewRequired: oc
       .input(z.object({ required: z.boolean() }))
       .output(RunControlSchema),
+
+    /**
+     * Whether the platform may deny some runs the lessons their persona holds about the
+     * repository they are working in, so that "does this memory help" has a baseline.
+     *
+     * Off by default, and its own procedure for the reason the three above have theirs. The
+     * default is off because this is the only measurement in the platform that makes work
+     * worse on purpose: half the runs on an armed pairing are denied a memory the persona
+     * has, and that is not a price a platform charges an operator silently.
+     */
+    setExperienceTrialEnabled: oc
+      .input(z.object({ enabled: z.boolean() }))
+      .output(RunControlSchema),
   },
 
   /**

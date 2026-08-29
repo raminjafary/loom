@@ -491,6 +491,13 @@
       "when": 1788001346182,
       "tag": "0069_shocking_shockwave",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1788002735628,
+      "tag": "0070_furry_the_enforcers",
+      "breakpoints": true
     }
   ]
 }

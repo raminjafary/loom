@@ -54,6 +54,7 @@ import {
   getPlanForReview,
   rejectPlan,
   requestPlanChanges,
+  setExperienceTrialEnabled,
   setModelRoutingEnabled,
   setPlanReviewRequired,
   conveneSession,
@@ -1762,6 +1763,18 @@ export const router = os.router({
           required: input.required,
         }),
       ),
+    ),
+
+    /** Whether some runs are denied their persona's memory, to find out whether it helps. */
+    setExperienceTrialEnabled: os.runControl.setExperienceTrialEnabled.handler(
+      ({ context, input }) =>
+        guard(() =>
+          setExperienceTrialEnabled(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            enabled: input.enabled,
+          }),
+        ),
     ),
   },
 

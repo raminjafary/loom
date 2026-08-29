@@ -1474,6 +1474,8 @@ export const RunControlSchema = z.object({
    * offered the toggle without knowing its state would be a checkbox that lies.
    */
   modelRoutingEnabled: z.boolean(),
+  /** Whether some runs are being denied their persona's memory, to measure whether it helps. */
+  experienceTrialEnabled: z.boolean(),
 })
 
 /**

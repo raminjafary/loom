@@ -118,6 +118,7 @@ export const useAgentStore = defineStore('agent', () => {
     personaEvolution: (personaId: string) => session.personaEvolution(personaId),
     retireLesson: (input: { lessonId: string; reason: string }) => session.retireLesson(input),
     setModelRoutingEnabled: (enabled: boolean) => session.setModelRoutingEnabled(enabled),
+    setExperienceTrialEnabled: (enabled: boolean) => session.setExperienceTrialEnabled(enabled),
     unbindRepository: (input: { repositoryId: string; acknowledge?: boolean }) =>
       session.unbindRepository(input),
     removeRunner: (runnerId: string) => session.removeRunner(runnerId),

@@ -1,4 +1,6 @@
 import type {
+  ExperienceArm,
+  ExperienceArmTally,
   ExperienceLesson,
   LessonDraft,
   PersonaLessonId,
@@ -1520,6 +1522,17 @@ export interface WorkspaceRunControlRepositoryPort {
     workspaceId: WorkspaceId,
     enabled: boolean,
   ): Promise<WorkspaceRunControl>
+  /**
+   * Whether the platform may deny some runs the lessons their persona holds.
+   *
+   * Its own method for the reason the three above have theirs, and here the consequence
+   * avoided is the worst of them: hitting the kill switch must not quietly start — or stop —
+   * denying runs a memory they would otherwise be given.
+   */
+  setExperienceTrialEnabled(
+    workspaceId: WorkspaceId,
+    enabled: boolean,
+  ): Promise<WorkspaceRunControl>
 }
 
 export interface ApprovalRepositoryPort {
@@ -2192,6 +2205,43 @@ export interface ExperienceRepositoryPort {
     personaId: AgentPersonaId,
     repositoryId: RepositoryId,
   ): Promise<Record<string, { decided: number; merged: number; discarded: number; failed: number }>>
+
+  /**
+   * Which arm of the trial a run was put on, and how much it was actually shown.
+   *
+   * Written for the `retrieved` side as well as the `withheld` one, and that is the point:
+   * a run denied the memory cites nothing, and so does a run against a pairing that holds
+   * nothing, and so does every run from before this shipped. A citation table cannot tell
+   * those apart, which is what "a baseline nobody wrote down is not a baseline" means here.
+   */
+  recordUse(input: {
+    workspaceId: WorkspaceId
+    personaId: AgentPersonaId
+    repositoryId: RepositoryId
+    agentRunId: AgentRunId
+    arm: ExperienceArm
+    lessonsShown: number
+  }): Promise<void>
+
+  /** How many runs each arm already holds, which is what the alternation reads. */
+  countExperienceArms(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    repositoryId: RepositoryId,
+  ): Promise<{ retrieved: number; withheld: number }>
+
+  /**
+   * What became of the runs on each arm.
+   *
+   * "Decided" must match `tallyExpertiseOutcomes` exactly — a disposition, a failed run, or
+   * a branch that failed its repository's definition of done — because the two are one query
+   * written twice, and a second definition would drift.
+   */
+  tallyExperienceOutcomes(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+    repositoryId: RepositoryId,
+  ): Promise<ExperienceArmTally[]>
 
   /** Retires lessons. Never a delete — see `record`. Returns how many rows it stamped. */
   invalidate(

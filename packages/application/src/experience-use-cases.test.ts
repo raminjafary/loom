@@ -10,6 +10,7 @@ import {
   type AgentRunId,
   type Envelope,
   type ExperienceLesson,
+  type ExperienceArmTally,
   type PersonaLessonId,
   type RepositoryId,
 } from '@loom/domain'
@@ -22,7 +23,7 @@ import {
   listPersonaExperience,
   recordExperience,
   retireLesson,
-  type ExperienceDeps,
+  type ExperienceReadDeps,
 } from './experience-use-cases.js'
 
 const workspaceId = asWorkspaceId('w1')
@@ -135,6 +136,30 @@ class FakeExperience implements ExperienceRepositoryPort {
     return this.outcomes
   }
 
+  uses: { agentRunId: string; arm: 'retrieved' | 'withheld'; lessonsShown: number }[] = []
+
+  async recordUse(input: Parameters<ExperienceRepositoryPort['recordUse']>[0]) {
+    if (this.uses.some((use) => use.agentRunId === input.agentRunId)) return
+    this.uses.push({
+      agentRunId: input.agentRunId,
+      arm: input.arm,
+      lessonsShown: input.lessonsShown,
+    })
+  }
+
+  async countExperienceArms() {
+    return {
+      retrieved: this.uses.filter((use) => use.arm === 'retrieved').length,
+      withheld: this.uses.filter((use) => use.arm === 'withheld').length,
+    }
+  }
+
+  armTallies: ExperienceArmTally[] = []
+
+  async tallyExperienceOutcomes() {
+    return this.armTallies
+  }
+
   async invalidate(_w: typeof workspaceId, lessonIds: readonly PersonaLessonId[], reason: string) {
     let count = 0
     this.lessons = this.lessons.map((lesson) => {
@@ -148,10 +173,13 @@ class FakeExperience implements ExperienceRepositoryPort {
 
 const deps = (
   experience: FakeExperience,
-  over: { envelope?: Envelope | null; personaName?: string } = {},
-): ExperienceDeps =>
+  over: { envelope?: Envelope | null; personaName?: string; trialArmed?: boolean } = {},
+): ExperienceReadDeps =>
   ({
     experience,
+    runControl: {
+      get: async () => ({ experienceTrialEnabled: over.trialArmed === true }),
+    },
     personas: {
       listByWorkspace: async () => [
         {
@@ -175,7 +203,7 @@ const deps = (
         { id: otherRepositoryId, displayName: 'other' },
       ],
     },
-  }) as unknown as ExperienceDeps
+  }) as unknown as ExperienceReadDeps
 
 const distillation = (key: string, over: Record<string, unknown> = {}) => ({
   lessons: [
@@ -300,6 +328,96 @@ describe('buildExperienceContext — what a run is handed, and what is written d
     })
     expect(context).toBe('')
     expect(store.citations).toEqual([])
+  })
+
+  /**
+   * The default everywhere, and the one that must not change: a workspace that has not armed
+   * the trial gets exactly what it got before the trial existed. The row is still written,
+   * so a workspace that arms it later starts against a real history rather than an empty one.
+   */
+  it('shows the memory and records the arm when no trial is armed', async () => {
+    const store = new FakeExperience()
+    await recordExperience(deps(store), {
+      workspaceId,
+      agentRunId: runId,
+      distillation: distillation('seed-first'),
+    })
+
+    for (const id of ['run-a', 'run-b', 'run-c']) {
+      const context = await buildExperienceContext(deps(store), {
+        workspaceId,
+        personaId,
+        repositoryId,
+        agentRunId: asAgentRunId(id),
+      })
+      expect(context).toContain('About seed-first')
+    }
+    expect(store.uses.map((use) => use.arm)).toEqual(['retrieved', 'retrieved', 'retrieved'])
+  })
+
+  /**
+   * The kill criterion, enforced before a single run is denied anything: a pairing holding
+   * fewer lessons than the floor differs from an empty one by a couple of lines of prose, so
+   * denying half its runs buys nothing.
+   */
+  it('does not withhold on a pairing too small to show a difference, even when armed', async () => {
+    const store = new FakeExperience()
+    await recordExperience(deps(store), {
+      workspaceId,
+      agentRunId: runId,
+      distillation: distillation('seed-first'),
+    })
+
+    for (const id of ['run-a', 'run-b']) {
+      const context = await buildExperienceContext(deps(store, { trialArmed: true }), {
+        workspaceId,
+        personaId,
+        repositoryId,
+        agentRunId: asAgentRunId(id),
+      })
+      expect(context).toContain('About seed-first')
+    }
+    expect(store.uses.every((use) => use.arm === 'retrieved')).toBe(true)
+  })
+
+  /**
+   * The trial itself. Half the runs against an armed pairing over the floor are denied a
+   * memory the persona has — and the denied run writes a row saying so, because without it
+   * a denied run and a run against an empty pairing are the same absence.
+   */
+  it('withholds the memory from alternate runs once armed, and writes the baseline down', async () => {
+    const store = new FakeExperience()
+    for (const key of ['seed-first', 'seed-second', 'seed-third', 'seed-fourth']) {
+      await recordExperience(deps(store), {
+        workspaceId,
+        agentRunId: asAgentRunId(`author-${key}`),
+        distillation: distillation(key),
+      })
+    }
+
+    const contexts: string[] = []
+    for (const id of ['run-a', 'run-b', 'run-c', 'run-d']) {
+      contexts.push(
+        await buildExperienceContext(deps(store, { trialArmed: true }), {
+          workspaceId,
+          personaId,
+          repositoryId,
+          agentRunId: asAgentRunId(id),
+        }),
+      )
+    }
+
+    expect(store.uses.map((use) => use.arm)).toEqual([
+      'retrieved',
+      'withheld',
+      'retrieved',
+      'withheld',
+    ])
+    // A withheld run is handed nothing and cites nothing — it is the baseline.
+    expect(contexts[0]).toContain('About seed-first')
+    expect(contexts[1]).toBe('')
+    expect(store.uses[1]?.lessonsShown).toBe(0)
+    expect(store.citations.every((citation) => citation.agentRunId !== 'run-b')).toBe(true)
   })
 
   it('never shows a retired lesson', async () => {

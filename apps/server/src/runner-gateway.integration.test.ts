@@ -7922,6 +7922,141 @@ Work on whatever you are asked.`
     socket.close()
   })
 
+  /**
+   * The withheld baseline, over the real protocol.
+   *
+   * The half only an integration test can show is that the arm actually reaches the
+   * dispatch: a run on the withheld side has to be started with **no** `experienceContext`
+   * while the persona demonstrably holds lessons about that repository, and the row saying
+   * so has to exist. Every arithmetic surface downstream is computed over those rows, and
+   * arithmetic over rows that were never produced is the failure this catches.
+   *
+   * It also pins the default. The first four runs here are all shown the memory, because the
+   * trial is not armed — a workspace that never asks for it must keep getting exactly what it
+   * got before any of this existed.
+   */
+  it('denies alternate runs the memory once a human arms the trial, and never before', async () => {
+    const { socket, runnerId } = await pairFakeRunner('experience-trial')
+    const repo = await bindViaFakeRunner(socket, runnerId, '/tmp/trialled-repo', 'trialled')
+    const created = await client.channel.create({ name: 'experience-trial' })
+    const persona = await client.persona.create({
+      markdownSource: REMEMBERING_PERSONA.replace('rememberer', `trialled-${Date.now()}`),
+    })
+
+    /**
+     * Each run is finished before the next starts. Not tidiness: the workspace concurrency
+     * limit refuses a seventh live run, and this test needs ten.
+     */
+    const finish = async (runId: string) => {
+      socket.send(
+        JSON.stringify({
+          type: 'agent_event',
+          runId,
+          seq: 1,
+          event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'done' },
+        }),
+      )
+      for (let i = 0; i < 40; i += 1) {
+        if ((await client.agentRun.get({ agentRunId: runId })).status === 'completed') return
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+    }
+
+    const authorStart = nextFrame(socket, (v) => v.type === 'start_run')
+    const author = await client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: persona.id,
+    })
+    await authorStart
+
+    /**
+     * Four lessons, because the kill criterion refuses to withhold below the floor: a pairing
+     * holding fewer differs from an empty one by a couple of lines of prose, and denying half
+     * its runs would buy nothing. Two runs, since one run may only write three.
+     */
+    const keys = ['first-rule', 'second-rule', 'third-rule', 'fourth-rule']
+    const write = async (runId: string, requestId: string, batch: string[]) => {
+      const answered = nextFrame(
+        socket,
+        (v) => v.type === 'experience_result' && v.requestId === requestId,
+      )
+      socket.send(
+        JSON.stringify({
+          type: 'experience_recorded',
+          runId,
+          requestId,
+          distillation: {
+            lessons: batch.map((key) => ({
+              key,
+              kind: 'convention',
+              title: `About ${key}`,
+              body: `Something true about ${key} in this repository.`,
+              paths: [`packages/${key}`],
+            })),
+          },
+        }),
+      )
+      expect((await answered).ok).toBe(true)
+    }
+    await write(author.id, 'trial-lessons-1', keys.slice(0, 3))
+    await finish(author.id)
+
+    const secondAuthorStart = nextFrame(socket, (v) => v.type === 'start_run')
+    const secondAuthor = await client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: persona.id,
+    })
+    await secondAuthorStart
+    await write(secondAuthor.id, 'trial-lessons-2', keys.slice(3))
+    await finish(secondAuthor.id)
+
+    const startAndReadContext = async (): Promise<string | undefined> => {
+      const frame = nextFrame(socket, (v) => v.type === 'start_run')
+      const run = await client.agentRun.start({
+        threadId: created.rootThread.id,
+        repositoryId: repo.id,
+        personaId: persona.id,
+      })
+      const started = await frame
+      await finish(run.id)
+      return started.experienceContext === undefined
+        ? undefined
+        : String(started.experienceContext)
+    }
+
+    // Unarmed: every run is shown the memory, which is the shipped behaviour.
+    expect(await startAndReadContext()).toContain('About first-rule')
+    expect(await startAndReadContext()).toContain('About first-rule')
+
+    await client.runControl.setExperienceTrialEnabled({ enabled: true })
+
+    /**
+     * Armed. The arms alternate from the counts already recorded, and four runs have been
+     * recorded as `retrieved` already — so the next two go to the baseline before the
+     * alternation catches up. What is asserted is the *pattern*, not a fixed position: some
+     * runs get nothing while the persona demonstrably holds four lessons about this
+     * repository, and some still get the memory.
+     */
+    const armed = [
+      await startAndReadContext(),
+      await startAndReadContext(),
+      await startAndReadContext(),
+      await startAndReadContext(),
+    ]
+    expect(armed.some((context) => context === undefined)).toBe(true)
+    expect(armed.some((context) => context?.includes('About first-rule'))).toBe(true)
+
+    // The persona still holds every lesson: a withheld run is denied the memory, never
+    // stripped of it. A trial that retired what it was measuring would measure nothing twice.
+    const held = await client.experience.listForPersona({ personaId: persona.id })
+    expect(held.filter((lesson) => lesson.invalidatedAt === null)).toHaveLength(4)
+
+    await client.runControl.setExperienceTrialEnabled({ enabled: false })
+    socket.close()
+  })
+
   it('refuses a persona with no envelope, and remembers nothing', async () => {
     const { socket, runnerId } = await pairFakeRunner('experience-refused')
     const repo = await bindViaFakeRunner(socket, runnerId)

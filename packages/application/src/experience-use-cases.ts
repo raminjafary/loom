@@ -4,14 +4,19 @@ import {
   MAX_LESSONS_PER_RUN,
   NotFoundError,
   ValidationError,
+  experienceAssignment,
+  experienceStateFor,
   maySelfModify,
   parseDistillation,
   renderExperienceForPrompt,
   selectExperienceForContext,
   selectStaleLessonIds,
+  summarizeExperienceEffect,
   type AgentPersonaId,
   type AgentRunId,
+  type ExperienceEffect,
   type ExperienceLesson,
+  type ExperienceState,
   type PersonaLessonId,
   type RepositoryId,
   type WorkspaceId,
@@ -21,6 +26,7 @@ import type {
   ExperienceRepositoryPort,
   PersonaRepositoryPort,
   RepositoryRepositoryPort,
+  WorkspaceRunControlRepositoryPort,
 } from './agent-ports.js'
 
 /**
@@ -49,6 +55,51 @@ export interface ExperienceDeps {
   readonly personas: PersonaRepositoryPort
   readonly agentRuns: AgentRunRepositoryPort
   readonly repositories: RepositoryRepositoryPort
+}
+
+/** What `buildExperienceContext` needs beyond the write path: the workspace's own policy. */
+export interface ExperienceReadDeps extends ExperienceDeps {
+  readonly runControl: WorkspaceRunControlRepositoryPort
+}
+
+/**
+ * What this persona's memory of this repository has come to, and whether it is being
+ * measured.
+ *
+ * Read on demand and never polled, like the lineage walk: three round trips for a panel
+ * somebody opened. The verdict is recomputed from the rows on every read rather than stored,
+ * for the map trial's reason — a stored decision goes stale, and the store this one is about
+ * gains and retires lessons continuously.
+ */
+export const experienceTrialFor = async (
+  deps: ExperienceReadDeps,
+  input: {
+    workspaceId: WorkspaceId
+    personaId: AgentPersonaId
+    repositoryId: RepositoryId
+  },
+): Promise<{
+  state: ExperienceState
+  liveLessons: number
+  effect: ExperienceEffect
+}> => {
+  const [lessons, tallies, control] = await Promise.all([
+    deps.experience.listForScope(input.workspaceId, input.personaId, input.repositoryId),
+    deps.experience.tallyExperienceOutcomes(input.workspaceId, input.personaId, input.repositoryId),
+    deps.runControl.get(input.workspaceId),
+  ])
+  const liveLessons = lessons.filter((lesson) => lesson.invalidatedAt === null).length
+  const effect = summarizeExperienceEffect(tallies)
+  return {
+    state: experienceStateFor({
+      override: null,
+      trialArmed: control.experienceTrialEnabled,
+      liveLessons,
+      verdict: effect.verdict,
+    }),
+    liveLessons,
+    effect,
+  }
 }
 
 export type ExperienceWriteResult =
@@ -150,7 +201,7 @@ export const recordExperience = async (
  * tie throughput to the least important write in the system.
  */
 export const buildExperienceContext = async (
-  deps: ExperienceDeps,
+  deps: ExperienceReadDeps,
   input: {
     workspaceId: WorkspaceId
     personaId: AgentPersonaId
@@ -159,18 +210,65 @@ export const buildExperienceContext = async (
   },
 ): Promise<string> => {
   if (input.repositoryId === null) return ''
+  const repositoryId = input.repositoryId
 
   const lessons = await deps.experience.listForScope(
     input.workspaceId,
     input.personaId,
-    input.repositoryId,
+    repositoryId,
   )
   if (lessons.length === 0) return ''
+
+  /**
+   * Which arm this run is on, decided here because here is where the memory would be handed
+   * over — a decision made anywhere else would be a decision about a run that might still
+   * not be shown anything.
+   *
+   * A `withheld` run returns early with its row written and nothing rendered. That row is the
+   * baseline: without it a denied run and a run against an empty pairing are the same absence,
+   * and the comparison the trial exists for has nothing to compare against.
+   */
+  const [control, used] = await Promise.all([
+    deps.runControl.get(input.workspaceId),
+    deps.experience.countExperienceArms(input.workspaceId, input.personaId, repositoryId),
+  ])
+  const live = lessons.filter((lesson) => lesson.invalidatedAt === null)
+  const tallies = control.experienceTrialEnabled
+    ? await deps.experience.tallyExperienceOutcomes(input.workspaceId, input.personaId, repositoryId)
+    : []
+  const state = experienceStateFor({
+    override: null,
+    trialArmed: control.experienceTrialEnabled,
+    liveLessons: live.length,
+    verdict: summarizeExperienceEffect(tallies).verdict,
+  })
+  const arm = experienceAssignment(state, used)
+  if (arm === null) return ''
+
+  const recordUse = async (lessonsShown: number) => {
+    try {
+      await deps.experience.recordUse({
+        workspaceId: input.workspaceId,
+        personaId: input.personaId,
+        repositoryId,
+        agentRunId: input.agentRunId,
+        arm,
+        lessonsShown,
+      })
+    } catch {
+      // Best-effort, like the citations below: a run worse recorded, never a run refused.
+    }
+  }
+
+  if (arm === 'withheld') {
+    await recordUse(0)
+    return ''
+  }
 
   const outcomes = await deps.experience.tallyLessonOutcomes(
     input.workspaceId,
     input.personaId,
-    input.repositoryId,
+    repositoryId,
   )
   const selected = selectExperienceForContext(
     lessons,
@@ -180,6 +278,7 @@ export const buildExperienceContext = async (
   )
   if (selected.lessons.length === 0) return ''
 
+  await recordUse(selected.lessons.length)
   try {
     await deps.experience.recordCitations({
       workspaceId: input.workspaceId,

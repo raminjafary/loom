@@ -4,13 +4,15 @@ import {
   asPersonaLessonId,
   asRepositoryId,
   asWorkspaceId,
+  type ExperienceArmTally,
   type ExperienceLesson,
   type LessonKind,
 } from '@loom/domain'
 import type { ExperienceRepositoryPort } from '@loom/application'
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
-import { agentRun, personaLesson, personaLessonCitation } from './schema.js'
+import { agentRun, experienceUse, personaLesson, personaLessonCitation, runVerification } from './schema.js'
+import { decidedRun, modalFailingCheck, verificationFailedCount } from './trial-sql.js'
 
 type LessonRow = typeof personaLesson.$inferSelect
 
@@ -205,6 +207,102 @@ export const experienceRepository = (db: Database): ExperienceRepositoryPort => 
       }
     }
     return byLesson
+  },
+
+  /**
+   * One row per run per pairing, and the conflict target is what enforces it: a run is on
+   * one arm, and a second row would count it twice in whichever arm it landed in. `do
+   * nothing` rather than an update, because the arm was decided at the moment the run's
+   * context was built and re-deciding it later would rewrite the evidence.
+   */
+  async recordUse(input) {
+    await db
+      .insert(experienceUse)
+      .values({
+        workspaceId: input.workspaceId,
+        personaId: input.personaId,
+        repositoryId: input.repositoryId,
+        agentRunId: input.agentRunId,
+        arm: input.arm,
+        lessonsShown: input.lessonsShown,
+      })
+      .onConflictDoNothing({
+        target: [
+          experienceUse.workspaceId,
+          experienceUse.agentRunId,
+          experienceUse.personaId,
+          experienceUse.repositoryId,
+        ],
+      })
+  },
+
+  async countExperienceArms(workspaceId, personaId, repositoryId) {
+    const rows = await db
+      .select({ arm: experienceUse.arm, count: sql<number>`count(*)::int` })
+      .from(experienceUse)
+      .where(
+        and(
+          eq(experienceUse.workspaceId, workspaceId),
+          eq(experienceUse.personaId, personaId),
+          eq(experienceUse.repositoryId, repositoryId),
+        ),
+      )
+      .groupBy(experienceUse.arm)
+    const countOf = (arm: string) => rows.find((row) => row.arm === arm)?.count ?? 0
+    return { retrieved: countOf('retrieved'), withheld: countOf('withheld') }
+  },
+
+  /**
+   * Joined against the run at read time rather than copied onto the use row, because a
+   * disposition is set long after the run started — a copy would be a second write that can
+   * be missed, which is how a measurement ends up describing runs nobody decided about.
+   *
+   * `decidedRun`, `verificationFailedCount` and `modalFailingCheck` are the shared fragments
+   * every other trial counts with, imported rather than restated: this arm count is compared
+   * against the map trial's by a human, so a second definition of "decided" would make two
+   * numbers that look comparable and are not.
+   */
+  async tallyExperienceOutcomes(workspaceId, personaId, repositoryId) {
+    const rows = await db
+      .select({
+        arm: experienceUse.arm,
+        decided: sql<number>`count(*) filter (where ${decidedRun})::int`,
+        merged: sql<number>`count(*) filter (where ${agentRun.branchDisposition} in ('merged', 'pushed'))::int`,
+        discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded')::int`,
+        failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
+        verificationFailed: verificationFailedCount,
+        failingCheck: modalFailingCheck,
+        costUsdTotal: sql<number>`coalesce(sum(${agentRun.totalCostUsd}) filter (where ${decidedRun}), 0)::double precision`,
+      })
+      .from(experienceUse)
+      .innerJoin(agentRun, eq(agentRun.id, experienceUse.agentRunId))
+      .leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+      .where(
+        and(
+          eq(experienceUse.workspaceId, workspaceId),
+          eq(experienceUse.personaId, personaId),
+          eq(experienceUse.repositoryId, repositoryId),
+        ),
+      )
+      .groupBy(experienceUse.arm)
+
+    const tallies: ExperienceArmTally[] = []
+    for (const row of rows) {
+      // Narrowed rather than validated, the way every other arm column here is: the column
+      // is written only by this package, and an unrecognized value is not an arm.
+      if (row.arm !== 'retrieved' && row.arm !== 'withheld') continue
+      tallies.push({
+        arm: row.arm,
+        decided: row.decided,
+        merged: row.merged,
+        discarded: row.discarded,
+        failed: row.failed,
+        costUsdTotal: row.costUsdTotal,
+        verificationFailed: row.verificationFailed,
+        failingCheck: row.failingCheck,
+      })
+    }
+    return tallies
   },
 
   async invalidate(workspaceId, lessonIds, reason) {

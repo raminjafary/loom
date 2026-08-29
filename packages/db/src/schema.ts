@@ -81,6 +81,22 @@ export const workspace = pgTable(
      * sets, persisted so a redeploy cannot undo it, read on a path that already reads this row.
      */
     modelRoutingEnabled: boolean('model_routing_enabled').notNull().default(false),
+    /**
+     * Whether the platform may deny some runs the lessons their persona holds about the
+     * repository they are working in, to find out whether those lessons help.
+     *
+     * **Off by default, and this is the one workspace policy whose default is off because
+     * turning it on makes work worse on purpose.** Half the runs on an armed pairing are
+     * denied a memory the persona has; that is the price of the answer and it is not a price
+     * a platform gets to charge an operator silently. Every other measurement in this system
+     * is free in that sense — a variant search runs candidates that might be better, a screen
+     * spends nothing on a refused arm — and this one is not.
+     *
+     * Travels with the pause, the plan gate and the routing toggle for their reason:
+     * workspace policy an operator sets, persisted so a redeploy cannot undo it, read on a
+     * path that already reads this row.
+     */
+    experienceTrialEnabled: boolean('experience_trial_enabled').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('workspace_slug_idx').on(t.slug)],
@@ -1399,6 +1415,55 @@ export const personaLessonCitation = pgTable(
   (t) => [
     uniqueIndex('persona_lesson_citation_unique_idx').on(t.lessonId, t.agentRunId),
     index('persona_lesson_citation_lesson_idx').on(t.workspaceId, t.lessonId),
+  ],
+)
+
+/**
+ * Which arm of the experience trial a run was on.
+ *
+ * A separate table from `persona_lesson_citation` rather than a column on it, because the
+ * whole point of the withheld arm is that it has **no citations** — a run denied the memory
+ * cites nothing, and so does a run against a pairing that holds nothing, and so does every
+ * run that happened before any of this shipped. Three different facts that a citation table
+ * cannot tell apart, which is exactly why a baseline nobody wrote down is not a baseline.
+ *
+ * `expertise_use` next door for the map trial, deliberately the same shape: one row per
+ * (run, persona, repository), the arm as text, and the outcome joined from the run at read
+ * time rather than copied here — a disposition arrives long after the run started, and a
+ * copy is a second write that can be missed.
+ */
+export const experienceUse = pgTable(
+  'experience_use',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    personaId: uuid('persona_id')
+      .notNull()
+      .references(() => agentPersona.id, { onDelete: 'cascade' }),
+    /**
+     * Never null, for the reason the lesson table's is not: the scope of this memory is
+     * `(persona, repository)` and a row without one would be measuring a question nobody
+     * asked.
+     */
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references((): AnyPgColumn => agentRun.id, { onDelete: 'cascade' }),
+    // 'retrieved' | 'withheld'.
+    arm: text('arm').notNull(),
+    /** What the run was actually shown, so a thin memory is not read as a full one. */
+    lessonsShown: integer('lessons_shown').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One decision per run per pairing: a second row would count one run twice in
+    // whichever arm it landed in.
+    uniqueIndex('experience_use_run_idx').on(t.workspaceId, t.agentRunId, t.personaId, t.repositoryId),
+    index('experience_use_scope_idx').on(t.workspaceId, t.personaId, t.repositoryId, t.arm),
   ],
 )
 

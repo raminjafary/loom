@@ -45,6 +45,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { Database } from './client.js'
+import { decidedRun, modalFailingCheck, verificationFailedCount } from './trial-sql.js'
 import {
   toAgentPersona,
   toAgentRun,
@@ -124,43 +125,6 @@ import {
 } from './schema.js'
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'] as const
-
-/**
- * What both trials count as a run that has an outcome.
- *
- * Written once and used by `tallyTrialOutcomes` and `tallyExpertiseOutcomes`, because the
- * two are one query written twice: two definitions of "decided" would drift, and the arm
- * counts of the prompt trial and the map trial would stop being comparable numbers.
- *
- * Three ways a run is decided, and the third is the one verification harness added:
- *
- * 1. **A disposition.** Somebody merged, pushed or discarded the branch — the judgement.
- * 2. **The run failed.** An outcome, and the arm wears it.
- * 3. **The branch failed its repository's definition of done.** No human required. A
- *    branch that does not build is decided whether or not anyone has looked at it, and
- *    waiting for a reviewer to say so would mean the measurement only ever describes runs
- *    a human had time for. Only `failed` counts: `skipped`, `refused` and `error` are
- *    facts about the operator's setup or the Runner, not about the branch (see
- *    `VerificationStatus`), and a *pass* is not an outcome on its own — passing the checks
- *    is the floor, and only a human merging says the work was wanted.
- */
-const decidedRun = sql`(${agentRun.branchDisposition} is not null or ${agentRun.status} = 'failed' or ${runVerification.status} = 'failed')`
-
-/**
- * The check that failed most often on this arm.
- *
- * `jsonb_path_query_first` pulls the first `failed` entry out of the verification's
- * results — the first is the only one, since the harness short-circuits at the first
- * failure — and `mode()` picks the name that came up most. Extracted here rather than
- * counted in TypeScript so the aggregate stays one round trip per trial.
- */
-const modalFailingCheck = sql<
-  string | null
->`mode() within group (order by jsonb_path_query_first(${runVerification.checks}, '$[*] ? (@.status == "failed")') ->> 'name') filter (where ${runVerification.status} = 'failed')`
-
-const verificationFailedCount = sql<
-  number
->`count(*) filter (where ${runVerification.status} = 'failed')::int`
 
 /**
  * Runs on this arm whose merged branch a later merge took back out.
@@ -1595,6 +1559,7 @@ const CONTROL_COLUMNS = {
   handoffCapPerTree: workspace.handoffCapPerTree,
   planReviewRequired: workspace.planReviewRequired,
   modelRoutingEnabled: workspace.modelRoutingEnabled,
+  experienceTrialEnabled: workspace.experienceTrialEnabled,
 }
 
 const toControl = (
@@ -1607,6 +1572,7 @@ const toControl = (
     handoffCapPerTree: number | null
     planReviewRequired: boolean
     modelRoutingEnabled: boolean
+    experienceTrialEnabled: boolean
   },
 ): WorkspaceRunControl => ({
   workspaceId,
@@ -1615,6 +1581,7 @@ const toControl = (
   pausedByUserId: row.runsPausedByUserId,
   planReviewRequired: row.planReviewRequired,
   modelRoutingEnabled: row.modelRoutingEnabled,
+  experienceTrialEnabled: row.experienceTrialEnabled,
   handoff: { threshold: row.handoffThreshold, capPerTree: row.handoffCapPerTree },
 })
 
@@ -1657,6 +1624,16 @@ export const workspaceRunControlRepository = (db: Database): WorkspaceRunControl
     const [row] = await db
       .update(workspace)
       .set({ modelRoutingEnabled: enabled })
+      .where(eq(workspace.id, workspaceId))
+      .returning(CONTROL_COLUMNS)
+    if (!row) throw new NotFoundError('Workspace')
+    return toControl(workspaceId, row)
+  },
+
+  async setExperienceTrialEnabled(workspaceId, enabled) {
+    const [row] = await db
+      .update(workspace)
+      .set({ experienceTrialEnabled: enabled })
       .where(eq(workspace.id, workspaceId))
       .returning(CONTROL_COLUMNS)
     if (!row) throw new NotFoundError('Workspace')

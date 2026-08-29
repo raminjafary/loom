@@ -7648,6 +7648,34 @@ export const setModelRoutingEnabled = async (
 }
 
 /**
+ * Arms or disarms the experience trial for a workspace.
+ *
+ * Human-only, like every other run-control toggle, and this is the one where that matters
+ * most: arming it means the platform will deliberately deny some runs a memory their persona
+ * holds, so that the question "does that memory help" has a baseline to be answered against.
+ * That is work made worse on purpose to buy an answer, and only a person gets to decide a
+ * workspace is paying for it.
+ */
+export const setExperienceTrialEnabled = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; enabled: boolean },
+): Promise<WorkspaceRunControl> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError('Only a human decides whether runs are denied what a persona learned')
+  }
+  const control = await deps.runControl.setExperienceTrialEnabled(input.workspaceId, input.enabled)
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'workspace.experience_trial_set',
+    subjectType: 'workspace',
+    subjectId: input.workspaceId,
+    metadata: { enabled: input.enabled },
+  })
+  return control
+}
+
+/**
  * Records that a person ruled on a branch.
  *
  * The disposition itself lives on the run, and the run says *what* was decided and never

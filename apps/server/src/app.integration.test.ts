@@ -96,6 +96,26 @@ describe('contract over HTTP', () => {
     expect((await client.runControl.setModelRoutingEnabled({ enabled: false })).modelRoutingEnabled).toBe(false)
   })
 
+  /**
+   * The experience trial is off until a human arms it, and this default is the strongest of
+   * the four: arming it means the platform deliberately denies some runs a memory their
+   * persona holds, so that "does that memory help" has a baseline. That is work made worse on
+   * purpose, and a platform does not charge an operator for it silently.
+   */
+  it('leaves the experience trial off until a human arms it', async () => {
+    expect((await client.runControl.get()).experienceTrialEnabled).toBe(false)
+    const on = await client.runControl.setExperienceTrialEnabled({ enabled: true })
+    expect(on.experienceTrialEnabled).toBe(true)
+    // The kill switch does not carry it either: pausing must not silently stop a measurement
+    // an operator is deliberately paying for, nor start one they are not.
+    const paused = await client.runControl.pauseAll()
+    expect(paused.control.experienceTrialEnabled).toBe(true)
+    await client.runControl.resume()
+    expect(
+      (await client.runControl.setExperienceTrialEnabled({ enabled: false })).experienceTrialEnabled,
+    ).toBe(false)
+  })
+
   it('reports no promoted revision, distinctly from a pointer it could not read', async () => {
     const result = await client.runControl.selfDeployment()
     expect(result.deployment).toBeNull()
@@ -1069,6 +1089,7 @@ describe('contract completeness', () => {
       'setHandoffPolicy',
       'setModelRoutingEnabled',
       'setPlanReviewRequired',
+      'setExperienceTrialEnabled',
     ])
     expect(Object.keys(contract.notification)).toEqual(['config', 'subscribe', 'unsubscribe'])
     expect(Object.keys(contract.approval)).toEqual(['listPending', 'decide'])

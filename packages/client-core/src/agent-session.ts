@@ -381,6 +381,7 @@ export interface AgentSession {
   setPlanReviewRequired(required: boolean): Promise<void>
   /** Whether a run's model may come from the routing table. Off by default — see `routeModel`. */
   setModelRoutingEnabled(enabled: boolean): Promise<void>
+  setExperienceTrialEnabled(enabled: boolean): Promise<void>
   listAtlasProposals(input?: {
     status?: ('proposed' | 'contended' | 'promoted' | 'rejected')[]
   }): Promise<AtlasEdge[]>
@@ -1456,6 +1457,21 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
          * quietly wrong about.
          */
         patch({ runControl: await options.api.runControl.setModelRoutingEnabled({ enabled }) })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+      }
+    },
+
+    /**
+     * Patched back for the same reason, and here the cost of being quietly wrong is higher
+     * than a stale checkbox: this toggle decides whether runs are being denied a memory their
+     * persona holds, and an operator who thinks they turned that off is paying for a trial
+     * they believe has stopped.
+     */
+    async setExperienceTrialEnabled(enabled) {
+      patch({ error: null })
+      try {
+        patch({ runControl: await options.api.runControl.setExperienceTrialEnabled({ enabled }) })
       } catch (error) {
         patch({ error: errorMessage(error) })
       }

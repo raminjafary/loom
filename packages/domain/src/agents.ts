@@ -556,6 +556,15 @@ export interface WorkspaceRunControl {
    * because it is the same kind of thing: workspace policy an operator sets deliberately.
    */
   readonly modelRoutingEnabled: boolean
+  /**
+   * Whether the platform may deny some runs the lessons their persona holds about the
+   * repository they are working in, to find out whether those lessons help.
+   *
+   * Off by default, and unlike every other measurement here, arming it makes some work worse
+   * on purpose — see `experienceStateFor`. Beside the routing toggle because it is the same
+   * kind of thing: workspace policy an operator sets deliberately.
+   */
+  readonly experienceTrialEnabled: boolean
   readonly handoff: {
     readonly threshold: number | null
     readonly capPerTree: number | null
