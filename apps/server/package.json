@@ -25,7 +25,7 @@
     "@orpc/server": "^1.14.10",
     "@types/ws": "^8.18.1",
     "better-auth": "1.6.25",
-    "fastify": "^5.10.0",
+    "fastify": "^5.12.1",
     "ioredis": "^5.9.0",
     "web-push": "3.6.7",
     "ws": "^8.21.1",
