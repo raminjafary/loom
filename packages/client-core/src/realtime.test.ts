@@ -7,6 +7,9 @@ import { connectRealtime, type WebSocketLike } from './realtime.js'
  * tested against a fake socket rather than a live server.
  */
 
+/** What the server answers a mint with: the token, and how soon to ask again. */
+const minted = (token: string, renewAfterMs = 60_000) => ({ token, renewAfterMs })
+
 type Handler = () => void
 type MessageHandler = (event: { data: unknown }) => void
 
@@ -92,7 +95,7 @@ describe('connectRealtime', () => {
     const states: string[] = []
     const connection = connectRealtime({
       wsUrl: 'ws://test/ws/client',
-      mintToken: async () => 'v1.w1.999.sig',
+      mintToken: async () => minted('v1.w1.999.sig'),
       onEvent: () => {},
       onState: (s) => states.push(s),
       socketFactory: (url) => new FakeSocket(url),
@@ -112,10 +115,10 @@ describe('connectRealtime', () => {
   })
 
   it('mints again on every reconnect rather than reusing the first token', async () => {
-    let minted = 0
+    let mintCount = 0
     const connection = connectRealtime({
       wsUrl: 'ws://test/ws/client',
-      mintToken: async () => `token-${++minted}`,
+      mintToken: async () => minted(`token-${++mintCount}`),
       onEvent: () => {},
       socketFactory: (url) => new FakeSocket(url),
     })
@@ -130,6 +133,96 @@ describe('connectRealtime', () => {
     expect(FakeSocket.instances[1]?.sent).toEqual([
       JSON.stringify({ type: 'subscribe', token: 'token-2' }),
     ])
+  })
+
+  /**
+   * The lease, from the client's side.
+   *
+   * The gateway closes a socket whose lease lapses, so a connection that outlives its
+   * token has to keep presenting fresh ones. Minting is the proof — it goes through the
+   * authenticated server — so this loop is what makes a revoked session stop reading.
+   */
+  it('renews the lease on the interval the server asked for, with a fresh token', async () => {
+    let mintCount = 0
+    const connection = connectRealtime({
+      wsUrl: 'ws://test/ws/client',
+      mintToken: async () => minted(`token-${++mintCount}`, 30_000),
+      onEvent: () => {},
+      socketFactory: (url) => new FakeSocket(url),
+    })
+
+    const socket = FakeSocket.instances[0]
+    await opened(socket)
+    expect(socket?.sent).toEqual([JSON.stringify({ type: 'subscribe', token: 'token-1' })])
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    // Two renewals, each with its own freshly minted token — a resent one would prove
+    // nothing about the session still being there.
+    expect(socket?.sent).toEqual([
+      JSON.stringify({ type: 'subscribe', token: 'token-1' }),
+      JSON.stringify({ type: 'renew', token: 'token-2' }),
+      JSON.stringify({ type: 'renew', token: 'token-3' }),
+    ])
+
+    connection.close()
+  })
+
+  it('follows the server when it changes how soon to renew', async () => {
+    // The lease is a deployment's decision, so the interval travels with the token. A
+    // client that kept its first answer would renew on a schedule the gateway had
+    // stopped honouring.
+    const connection = connectRealtime({
+      wsUrl: 'ws://test/ws/client',
+      mintToken: async () => minted('token', 10_000),
+      onEvent: () => {},
+      socketFactory: (url) => new FakeSocket(url),
+    })
+    const socket = FakeSocket.instances[0]
+    await opened(socket)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(socket?.sent).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(socket?.sent).toHaveLength(3)
+    connection.close()
+  })
+
+  it('stops renewing once the connection is closed, rather than minting forever', async () => {
+    let mintCount = 0
+    const connection = connectRealtime({
+      wsUrl: 'ws://test/ws/client',
+      mintToken: async () => minted(`token-${++mintCount}`, 20_000),
+      onEvent: () => {},
+      socketFactory: (url) => new FakeSocket(url),
+    })
+    await opened(FakeSocket.instances[0])
+    connection.close()
+    const after = mintCount
+    await vi.advanceTimersByTimeAsync(20_000 * 3)
+    expect(mintCount).toBe(after)
+  })
+
+  it('closes the socket when a renewal cannot be minted, instead of looking connected', async () => {
+    // The alternative is a client that looks live for the rest of the lease and then
+    // drops for a reason the UI cannot explain. Closing puts it in the ordinary backoff,
+    // where the state is visible.
+    let allowMint = true
+    const connection = connectRealtime({
+      wsUrl: 'ws://test/ws/client',
+      mintToken: async () => {
+        if (!allowMint) throw new Error('session gone')
+        return minted('token', 15_000)
+      },
+      onEvent: () => {},
+      socketFactory: (url) => new FakeSocket(url),
+    })
+    const socket = FakeSocket.instances[0]
+    await opened(socket)
+    allowMint = false
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(socket?.closed).toBe(true)
+    connection.close()
   })
 
   it('closes and backs off when the token cannot be minted, and never reports open', async () => {
@@ -158,11 +251,11 @@ describe('connectRealtime', () => {
   it('does not send a token that arrives after its socket was replaced', async () => {
     // Initialised rather than left null: TypeScript does not track an assignment made
     // inside the promise executor, so a nullable one narrows to `never` at the call below.
-    let resolveMint: (token: string) => void = () => {}
+    let resolveMint: (value: { token: string; renewAfterMs: number }) => void = () => {}
     connectRealtime({
       wsUrl: 'ws://test/ws/client',
       mintToken: () =>
-        new Promise<string>((resolve) => {
+        new Promise<{ token: string; renewAfterMs: number }>((resolve) => {
           resolveMint = resolve
         }),
       onEvent: () => {},
@@ -175,7 +268,7 @@ describe('connectRealtime', () => {
     await vi.advanceTimersByTimeAsync(MAX_BACKOFF)
     expect(FakeSocket.instances.length).toBeGreaterThan(1)
 
-    resolveMint('late-token')
+    resolveMint(minted('late-token'))
     await vi.advanceTimersByTimeAsync(0)
     // Sending it would subscribe a socket the reconnect already abandoned.
     expect(first?.sent).toEqual([])
@@ -185,7 +278,7 @@ describe('connectRealtime', () => {
     const resubscribes: number[] = []
     const connection = connectRealtime({
       wsUrl: 'ws://test/ws/client',
-      mintToken: async () => 'token',
+      mintToken: async () => minted('token'),
       onEvent: () => {},
       onResubscribe: () => resubscribes.push(Date.now()),
       socketFactory: (url) => new FakeSocket(url),
@@ -211,7 +304,7 @@ describe('connectRealtime', () => {
   it('stops reconnecting once closed by the caller', async () => {
     const connection = connectRealtime({
       wsUrl: 'ws://test/ws/client',
-      mintToken: async () => 'token',
+      mintToken: async () => minted('token'),
       onEvent: () => {},
       socketFactory: (url) => new FakeSocket(url),
     })
@@ -229,7 +322,7 @@ describe('connectRealtime', () => {
     const received: ServerEvent[] = []
     const connection = connectRealtime({
       wsUrl: 'ws://test/ws/client',
-      mintToken: async () => 'token',
+      mintToken: async () => minted('token'),
       onEvent: (event) => received.push(event),
       socketFactory: (url) => new FakeSocket(url),
     })

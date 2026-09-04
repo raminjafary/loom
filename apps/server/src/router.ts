@@ -120,6 +120,7 @@ import {
 } from '@loom/application'
 import {
   DomainError,
+  SUBSCRIPTION_RENEW_EVERY_MS,
   builtinPersonaStatus,
   type AgentPersona,
   type PersonaRevision,
@@ -278,9 +279,17 @@ export const router = os.router({
       },
     })),
 
-    subscriptionToken: os.session.subscriptionToken.handler(({ context }) =>
-      context.mintSubscriptionToken(context.principal.workspaceId),
-    ),
+    subscriptionToken: os.session.subscriptionToken.handler(async ({ context }) => {
+      const minted = await context.mintSubscriptionToken(context.principal.workspaceId)
+      return {
+        token: minted.token,
+        expiresAt: minted.expiresAt,
+        // The gateway's lease, told to the client that has to renew against it. One
+        // constant, read by both sides, so a client cannot be renewing on a schedule the
+        // gateway stopped honouring.
+        renewAfterMs: SUBSCRIPTION_RENEW_EVERY_MS,
+      }
+    }),
   },
 
   channel: {

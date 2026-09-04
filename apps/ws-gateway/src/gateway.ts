@@ -1,7 +1,9 @@
 import websocket from '@fastify/websocket'
 import {
+  SUBSCRIPTION_LEASE_MS,
   originAllowed,
   parseSubscriptionToken,
+  subscriptionRenewalVerdict,
   subscriptionTokenVerdict,
 } from '@loom/domain'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -21,10 +23,23 @@ import { z } from 'zod'
  * Authentication is a signed token and not a session, for that same reason.
  * This process verifies and never signs: it can admit a subscriber to the workspace a
  * token already names, and it cannot mint one.
+ *
+ * A subscription is a **lease**, not a permanent admission: the subscribe grants one, a
+ * `renew` frame carrying a fresh token extends it, and a socket whose lease lapses is closed.
+ * That is how a stateless process bounds the lifetime of a credential it cannot re-check —
+ * renewing means minting, and minting happens where the session is. See
+ * `subscription-token.ts`.
  */
 
 const ClientHelloSchema = z.object({
-  type: z.literal('subscribe'),
+  /**
+   * `subscribe` opens the stream; `renew` extends the lease it opened.
+   *
+   * One schema and one token field for both, because they carry the same credential and
+   * differ only in what a valid one is allowed to do — which is a rule about the socket's
+   * state, not about the frame's shape, and lives in the domain rather than here.
+   */
+  type: z.enum(['subscribe', 'renew']),
   /**
    * The token is the only thing that says which workspace. It used to be a plain
    * `workspaceId` field, which is to say a subscriber chose its own — any peer reaching
@@ -39,6 +54,14 @@ export interface GatewayOptions {
   readonly webOrigin: string
   /** Shared with apps/server, which signs with it. */
   readonly subscriptionSecret: string
+  /**
+   * How long one proof keeps a socket alive. Defaults to the domain's lease.
+   *
+   * A seam for tests and nothing else: the behaviour under test is "the socket closes when
+   * the lease lapses", and a test that waited fifteen real minutes to see it would be a
+   * test nobody runs.
+   */
+  readonly leaseMs?: number
 }
 
 /**
@@ -58,9 +81,13 @@ export const buildGateway = async (options: GatewayOptions): Promise<FastifyInst
 
   fastify.get('/healthz', async () => ({ status: 'ok' }))
 
-  const authorize = (raw: string): { workspaceId: string } | null => {
+  /**
+   * The verified token, or null. One function for both frames, so a renewal cannot end up
+   * verified by a second, subtly different implementation of the same check.
+   */
+  const verify = (raw: string) => {
     const token = parseSubscriptionToken(raw)
-    const verdict = subscriptionTokenVerdict({
+    return {
       token,
       signatureMatches:
         token !== null &&
@@ -73,7 +100,11 @@ export const buildGateway = async (options: GatewayOptions): Promise<FastifyInst
           token.signature,
         ),
       nowMs: Date.now(),
-    })
+    }
+  }
+
+  const authorize = (raw: string): { workspaceId: string } | null => {
+    const verdict = subscriptionTokenVerdict(verify(raw))
     return verdict.ok ? { workspaceId: verdict.workspaceId } : null
   }
 
@@ -84,8 +115,37 @@ export const buildGateway = async (options: GatewayOptions): Promise<FastifyInst
       // affecting other subscribers.
       let redis: Redis | null = null
       let subscribed: string | null = null
+      let workspace: string | null = null
+      /**
+       * The lease timer. One timer per socket, reset on renewal rather than a clock read
+       * per frame: the fan-out is the hot path and a lease is a fact about the socket, not
+       * about a message.
+       */
+      let lease: ReturnType<typeof setTimeout> | null = null
+
+      const clearLease = () => {
+        if (lease) {
+          clearTimeout(lease)
+          lease = null
+        }
+      }
+
+      const extendLease = () => {
+        clearLease()
+        lease = setTimeout(() => {
+          // Told, then closed: a client whose renewal never arrived should see the reason
+          // in the frame rather than infer it from a bare disconnect. It reconnects with a
+          // fresh token, which is the same path a restart takes.
+          refuse('subscription lease expired')
+          socket.close()
+        }, options.leaseMs ?? SUBSCRIPTION_LEASE_MS)
+        // Node keeps the process alive for a pending timer; a socket's lease must not be
+        // the reason the gateway cannot shut down.
+        lease.unref?.()
+      }
 
       const closeRedis = () => {
+        clearLease()
         if (redis) {
           redis.disconnect()
           redis = null
@@ -117,6 +177,28 @@ export const buildGateway = async (options: GatewayOptions): Promise<FastifyInst
           return
         }
 
+        if (hello.data.type === 'renew') {
+          if (!subscribed || workspace === null) {
+            refuse('nothing to renew')
+            return
+          }
+          const renewal = subscriptionRenewalVerdict({
+            ...verify(hello.data.token),
+            subscribedWorkspaceId: workspace,
+          })
+          if (!renewal.ok) {
+            // Closed rather than left open, exactly as a refused subscribe is: a client
+            // holding a token this gateway will not take has nothing to retry with on
+            // this socket.
+            refuse('subscription refused')
+            socket.close()
+            return
+          }
+          extendLease()
+          socket.send(JSON.stringify({ type: 'renewed', workspaceId: workspace }))
+          return
+        }
+
         if (subscribed) {
           refuse('already subscribed')
           return
@@ -134,6 +216,8 @@ export const buildGateway = async (options: GatewayOptions): Promise<FastifyInst
         const workspaceId = authorized.workspaceId
         const channel = `loom:ws:${workspaceId}`
         subscribed = channel
+        workspace = workspaceId
+        extendLease()
         redis = new Redis(options.valkeyUrl)
 
         void redis.subscribe(channel).then(() => {

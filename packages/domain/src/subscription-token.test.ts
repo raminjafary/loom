@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  SUBSCRIPTION_LEASE_MS,
+  SUBSCRIPTION_RENEW_EVERY_MS,
   SUBSCRIPTION_TOKEN_TTL_MS,
   formatSubscriptionToken,
   originAllowed,
   parseSubscriptionToken,
+  subscriptionRenewalVerdict,
   subscriptionTokenSignedInput,
   subscriptionTokenVerdict,
 } from './subscription-token.js'
@@ -114,5 +117,71 @@ describe('originAllowed', () => {
 describe('the TTL', () => {
   it('is short enough to be a connect-time credential rather than a session', () => {
     expect(SUBSCRIPTION_TOKEN_TTL_MS).toBeLessThanOrEqual(5 * 60_000)
+  })
+})
+
+/**
+ * The lease: what bounds how long one proof is worth, now that a socket can outlive the
+ * token that opened it and still be closed for it.
+ */
+describe('subscriptionRenewalVerdict', () => {
+  const parsed = (workspaceId: string, expiresAtMs = 2_000_000) =>
+    parseSubscriptionToken(formatSubscriptionToken({ workspaceId, expiresAtMs }, SIGNATURE))
+
+  it('extends the lease from now, not from the token’s expiry', () => {
+    // A token about to expire and one just minted are worth the same lease: what the
+    // token proves is that the session was live a moment ago, so a client renewing late
+    // is not punished with a shorter lease than one renewing early.
+    const verdict = subscriptionRenewalVerdict({
+      token: parsed('ws-1', 1_000_001),
+      signatureMatches: true,
+      nowMs: 1_000_000,
+      subscribedWorkspaceId: 'ws-1',
+    })
+    expect(verdict.ok).toBe(true)
+    if (!verdict.ok) return
+    expect(verdict.leaseExpiresAtMs).toBe(1_000_000 + SUBSCRIPTION_LEASE_MS)
+  })
+
+  it('refuses a valid token for another workspace, rather than moving the socket', () => {
+    // The fan-out subscription is fixed at subscribe time, so honouring this would leave
+    // the socket reading its old workspace under a new workspace's authority.
+    const verdict = subscriptionRenewalVerdict({
+      token: parsed('ws-2'),
+      signatureMatches: true,
+      nowMs: 1_000_000,
+      subscribedWorkspaceId: 'ws-1',
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  it('refuses an expired or unsigned token with the subscribe’s own sentence', () => {
+    const expired = subscriptionRenewalVerdict({
+      token: parsed('ws-1', 999),
+      signatureMatches: true,
+      nowMs: 1_000_000,
+      subscribedWorkspaceId: 'ws-1',
+    })
+    const unsigned = subscriptionRenewalVerdict({
+      token: parsed('ws-1'),
+      signatureMatches: false,
+      nowMs: 1_000_000,
+      subscribedWorkspaceId: 'ws-1',
+    })
+    expect(expired).toEqual({ ok: false, reason: 'subscription refused' })
+    // Identical, for the reason the subscribe's are: which half failed is not a
+    // prober's business.
+    expect(unsigned).toEqual(expired)
+  })
+
+  it('renews well inside the lease, so one failed mint is not a dropped stream', () => {
+    expect(SUBSCRIPTION_RENEW_EVERY_MS).toBeLessThan(SUBSCRIPTION_LEASE_MS / 2)
+  })
+
+  it('keeps the lease a bound rather than a promise of immediacy', () => {
+    // Minutes, not the lifetime of a browser tab — and not so short that renewing is
+    // most of what a client does.
+    expect(SUBSCRIPTION_LEASE_MS).toBeGreaterThan(SUBSCRIPTION_TOKEN_TTL_MS)
+    expect(SUBSCRIPTION_LEASE_MS).toBeLessThanOrEqual(60 * 60_000)
   })
 })

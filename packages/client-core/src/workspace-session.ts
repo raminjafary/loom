@@ -342,8 +342,13 @@ export const createWorkspaceSession = (options: {
 
         realtime = connectRealtime({
           wsUrl: options.wsUrl,
-          // Fetched per connect, not held from `me` — see `RealtimeOptions.mintToken`.
-          mintToken: async () => (await options.api.session.subscriptionToken()).token,
+          // Fetched per connect *and* on the lease's own schedule, not held from `me` —
+          // see `RealtimeOptions.mintToken`. The renewal interval comes back with the
+          // token, so this passes both through untouched.
+          mintToken: async () => {
+            const token = await options.api.session.subscriptionToken()
+            return { token: token.token, renewAfterMs: token.renewAfterMs }
+          },
           onEvent: handleEvent,
           onState: (connection) => patch({ connection }),
           // A dropped socket means missed frames; replay rather than assume.

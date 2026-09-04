@@ -1,6 +1,6 @@
 import { ServerEventSchema, type Contract } from '@loom/api-contract'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
-import { asWorkspaceId } from '@loom/domain'
+import { SUBSCRIPTION_LEASE_MS, asWorkspaceId } from '@loom/domain'
 import { buildApp, devAuth, loadConfig, subscriptionTokenMinter, type App } from '@loom/server'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
@@ -334,6 +334,134 @@ describe('subscription authentication', () => {
     // the only client that can subscribe.
     const socket = await subscribedSocket()
     expect(socket.readyState).toBe(WebSocket.OPEN)
+    socket.close()
+  })
+})
+
+/**
+ * The lease.
+ *
+ * The earlier limit was written down and stood for months: a socket outlived the token that
+ * opened it, so a session revoked an hour ago kept reading a workspace's whole agent
+ * transcript until the tab closed. A stateless gateway cannot re-check a session — but it can
+ * refuse to hold a subscription on one proof forever, and renewing means minting, which
+ * happens where the session is.
+ *
+ * These run against a gateway of their own with a very short lease: the behaviour is "the
+ * socket closes when the lease lapses", and a test that waited the real fifteen minutes to
+ * see it is a test nobody runs.
+ */
+describe('the subscription lease', () => {
+  const LEASE_MS = 700
+  let leasedGateway: FastifyInstance
+  let leasedUrl: string
+
+  beforeAll(async () => {
+    leasedGateway = await buildGateway({
+      valkeyUrl: config.VALKEY_URL,
+      webOrigin: config.WEB_ORIGIN,
+      subscriptionSecret: config.WS_SUBSCRIPTION_SECRET,
+      leaseMs: LEASE_MS,
+    })
+    await leasedGateway.listen({ port: 0, host: '127.0.0.1' })
+    const address = leasedGateway.server.address()
+    if (address === null || typeof address === 'string') throw new Error('no ws port')
+    leasedUrl = `ws://127.0.0.1:${address.port}/ws/client`
+  })
+
+  afterAll(async () => {
+    await leasedGateway.close()
+  })
+
+  const leasedSocket = async (): Promise<WebSocket> => {
+    const token = (await client.session.subscriptionToken()).token
+    const socket = new WebSocket(leasedUrl)
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve())
+      socket.once('error', reject)
+    })
+    socket.send(JSON.stringify({ type: 'subscribe', token }))
+    await nextFrame(socket, (v) => (v as { type?: string }).type === 'subscribed')
+    return socket
+  }
+
+  it('closes a socket whose lease lapses, and says why before it does', async () => {
+    const socket = await leasedSocket()
+    const error = nextFrame(socket, (v) => (v as { type?: string }).type === 'error')
+    expect((await error).message).toBe('subscription lease expired')
+    await closed(socket)
+  })
+
+  it('keeps a renewed socket alive past the lease, and it still receives frames', async () => {
+    const socket = await leasedSocket()
+
+    // Two renewals, each inside the lease, so the socket lives more than twice as long as
+    // one proof would have kept it.
+    for (let i = 0; i < 3; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, LEASE_MS / 2))
+      const fresh = (await client.session.subscriptionToken()).token
+      socket.send(JSON.stringify({ type: 'renew', token: fresh }))
+      await nextFrame(socket, (v) => (v as { type?: string }).type === 'renewed')
+    }
+    expect(socket.readyState).toBe(WebSocket.OPEN)
+
+    // Alive means *subscribed*, not merely connected: a renewal that had disturbed the
+    // fan-out would leave a socket that answers and delivers nothing.
+    const { rootThread } = await client.channel.create({ name: 'renewed-stream' })
+    const frame = nextFrame(socket, (v) => (v as { type?: string }).type === 'message.created')
+    await client.message.post({ threadId: rootThread.id, text: 'after two renewals' })
+    expect((await frame).type).toBe('message.created')
+
+    socket.close()
+  })
+
+  it('tells the server how soon to renew, rather than leaving the client to guess', async () => {
+    const minted = await client.session.subscriptionToken()
+    expect(minted.renewAfterMs).toBeGreaterThan(0)
+    // Comfortably inside the deployment's lease, or one failed mint is a dropped stream.
+    expect(minted.renewAfterMs).toBeLessThan(SUBSCRIPTION_LEASE_MS)
+  })
+
+  it('refuses a renewal that names another workspace, and closes the socket', async () => {
+    // A valid token — signed, unexpired — for a workspace this socket did not subscribe to.
+    // Honouring it would leave the socket reading its old workspace's stream under another
+    // workspace's authority. Reconnecting is how you read a different workspace.
+    const socket = await leasedSocket()
+    const elsewhere = mint(asWorkspaceId('00000000-0000-4000-8000-00000000dead')).token
+    const error = nextFrame(socket, (v) => (v as { type?: string }).type === 'error')
+    socket.send(JSON.stringify({ type: 'renew', token: elsewhere }))
+    expect((await error).message).toBe('subscription refused')
+    await closed(socket)
+  })
+
+  it('refuses an expired token on renewal, which is the whole point of renewing', async () => {
+    const socket = await leasedSocket()
+    // A minter with a clock two minutes behind: the token is well-formed and correctly
+    // signed, and its TTL has already run out.
+    const stale = subscriptionTokenMinter(
+      config.WS_SUBSCRIPTION_SECRET,
+      () => Date.now() - 300_000,
+    )(asWorkspaceId(workspaceId)).token
+    const error = nextFrame(socket, (v) => (v as { type?: string }).type === 'error')
+    socket.send(JSON.stringify({ type: 'renew', token: stale }))
+    expect((await error).message).toBe('subscription refused')
+    await closed(socket)
+  })
+
+  it('has nothing to renew before a subscribe, and does not close the socket for asking', async () => {
+    const socket = new WebSocket(leasedUrl)
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve())
+      socket.once('error', reject)
+    })
+    const token = (await client.session.subscriptionToken()).token
+    const error = nextFrame(socket, (v) => (v as { type?: string }).type === 'error')
+    socket.send(JSON.stringify({ type: 'renew', token }))
+    expect((await error).message).toBe('nothing to renew')
+    // Still open, so the ordinary subscribe still works — a client that renewed too early
+    // has made a mistake, not an attempt.
+    socket.send(JSON.stringify({ type: 'subscribe', token }))
+    await nextFrame(socket, (v) => (v as { type?: string }).type === 'subscribed')
     socket.close()
   })
 })

@@ -93,6 +93,16 @@ export const contract = {
         token: z.string(),
         /** Advisory: the gateway checks the signed expiry, never this field. */
         expiresAt: z.date(),
+        /**
+         * How soon to present a fresh token on an open socket.
+         *
+         * A subscription is a lease: the gateway closes a socket whose lease lapses, so a
+         * connection outliving its token has to keep proving the session behind it is
+         * still there. The interval travels *with the token* rather than living in the
+         * client, because how long a lease lasts is the deployment's decision and a client
+         * holding its own copy would be one release away from renewing too late to matter.
+         */
+        renewAfterMs: z.number().int().positive(),
       }),
     ),
   },

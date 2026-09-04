@@ -13,9 +13,19 @@
  * no shared implementation to drift because there is no shared implementation.
  *
  * What the token does **not** do: authorize each frame. It authorizes the subscribe, and
- * the socket then lives as long as it lives. That is the honest limit of a connect-time
- * credential; closing it means re-authorizing an open socket, which needs a session the
- * gateway still does not have.
+ * the stream then flows without a per-frame check — the fan-out payload is already shaped
+ * for that workspace, and a check per frame would be a check of the same fact thousands of
+ * times.
+ *
+ * What it *does* now do is bound how long one proof is worth. A subscription is a **lease**:
+ * the subscribe grants one, the bearer renews it by presenting a *fresh* token, and a socket
+ * whose lease lapses is closed. That closes the earlier limit — a socket outliving the token
+ * that opened it, and therefore outliving the session behind it — without giving this process
+ * a session to check: renewing means minting, minting happens on the server, and the server
+ * is the thing that has the session. The authority stays exactly where it was.
+ *
+ * The bound is a bound and not an eviction: a revoked session keeps its stream until the
+ * current lease lapses, which is minutes rather than the lifetime of a browser tab.
  */
 
 /** Bumped when the signed input changes shape, so an old token is refused rather than misread. */
@@ -29,6 +39,22 @@ export const SUBSCRIPTION_TOKEN_VERSION = 'v1'
  * widening the window.
  */
 export const SUBSCRIPTION_TOKEN_TTL_MS = 120_000
+
+/**
+ * How long one proof keeps a socket alive.
+ *
+ * Fifteen minutes, and the number is a trade rather than a preference. A lease as short as
+ * the token's own two minutes would cost a mint per client every two minutes for no gain —
+ * the thing being bounded is how long a *revoked* session keeps reading, and nobody's
+ * revocation is urgent to the minute. Much longer and the lease stops being a bound at all.
+ */
+export const SUBSCRIPTION_LEASE_MS = 15 * 60_000
+
+/**
+ * When a subscriber renews: comfortably inside the lease, so one failed mint — a server
+ * restarting, a network blip — is a retry rather than a dropped stream.
+ */
+export const SUBSCRIPTION_RENEW_EVERY_MS = 5 * 60_000
 
 export interface SubscriptionTokenClaims {
   readonly workspaceId: string
@@ -115,6 +141,39 @@ export const subscriptionTokenVerdict = (input: {
   if (!input.signatureMatches) return refused
   if (input.token.claims.expiresAtMs <= input.nowMs) return refused
   return { ok: true, workspaceId: input.token.claims.workspaceId }
+}
+
+export type SubscriptionRenewalVerdict =
+  | { readonly ok: true; readonly leaseExpiresAtMs: number }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Whether a renewal extends this socket's lease.
+ *
+ * The token is verified exactly as a subscribe's is — same order, same single sentence for
+ * every failure — and then one rule that only exists for a renewal: **it must name the
+ * workspace this socket is already subscribed to.** A valid token for another workspace is
+ * refused rather than honoured, because the fan-out subscription is fixed at subscribe time:
+ * accepting it would either leave the socket reading its old workspace under a new
+ * workspace's authority, or make a renewal frame a workspace switch. Reconnecting is the way
+ * to read a different workspace.
+ *
+ * The lease is granted from *now*, not from the token's expiry: the token proves the session
+ * was live a moment ago, which is what the lease is a bound on. A token about to expire and
+ * one just minted are worth the same lease, so a client is never punished for renewing late.
+ */
+export const subscriptionRenewalVerdict = (input: {
+  readonly token: ParsedSubscriptionToken | null
+  readonly signatureMatches: boolean
+  readonly nowMs: number
+  /** The workspace this socket subscribed to. A renewal may not move it. */
+  readonly subscribedWorkspaceId: string
+}): SubscriptionRenewalVerdict => {
+  const refused = { ok: false as const, reason: 'subscription refused' }
+  const verdict = subscriptionTokenVerdict(input)
+  if (!verdict.ok) return refused
+  if (verdict.workspaceId !== input.subscribedWorkspaceId) return refused
+  return { ok: true, leaseExpiresAtMs: input.nowMs + SUBSCRIPTION_LEASE_MS }
 }
 
 /**
