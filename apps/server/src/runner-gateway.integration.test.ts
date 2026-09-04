@@ -216,6 +216,58 @@ describe('runner-gateway: pairing and repository binding', () => {
     socket.close()
   })
 
+  /**
+   * A reply is matched by request id, and a request id is not a secret — it travels to the
+   * Runner it was sent to and comes back on whatever socket answers. Two Runners on one host
+   * is the ordinary arrangement here, so this drives the case directly: the second Runner
+   * answers the first one's request id, with a *different* answer.
+   *
+   * The frame must be dropped rather than honoured, and the request must still be answerable
+   * by the Runner that actually holds the path — which is the half that makes the fix a check
+   * rather than a lockout.
+   */
+  it('ignores a reply to another Runner’s request, and still takes the right one’s', async () => {
+    const holder = await pairFakeRunner('reply-holder')
+    const impostor = await pairFakeRunner('reply-impostor')
+
+    const checkPath = nextFrame(holder.socket, (v) => v.type === 'check_path')
+    const bindPromise = client.repository.bindExisting({
+      runnerId: holder.runnerId,
+      path: '/tmp/contested-repo',
+      displayName: 'contested',
+    })
+    const frame = await checkPath
+
+    impostor.socket.send(
+      JSON.stringify({
+        type: 'check_path_result',
+        requestId: frame.requestId,
+        ok: true,
+        defaultBranch: 'impostor-branch',
+      }),
+    )
+    // Nothing resolves off that: the bind is still waiting a beat later.
+    const settledEarly = await Promise.race([
+      bindPromise.then(() => 'settled' as const).catch(() => 'settled' as const),
+      new Promise<'waiting'>((resolve) => setTimeout(() => resolve('waiting'), 300)),
+    ])
+    expect(settledEarly).toBe('waiting')
+
+    holder.socket.send(
+      JSON.stringify({
+        type: 'check_path_result',
+        requestId: frame.requestId,
+        ok: true,
+        defaultBranch: 'main',
+      }),
+    )
+    const repo = await bindPromise
+    expect(repo.defaultBranch).toBe('main')
+
+    holder.socket.close()
+    impostor.socket.close()
+  })
+
   it('surfaces a Runner-reported path failure as a validation error, not a crash', async () => {
     const { socket, runnerId } = await pairFakeRunner('rejecting-runner')
     const checkPath = nextFrame(socket, (v) => v.type === 'check_path')

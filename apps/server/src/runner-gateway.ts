@@ -83,34 +83,52 @@ interface ConnectedRunner {
   readonly workspaceId: WorkspaceId
 }
 
-interface PendingCheck {
+/**
+ * What every request the server has out to a Runner carries: **which Runner it went to.**
+ *
+ * A reply is matched by request id, and a request id is not a secret — it travels to the
+ * Runner and comes back on a socket the server does not otherwise check. Two Runners on one
+ * host is the ordinary arrangement here (every live driver in `tools/` spawns one), so
+ * without this a second Runner could resolve another's in-flight merge, push or verification
+ * simply by answering with its id: the merge queue would record a commit that machine never
+ * produced, and the definition of done would report on a branch it never had.
+ *
+ * So the Runner is stored at request time and compared at every resolution site, by `take`.
+ * From the connection the frame arrived on, never from the frame — a frame that could
+ * nominate the Runner it was answering for would make the check its own subject.
+ */
+interface PendingTo {
+  readonly to: RunnerId
+}
+
+interface PendingCheck extends PendingTo {
   resolve(result: { ok: true; defaultBranch: string } | { ok: false; error: string }): void
   reject(error: Error): void
 }
 
-interface PendingList {
+interface PendingList extends PendingTo {
   resolve(result: import('@loom/application').ListDirectoryResult): void
   reject(error: Error): void
 }
 
-interface PendingInit {
+interface PendingInit extends PendingTo {
   resolve(
     result: { ok: true; path: string; defaultBranch: string } | { ok: false; error: string },
   ): void
   reject(error: Error): void
 }
 
-interface PendingDiff {
+interface PendingDiff extends PendingTo {
   resolve(result: { ok: true; diff: string } | { ok: false; error: string }): void
   reject(error: Error): void
 }
 
-interface PendingDiscard {
+interface PendingDiscard extends PendingTo {
   resolve(result: { ok: true } | { ok: false; error: string }): void
   reject(error: Error): void
 }
 
-interface PendingPush {
+interface PendingPush extends PendingTo {
   resolve(
     result:
       | { ok: true; prUrl?: string; compareUrl?: string; warning?: string }
@@ -119,12 +137,12 @@ interface PendingPush {
   reject(error: Error): void
 }
 
-interface PendingWarm {
+interface PendingWarm extends PendingTo {
   resolve(result: { ok: true } | { ok: false; detail: string }): void
   reject(error: Error): void
 }
 
-interface PendingMerge {
+interface PendingMerge extends PendingTo {
   resolve(
     result:
       | {
@@ -141,7 +159,7 @@ interface PendingMerge {
   reject(error: Error): void
 }
 
-interface PendingVerification {
+interface PendingVerification extends PendingTo {
   resolve(
     result:
       | { status: 'ran'; commitSha: string; checks: VerificationCheckResult[] }
@@ -195,6 +213,25 @@ export const createRunnerGateway = (
   const pendingVerifications = new Map<string, PendingVerification>()
   const pendingWarms = new Map<string, PendingWarm>()
 
+  /**
+   * Takes a pending request, and **only for the Runner it was sent to**.
+   *
+   * A reply from anyone else is dropped rather than rejected: the request stays pending, so
+   * the Runner that actually holds the clone can still answer it, and the caller's own
+   * timeout remains the one thing that ends the wait. Rejecting here would let a second
+   * Runner fail another's merge on demand — a smaller hole than resolving it, and still one.
+   */
+  const take = <T extends PendingTo>(
+    pending: Map<string, T>,
+    requestId: string,
+    from: RunnerId,
+  ): T | null => {
+    const entry = pending.get(requestId)
+    if (!entry || entry.to !== from) return null
+    pending.delete(requestId)
+    return entry
+  }
+
   const send = (runnerId: RunnerId, frame: ServerFrame): void => {
     const conn = connections.get(runnerId)
     if (!conn) throw new Error(`Runner ${runnerId} is not connected`)
@@ -215,6 +252,7 @@ export const createRunnerGateway = (
           reject(new Error('Runner did not respond to check_path in time'))
         }, CHECK_PATH_TIMEOUT_MS)
         pendingChecks.set(requestId, {
+          to: runnerId,
           resolve: (r) => {
             clearTimeout(timer)
             resolve(r)
@@ -240,6 +278,7 @@ export const createRunnerGateway = (
           reject(new Error('Runner did not respond to list_directory in time'))
         }, CHECK_PATH_TIMEOUT_MS)
         pendingLists.set(requestId, {
+          to: runnerId,
           resolve: (r) => {
             clearTimeout(timer)
             resolve(r)
@@ -266,6 +305,7 @@ export const createRunnerGateway = (
           reject(new Error('Runner did not respond to init_repository in time'))
         }, CHECK_PATH_TIMEOUT_MS)
         pendingInits.set(requestId, {
+          to: runnerId,
           resolve: (r) => {
             clearTimeout(timer)
             resolve(r)
@@ -388,6 +428,7 @@ export const createRunnerGateway = (
             reject(new Error('Runner did not respond to get_diff in time'))
           }, CHECK_PATH_TIMEOUT_MS)
           pendingDiffs.set(requestId, {
+            to: runnerId,
             resolve: (r) => {
               clearTimeout(timer)
               resolve(r)
@@ -413,6 +454,7 @@ export const createRunnerGateway = (
           reject(new Error('Runner did not respond to discard_run in time'))
         }, CHECK_PATH_TIMEOUT_MS)
         pendingDiscards.set(requestId, {
+          to: runnerId,
           resolve: (r) => {
             clearTimeout(timer)
             resolve(r)
@@ -440,6 +482,7 @@ export const createRunnerGateway = (
           reject(new Error('Runner did not respond to push_run in time'))
         }, CHECK_PATH_TIMEOUT_MS)
         pendingPushes.set(requestId, {
+          to: runnerId,
           resolve: (r) => {
             clearTimeout(timer)
             resolve(r)
@@ -464,6 +507,7 @@ export const createRunnerGateway = (
           reject(new Error('Runner did not respond to warm_cache in time'))
         }, WARM_TIMEOUT_MS)
         pendingWarms.set(requestId, {
+          to: runnerId,
           resolve: (r) => {
             clearTimeout(timer)
             resolve(r)
@@ -505,6 +549,7 @@ export const createRunnerGateway = (
           reject(new Error('Runner did not respond to merge_run in time'))
         }, MERGE_TIMEOUT_MS)
         pendingMerges.set(requestId, {
+          to: runnerId,
           resolve: (r) => {
             clearTimeout(timer)
             resolve(r)
@@ -532,6 +577,7 @@ export const createRunnerGateway = (
           reject(new Error('Runner did not respond to verify_run in time'))
         }, MERGE_TIMEOUT_MS)
         pendingVerifications.set(requestId, {
+          to: runnerId,
           resolve: (r) => {
             clearTimeout(timer)
             resolve(r)
@@ -577,9 +623,8 @@ export const createRunnerGateway = (
         return
 
       case 'check_path_result': {
-        const pending = pendingChecks.get(frame.requestId)
+        const pending = take(pendingChecks, frame.requestId, from)
         if (!pending) return
-        pendingChecks.delete(frame.requestId)
         pending.resolve(
           frame.ok
             ? { ok: true, defaultBranch: frame.defaultBranch ?? 'main' }
@@ -589,9 +634,8 @@ export const createRunnerGateway = (
       }
 
       case 'list_directory_result': {
-        const pending = pendingLists.get(frame.requestId)
+        const pending = take(pendingLists, frame.requestId, from)
         if (!pending) return
-        pendingLists.delete(frame.requestId)
         pending.resolve(
           frame.ok
             ? {
@@ -607,9 +651,8 @@ export const createRunnerGateway = (
       }
 
       case 'init_repository_result': {
-        const pending = pendingInits.get(frame.requestId)
+        const pending = take(pendingInits, frame.requestId, from)
         if (!pending) return
-        pendingInits.delete(frame.requestId)
         pending.resolve(
           frame.ok
             ? { ok: true, path: frame.path ?? '', defaultBranch: frame.defaultBranch ?? 'main' }
@@ -676,9 +719,8 @@ export const createRunnerGateway = (
         return
 
       case 'diff_result': {
-        const pending = pendingDiffs.get(frame.requestId)
+        const pending = take(pendingDiffs, frame.requestId, from)
         if (!pending) return
-        pendingDiffs.delete(frame.requestId)
         pending.resolve(
           frame.ok
             ? { ok: true, diff: frame.diff ?? '' }
@@ -688,9 +730,8 @@ export const createRunnerGateway = (
       }
 
       case 'discard_result': {
-        const pending = pendingDiscards.get(frame.requestId)
+        const pending = take(pendingDiscards, frame.requestId, from)
         if (!pending) return
-        pendingDiscards.delete(frame.requestId)
         pending.resolve(
           frame.ok ? { ok: true } : { ok: false, error: frame.error ?? 'Runner failed to discard the run' },
         )
@@ -698,9 +739,8 @@ export const createRunnerGateway = (
       }
 
       case 'push_result': {
-        const pending = pendingPushes.get(frame.requestId)
+        const pending = take(pendingPushes, frame.requestId, from)
         if (!pending) return
-        pendingPushes.delete(frame.requestId)
         pending.resolve(
           frame.ok
             ? {
@@ -715,9 +755,8 @@ export const createRunnerGateway = (
       }
 
       case 'warm_cache_result': {
-        const pending = pendingWarms.get(frame.requestId)
+        const pending = take(pendingWarms, frame.requestId, from)
         if (!pending) return
-        pendingWarms.delete(frame.requestId)
         pending.resolve(
           frame.ok
             ? // Carried on success too: a warm that
@@ -730,9 +769,8 @@ export const createRunnerGateway = (
       }
 
       case 'verification_result': {
-        const pending = pendingVerifications.get(frame.requestId)
+        const pending = take(pendingVerifications, frame.requestId, from)
         if (!pending) return
-        pendingVerifications.delete(frame.requestId)
         if (frame.status !== 'ran') {
           pending.resolve({
             status: frame.status,
@@ -754,9 +792,8 @@ export const createRunnerGateway = (
       }
 
       case 'merge_result': {
-        const pending = pendingMerges.get(frame.requestId)
+        const pending = take(pendingMerges, frame.requestId, from)
         if (!pending) return
-        pendingMerges.delete(frame.requestId)
         pending.resolve(
           frame.ok
             ? {
