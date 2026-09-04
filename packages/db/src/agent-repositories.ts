@@ -33,6 +33,7 @@ import {
   asRepositoryId,
   asSubjectMapId,
   asWorkspaceId,
+  TERMINAL_RUN_STATUSES,
   type ColosseumClaim,
   type ColosseumSession,
   type ExpertiseArmTally,
@@ -1160,6 +1161,132 @@ export const agentRunRepository = (db: Database): AgentRunRepositoryPort => ({
   },
 
   /**
+   * Trigger candidates: one row per persona that has decided work, carrying where its last run
+   * happened.
+   *
+   * `distinct on` over `(workspace_id, name)` ordered by the run's recency is what makes the
+   * thread and repository the *latest* ones rather than an arbitrary row's — Postgres keeps the
+   * first row of each group under that ordering, which is the query this read exists to be.
+   */
+  async listTriggerCandidates(limit) {
+    const rows = await db
+      .selectDistinctOn([agentRun.workspaceId, sql`${agentRun.persona} ->> 'name'`], {
+        workspaceId: agentRun.workspaceId,
+        personaId: agentPersona.id,
+        personaName: agentPersona.name,
+        markdownSource: agentPersona.markdownSource,
+        threadId: agentRun.threadId,
+        repositoryId: agentRun.repositoryId,
+      })
+      .from(agentRun)
+      .leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+      .innerJoin(
+        agentPersona,
+        and(
+          eq(agentPersona.workspaceId, agentRun.workspaceId),
+          eq(agentPersona.name, sql`${agentRun.persona} ->> 'name'`),
+        ),
+      )
+      .where(
+        and(
+          sql`(${agentRun.relation} is null or ${agentRun.relation} <> 'screen')`,
+          isNotNull(agentRun.repositoryId),
+          decidedRun,
+        ),
+      )
+      .orderBy(
+        agentRun.workspaceId,
+        sql`${agentRun.persona} ->> 'name'`,
+        desc(agentRun.createdAt),
+      )
+      .limit(limit)
+
+    return rows.flatMap((row) =>
+      row.repositoryId === null
+        ? []
+        : [
+            {
+              workspaceId: asWorkspaceId(row.workspaceId),
+              personaId: asAgentPersonaId(row.personaId),
+              personaName: row.personaName,
+              markdownSource: row.markdownSource,
+              threadId: asThreadId(row.threadId),
+              repositoryId: asRepositoryId(row.repositoryId),
+            },
+          ],
+    )
+  },
+
+  /**
+   * The trigger's window, in one round trip.
+   *
+   * Same shape as `tallyFailingChecks` and deliberately so — same population predicate, same
+   * screening-run exclusion, same short-circuit assumption about which check failed — with two
+   * differences: the window is bounded below by the persona's last settled measurement, and only
+   * the single worst check comes back, because that is all the gate reads.
+   */
+  async triggerPopulation(workspaceId, personaName, since) {
+    const population = and(
+      eq(agentRun.workspaceId, workspaceId),
+      sql`${agentRun.persona} ->> 'name' = ${personaName}`,
+      sql`(${agentRun.relation} is null or ${agentRun.relation} <> 'screen')`,
+      /**
+       * `created_at` rather than a finish time, because the question the window asks is "what
+       * has this persona done since the last verdict" and a run that started before the
+       * settlement was doing work the settlement already judged.
+       */
+      since === null ? undefined : gte(agentRun.createdAt, since),
+      decidedRun,
+    )
+
+    const [[totals], [worst]] = await Promise.all([
+      db
+        .select({
+          decided: sql<number>`count(*)::int`,
+          /**
+           * **Passed-but-discarded, not merely discarded**, and the predicate is copied from
+           * `divergenceSet` rather than invented here.
+           *
+           * The trigger fires this signal and then shows the session the taste record, which
+           * *is* the divergence set — so a looser count here fires on evidence the brief cannot
+           * show, and the session is refused after the gate has already decided one was due. It
+           * was written loosely first and the end-to-end test caught it: three discarded
+           * branches in a repository with no checks configured produced a refusal every sweep.
+           *
+           * A discard with no verdict is not taste. Nobody can say the machine disagreed with a
+           * human when the machine never spoke.
+           */
+          discarded: sql<number>`count(*) filter (where ${agentRun.branchDisposition} = 'discarded' and ${runVerification.status} = 'passed')::int`,
+        })
+        .from(agentRun)
+        .leftJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+        .where(population),
+      db
+        .select({
+          name: sql<string>`failed_check ->> 'name'`,
+          failures: sql<number>`count(*)::int`,
+        })
+        .from(agentRun)
+        .innerJoin(runVerification, eq(runVerification.agentRunId, agentRun.id))
+        .innerJoin(
+          sql`jsonb_array_elements(${runVerification.checks}) as failed_check`,
+          sql`failed_check ->> 'status' = 'failed'`,
+        )
+        .where(population)
+        .groupBy(sql`failed_check ->> 'name'`)
+        .orderBy(desc(sql`count(*)`), sql`failed_check ->> 'name'`)
+        .limit(1),
+    ])
+
+    return {
+      decided: totals?.decided ?? 0,
+      discarded: totals?.discarded ?? 0,
+      recurringCheck:
+        worst && worst.name !== null ? { name: worst.name, failures: worst.failures } : null,
+    }
+  },
+
+  /**
    * Runs where the definition of done and the human disagreed, both directions.
    *
    * Pure SQL over columns that already exist: `agent_run.branch_disposition` is the human's
@@ -2176,6 +2303,29 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
     }))
   },
 
+  async hasRunningProposerSession(workspaceId, personaId) {
+    /**
+     * Terminal is read off the run rather than tracked on the session, because the run's
+     * lifecycle is already the thing that ends — a second status would be a second opinion about
+     * whether a session is over.
+     */
+    const [row] = await db
+      .select({ id: personaProposerSession.id })
+      .from(personaProposerSession)
+      .innerJoin(agentRun, eq(agentRun.id, personaProposerSession.agentRunId))
+      .where(
+        and(
+          eq(personaProposerSession.workspaceId, workspaceId),
+          eq(personaProposerSession.personaId, personaId),
+          // The domain's list, not a copy of it: a fourth terminal status must not mean a
+          // session that never releases its persona.
+          notInArray(agentRun.status, [...TERMINAL_RUN_STATUSES]),
+        ),
+      )
+      .limit(1)
+    return row !== undefined
+  },
+
   async openProposerSession(input) {
     await db
       .insert(personaProposerSession)
@@ -2319,6 +2469,48 @@ export const personaVariantRepository = (db: Database): PersonaVariantRepository
   },
 
   /** The same joins and the same `decidedRun` as both trials. See `decidedRun`. */
+  /**
+   * The newer of two settlements: a search a human closed, or a trial they ruled on.
+   *
+   * Two queries rather than a union, because the two tables agree on nothing but the persona —
+   * a search settles on `persona_variant_set.settled_at`, a trial on
+   * `persona_revision.trial_decided_at` — and a union would need both coerced into one shape to
+   * save a round trip nobody is waiting on.
+   */
+  async lastMeasurementSettledAt(workspaceId, personaId) {
+    const [[search], [trial]] = await Promise.all([
+      db
+        .select({ at: personaVariantSet.settledAt })
+        .from(personaVariantSet)
+        .where(
+          and(
+            eq(personaVariantSet.workspaceId, workspaceId),
+            eq(personaVariantSet.personaId, personaId),
+            isNotNull(personaVariantSet.settledAt),
+          ),
+        )
+        .orderBy(desc(personaVariantSet.settledAt))
+        .limit(1),
+      db
+        .select({ at: personaRevision.trialDecidedAt })
+        .from(personaRevision)
+        .where(
+          and(
+            eq(personaRevision.workspaceId, workspaceId),
+            eq(personaRevision.personaId, personaId),
+            isNotNull(personaRevision.trialDecidedAt),
+          ),
+        )
+        .orderBy(desc(personaRevision.trialDecidedAt))
+        .limit(1),
+    ])
+
+    const times = [search?.at, trial?.at].filter((at): at is Date => at instanceof Date)
+    return times.length === 0
+      ? null
+      : times.reduce((latest, at) => (at > latest ? at : latest))
+  },
+
   async listLosingArms(workspaceId, personaId, limit) {
     /**
      * A settled search that promoted something else, or promoted nothing at all. Both are a

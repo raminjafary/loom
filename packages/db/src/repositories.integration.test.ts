@@ -48,6 +48,7 @@ import {
   channel,
   message,
   personaRevision,
+  personaVariantSet,
   promptTrialUse,
   repository,
   runVerification,
@@ -3018,5 +3019,229 @@ describe('distilled experience repository', () => {
         { includeInvalidated: true },
       ),
     ).toEqual([])
+  })
+})
+
+/**
+ * The trigger's three reads, against real Postgres.
+ *
+ * Every one of them is a question a fake would answer with whatever this file's author believed
+ * the SQL did: whether a window bounded by a settlement actually excludes the runs before it,
+ * whether `distinct on` really returns the *latest* run's thread, and whether the worst check is
+ * picked by count rather than by name. The trigger fires an agent session off these numbers, so
+ * being wrong here spends money on a persona that was doing fine.
+ */
+describe('the evolution trigger reads', () => {
+  const runs = agentRunRepository(db)
+  const variants = personaVariantRepository(db)
+
+  let seq = 0
+
+  const scaffold = async (workspaceId: WorkspaceId, personaName: string) => {
+    seq += 1
+    const [ch] = await db
+      .insert(channel)
+      .values({ workspaceId, name: `trigger-${seq}`, isPrivate: false })
+      .returning({ id: channel.id })
+    const [th] = await db
+      .insert(thread)
+      .values({ workspaceId, channelId: ch!.id, isRoot: true })
+      .returning({ id: thread.id })
+    const [rn] = await db
+      .insert(runner)
+      .values({ workspaceId, name: `runner-trigger-${seq}`, pairingTokenHash: `hash-trigger-${seq}` })
+      .returning({ id: runner.id })
+    const [repo] = await db
+      .insert(repository)
+      .values({
+        workspaceId,
+        runnerId: rn!.id,
+        displayName: 'repo',
+        absolutePath: `/tmp/trigger-${seq}`,
+        defaultBranch: 'main',
+      })
+      .returning({ id: repository.id })
+    const [persona] = await db
+      .insert(agentPersona)
+      .values({
+        workspaceId,
+        name: personaName,
+        description: 'd',
+        markdownSource: 'live',
+        model: 'claude-haiku-4-5',
+      })
+      .returning({ id: agentPersona.id })
+    return {
+      threadId: th!.id,
+      runnerId: rn!.id,
+      repositoryId: repo!.id,
+      personaId: persona!.id,
+    }
+  }
+
+  type Trigger = Awaited<ReturnType<typeof scaffold>>
+
+  const addRun = async (
+    workspaceId: WorkspaceId,
+    s: Trigger,
+    personaName: string,
+    input: {
+      disposition?: 'merged' | 'discarded' | null
+      status?: 'completed' | 'failed'
+      failing?: string
+      /** A passing verdict, which is what makes a discard *taste* rather than just a discard. */
+      passing?: boolean
+      createdAt?: Date
+      relation?: 'screen'
+    },
+  ) => {
+    const [run] = await db
+      .insert(agentRun)
+      .values({
+        workspaceId,
+        threadId: s.threadId,
+        repositoryId: s.repositoryId,
+        runnerId: s.runnerId,
+        persona: {
+          name: personaName,
+          model: 'claude-haiku-4-5',
+          systemPrompt: 'x',
+          tools: [],
+          approvalMode: 'ask' as const,
+        },
+        status: input.status ?? 'completed',
+        branchName: 'loom/x',
+        branchDisposition: input.disposition ?? null,
+        totalCostUsd: 0.1,
+        ...(input.relation ? { relation: input.relation } : {}),
+        ...(input.createdAt ? { createdAt: input.createdAt } : {}),
+      })
+      .returning({ id: agentRun.id })
+    if (input.failing || input.passing) {
+      await db.insert(runVerification).values({
+        workspaceId,
+        agentRunId: run!.id,
+        repositoryId: s.repositoryId,
+        branchName: 'loom/x',
+        status: input.failing ? 'failed' : 'passed',
+        checks: input.failing
+          ? [
+              { name: input.failing, status: 'failed', detail: 'boom', durationMs: 12 },
+              { name: 'smoke', status: 'not_run', detail: null, durationMs: null },
+            ]
+          : [{ name: 'tests', status: 'passed', detail: null, durationMs: 30 }],
+      })
+    }
+    return run!.id
+  }
+
+  it('counts discarded dispositions and the worst named check over the window', async () => {
+    const name = `trig-a-${Date.now()}`
+    const s = await scaffold(WS, name)
+    await addRun(WS, s, name, { disposition: 'discarded', passing: true })
+    await addRun(WS, s, name, { disposition: 'discarded', passing: true })
+    /**
+     * Discarded with no verdict, which is deliberately **not** counted: the signal is work the
+     * machine approved and a human threw away, and nobody can say the machine disagreed when it
+     * never spoke. It is still a decided run, so it moves the denominator.
+     */
+    await addRun(WS, s, name, { disposition: 'discarded' })
+    await addRun(WS, s, name, { disposition: 'merged', passing: true })
+    await addRun(WS, s, name, { failing: 'build' })
+    await addRun(WS, s, name, { failing: 'build' })
+    await addRun(WS, s, name, { failing: 'tests' })
+
+    const population = await runs.triggerPopulation(WS, name, null)
+    expect(population.decided).toBe(7)
+    expect(population.discarded).toBe(2)
+    // Two builds against one test failure — by count, not by name.
+    expect(population.recurringCheck).toEqual({ name: 'build', failures: 2 })
+  })
+
+  /** A screening run's prompt is substituted, so its outcome is a candidate's, not the persona's. */
+  it('excludes screening runs, as every other tally does', async () => {
+    const name = `trig-b-${Date.now()}`
+    const s = await scaffold(WS, name)
+    await addRun(WS, s, name, { disposition: 'discarded', passing: true })
+    await addRun(WS, s, name, { disposition: 'discarded', passing: true, relation: 'screen' })
+
+    const population = await runs.triggerPopulation(WS, name, null)
+    expect(population).toMatchObject({ decided: 1, discarded: 1 })
+  })
+
+  /**
+   * The window is the whole point: a persona whose last measurement settled yesterday should be
+   * judged on today's work, or the trigger re-fires forever on discards a human already answered.
+   */
+  it('excludes runs that started before the last settlement', async () => {
+    const name = `trig-c-${Date.now()}`
+    const s = await scaffold(WS, name)
+    const old = new Date(Date.now() - 72 * 3600 * 1000)
+    await addRun(WS, s, name, { disposition: 'discarded', passing: true, createdAt: old })
+    await addRun(WS, s, name, { disposition: 'discarded', passing: true, createdAt: old })
+    await addRun(WS, s, name, { disposition: 'discarded', passing: true })
+
+    const since = new Date(Date.now() - 3600 * 1000)
+    expect(await runs.triggerPopulation(WS, name, null)).toMatchObject({ discarded: 3 })
+    expect(await runs.triggerPopulation(WS, name, since)).toMatchObject({
+      decided: 1,
+      discarded: 1,
+    })
+  })
+
+  it('returns one candidate per persona, carrying its latest run context', async () => {
+    const name = `trig-d-${Date.now()}`
+    const s = await scaffold(WS, name)
+    await addRun(WS, s, name, {
+      disposition: 'discarded',
+      passing: true,
+      createdAt: new Date(Date.now() - 7200_000),
+    })
+    await addRun(WS, s, name, { disposition: 'merged', passing: true })
+
+    const candidates = await runs.listTriggerCandidates(200)
+    const mine = candidates.filter((entry) => entry.personaName === name)
+    expect(mine).toHaveLength(1)
+    expect(mine[0]).toMatchObject({
+      personaId: s.personaId,
+      threadId: s.threadId,
+      repositoryId: s.repositoryId,
+      markdownSource: 'live',
+    })
+  })
+
+  /** A run with no decided outcome has nothing to fire on and no verdict to read. */
+  it('omits a persona whose runs are all undecided', async () => {
+    const name = `trig-e-${Date.now()}`
+    const s = await scaffold(WS, name)
+    await addRun(WS, s, name, {})
+
+    const candidates = await runs.listTriggerCandidates(200)
+    expect(candidates.some((entry) => entry.personaName === name)).toBe(false)
+  })
+
+  it('takes the newer of a settled search and a decided trial', async () => {
+    const name = `trig-f-${Date.now()}`
+    const s = await scaffold(WS, name)
+    expect(await variants.lastMeasurementSettledAt(WS, s.personaId as never)).toBeNull()
+
+    const trialAt = new Date('2026-09-01T00:00:00Z')
+    await db.insert(personaRevision).values({
+      workspaceId: WS,
+      personaId: s.personaId,
+      markdownSource: 'superseded',
+      replacedByKind: 'agent_run',
+      trialDecidedAt: trialAt,
+    })
+    expect(await variants.lastMeasurementSettledAt(WS, s.personaId as never)).toEqual(trialAt)
+
+    const searchAt = new Date('2026-09-02T00:00:00Z')
+    await db.insert(personaVariantSet).values({
+      workspaceId: WS,
+      personaId: s.personaId,
+      status: 'settled',
+      settledAt: searchAt,
+    })
+    expect(await variants.lastMeasurementSettledAt(WS, s.personaId as never)).toEqual(searchAt)
   })
 })

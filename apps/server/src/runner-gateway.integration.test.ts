@@ -1,10 +1,12 @@
 import type { Contract } from '@loom/api-contract'
 import {
+  advanceEvolutionTriggers,
   advanceMergeQueue,
   advanceVerificationQueue,
   expireStaleApprovals,
   reapStuckRuns,
   startAgentRun,
+  startVariantProposer,
 } from '@loom/application'
 import {
   ATLAS_CLOSE,
@@ -18,6 +20,7 @@ import {
   asRepositoryId,
   asThreadId,
   asWorkspaceId,
+  systemActor,
   type Notification,
   UNTRUSTED_MAP_OPEN,
 } from '@loom/domain'
@@ -7617,6 +7620,181 @@ The prompt it started with.`,
     expect(search?.proposer?.detail).toContain('separate proposer session')
     expect(search?.proposer?.detail).toContain('2 of 2 candidates this persona has already lost')
     expect(await client.persona.revisions({ personaId: proposerRow.id })).toHaveLength(0)
+
+    socket.close()
+  })
+
+  /**
+   * The loop closing, over the real protocol.
+   *
+   * This is the one test that proves the platform can improve a persona with nobody asking it
+   * to: three discarded branches, a sweep, and a proposer session reaches the Runner. Every
+   * layer is real — the candidate read joins a run snapshot to a persona row, the window is
+   * bounded by a settlement that has not happened, the gate reads the counts, and the run is
+   * started by a **system actor**, which `startAgentRun` refuses for every other shape of run.
+   *
+   * Asserted here rather than against fakes because the interesting failure is a system actor
+   * being refused at the door, and a fake `startAgentRun` would happily accept one.
+   */
+  it('fires a proposer session from discarded dispositions, and refuses any other system-actor run', async () => {
+    const { socket, runnerId } = await pairFakeRunner('trigger-fires')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'trigger-fires' })
+
+    // The proposer persona is looked up by name, so a workspace without the built-ins has
+    // nothing to run the session as — the same prerequisite a human's click has.
+    await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+
+    const persona = await client.persona.create({
+      markdownSource: [
+        '---',
+        'name: trigger-subject',
+        'description: A worker whose branches keep getting discarded.',
+        'model: claude-haiku-4-5-20251001',
+        'tools: [Read]',
+        'envelope:',
+        '  tools: [Read]',
+        '---',
+        '',
+        'The prompt in use.',
+      ].join('\n'),
+    })
+
+    /**
+     * Three branches that **passed their checks and were discarded anyway**, which is the
+     * threshold — and that pairing is the signal, not the discard alone: work the machine
+     * approved and a human threw away is the one thing verifiable rewards cannot see. A discard
+     * with no verdict is not taste evidence, and the trigger deliberately does not count it.
+     */
+    await client.repository.setVerificationChecks({
+      repositoryId: repo.id,
+      checks: [{ name: 'tests', command: 'true' }],
+    })
+    for (let i = 0; i < 3; i += 1) {
+      const startFrame = nextFrame(socket, (v) => v.type === 'start_run')
+      const run = await client.agentRun.start({
+        threadId: created.rootThread.id,
+        repositoryId: repo.id,
+        personaId: persona.id,
+      })
+      await startFrame
+      const branchName = `loom/trigger-${i}`
+      socket.send(
+        JSON.stringify({
+          type: 'run_workspace_ready',
+          runId: run.id,
+          clonePath: `/tmp/${branchName}`,
+          branchName,
+        }),
+      )
+      socket.send(
+        JSON.stringify({
+          type: 'agent_event',
+          runId: run.id,
+          seq: 1,
+          event: { kind: 'run_completed', totalCostUsd: 0.01, result: 'done' },
+        }),
+      )
+      // A branch can only be dispositioned once its run has finished, which is the rule that
+      // makes a disposition a judgement about finished work rather than about a guess.
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if ((await client.agentRun.get({ agentRunId: run.id })).status === 'completed') break
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      // The harness is swept rather than automatic, so the verdict has to be driven here —
+      // and it is the verdict that makes a discard *taste* rather than just a discard.
+      const verifying = advanceVerificationQueue(app.deps, { verificationStuckMs: 1_800_000 })
+      const asked = await nextFrame(socket, (v) => v.type === 'verify_run', 10_000)
+      socket.send(
+        JSON.stringify({
+          type: 'verification_result',
+          requestId: asked.requestId,
+          status: 'ran',
+          commitSha: 'abc1234567890',
+          checks: [{ name: 'tests', status: 'passed', detail: null, durationMs: 10 }],
+        }),
+      )
+      await verifying
+
+      // Discarding asks the Runner to drop its clone, so the fake has to answer the frame —
+      // the same handshake a real discard performs.
+      const discardFrame = nextFrame(socket, (v) => v.type === 'discard_run')
+      const discarding = client.agentRun.discard({ agentRunId: run.id })
+      const discardRequest = await discardFrame
+      socket.send(
+        JSON.stringify({ type: 'discard_result', requestId: discardRequest.requestId, ok: true }),
+      )
+      await discarding
+    }
+
+    const proposerStart = nextFrame(
+      socket,
+      (v) => v.type === 'start_run' && v.proposeVariants !== undefined,
+      10_000,
+    )
+
+    const swept = await advanceEvolutionTriggers(
+      {
+        agentRuns: app.deps.agentRuns,
+        personaVariants: app.deps.personaVariants,
+        audit: app.deps.audit,
+        startProposer: (input) => startVariantProposer(app.deps, input),
+      },
+      { enabled: true, maxStartsPerTick: 1, maxCandidates: 50 },
+    )
+
+    expect(swept).toEqual({ considered: 1, fired: 1, held: 0, refused: 0 })
+
+    const frame = await proposerStart
+    // The session runs as the proposer persona, about the subject — the same shape a human's
+    // click produces, reached without a human.
+    expect((frame.persona as { name: string }).name).toBe('variant-proposer')
+    expect((frame.proposeVariants as { personaName: string }).personaName).toBe('trigger-subject')
+
+    /**
+     * The audit row carries the population, which is the only way the threshold ever gets
+     * corrected: it was chosen with no settled traffic to mine, so every firing is the
+     * measurement that was not available up front.
+     */
+    const fired = await app.deps.audit.listSince({
+      workspaceId: asWorkspaceId(workspaceId),
+      since: new Date(Date.now() - 600_000),
+      limit: 200,
+    })
+    const entry = fired.find((row) => row.action === 'persona.trigger_fired')
+    expect(entry?.metadata).toMatchObject({
+      personaName: 'trigger-subject',
+      signal: 'discarded-dispositions',
+      discarded: 3,
+    })
+
+    /**
+     * The other half of the widening, and the reason it is safe: a system actor may start a
+     * proposer and nothing else. Without `proposeVariants` the same call is refused, so the
+     * platform cannot manufacture a worker for itself.
+     */
+    await expect(
+      startAgentRun(app.deps, {
+        workspaceId: asWorkspaceId(workspaceId),
+        actor: systemActor(),
+        threadId: asThreadId(created.rootThread.id),
+        repositoryId: asRepositoryId(repo.id),
+        personaId: asAgentPersonaId(persona.id),
+        task: 'Do some work nobody asked for.',
+      }),
+    ).rejects.toThrow(/Only a human may start an agent run/)
+
+    /** And a second sweep does nothing, because the first one opened the measurement. */
+    const again = await advanceEvolutionTriggers(
+      {
+        agentRuns: app.deps.agentRuns,
+        personaVariants: app.deps.personaVariants,
+        audit: app.deps.audit,
+        startProposer: (input) => startVariantProposer(app.deps, input),
+      },
+      { enabled: true, maxStartsPerTick: 1, maxCandidates: 50 },
+    )
+    expect(again.fired).toBe(0)
 
     socket.close()
   })

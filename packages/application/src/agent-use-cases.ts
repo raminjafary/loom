@@ -4649,11 +4649,29 @@ export const startAgentRun = async (
   // defined over, which is the same forgery surface identity-bound approval closes for
   // approvals.
   if (!isHuman(input.actor)) {
-    if (input.actor.kind !== 'agent_run' || parent === null) {
-      throw new ForbiddenError('Only a human may start an agent run')
-    }
-    if (input.actor.agentRunId !== parent.id) {
-      throw new ForbiddenError('An agent run may only spawn children of itself')
+    /**
+     * The one exception, and it is deliberately the narrowest expressible: the platform's own
+     * trigger may start a **proposer session** and nothing else.
+     *
+     * `proposeVariants` is what makes a run a proposer — it carries the subject persona and
+     * what the session was shown — so gating on its presence means a system actor gains
+     * exactly one shape of run. It cannot start a worker, a planner, a reviewer or a
+     * reconciler, and it cannot start a child of anything, because a proposer has no parent by
+     * construction.
+     *
+     * What this widens is *when* a session begins, not what one may do. The candidates it
+     * writes are refused by the same validator a human-started proposer's are, its subject
+     * still needs an envelope a human set, and promotion stays a human's permanently. And the
+     * kill switch below is checked after this, so a paused workspace triggers nothing.
+     */
+    const isPlatformProposer = input.actor.kind === 'system' && input.proposeVariants !== undefined
+    if (!isPlatformProposer) {
+      if (input.actor.kind !== 'agent_run' || parent === null) {
+        throw new ForbiddenError('Only a human may start an agent run')
+      }
+      if (input.actor.agentRunId !== parent.id) {
+        throw new ForbiddenError('An agent run may only spawn children of itself')
+      }
     }
   }
 

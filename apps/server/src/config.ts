@@ -130,6 +130,26 @@ const EnvSchema = z.object({
    * a person is waiting for should sit behind an experiment. The stuck timeout matches the
    * screen's, since the unit is the same whole agent run.
    */
+  /**
+   * The trigger — the platform opening a proposer session because a persona's own dispositions
+   * say one is due. **Off unless an operator turns it on**: every other sweep moves work
+   * somebody asked for, and this one spends model budget with nobody watching.
+   */
+  EVOLUTION_TRIGGER_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === '1' || value === 'true'),
+  /** Sessions one tick may start. One, so a quiet afternoon cannot become a full queue. */
+  EVOLUTION_TRIGGER_MAX_STARTS_PER_TICK: z.coerce.number().int().nonnegative().default(1),
+  /** Personas one tick may consider. Bounds the read rather than the spend. */
+  EVOLUTION_TRIGGER_MAX_CANDIDATES: z.coerce.number().int().positive().default(50),
+  /**
+   * The thresholds, overridable because they are a stated prior rather than a measurement —
+   * there was no settled traffic to mine when they were chosen, and every firing records the
+   * population it fired on so a deployment can correct them from its own history.
+   */
+  EVOLUTION_TRIGGER_DISCARDED: z.coerce.number().int().positive().optional(),
+  EVOLUTION_TRIGGER_CHECK_FAILURES: z.coerce.number().int().positive().optional(),
   CAMPAIGN_STUCK_TIMEOUT_MS: z.coerce.number().int().positive().default(21_600_000),
   CAMPAIGN_MAX_STARTS_PER_TICK: z.coerce.number().int().nonnegative().default(1),
 })

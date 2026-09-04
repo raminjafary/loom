@@ -1,5 +1,7 @@
 import {
+  advanceEvolutionTriggers,
   advanceMergeQueue,
+  startVariantProposer,
   advanceCampaignQueue,
   advanceScreenQueue,
   advanceVerificationQueue,
@@ -11,7 +13,11 @@ import {
   type AgentDeps,
   type NotificationPort,
 } from '@loom/application'
-import { asWorkspaceId } from '@loom/domain'
+import {
+  asWorkspaceId,
+  TRIGGER_CHECK_FAILURES,
+  TRIGGER_DISCARDED_DISPOSITIONS,
+} from '@loom/domain'
 import {
   agentRunEventRepository,
   agentRunRepository,
@@ -234,6 +240,39 @@ export const buildApp = async (
              * rule.
              */
             await curateIdleWorkspaces(deps)
+            /**
+             * The trigger, last of all and off unless an operator turned it on.
+             *
+             * Last because it is the only sweep that starts work nobody asked for: everything
+             * above moves a run, a merge or a measurement that already exists, so a tick that
+             * spent its budget here first would delay work a person is waiting for in order to
+             * begin work no person requested. It also means the population it reads is the one
+             * the reapers and the harness have already settled this tick.
+             */
+            await advanceEvolutionTriggers(
+              {
+                agentRuns: deps.agentRuns,
+                personaVariants: deps.personaVariants,
+                audit: deps.audit,
+                startProposer: (input) => startVariantProposer(deps, input),
+              },
+              {
+                enabled: config.EVOLUTION_TRIGGER_ENABLED,
+                maxStartsPerTick: config.EVOLUTION_TRIGGER_MAX_STARTS_PER_TICK,
+                maxCandidates: config.EVOLUTION_TRIGGER_MAX_CANDIDATES,
+                ...(config.EVOLUTION_TRIGGER_DISCARDED !== undefined ||
+                config.EVOLUTION_TRIGGER_CHECK_FAILURES !== undefined
+                  ? {
+                      thresholds: {
+                        discardedDispositions:
+                          config.EVOLUTION_TRIGGER_DISCARDED ?? TRIGGER_DISCARDED_DISPOSITIONS,
+                        checkFailures:
+                          config.EVOLUTION_TRIGGER_CHECK_FAILURES ?? TRIGGER_CHECK_FAILURES,
+                      },
+                    }
+                  : {}),
+              },
+            )
           })().catch((error) => {
             fastify.log.error({ error }, 'background safety sweep failed')
           })

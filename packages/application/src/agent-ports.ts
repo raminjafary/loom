@@ -99,6 +99,8 @@ import type {
   SubjectMap,
   SubjectMapId,
   SubjectMapStatus,
+  TriggerPopulation,
+  TriggerCandidate,
   WorkspaceId,
   WorkspaceRunControl,
 } from '@loom/domain'
@@ -622,6 +624,44 @@ export interface AgentRunRepositoryPort {
     personaName: string,
     limit: number,
   ): Promise<DivergenceSet>
+  /**
+   * Personas the trigger could fire for, across every workspace, newest activity first.
+   *
+   * Workspace-agnostic like the campaign sweep's own read, and for the same reason: one busy
+   * tenant must not stop another's loop, and a sweep that took a workspace id would need
+   * something to enumerate workspaces with.
+   *
+   * Three things it settles, each of which would otherwise be a per-persona round trip:
+   *
+   * - **A persona with no decided run is not a candidate.** There is nothing to fire on, and
+   *   there is also nowhere to put the session — the thread and repository come from the run
+   *   the persona last did work in, which is where a human would have started one by hand.
+   * - **The persona row is resolved by name**, from the run's snapshot, in the run's workspace.
+   *   A renamed persona simply stops being a candidate, which is the same call every other read
+   *   over run history makes: an id in a snapshot would answer for a row that has since moved.
+   * - **The markdown comes back with it**, so the envelope can be checked in the domain without
+   *   a second read per persona.
+   */
+  listTriggerCandidates(limit: number): Promise<TriggerCandidate[]>
+  /**
+   * The window the trigger decides from: what this persona has done since its last measurement
+   * settled (PLAN-free by design — see `evolutionTriggerVerdict` for the argument).
+   *
+   * **One read rather than three**, and the window is the reason. A denominator counted over
+   * one span, a discard count over another and a check histogram over the persona's whole life
+   * would produce a verdict whose own sentence — "3 of 10 decided runs, worst check at 4" —
+   * described three different populations. The trigger's reason is the only thing that can ever
+   * correct its threshold, so the counts in it have to be commensurable.
+   *
+   * `since` null means the persona has never had a measurement settle, so the window is its
+   * whole history. Screening runs are excluded, as in every other tally here: their prompt is
+   * substituted, so their outcome is a fact about a candidate rather than about the persona.
+   */
+  triggerPopulation(
+    workspaceId: WorkspaceId,
+    personaName: string,
+    since: Date | null,
+  ): Promise<TriggerPopulation>
   /**
    * How many runs reached a decision since a moment — the supervision ledger's denominator.
    *
@@ -1283,6 +1323,18 @@ export interface PersonaVariantRepositoryPort {
    * arm kept 1 of 5 has to be reading the figure the panel showed the human who discarded
    * it.
    */
+  /**
+   * When this persona's last measurement settled, across both kinds — a variant search a human
+   * closed, or a prompt trial they ruled on. Null if neither has ever happened.
+   *
+   * Both, because the trigger's window is "since anything was decided about this persona" and a
+   * platform that counted only searches would re-fire on the same discarded work a trial had
+   * already answered for. Newest of the two wins.
+   */
+  lastMeasurementSettledAt(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+  ): Promise<Date | null>
   listLosingArms(
     workspaceId: WorkspaceId,
     personaId: AgentPersonaId,
@@ -1300,6 +1352,22 @@ export interface PersonaVariantRepositoryPort {
    * The shown counts are stored rather than recomputed: they are a fact about one session's
    * brief, and the buffer they were drawn from grows underneath them.
    */
+  /**
+   * Whether a proposer session for this persona is still running.
+   *
+   * The trigger's re-fire guard, and it exists because the obvious guard was wrong. A fired
+   * persona was assumed to have an open measurement — but a proposer *session* is a run, and
+   * the search it opens does not exist until the session submits candidates. So between firing
+   * and submission `findOpenSet` says nothing is open, and a sweep every thirty seconds would
+   * have started a session per tick until one of them finished. The end-to-end test caught it.
+   *
+   * A session whose run is terminal does not count: the persona is free again, whether the
+   * session submitted candidates or gave up.
+   */
+  hasRunningProposerSession(
+    workspaceId: WorkspaceId,
+    personaId: AgentPersonaId,
+  ): Promise<boolean>
   openProposerSession(input: {
     workspaceId: WorkspaceId
     personaId: AgentPersonaId
