@@ -3,7 +3,7 @@
 [![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
-![tests](https://img.shields.io/badge/tests-2%2C100-brightgreen)
+![tests](https://img.shields.io/badge/tests-2%2C361-brightgreen)
 
 **Run ten coding agents at once, each in its own git clone and container. Nothing any of them
 says about its own work is taken as evidence: spend is counted at the network boundary, "done"
@@ -45,6 +45,12 @@ session that was never shown who wrote what, or a human reading the exact comman
   to find out whether the edit actually helped. Candidates come from a session that is *not* the
   run being edited, shown what has already lost — a session grading its own transcript writes the
   prompt that would have made its own last hour look better
+- 🕸️ **A harness you draw rather than write** — the shapes worth reusing (deep research, code
+  review, security analysis, a standing team, a migration sweep) are a graph the server validates
+  before it can spend, not a script an agent authored and the host executes. Every step is an
+  ordinary run, so the meter, the envelope, approvals and steering all apply unchanged; a bar
+  across the lane is a barrier, and everywhere else a step starts the moment its own predecessor
+  finished
 - 🗺️ **[Expertise](#expertise-and-the-colosseum): a map an agent built and can be held to** — a
   mastery run's deliverable is a graph of a codebase rather than a diff, every claim carries how
   it was arrived at, and retrieval is a trial with a deliberately-withheld baseline, because an
@@ -101,7 +107,7 @@ nine cents.
 | 💸 | **Metered spend, enforced caps** | Cost is read from the provider's responses at the proxy, not self-reported, with pre-flight estimate, per-turn check and a hard kill |
 | 🔌 | **Two execution backends, one port** | The Claude Agent SDK, and any model an operator serves themselves over the chat-completions protocol — same persona document, same tool names, same approval gate, same run row. A backend is chosen by a prefix in the model id, so which one ran a run is still readable months later |
 | 🧠 | **Measured persona memory** | Subject maps, an atlas across projects, and retrieval as a trial with a deliberately-denied baseline arm |
-| 📓 | **Durable lessons, per repository** | An agent records what it learned about *this* codebase and the next run against it is shown that back — bounded hard, ranked by what became of the runs that read each one, fenced as untrusted data, and retired when a merge changes the files it named |
+| 📓 | **Durable lessons, per repository — and measured** | An agent records what it learned about *this* codebase and the next run against it is shown that back — bounded hard, ranked by what became of the runs that read each one, fenced as untrusted data, and retired when a merge changes the files it named. Like the maps, it is a trial: some runs are deliberately denied the lessons and recorded as the baseline |
 | ⚔️ | **The Colosseum** | Two agents that learned different things put questions to each other in a bounded, recorded session — settled by a check the repository can answer, never by agreement |
 | ♻️ | **Self-editing inside a ceiling** | An envelope bounds what a persona may become; edits go on trial against what they replaced, judged by outcomes rather than by a model's opinion |
 | 🎯 | **A held-out screen before a candidate costs anything** | A proposed prompt is replayed against past decided work at the commit each run opened at. One that does worse than the prompt in use is refused an arm, so no live run is spent on it |
@@ -109,6 +115,12 @@ nine cents.
 | 🎚️ | **Model routing on the one honest signal** | A branch that fails the repository's checks is retried once, one tier up — never on a crashed run, which says nothing about capability. Optionally, a run's model comes from what has already happened on that persona's work, which only ever routes *down*: the table is read from runs nobody randomised, so it is biased against whichever model a human reached for on the hard tasks |
 | ⬆️ | **It can replace itself, and has to prove the replacement** | A revision of Loom's own source is built in a worktree with a frozen lockfile, started on a port of its own until `/healthz` says the schema it expects is the schema the database has, and checked against what the running revision could do. Only then does a pointer move — and a rollback is the same pointer moving back |
 | ⏮️ | **A rehearsed rollback** | A scripted drill promotes a knowingly-broken change to Loom's own source and recovers from it — with the recovery running from a checkout pinned before the change, so the broken code cannot take part in its own repair |
+| 🕸️ | **Workflows, drawn rather than scripted** | A closed vocabulary of nodes and edges the server validates before anything runs. A fan splits work into lanes that flow independently; a barrier is the only thing that collects them; a refusal stops its own lane rather than the execution. Five ship drawn: deep research, code review, security analysis, agent teams, migration sweep |
+| 📐 | **A shape is a configuration, so it is versioned** | Editing a workflow writes a new version with its own digest; nothing rewrites one. An execution renders the version *it* ran, and its journal is what a resumed execution replays from — there is no cache and no separate resume path |
+| 🧪 | **Campaigns: growth measured, not asserted** | Any past version of a persona replayed against its own past work, at the commits that work opened at, scored by the repository's checks. It gates nothing and promotes nothing; a hard cap **halts** it, and a halted campaign's score says "partial" first. No growth figure is ever computed — a difference between two vintages is a difference in everything that moved |
+| 📉 | **The raw gap between two models, paired per item** | The same document on a small model and a frontier one over one item set, paired over the items *both* arms scored, with the dropped verdicts counted. The first point of a punch-up curve, and it is a curve only within one leg — two campaigns over two sets differ in which work was asked for |
+| 🔁 | **The loop can close itself** | Off by default: a mined threshold on a persona's own recent dispositions opens a proposer session and a search with nobody watching. No new authority — every write is one the envelope already permits, and promotion stays a human's |
+| 🔧 | **A tool list is an arm too** | Tier 2's self-edit is measured the way tier 1's is: a candidate tool list is screened, dealt runs and promoted on outcomes, rather than merely permitted |
 | 🖼️ | **Two canvases** | Design a team on a canvas that will not draw an edge the runtime would refuse, and watch a live graph of what each run is doing now |
 | ⚡ | **Warm dependency trees** | Optional: runs open with `node_modules` already in place instead of spending a model turn installing |
 
@@ -121,6 +133,12 @@ showing the exact argv, then review and keep, discard, push or queue the branch.
 **A swarm.** A Planner decomposes a goal into a DAG of subtasks, sub-planners decompose their own
 areas, workers share a notes ledger, sibling branches converge through the merge queue, and you
 can steer the whole thing — or answer a question one run is blocked on — without stopping it.
+
+**A harness.** When the decomposition is *not* the hard part — the same five stages every time —
+open Settings → Workflows, pick a shape, read what it may cost at worst, and run it. The diagram
+shows where the work waits: a bar across the lane is a barrier, and everywhere else a step starts
+the moment its own predecessor finished. Where the decomposition *is* the hard part, the Planner
+is still the right answer and a workflow would be a guess frozen into a diagram.
 
 ### Three ideas that do not exist elsewhere
 
@@ -143,6 +161,18 @@ proposes candidate prompts that never go live, the platform deals runs out betwe
 the fitness is a human's disposition, then the repository's definition of done, then cost —
 never a model's self-report. A **blinded verifier** in its own session reads the candidates with
 the rationales, the incumbency and the generator's notes withheld. It ranks; a person promotes.
+
+The loop can also **start itself**, and that is a switch rather than a default. With
+`EVOLUTION_TRIGGER_ENABLED` on, a mined threshold on a persona's own recent dispositions — passed
+branches a human discarded anyway, or one named check failing over and over — opens a proposer
+session and a search with nobody watching. It grants no new authority: every write is one the
+envelope already permitted, and promotion stays a human's permanently. What is left to ask is
+whether a persona has actually *grown*, and a **campaign** is the instrument for it: any past
+version of a persona replayed against its own past work, at the commits that work opened at,
+scored by the repository's checks. It gates nothing, and it deliberately reports no growth
+figure — a difference between two vintages is a difference in the document *and* in the checks,
+the model and the harness that all moved between them. The one comparison it can make cleanly is
+the same document on two models, paired per item: the raw gap before anything tries to close it.
 
 ### Expertise, and the Colosseum
 
@@ -317,6 +347,12 @@ holds your repositories, connected by an authenticated WebSocket; the server nev
 filesystem. The **egress proxy** sits between every sandbox and the network, holding the real
 credential so the sandbox holds only an opaque per-run lease.
 
+A third is worth knowing about if you touch workflows. The executor is a **pure function of the
+drawn shape and the journal** — asked "given these rows, what may be dealt now", it answers, and
+the application layer does the dealing. That split is what makes an execution replayable and makes
+resume stop being a special path: a resumed execution is the same function called against a
+journal that happens to be longer.
+
 Design decisions and their reasoning live in the code, next to what they constrain: a
 comment explains *why* a boundary sits where it does, so the argument is where the change
 would be made.
@@ -335,6 +371,8 @@ web page is reading attacker-controllable instructions. The load-bearing control
 | **The clone gets no vote** | The SDK runs with `settingSources: []`, so a `.claude/settings.json` committed to a repository cannot grant permissions nobody was asked for. A repo's `CLAUDE.md` is not auto-injected either — the persona is the instruction source. |
 | **A planner cannot act** | Read-only tools, enforced at persona-authoring time. Its only effect on the world is a decomposition the server validates itself. |
 | **The realtime stream asks who is listening** | A subscriber presents a short-lived token the server signs from its session; the workspace is inside the token, so a client cannot name one. The fan-out service verifies and never signs, so it can read what it was already forwarding and cannot mint itself anything else. |
+| **A subscription is a lease** | That token expires and is renewed on an interval the mint returns, so a revoked session loses its stream in minutes rather than for the life of a tab — and a client holding its own copy of the deployment's lease cannot be one release out of date about it. |
+| **A Runner may only answer what it was sent** | Two Runners on one host is the ordinary arrangement. A reply used to be matched by request id alone, so a second Runner could resolve another's in-flight merge, push, diff or verification by answering with its id. Every pending request now carries the Runner it went to, taken from the connection rather than from the frame, and a reply from anyone else is *dropped* — rejecting would let a second Runner fail another's merge on demand. |
 
 Three limits stated plainly rather than buried:
 
@@ -353,7 +391,7 @@ Three limits stated plainly rather than buried:
 
 ```bash
 make check          # what CI runs: typecheck, lint, the suite, the boundary test
-pnpm test           # 1,778 tests across 100 files
+pnpm test           # 2,361 tests across 127 files
 pnpm db:test:prepare # four test databases — re-run after any db:generate
 ```
 
@@ -368,8 +406,19 @@ generating a migration — a migration applied only to `loom` shows up as integr
 out rather than as a missing-table error.
 
 **No automated test calls the real model API** (that costs real tokens). That path is covered by
-the live drivers in `tools/*-check.mts`, run by hand. Each drives a real server, a real Runner
-*process*, the real SDK and real git, and each **asserts** rather than prints:
+the live drivers in `tools/*-check.mts` — twenty-five of them, run by hand. Each drives a real
+server, a real Runner *process*, the real SDK and real git, and each **asserts** rather than
+prints.
+
+Several spend no tokens at all: a run refused by the Runner's own unsandboxed guard is refused
+*after* its clone, so the workspace, the commit and the dispatch are real and no model is ever
+called.
+
+```bash
+docker compose up -d postgres valkey
+npx tsx tools/workflow-check.mts   # 30 checks: a drawn shape dealing real runs, no tokens
+npx tsx tools/campaign-check.mts   # a campaign against a real repository, no tokens
+```
 
 ```bash
 docker compose up -d
@@ -407,8 +456,10 @@ Two things that otherwise cost you a pass:
 | `LOOM_ALLOWED_ROOTS` | — | Parent directories a repository may be bound from |
 | `LOOM_CHAT_COMPLETIONS_BASE_URL` | — | Where a model the operator serves themselves is reachable. Required for any persona whose model id starts with `local/`; unset is a refusal rather than a guess at localhost |
 | `LOOM_CHAT_COMPLETIONS_API_KEY` | unset | Sent as a bearer token to that endpoint, for a server that wants one |
-| `LOOM_DEP_CACHE_ENABLED` | off | Shared package-manager cache; a warmed repository also captures a **prepared tree**, so runs open with `node_modules` already in place |
+| `EVOLUTION_TRIGGER_ENABLED` | off | Whether the platform may decide an improvement is due and open a proposer session itself. Off is consent withheld rather than a feature gate — the improvement loop works without it and waits to be asked |
+| `LOOM_DEP_CACHE_ENABLED` | off | Package-manager cache, keyed **per repository**; a warmed repository also captures a **prepared tree**, so runs open with `node_modules` already in place. Per repository because the only writer is the operator's install command and that command is a per-repository setting — one root for a host meant one repository's command wrote what every other repository's runs copied |
 | `LOOM_DEP_CACHE_MODE` | `copy` | `shared` is faster and unsound — a directory shared between sandboxes is a channel between them |
+| `WORKFLOW_MAX_STARTS_PER_TICK` | 4 | How many workflow steps one executor tick may start. Higher than a campaign's on purpose: a fan is *meant* to open several lanes at once, and a budget of one turns a shape drawn as parallel into a queue |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | unset | Web push. Off until configured; `npx web-push generate-vapid-keys` |
 
 Only directories a repository's own `.gitignore` covers are captured into a prepared tree, which
@@ -422,13 +473,19 @@ reads are exactly what they would have been.
 Loom is built in phases, and the phase boundaries are architectural rather than cosmetic —
 each one exists because the next depends on it.
 
+**Recently landed:** workflows — the drawn vocabulary, the executor, the enforced budget, the
+answer channel, the five built-ins and a live driver that deals real runs against a real
+repository at zero tokens. Campaigns and the cross-model gap. The trigger that lets the
+improvement loop start itself.
+
 **Next:**
 
 | | |
 |---|---|
-| **Platform channels on the second backend** | The execution port now has two adapters and the second is driven live, so replaceability is demonstrated rather than architectural — but a model served over the chat-completions protocol gets file and shell tools only. A run needing the planner, mastery, verifier, proposer, self-edit or memory channel is refused with the channel named rather than run without it (Phase 3) |
+| **The trial a workflow has to survive** | The shape is built; the claim is not settled. Same task class, planner-and-delegate against workflow, judged on dispositions first and cost second — the trial machinery's answer rather than an argument. It needs traffic, not code (Phase 3) |
+| **A designer agent** | There is deliberately no workflow editor. A shape is a configuration a measurement cites, so an edit is a new version — and the way configuration should become a conversation is an agent proposing one that a human approves, not a form (Phase 3) |
+| **Platform channels on the second backend** | The execution port now has two adapters and the second is driven live, so replaceability is demonstrated rather than architectural — but a model served over the chat-completions protocol gets file and shell tools only. A run needing the planner, mastery, verifier, proposer, self-edit, memory or workflow-answer channel is refused with the channel named rather than run without it (Phase 3) |
 | **microVM isolation** | Containers alone are insufficient; Kata or microsandbox is the boundary (Phase 3) |
-| **Workflows** | A harness per task, **drawn on the composition canvas rather than written as a script**: nodes are steps, an edge is a pipeline, a bar is a barrier where a stage really does need every prior result. It is data the server validates rather than code the platform executes — an agent-authored script run by the host is the one thing the security model exists to prevent — and every step is an ordinary run, so the tree, the cost meter, the envelope, approvals and steering all apply unchanged. Deterministic and replayable from the journal, with an enforced budget rather than a requested one. Five built-ins ship as drawn graphs: deep research, code review, security analysis, agent teams, and a migration sweep (Phase 3) |
 
 ## Contributing
 
