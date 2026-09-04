@@ -180,6 +180,12 @@ export interface RunVerificationInput {
   readonly plan: Extract<VerificationPlan, { kind: 'run' }>
   /** Names the dependency-cache copy on disk, so a leftover directory is searchable. */
   readonly label: string
+  /**
+   * Whose cache to copy. Absent means none — the checks install for themselves, which is
+   * what they did before the cache existed. The cache is keyed per repository, so a
+   * verification with no repository to name has nothing to inherit; see `dep-cache.ts`.
+   */
+  readonly repositoryId?: string
   readonly log?: (message: string) => void
 }
 
@@ -197,9 +203,14 @@ export const runVerification = async (
 ): Promise<VerificationCheckResult[]> => {
   const log = input.log ?? (() => {})
   const cacheConfig = depCacheFromEnv()
-  const mount = cacheConfig
-    ? await prepareDepCache(cacheConfig, `verify-${input.label.replace(/[^a-zA-Z0-9]+/g, '-')}`)
-    : null
+  const mount =
+    cacheConfig && input.repositoryId
+      ? await prepareDepCache(
+          cacheConfig,
+          `verify-${input.label.replace(/[^a-zA-Z0-9]+/g, '-')}`,
+          input.repositoryId,
+        )
+      : null
 
   const results: VerificationCheckResult[] = []
   try {
@@ -268,6 +279,8 @@ export interface VerifyRunBranchInput {
   readonly branchName: string
   readonly defaultBranch: string
   readonly checks: readonly VerificationCheck[]
+  /** The repository whose dependency cache these checks may copy. See `dep-cache.ts`. */
+  readonly repositoryId?: string
   readonly log?: (message: string) => void
 }
 
@@ -315,6 +328,7 @@ export const verifyRunBranch = async (
     clonePath: input.clonePath,
     plan,
     label: `${input.branchName}@${head.slice(0, 8)}`,
+    ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
     ...(input.log ? { log: input.log } : {}),
   })
 

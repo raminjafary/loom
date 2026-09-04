@@ -33,6 +33,21 @@ const execFileAsync = promisify(execFile)
  * In `copy` mode the shared root is only ever written by `warmDepCache`, which runs an
  * operator-authored install command with no agent in the loop. That is the whole safety
  * argument: **nothing a model produced ever wrote to the cache runs inherit.**
+ *
+ * **And the root is keyed per repository**, the way `prepared-tree.ts` keys its own trees.
+ * The safety argument above says the writer is the operator's install command, but "the
+ * operator's install command" is a *per-repository* setting: with one root for a whole host,
+ * one repository's command wrote what every other repository's runs then copied. Nothing
+ * about that is a model's doing and it is still wrong — a Python repository would inherit a
+ * JavaScript one's registry responses, a monorepo's pnpm store would be handed to a project
+ * that has never used pnpm, and a private registry configured for one repository would serve
+ * packages to another whose operator never granted it. Keyed by repository id rather than by
+ * path, for the reason the prepared tree gives: two `repository` rows can legitimately point
+ * at one directory on different Runners, and a path is not a stable name for a cache entry.
+ *
+ * A run with no repository to key on gets **no cache at all** rather than the root itself.
+ * That is the pre-cache behaviour — it installs for itself — and it is the only fallback that
+ * cannot quietly re-create the shared bucket this keying exists to remove.
  */
 
 export type DepCacheMode = 'copy' | 'shared'
@@ -52,6 +67,15 @@ export const depCacheFromEnv = (env: NodeJS.ProcessEnv = process.env): DepCacheC
     mode: env.LOOM_DEP_CACHE_MODE === 'shared' ? 'shared' : 'copy',
   }
 }
+
+/**
+ * The cache directory for one repository — where the warm step writes and a run copies from.
+ *
+ * One function so the two sides cannot disagree: a writer and a reader that each built the
+ * path would be one refactor away from a warm step filling a directory nothing reads.
+ */
+export const depCacheDirFor = (config: DepCacheConfig, repositoryId: string): string =>
+  join(config.root, repositoryId)
 
 /**
  * Copy-on-write where the filesystem allows it, a plain copy where it does not.
@@ -100,20 +124,25 @@ export interface DepCacheMount {
 export const prepareDepCache = async (
   config: DepCacheConfig,
   runId: string,
+  /** Whose cache this is. Required: see the header on why there is no host-wide bucket. */
+  repositoryId: string,
 ): Promise<DepCacheMount> => {
+  const root = depCacheDirFor(config, repositoryId)
   // Created here rather than left to the container runtime: docker would create a
   // missing bind-mount source as root, which the non-root agent cannot write, so the
   // cache would silently stay empty while looking configured.
-  await mkdir(config.root, { recursive: true })
+  await mkdir(root, { recursive: true })
 
   if (config.mode === 'shared') {
-    return { path: config.root, release: async () => {} }
+    // Still shared, and still unsound — but now between the runs of *one* repository
+    // rather than every repository on the host. Narrower, not safe; `copy` is the default.
+    return { path: root, release: async () => {} }
   }
 
   const copyPath = await mkdtemp(
     join(process.env.LOOM_RUN_SCRATCH_ROOT ?? tmpdir(), `loom-deps-${runId}-`),
   )
-  await cloneDirectory(config.root, copyPath)
+  await cloneDirectory(root, copyPath)
   return {
     path: copyPath,
     release: async () => {

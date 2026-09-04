@@ -16,7 +16,7 @@ import {
 import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
 import { runAgentOnBackend } from './agent-backend.js'
-import { depCacheEnv, depCacheFromEnv, warmDepCache } from './dep-cache.js'
+import { depCacheDirFor, depCacheEnv, depCacheFromEnv, warmDepCache } from './dep-cache.js'
 import {
   capturePreparedTree,
   lockDigest,
@@ -198,7 +198,21 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
   // runId since a Runner may have several runs in flight concurrently.
   const runWorkspaces = new Map<
     string,
-    { clonePath: string; defaultBranch: string; sourcePath: string; branchName: string; homePath: string }
+    {
+      clonePath: string
+      defaultBranch: string
+      sourcePath: string
+      branchName: string
+      homePath: string
+      /**
+       * Which repository this run is against, kept because `merge_run` and `verify_run`
+       * carry a run id and nothing else — and the dependency cache is keyed per
+       * repository, so a rebased check that could not name one would have to fall back to
+       * a host-wide bucket. Undefined for a run started by a server that predates the
+       * field: those install for themselves.
+       */
+      repositoryId?: string
+    }
   >()
   // Per-run heartbeat timers — started as soon as
   // start_run arrives (covers a hang during workspace prep too), cleared once
@@ -551,6 +565,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
     task?: string
     clonePath: string
     homePath: string
+    /** The repository whose dependency cache this run inherits. See `dep-cache.ts`. */
+    repositoryId?: string
     abort: AbortController
     resumeSessionId?: string
     /** The tree's ledger, rendered server-side. */
@@ -1168,6 +1184,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
       await runAgentInSandbox(sandbox, {
         runId: input.runId,
         persona: input.persona,
+        ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
         ...(input.task === undefined ? {} : { task: input.task }),
         ...(input.contextLedger === undefined ? {} : { contextLedger: input.contextLedger }),
         ...(input.mapContext === undefined ? {} : { mapContext: input.mapContext }),
@@ -1475,11 +1492,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 sourcePath: frame.cwd,
                 branchName,
                 homePath,
+                ...(frame.repositoryId === undefined ? {} : { repositoryId: frame.repositoryId }),
               })
               const state: RunState = {
                 runId,
                 persona: frame.persona,
                 ...(frame.task === undefined ? {} : { task: frame.task }),
+                ...(frame.repositoryId === undefined ? {} : { repositoryId: frame.repositoryId }),
                 clonePath,
                 homePath,
                 branchName,
@@ -1514,6 +1533,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
               return runAgentForRun({
                 runId,
                 persona: frame.persona,
+                ...(frame.repositoryId === undefined ? {} : { repositoryId: frame.repositoryId }),
                 ...(frame.task === undefined ? {} : { task: frame.task }),
                 // Deliberately not persisted into RunState: the ledger is a snapshot
                 // of other runs' notes, and a resumed run should read the ledger as
@@ -1624,6 +1644,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
             ...(state.task === undefined ? {} : { task: state.task }),
             clonePath: state.clonePath,
             homePath: state.homePath,
+            ...(state.repositoryId === undefined ? {} : { repositoryId: state.repositoryId }),
             abort,
             ...(state.sessionId === undefined ? {} : { resumeSessionId: state.sessionId }),
           })
@@ -1866,7 +1887,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                   runtime: sandbox.runtime,
                   image: sandbox.image,
                   network: sandbox.network,
-                  cacheRoot: cache.root,
+                  cacheRoot: depCacheDirFor(cache, frame.repositoryId),
                   clonePath: workspace.clonePath,
                   command: frame.installCommand,
                   env: { HTTP_PROXY: proxy, HTTPS_PROXY: proxy, ...depCacheEnv() },
@@ -1958,6 +1979,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
             branchName: workspace.branchName,
             defaultBranch: workspace.defaultBranch,
             checks: frame.checks,
+            ...(workspace.repositoryId === undefined
+              ? {}
+              : { repositoryId: workspace.repositoryId }),
             log,
           })
             .then((result) =>
@@ -2016,6 +2040,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
             branchName: workspace.branchName,
             defaultBranch: workspace.defaultBranch,
             checks: frame.checks,
+            ...(workspace.repositoryId === undefined
+              ? {}
+              : { repositoryId: workspace.repositoryId }),
             log,
           })
             .then((outcome) =>

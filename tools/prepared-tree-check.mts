@@ -21,7 +21,7 @@
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
 import { execFile, spawn } from 'node:child_process'
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -157,6 +157,30 @@ const main = async () => {
   check(
     await exists(join(PREPARED_ROOT, repo.id, 'node_modules', 'chalk', 'package.json')),
     'the dependency itself is in the prepared tree, not just a directory named after it',
+  )
+
+  /**
+   * And the package-manager cache the warm filled is **this repository's**, not a
+   * host-wide bucket.
+   *
+   * Asserted on the filesystem rather than inferred from the warm's own sentence: the
+   * failure this closes is one repository's install command writing what every other
+   * repository's runs then copy, and the only place that is visible is the layout under
+   * the configured root. Nothing may sit at the top level — a `npm` directory there
+   * would be exactly the shared bucket, wearing the new keying as a disguise.
+   */
+  const cacheEntries = await readdir(CACHE_ROOT).catch(() => [] as string[])
+  check(
+    cacheEntries.includes(repo.id),
+    `the warm filled this repository's own cache directory (${cacheEntries.join(', ') || 'nothing'})`,
+  )
+  check(
+    cacheEntries.every((entry) => entry === repo.id || entry.startsWith('.')),
+    'and nothing else — no host-wide cache sits beside it for another repository to inherit',
+  )
+  check(
+    await exists(join(CACHE_ROOT, repo.id, 'npm')),
+    "the package manager's own cache is inside that directory, which is what a run copies",
   )
 
   // ── 2. A real run opens onto it ────────────────────────────────────────────────

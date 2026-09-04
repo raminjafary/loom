@@ -44,6 +44,14 @@ const execFileAsync = promisify(execFile)
 
 export interface SandboxOptions {
   readonly runId: string
+  /**
+   * Which repository this run is against — the key of the dependency cache it inherits.
+   *
+   * Absent means no cache: an old server that does not send the field leaves a run
+   * installing for itself, which is what every run did before the cache existed and is the
+   * only fallback that cannot re-create a host-wide bucket. See `dep-cache.ts`.
+   */
+  readonly repositoryId?: string
   readonly persona: WirePersonaSpec
   readonly task?: string
   /** Host path of the run's clone, mounted at WORK_DIR. */
@@ -492,7 +500,10 @@ export const runAgentInSandbox = async (
   // never outlives the run and never contains anything real.
   // Per-run copy of the warmed cache by default, so nothing this run writes is ever
   // seen by another (dep-cache.ts). Released in the same `finally` as the container.
-  const depCache = config.depCache ? await prepareDepCache(config.depCache, options.runId) : null
+  const depCache =
+    config.depCache && options.repositoryId
+      ? await prepareDepCache(config.depCache, options.runId, options.repositoryId)
+      : null
   if (depCache) await chmod(depCache.path, 0o777)
 
   await mkdir(join(options.homePath, '.claude'), { recursive: true })

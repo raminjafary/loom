@@ -92,6 +92,8 @@ export interface MergeRunBranchInput {
    * branch, which is the different question the queue exists to ask.
    */
   readonly checks: readonly VerificationCheck[]
+  /** The repository whose dependency cache the rebased checks may copy. See `dep-cache.ts`. */
+  readonly repositoryId?: string
   readonly log?: (message: string) => void
 }
 
@@ -208,6 +210,7 @@ export const mergeRunBranch = async (input: MergeRunBranchInput): Promise<MergeO
       clonePath,
       plan,
       label: `${branchName}@${rebasedSha.slice(0, 8)}`,
+      ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
       log,
     })
     const summary = summarizeVerification(results)

@@ -26,6 +26,15 @@ export const RunStateSchema = z.object({
   defaultBranch: z.string(),
   /** Source repo the clone came from, needed for a later push. */
   sourcePath: z.string(),
+  /**
+   * Which repository this run is against — the key of the dependency cache it may copy.
+   *
+   * Persisted because a run resumed after a Runner restart would otherwise lose it and
+   * install from nothing, and because the merge and verification frames carry a run id
+   * only. Optional: a run started by a server that predates the field has none, and gets
+   * no cache rather than a host-wide one.
+   */
+  repositoryId: z.string().optional(),
   /** SDK session to resume. Absent until the session announces itself. */
   sessionId: z.string().optional(),
   /**

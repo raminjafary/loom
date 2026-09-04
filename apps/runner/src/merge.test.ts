@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -361,11 +361,15 @@ describe('mergeRunBranch', () => {
    * being a setting that only suits fixtures.
    */
   describe('with a dependency cache', () => {
+    const MERGE_REPO = 'repo-under-merge'
     let cacheRoot: string
 
     beforeEach(async () => {
       cacheRoot = await mkdtemp(join(root, 'dep-cache-'))
-      await writeFile(join(cacheRoot, 'warmed.txt'), 'from the warm step\n')
+      // Under the repository's own directory: the cache is keyed per repository, so the
+      // warm step's contents live where that repository's runs will look for them.
+      await mkdir(join(cacheRoot, MERGE_REPO), { recursive: true })
+      await writeFile(join(cacheRoot, MERGE_REPO, 'warmed.txt'), 'from the warm step\n')
       process.env.LOOM_DEP_CACHE_ENABLED = '1'
       process.env.LOOM_DEP_CACHE_ROOT = cacheRoot
       process.env.LOOM_SANDBOX_ENABLED = '0'
@@ -392,6 +396,41 @@ describe('mergeRunBranch', () => {
         // What an offline `npm ci` needs: the cache env pointing somewhere real, with
         // the warm step's contents in it.
         checks: [{ name: 'tests', command: 'test -f "$(dirname "$npm_config_cache")/warmed.txt"' }],
+        repositoryId: MERGE_REPO,
+      })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.verified).toBe(true)
+    })
+
+    /**
+     * And a merge that cannot name a repository gets no cache rather than the root.
+     *
+     * The root held every repository's warmed tree, so handing it over was one
+     * repository's install command deciding what another's checks resolved against.
+     * Nothing is silently substituted: the environment simply has no cache in it, which
+     * is what a check saw before the cache existed at all.
+     */
+    it('gives no cache at all to a merge with no repository to key on', async () => {
+      const clone = await makeRunClone('loom/run-k2')
+      await commitFile(clone, 'feature.txt', 'one\n', 'add feature')
+
+      const result = await mergeRunBranch({
+        sourcePath: source,
+        clonePath: clone,
+        branchName: 'loom/run-k2',
+        defaultBranch: 'main',
+        /**
+         * Not `test -z "$npm_config_cache"`: the process running these tests was started
+         * by a package manager, which sets that variable itself. What is asserted is the
+         * thing the platform controls — no per-run cache copy was mounted for this merge.
+         */
+        checks: [
+          {
+            name: 'tests',
+            command: 'case "$npm_config_cache" in *loom-deps-*) exit 1;; esac',
+          },
+        ],
       })
       expect(result.ok).toBe(true)
       if (!result.ok) return
@@ -414,10 +453,13 @@ describe('mergeRunBranch', () => {
         branchName: 'loom/run-l',
         defaultBranch: 'main',
         checks: [{ name: 'tests', command: 'echo planted > "$(dirname "$npm_config_cache")/planted.txt"' }],
+        repositoryId: MERGE_REPO,
       })
       expect(result.ok).toBe(true)
 
-      const survivors = await execFileAsync('ls', [cacheRoot]).then((r) => r.stdout)
+      const survivors = await execFileAsync('ls', [join(cacheRoot, MERGE_REPO)]).then(
+        (r) => r.stdout,
+      )
       expect(survivors).toContain('warmed.txt')
       expect(survivors).not.toContain('planted.txt')
     })
