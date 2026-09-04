@@ -6,6 +6,7 @@ import type { VerificationCheck } from './verification.js'
 import type { ReplayCheckOutcome, ReplayOutcome, ScreenDecision } from './replay-set.js'
 import type { CampaignStatus } from './replay-campaign.js'
 import type { VariantComponent } from './prompt-variants.js'
+import type { WorkflowGraph } from './workflow-graph.js'
 import type {
   AgentPersonaId,
   AgentRunId,
@@ -23,6 +24,10 @@ import type {
   ThreadId,
   UserId,
   VariantScreenId,
+  WorkflowId,
+  WorkflowRunId,
+  WorkflowStepRunId,
+  WorkflowVersionId,
   WorkspaceId,
 } from './ids.js'
 
@@ -870,4 +875,77 @@ export const primaryToolArgument = (
     if (typeof value === 'string') return value
   }
   return null
+}
+
+/** A named harness. The row holds what a name holds; the shape is a version of it. */
+export interface WorkflowRecord {
+  readonly id: WorkflowId
+  readonly workspaceId: WorkspaceId
+  readonly name: string
+  readonly description: string | null
+  readonly createdByUserId: string | null
+  readonly createdAt: Date
+  readonly archivedAt: Date | null
+}
+
+/**
+ * One drawn shape, append-only.
+ *
+ * The digest is `canonicalWorkflow` hashed, and two versions may share one — drawing a change
+ * and drawing it back is an undo, not a collision.
+ */
+export interface WorkflowVersionRecord {
+  readonly id: WorkflowVersionId
+  readonly workflowId: WorkflowId
+  readonly version: number
+  readonly graph: WorkflowGraph
+  readonly digest: string
+  readonly createdByUserId: string | null
+  readonly createdAt: Date
+}
+
+export type WorkflowRunStatus = 'running' | 'finished' | 'halted' | 'cancelled' | 'failed'
+
+/** One execution of one version, with the cap it is held to. */
+export interface WorkflowRunRecord {
+  readonly id: WorkflowRunId
+  readonly workspaceId: WorkspaceId
+  readonly workflowVersionId: WorkflowVersionId
+  readonly repositoryId: RepositoryId
+  readonly threadId: ThreadId
+  readonly input: string
+  readonly status: WorkflowRunStatus
+  readonly capUsd: number | null
+  /** Whose instruction this is — the executor deals its steps as this person. */
+  readonly startedByUserId: string | null
+  readonly haltReason: string | null
+  readonly createdAt: Date
+  readonly finishedAt: Date | null
+}
+
+/**
+ * `skipped` is not a failure: a router takes one branch, so every step on the branches it did
+ * not take is settled without ever having been dealt. Recording it is what lets a reader tell a
+ * path that was not chosen from a path that is still coming.
+ */
+export type WorkflowStepStatus = 'pending' | 'running' | 'answered' | 'refused' | 'skipped'
+
+/** One node, on one pass of any loop it sits inside, against one item if it fans. */
+export interface WorkflowStepRunRecord {
+  readonly id: WorkflowStepRunId
+  readonly workflowRunId: WorkflowRunId
+  /** The node's id from the graph — what the drawing calls this step. */
+  readonly nodeId: string
+  readonly pass: number
+  readonly itemIndex: number
+  readonly item: string | null
+  readonly claimedAt: Date | null
+  readonly agentRunId: AgentRunId | null
+  readonly status: WorkflowStepStatus
+  /** The structured answer this node declared, parsed. Null while pending and on a refusal. */
+  readonly answer: Readonly<Record<string, unknown>> | null
+  readonly reason: string | null
+  /** This step's metered spend, copied on finishing so the cap is one query rather than a join. */
+  readonly costUsd: number | null
+  readonly finishedAt: Date | null
 }

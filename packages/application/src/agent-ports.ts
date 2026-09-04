@@ -101,6 +101,17 @@ import type {
   SubjectMapStatus,
   TriggerPopulation,
   TriggerCandidate,
+  WorkflowGraph,
+  WorkflowId,
+  WorkflowRecord,
+  WorkflowRunId,
+  WorkflowRunRecord,
+  WorkflowRunStatus,
+  WorkflowStepRunId,
+  WorkflowStepRunRecord,
+  WorkflowStepStatus,
+  WorkflowVersionId,
+  WorkflowVersionRecord,
   WorkspaceId,
   WorkspaceRunControl,
 } from '@loom/domain'
@@ -2550,4 +2561,157 @@ export interface AtlasRepositoryPort {
     decidedByName: string
     note: string
   }): Promise<AtlasEdge | null>
+}
+
+/**
+ * The workflow's persistence — a named harness, its versions, and the journal one execution
+ * writes as it goes.
+ *
+ * Separate from every other port here for the reason the tables are separate: a version is
+ * **append-only**, and a port that offered to update a graph would be an invitation to edit a
+ * shape a measurement already refers to.
+ */
+export interface WorkflowRepositoryPort {
+  /**
+   * Creates a workflow with its first version, in one transaction.
+   *
+   * A workflow with no version is a name with nothing behind it, and every read here would
+   * then have to handle a case that only exists between two writes.
+   */
+  create(input: {
+    workspaceId: WorkspaceId
+    name: string
+    description: string | null
+    createdByUserId: string | null
+    graph: WorkflowGraph
+    digest: string
+  }): Promise<{ workflow: WorkflowRecord; version: WorkflowVersionRecord }>
+
+  /**
+   * Draws a new version of an existing workflow.
+   *
+   * The version number is assigned here rather than by the caller: two people drawing at once
+   * would otherwise agree on the same number, and the unique index would refuse the second
+   * with an error about an index rather than about what happened.
+   */
+  addVersion(input: {
+    workspaceId: WorkspaceId
+    workflowId: WorkflowId
+    createdByUserId: string | null
+    graph: WorkflowGraph
+    digest: string
+  }): Promise<WorkflowVersionRecord | null>
+
+  findById(workspaceId: WorkspaceId, workflowId: WorkflowId): Promise<WorkflowRecord | null>
+
+  /** Newest first, for the picker. Archived workflows are excluded, never deleted. */
+  listWorkflows(workspaceId: WorkspaceId, limit: number): Promise<WorkflowRecord[]>
+
+  /** The version in use — the highest number, which is the one a person last drew. */
+  latestVersion(
+    workspaceId: WorkspaceId,
+    workflowId: WorkflowId,
+  ): Promise<WorkflowVersionRecord | null>
+
+  findVersion(
+    workspaceId: WorkspaceId,
+    versionId: WorkflowVersionId,
+  ): Promise<WorkflowVersionRecord | null>
+
+  /** Every version of one workflow, newest first — the shape's own history. */
+  listVersions(
+    workspaceId: WorkspaceId,
+    workflowId: WorkflowId,
+    limit: number,
+  ): Promise<WorkflowVersionRecord[]>
+
+  archive(workspaceId: WorkspaceId, workflowId: WorkflowId): Promise<WorkflowRecord | null>
+
+  /** Opens an execution. Its steps are written as the executor reaches them, never up front. */
+  openRun(input: {
+    workspaceId: WorkspaceId
+    workflowVersionId: WorkflowVersionId
+    repositoryId: RepositoryId
+    threadId: ThreadId
+    input: string
+    capUsd: number | null
+    startedByUserId: string | null
+  }): Promise<WorkflowRunRecord>
+
+  findRun(workspaceId: WorkspaceId, runId: WorkflowRunId): Promise<WorkflowRunRecord | null>
+
+  /** Executions the executor still has work for. Across workspaces, like every other sweep read. */
+  listRunningWorkflowRuns(): Promise<{ workspaceId: WorkspaceId; runId: WorkflowRunId }[]>
+
+  listRunsByWorkflow(
+    workspaceId: WorkspaceId,
+    workflowId: WorkflowId,
+    limit: number,
+  ): Promise<WorkflowRunRecord[]>
+
+  /**
+   * The journal, in the order it was written. This is what resume replays: every finished step
+   * with its answer, so a resumed execution re-deals only what never reported.
+   */
+  stepsForRun(
+    workspaceId: WorkspaceId,
+    runId: WorkflowRunId,
+  ): Promise<WorkflowStepRunRecord[]>
+
+  /**
+   * Writes a step as `pending` and claims it in one statement, returning null when the row is
+   * already there.
+   *
+   * One call rather than an insert followed by a claim, because the unique index on
+   * `(run, node, pass, item)` *is* the concurrency control: two executors reaching the same
+   * node at once both try to write it, and exactly one wins. An insert that raced and then a
+   * separate claim would leave the loser holding a row it must remember to release.
+   */
+  claimStep(input: {
+    workspaceId: WorkspaceId
+    workflowRunId: WorkflowRunId
+    nodeId: string
+    pass: number
+    itemIndex: number
+    item: string | null
+  }): Promise<WorkflowStepRunRecord | null>
+
+  attachStepRun(
+    workspaceId: WorkspaceId,
+    stepId: WorkflowStepRunId,
+    agentRunId: AgentRunId,
+  ): Promise<void>
+
+  /** Frees a claimed step whose run never started, so the next sweep may deal it again. */
+  releaseStep(workspaceId: WorkspaceId, stepId: WorkflowStepRunId): Promise<void>
+
+  /**
+   * Settles a step: what it answered, or why it did not.
+   *
+   * The cost is copied onto the row rather than joined from the run, so an execution's spend
+   * survives its runs being deleted — the snapshot argument the campaign's rows already make.
+   */
+  finishStep(
+    workspaceId: WorkspaceId,
+    stepId: WorkflowStepRunId,
+    input: {
+      status: Exclude<WorkflowStepStatus, 'pending' | 'running'>
+      answer: Readonly<Record<string, unknown>> | null
+      reason: string | null
+      costUsd: number | null
+    },
+  ): Promise<void>
+
+  /** What this execution has spent, from its own rows. The cap is checked against it. */
+  spentOnRun(workspaceId: WorkspaceId, runId: WorkflowRunId): Promise<number>
+
+  /**
+   * Ends an execution, and only one that is running — so two executors cannot write two
+   * endings, and a halted run cannot later be reported as finished.
+   */
+  closeRun(
+    workspaceId: WorkspaceId,
+    runId: WorkflowRunId,
+    input: { status: Exclude<WorkflowRunStatus, 'running'>; reason: string | null },
+  ): Promise<WorkflowRunRecord | null>
 }

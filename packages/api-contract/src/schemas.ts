@@ -1421,6 +1421,18 @@ export const AgentRunRelationSchema = z.enum([
    * itself, when it is one task being paid for twice on purpose.
    */
   'escalate',
+  /**
+   * One step of a drawn workflow.
+   *
+   * **Parentless**, unlike every other relation here, and that is the decision rather than an
+   * omission: a workflow is a DAG and a tree cannot express one. A step often reads two
+   * predecessors' answers, and naming one of them "the parent" would make the tree assert
+   * something false about which answers that step actually had. The shape is rendered from the
+   * workflow's own rows, where the edges are; the relation is on the wire so a person seeing
+   * eight sibling runs appear at once reads a harness rather than a runaway swarm — the reason
+   * `screen` is on the wire.
+   */
+  'workflow',
 ])
 
 export const AgentRunSchema = z.object({

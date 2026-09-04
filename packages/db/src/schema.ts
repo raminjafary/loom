@@ -2437,3 +2437,160 @@ export const personaProposerSession = pgTable(
     index('persona_proposer_session_persona_idx').on(t.workspaceId, t.personaId, t.createdAt),
   ],
 )
+
+/**
+ * A named workflow — a harness for a task class, drawn once and run many times.
+ *
+ * The row holds only what a *name* holds. The shape lives in `workflow_version`, because a
+ * drawn shape is a configuration and a configuration that can be edited in place is a
+ * configuration no measurement can refer to: a tally against "the review workflow" would
+ * silently mix two shapes the moment somebody moved a node.
+ */
+export const workflow = pgTable(
+  'workflow',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description'),
+    /** Plain text with no foreign key, the convention every other authorship column here uses. */
+    createdByUserId: text('created_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('workflow_name_idx').on(t.workspaceId, t.name)],
+)
+
+/**
+ * One version of a shape: the graph as drawn, and the digest of it.
+ *
+ * **Append-only.** Editing a workflow writes a new version; nothing updates `graph`. That is
+ * the same rule `persona_revision` keeps for a document and for the same reason — a vintage
+ * that can be rewritten is not a vintage, and the whole argument for drawing a harness rather
+ * than scripting it is that the result can be an arm.
+ *
+ * `digest` is `canonicalWorkflow` hashed, and it is *not* unique: two versions with the same
+ * digest are the ordinary result of drawing a change and drawing it back, and refusing that
+ * would mean a person could not undo an edit. It is indexed because the question it answers is
+ * "has this exact shape run before", which is what a cross-workflow comparison asks.
+ */
+export const workflowVersion = pgTable(
+  'workflow_version',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflow.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    /** The validated `WorkflowGraph`. Written only by a path that ran `parseWorkflowGraph`. */
+    graph: jsonb('graph').notNull(),
+    digest: text('digest').notNull(),
+    createdByUserId: text('created_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('workflow_version_number_idx').on(t.workflowId, t.version),
+    index('workflow_version_digest_idx').on(t.workspaceId, t.digest),
+  ],
+)
+
+/**
+ * One execution of one version.
+ *
+ * `cap_usd` is the campaign's ceiling with the campaign's honesty: checked before each step
+ * rather than once, so at most one step is started after the cap is reached in aggregate and
+ * never a second. Reaching it **halts** the run rather than degrading it, and a halted run
+ * says so everywhere it is reported.
+ *
+ * `started_by_user_id` is load-bearing for the same reason a campaign's is: the executor deals
+ * this run's steps *as that person*. A platform actor here would be the sweep granting itself
+ * permission to spend.
+ */
+export const workflowRun = pgTable(
+  'workflow_run',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    workflowVersionId: uuid('workflow_version_id')
+      .notNull()
+      .references(() => workflowVersion.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repository.id, { onDelete: 'cascade' }),
+    /** Where its steps render and where a person talks to it. */
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => thread.id, { onDelete: 'cascade' }),
+    /** What this execution was opened on — interpolated into every node's task as `{{input}}`. */
+    input: text('input').notNull(),
+    /** `running | finished | halted | cancelled | failed`. */
+    status: text('status').notNull().default('running'),
+    capUsd: doublePrecision('cap_usd'),
+    startedByUserId: text('started_by_user_id'),
+    haltReason: text('halt_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [index('workflow_run_workspace_idx').on(t.workspaceId, t.createdAt)],
+)
+
+/**
+ * One step: a node, on one pass of any loop it sits inside, against one item if it fans.
+ *
+ * **This is the journal resume replays from.** The field's harness resumes by replaying the
+ * unchanged prefix of its agent calls from a cache; here the prefix is rows, so a resumed
+ * workflow re-reads what finished and deals only what did not. Nothing has to be re-run to
+ * find out what it answered.
+ *
+ * `pass` and `item_index` are both in the unique index and both default to 0, which is what
+ * makes that index mean "one row per step" for the ordinary graph and still admit the two
+ * shapes that legitimately repeat a node: a loop takes pass 1, 2, 3, and a fan takes item 0,
+ * 1, 2. Without them a loop's second pass would collide with its first and a fan would be one
+ * run wide.
+ *
+ * `answer` is the structured answer the node declared, parsed and stored — the thing a
+ * downstream template interpolates. Null while pending, and null for a step whose answer did
+ * not satisfy its schema, which is a refusal recorded in `reason` rather than a guess.
+ */
+export const workflowStepRun = pgTable(
+  'workflow_step_run',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    workflowRunId: uuid('workflow_run_id')
+      .notNull()
+      .references(() => workflowRun.id, { onDelete: 'cascade' }),
+    /** The node's own id from the graph, not a uuid — it is what the drawing calls this step. */
+    nodeId: text('node_id').notNull(),
+    pass: integer('pass').notNull().default(0),
+    itemIndex: integer('item_index').notNull().default(0),
+    /** The element a fan is running against, verbatim, so a step is readable without its source. */
+    item: text('item'),
+    /** Claimed before the run exists, released if the start fails — the screen's two-step. */
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    /** `pending | running | answered | refused | skipped`. */
+    status: text('status').notNull().default('pending'),
+    answer: jsonb('answer'),
+    reason: text('reason'),
+    /** This step's metered spend, copied on finishing so the cap is checked in one query. */
+    costUsd: doublePrecision('cost_usd'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('workflow_step_run_node_idx').on(t.workflowRunId, t.nodeId, t.pass, t.itemIndex),
+    index('workflow_step_run_status_idx').on(t.workflowRunId, t.status),
+  ],
+)

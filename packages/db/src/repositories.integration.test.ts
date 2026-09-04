@@ -34,6 +34,7 @@ import {
   subjectMapRepository,
 } from './agent-repositories.js'
 import { campaignRepository, screenRepository } from './screen-repositories.js'
+import { workflowRepository } from './workflow-repositories.js'
 import { experienceRepository } from './experience-repositories.js'
 import {
   auditAdapter,
@@ -3288,5 +3289,276 @@ describe('the evolution trigger reads', () => {
       settledAt: searchAt,
     })
     expect(await variants.lastMeasurementSettledAt(WS, s.personaId as never)).toEqual(searchAt)
+  })
+})
+
+/**
+ * The workflow's storage.
+ *
+ * Four claims only this layer can make: a version is append-only and numbered by the database
+ * rather than by whoever drew it, the unique index on (run, node, pass, item) *is* the claim
+ * two executors race on, a fan and a loop write rows the ordinary graph's index would have
+ * collided, and an execution closes once.
+ */
+describe('workflows', () => {
+  const workflows = workflowRepository(db)
+  let seq = 0
+
+  const graph = (task = 'do it') => ({
+    nodes: [{ kind: 'step' as const, id: 'a', title: 'A', persona: 'Worker', task, answer: null }],
+    edges: [],
+  })
+
+  const scaffold = async (workspaceId: WorkspaceId) => {
+    seq += 1
+    const [ch] = await db
+      .insert(channel)
+      .values({ workspaceId, name: `workflow-${seq}`, isPrivate: false })
+      .returning({ id: channel.id })
+    const [th] = await db
+      .insert(thread)
+      .values({ workspaceId, channelId: ch!.id, isRoot: true })
+      .returning({ id: thread.id })
+    const [rn] = await db
+      .insert(runner)
+      .values({
+        workspaceId,
+        name: `runner-workflow-${seq}`,
+        pairingTokenHash: `hash-workflow-${seq}`,
+      })
+      .returning({ id: runner.id })
+    const [repo] = await db
+      .insert(repository)
+      .values({
+        workspaceId,
+        runnerId: rn!.id,
+        displayName: 'repo',
+        absolutePath: `/tmp/workflow-${seq}`,
+        defaultBranch: 'main',
+      })
+      .returning({ id: repository.id })
+    return { threadId: th!.id as never, repositoryId: asRepositoryId(repo!.id) }
+  }
+
+  const openRun = async (workspaceId: WorkspaceId, capUsd: number | null = null) => {
+    const place = await scaffold(workspaceId)
+    const { version } = await workflows.create({
+      workspaceId,
+      name: `flow-${seq}`,
+      description: null,
+      createdByUserId: 'user_integration',
+      graph: graph(),
+      digest: 'digest-1',
+    })
+    const run = await workflows.openRun({
+      workspaceId,
+      workflowVersionId: version.id,
+      repositoryId: place.repositoryId,
+      threadId: place.threadId,
+      input: 'the ask',
+      capUsd,
+      startedByUserId: 'user_integration',
+    })
+    return { run, version }
+  }
+
+  it('numbers versions in the database, so two drawings cannot agree on one number', async () => {
+    const { workflow: created, version } = await workflows.create({
+      workspaceId: WS,
+      name: 'review',
+      description: 'the review shape',
+      createdByUserId: 'user_integration',
+      graph: graph(),
+      digest: 'digest-1',
+    })
+    expect(version.version).toBe(1)
+
+    const [second, third] = await Promise.all([
+      workflows.addVersion({
+        workspaceId: WS,
+        workflowId: created.id,
+        createdByUserId: 'user_integration',
+        graph: graph('do it twice'),
+        digest: 'digest-2',
+      }),
+      workflows.addVersion({
+        workspaceId: WS,
+        workflowId: created.id,
+        createdByUserId: 'user_integration',
+        graph: graph('do it thrice'),
+        digest: 'digest-3',
+      }),
+    ])
+    expect([second?.version, third?.version].sort()).toEqual([2, 3])
+    expect((await workflows.latestVersion(WS, created.id))?.version).toBe(3)
+    expect(await workflows.listVersions(WS, created.id, 10)).toHaveLength(3)
+  })
+
+  it('keeps a version graph, so an old shape can still be read back', async () => {
+    const { workflow: created, version } = await workflows.create({
+      workspaceId: WS,
+      name: 'research',
+      description: null,
+      createdByUserId: null,
+      graph: graph('sweep the sources'),
+      digest: 'digest-1',
+    })
+    await workflows.addVersion({
+      workspaceId: WS,
+      workflowId: created.id,
+      createdByUserId: null,
+      graph: graph('sweep them differently'),
+      digest: 'digest-2',
+    })
+    const first = await workflows.findVersion(WS, version.id)
+    expect(first?.graph.nodes[0]).toMatchObject({ task: 'sweep the sources' })
+  })
+
+  it('refuses a second workflow with one name, and drops an archived one from the list', async () => {
+    const { workflow: created } = await workflows.create({
+      workspaceId: WS,
+      name: 'sweep',
+      description: null,
+      createdByUserId: null,
+      graph: graph(),
+      digest: 'd',
+    })
+    await expect(
+      workflows.create({
+        workspaceId: WS,
+        name: 'sweep',
+        description: null,
+        createdByUserId: null,
+        graph: graph(),
+        digest: 'd',
+      }),
+    ).rejects.toThrow()
+
+    expect(await workflows.listWorkflows(WS, 10)).toHaveLength(1)
+    expect(await workflows.archive(WS, created.id)).not.toBeNull()
+    expect(await workflows.listWorkflows(WS, 10)).toEqual([])
+    // Archiving is idempotent rather than an error, but only the first one changes anything.
+    expect(await workflows.archive(WS, created.id)).toBeNull()
+  })
+
+  it('scopes every read to its workspace', async () => {
+    const { workflow: created } = await workflows.create({
+      workspaceId: WS,
+      name: 'mine',
+      description: null,
+      createdByUserId: null,
+      graph: graph(),
+      digest: 'd',
+    })
+    expect(await workflows.findById(OTHER_WS, created.id)).toBeNull()
+    expect(await workflows.latestVersion(OTHER_WS, created.id)).toBeNull()
+    expect(await workflows.listWorkflows(OTHER_WS, 10)).toEqual([])
+  })
+
+  it('lets exactly one of two executors claim a step', async () => {
+    const { run } = await openRun(WS)
+    const claim = () =>
+      workflows.claimStep({
+        workspaceId: WS,
+        workflowRunId: run.id,
+        nodeId: 'a',
+        pass: 0,
+        itemIndex: 0,
+        item: null,
+      })
+    const [first, second] = await Promise.all([claim(), claim()])
+    expect([first, second].filter((step) => step !== null)).toHaveLength(1)
+  })
+
+  it('admits a fan and a loop, which the index would otherwise collide', async () => {
+    const { run } = await openRun(WS)
+    const claim = (pass: number, itemIndex: number, item: string | null) =>
+      workflows.claimStep({
+        workspaceId: WS,
+        workflowRunId: run.id,
+        nodeId: 'a',
+        pass,
+        itemIndex,
+        item,
+      })
+    expect(await claim(0, 0, 'first')).not.toBeNull()
+    expect(await claim(0, 1, 'second')).not.toBeNull()
+    expect(await claim(1, 0, 'first again')).not.toBeNull()
+    expect(await workflows.stepsForRun(WS, run.id)).toHaveLength(3)
+  })
+
+  it('lets a released step be dealt again, and a settled one not be re-settled', async () => {
+    const { run } = await openRun(WS)
+    const first = await workflows.claimStep({
+      workspaceId: WS,
+      workflowRunId: run.id,
+      nodeId: 'a',
+      pass: 0,
+      itemIndex: 0,
+      item: null,
+    })
+    await workflows.releaseStep(WS, first!.id)
+    expect(await workflows.stepsForRun(WS, run.id)).toEqual([])
+
+    const second = await workflows.claimStep({
+      workspaceId: WS,
+      workflowRunId: run.id,
+      nodeId: 'a',
+      pass: 0,
+      itemIndex: 0,
+      item: null,
+    })
+    await workflows.finishStep(WS, second!.id, {
+      status: 'answered',
+      answer: { note: 'done' },
+      reason: null,
+      costUsd: 0.25,
+    })
+    await workflows.finishStep(WS, second!.id, {
+      status: 'refused',
+      answer: null,
+      reason: 'a late writer',
+      costUsd: 99,
+    })
+
+    const [settled] = await workflows.stepsForRun(WS, run.id)
+    expect(settled?.status).toBe('answered')
+    expect(settled?.answer).toEqual({ note: 'done' })
+    expect(await workflows.spentOnRun(WS, run.id)).toBeCloseTo(0.25)
+  })
+
+  it('sums spend from the workflow rows, so a deleted run cannot make it look cheaper', async () => {
+    const { run } = await openRun(WS, 1)
+    const step = await workflows.claimStep({
+      workspaceId: WS,
+      workflowRunId: run.id,
+      nodeId: 'a',
+      pass: 0,
+      itemIndex: 0,
+      item: null,
+    })
+    await workflows.finishStep(WS, step!.id, {
+      status: 'answered',
+      answer: null,
+      reason: null,
+      costUsd: 0.4,
+    })
+    expect(await workflows.spentOnRun(WS, run.id)).toBeCloseTo(0.4)
+  })
+
+  it('closes once, so two executors cannot write two endings', async () => {
+    const { run } = await openRun(WS)
+    expect(await workflows.listRunningWorkflowRuns()).toHaveLength(1)
+
+    const halted = await workflows.closeRun(WS, run.id, {
+      status: 'halted',
+      reason: 'the cap',
+    })
+    expect(halted?.status).toBe('halted')
+    expect(
+      await workflows.closeRun(WS, run.id, { status: 'finished', reason: null }),
+    ).toBeNull()
+    expect((await workflows.findRun(WS, run.id))?.haltReason).toBe('the cap')
+    expect(await workflows.listRunningWorkflowRuns()).toEqual([])
   })
 })

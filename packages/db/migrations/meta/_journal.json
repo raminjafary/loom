@@ -498,6 +498,13 @@
       "when": 1788002735628,
       "tag": "0070_furry_the_enforcers",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1788542795557,
+      "tag": "0071_chunky_the_hood",
+      "breakpoints": true
     }
   ]
 }

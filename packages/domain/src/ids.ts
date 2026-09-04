@@ -36,6 +36,14 @@ export type ReplayCampaignId = Brand<string, 'ReplayCampaignId'>
 export type ReplayCampaignArmId = Brand<string, 'ReplayCampaignArmId'>
 /** One distilled lesson a persona holds about one repository. */
 export type PersonaLessonId = Brand<string, 'PersonaLessonId'>
+/** A named harness for a task class. The name; the shape is a version of it. */
+export type WorkflowId = Brand<string, 'WorkflowId'>
+/** One drawn shape, append-only — what a digest identifies and a tally can refer to. */
+export type WorkflowVersionId = Brand<string, 'WorkflowVersionId'>
+/** One execution of one version. */
+export type WorkflowRunId = Brand<string, 'WorkflowRunId'>
+/** One node, on one pass of any loop it sits inside, against one item if it fans. */
+export type WorkflowStepRunId = Brand<string, 'WorkflowStepRunId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -64,3 +72,7 @@ export const asReplayCampaignId = (v: string): ReplayCampaignId => v as ReplayCa
 export const asReplayCampaignArmId = (v: string): ReplayCampaignArmId =>
   v as ReplayCampaignArmId
 export const asPersonaLessonId = (v: string): PersonaLessonId => v as PersonaLessonId
+export const asWorkflowId = (v: string): WorkflowId => v as WorkflowId
+export const asWorkflowVersionId = (v: string): WorkflowVersionId => v as WorkflowVersionId
+export const asWorkflowRunId = (v: string): WorkflowRunId => v as WorkflowRunId
+export const asWorkflowStepRunId = (v: string): WorkflowStepRunId => v as WorkflowStepRunId
