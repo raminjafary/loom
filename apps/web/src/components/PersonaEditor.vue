@@ -102,9 +102,22 @@ const props = defineProps<{
     label: string
     capUsd: number | null
     revisionIds: readonly string[]
+    /** One model to run the *current* document on beside its own — the gap's second side. */
+    models?: readonly string[]
+    /** An earlier campaign's item set, so the two gaps are readings of one curve. */
+    replaySetId?: string | null
   }) => Promise<{ opened: boolean; campaignId: string | null; detail: string }>
   campaignReport?: (campaignId: string) => Promise<CampaignReport | null>
   cancelCampaign?: (campaignId: string) => Promise<{ cancelled: boolean; detail: string }>
+  /**
+   * The punch-up curve across this persona's campaigns.
+   *
+   * A separate callback from the report because it is a different question: the report is one
+   * campaign's score, and this is what happened to a gap across several of them. Absent means
+   * this mount does not show the curve, which is the ordinary case for a persona that has
+   * never been measured across two models.
+   */
+  gapCurve?: (personaId: string) => Promise<{ detail: string; points: readonly unknown[] }>
   /**
    * What this persona remembers about each repository it has worked in — tier 5.
    *
@@ -323,17 +336,42 @@ const campaignNotice = ref<string | null>(null)
 const campaignCap = ref<number | null>(5)
 /** Which vintages to measure beside the document in use, by revision id. */
 const campaignVintages = ref<string[]>([])
+/**
+ * A model to run the document in use on, beside its own — the gap's second side.
+ *
+ * A free-text field rather than a select, because the ids that matter most here are the
+ * operator's own: everything after `local/` is whatever their endpoint calls the model, and a
+ * list this app shipped could not know it. An unknown id is refused by the server with the
+ * reason, which is the same bar every other model field here is held to.
+ */
+const campaignModel = ref('')
+/**
+ * Whether to replay the newest campaign's items instead of assembling a fresh set.
+ *
+ * On by default when there is a set to reuse, and that default is the point: a gap measured
+ * on new items each time is a series of unrelated points, and the closure figure this whole
+ * panel exists to produce needs the items held still.
+ */
+const campaignReuseSet = ref(true)
+const gapCurveDetail = ref<string | null>(null)
+
+/** The set a new campaign would reuse: the newest campaign's, or none if there is none. */
+const reusableSet = computed(() => campaigns.value[0]?.replaySetId ?? null)
 
 const loadCampaigns = async () => {
   if (!props.listCampaigns || editingId.value === '') {
     campaigns.value = []
     campaignDetail.value = null
+    gapCurveDetail.value = null
     return
   }
   campaigns.value = await props.listCampaigns(editingId.value)
   const newest = campaigns.value[0]
   campaignDetail.value =
     newest && props.campaignReport ? await props.campaignReport(newest.id) : null
+  gapCurveDetail.value = props.gapCurve
+    ? (await props.gapCurve(editingId.value)).detail
+    : null
 }
 
 /**
@@ -362,6 +400,8 @@ const openCampaignNow = async () => {
       label: `${editingPersona.value?.name ?? 'persona'} — ${new Date().toISOString().slice(0, 10)}`,
       capUsd: campaignCap.value,
       revisionIds: campaignVintages.value,
+      models: campaignModel.value.trim() === '' ? [] : [campaignModel.value.trim()],
+      replaySetId: campaignReuseSet.value ? reusableSet.value : null,
     })
     campaignNotice.value = result.detail
     await loadCampaigns()
@@ -1418,6 +1458,19 @@ const harnessSummary = (persona: AgentPersona): string => {
             Cap (dollars)
             <input v-model.number="campaignCap" type="number" min="1" step="1" />
           </label>
+          <!--
+            The gap's second side. Same document, another model — the one comparison a campaign
+            can make that a vintage difference cannot, because everything except the model is
+            held still.
+          -->
+          <label>
+            Also on model
+            <input
+              v-model="campaignModel"
+              type="text"
+              placeholder="e.g. local/qwen2.5-coder-32b"
+            />
+          </label>
           <button
             type="button"
             :disabled="campaignBusy || !openCampaign"
@@ -1426,6 +1479,17 @@ const harnessSummary = (persona: AgentPersona): string => {
             Open a campaign
           </button>
         </div>
+
+        <!--
+          Reusing the last campaign's items, and on by default: a gap measured on freshly
+          assembled items each time is a series of unrelated points, and closure is a
+          difference between two gaps over the *same* work. Only offered when there is a set
+          to reuse.
+        -->
+        <label v-if="reusableSet !== null" class="campaign-reuse">
+          <input v-model="campaignReuseSet" type="checkbox" />
+          Replay the last campaign's items, so this gap can be compared with that one
+        </label>
 
         <!--
           The vintages, from the history this editor already has. Checkboxes rather than a
@@ -1473,6 +1537,15 @@ const harnessSummary = (persona: AgentPersona): string => {
         -->
         <div v-if="campaignDetail" class="campaign-report">
           <p class="detail">{{ campaignDetail.detail }}</p>
+          <!--
+            The gap, when this campaign measured one: the same document on two models, paired
+            per item. Rendered as it arrives, disclaimers included — a client that showed the
+            points without the sentence about what they are not would be the whole failure
+            this instrument was written to avoid.
+          -->
+          <p v-if="campaignDetail.gap" class="detail campaign-gap">
+            {{ campaignDetail.gap.detail }}
+          </p>
           <p class="hint">
             Spent ${{ campaignDetail.spentUsd.toFixed(2) }}<template
               v-if="campaignDetail.capUsd !== null"
@@ -1481,6 +1554,9 @@ const harnessSummary = (persona: AgentPersona): string => {
             >.
           </p>
         </div>
+
+        <!-- The curve across campaigns: where a closure figure lives, and where it does not. -->
+        <p v-if="gapCurveDetail" class="detail campaign-curve">{{ gapCurveDetail }}</p>
       </section>
 
       <!--

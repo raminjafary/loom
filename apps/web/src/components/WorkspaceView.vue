@@ -1417,6 +1417,7 @@ onBeforeUnmount(() => {
       :list-campaigns="agent.listCampaigns"
       :open-campaign="agent.openCampaign"
       :campaign-report="agent.campaignReport"
+      :gap-curve="agent.gapCurve"
       :cancel-campaign="agent.cancelCampaign"
       :list-experience="agent.listExperience"
       :persona-evolution="agent.personaEvolution"

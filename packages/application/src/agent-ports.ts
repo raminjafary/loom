@@ -1175,6 +1175,24 @@ export interface CampaignRepositoryPort {
     campaignId: ReplayCampaignId,
   ): Promise<{ arm: ReplayCampaignArmRecord; runs: ReplayCampaignRunRecord[] }[]>
 
+  /**
+   * The same read over several campaigns at once, for the punch-up curve.
+   *
+   * One query rather than one per campaign: a curve is a *series*, so the panel that draws it
+   * asks about every campaign this persona has ever had. A round trip per point would make the
+   * cost of reading the instrument grow with the length of the experiment it measures.
+   */
+  armsForCampaigns(
+    workspaceId: WorkspaceId,
+    campaignIds: readonly ReplayCampaignId[],
+  ): Promise<
+    {
+      campaignId: ReplayCampaignId
+      arm: ReplayCampaignArmRecord
+      runs: ReplayCampaignRunRecord[]
+    }[]
+  >
+
   /** The screen's claim-then-attach two-step, for its reason. */
   claimCampaignRun(workspaceId: WorkspaceId, campaignRunId: string): Promise<boolean>
   attachCampaignRun(

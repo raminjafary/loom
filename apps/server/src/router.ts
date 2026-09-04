@@ -89,6 +89,7 @@ import {
   listPersonaRevisions,
   campaignReport,
   cancelReplayCampaign,
+  modelGapCurveFor,
   divergenceForPersona,
   openReplayCampaign,
   promptTrialFor,
@@ -132,6 +133,7 @@ import {
   parsePersonaMarkdown,
   asPersonaRevisionId,
   asReplayCampaignId,
+  asReplaySetId,
   asAgentRunId,
   asPersonaLessonId,
   asSubjectMapId,
@@ -970,6 +972,9 @@ export const router = os.router({
           capUsd: input.capUsd,
           revisionIds: input.revisionIds.map(asPersonaRevisionId),
           ...(input.models === undefined ? {} : { models: input.models }),
+          ...(input.replaySetId === undefined || input.replaySetId === null
+            ? {}
+            : { replaySetId: asReplaySetId(input.replaySetId) }),
         })
         return result.ok
           ? { opened: true, campaignId: result.campaign.id as string, detail: result.detail }
@@ -992,6 +997,7 @@ export const router = os.router({
           haltReason: campaign.haltReason,
           createdAt: campaign.createdAt,
           finishedAt: campaign.finishedAt,
+          replaySetId: campaign.replaySetId as string,
         }))
       }),
     ),
@@ -1021,6 +1027,46 @@ export const router = os.router({
             scored: arm.scored,
             passRate: arm.passRate,
             models: [...arm.models],
+          })),
+          gap:
+            found.gap === null
+              ? null
+              : {
+                  detail: found.gap.detail,
+                  partial: found.gap.report.partial,
+                  notes: [...found.gap.report.notes],
+                  gaps: found.gap.report.gaps.map((gap) => ({
+                    subjectModel: gap.subjectModel,
+                    referenceModel: gap.referenceModel,
+                    sharedItems: gap.sharedItems,
+                    subjectPassed: gap.subjectPassed,
+                    referencePassed: gap.referencePassed,
+                    gapPoints: gap.gapPoints,
+                    unpairedItems: gap.unpairedItems,
+                  })),
+                },
+        }
+      }),
+    ),
+
+    gapCurve: os.campaign.gapCurve.handler(({ context, input }) =>
+      guard(async () => {
+        const curve = await modelGapCurveFor(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          personaId: asAgentPersonaId(input.personaId),
+        })
+        return {
+          detail: curve.detail,
+          points: curve.points.map((point) => ({
+            campaignId: point.campaignId,
+            campaignLabel: point.campaignLabel,
+            openedAt: point.openedAt,
+            replaySetId: point.replaySetId,
+            subjectModel: point.subjectModel,
+            referenceModel: point.referenceModel,
+            gapPoints: point.gapPoints,
+            sharedItems: point.sharedItems,
+            partial: point.partial,
           })),
         }
       }),

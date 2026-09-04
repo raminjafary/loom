@@ -30,6 +30,13 @@
  *    `relation: 'screen'` for exactly this reason, and a campaign that fed its output back
  *    into the population it measures would look identical from the outside.
  * 4. **The cap halts rather than degrades, and the score then says "Partial." first.**
+ * 5. **A model override reaches the dispatch and changes nothing else.** The gap's second side
+ *    is the same document on another model, so the run this arm starts has to carry the arm's
+ *    model on its own snapshot and the *control's* document in its prompt. Both are read off
+ *    the stored run, because the row is what a reader months later actually has.
+ * 6. **A second campaign replays the first one's items**, which is the whole of what makes two
+ *    gaps a curve rather than two unrelated numbers — and a campaign over a freshly assembled
+ *    set is reported as a separate reading rather than subtracted.
  *
  * The outcomes and the one spend figure below are written by this driver rather than earned —
  * the unsandboxed refusal means no campaign run produces a branch for a definition of done to
@@ -47,11 +54,17 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildApp, devAuth } from '../apps/server/src/index.js'
 import { loadConfig } from '../apps/server/src/config.js'
-import { advanceCampaignQueue, campaignReport } from '../packages/application/src/index.js'
+import {
+  advanceCampaignQueue,
+  campaignReport,
+  modelGapCurveFor,
+} from '../packages/application/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
 import {
   MIN_REPLAY_ITEMS,
+  asAgentPersonaId,
   asReplayCampaignId,
+  asReplaySetId,
   asWorkspaceId,
 } from '../packages/domain/src/index.js'
 
@@ -336,6 +349,253 @@ const main = async () => {
     materialAfter.length === material.length,
     `${material.length} before, ${materialAfter.length} after ` +
       `${settled.flatMap((entry) => entry.runs).filter((entry) => entry.agentRunId !== null).length} campaign runs`,
+  )
+
+  /**
+   * The gap: the same document on two models, over the same items.
+   *
+   * Two campaigns, because one cannot settle both halves. The first is *dealt* — which is the
+   * only way to check that a model override reaches the dispatch, lands on the run's own
+   * snapshot, and does not quietly change the document alongside it. Its runs are then refused
+   * unsandboxed like every other run here, so it reaches no verdict, and what it proves about
+   * the gap is that an unscored campaign reports *why* rather than a number. The second is
+   * scored by this driver — the substitution the header states — because a paired figure needs
+   * verdicts and a refused run does not produce one.
+   */
+  console.log('\n— the gap: the same document, two models, the same items —')
+  const rows = await client.campaign.listForPersona({ personaId: persona.id })
+  const baselineSet = rows.find((row: any) => row.id === (campaignId as string))?.replaySetId
+  check('a campaign row says which set it replayed', typeof baselineSet === 'string', String(baselineSet))
+
+  const GAP_MODEL = 'local/campaign-check-model'
+  const dealt2 = await client.campaign.open({
+    personaId: persona.id,
+    label: 'campaign-check-gap-dispatch',
+    capUsd: 5,
+    revisionIds: [],
+    models: [GAP_MODEL],
+    replaySetId: baselineSet,
+  })
+  check('a cross-model campaign opened against the first campaign’s own set', dealt2.opened === true, dealt2.detail)
+  check(
+    'and says it is replaying the same items at the same commits, which is what makes two gaps comparable',
+    /same items at the same commits/.test(dealt2.detail ?? ''),
+    dealt2.detail ?? '',
+  )
+  const dispatchId = asReplayCampaignId(dealt2.campaignId)
+
+  const setItems = await app.deps.screens.listReplayItems(workspaceId, asReplaySetId(baselineSet))
+  const itemOrder = setItems.map((item) => item.id as string)
+  check(
+    'the reused set is the one the first campaign measured, item for item',
+    itemOrder.length >= MIN_REPLAY_ITEMS,
+    `${itemOrder.length} items`,
+  )
+
+  await advanceCampaignQueue(app.deps, { campaignStuckMs: 3_600_000, maxStartsPerTick: 64 })
+  await new Promise((r) => setTimeout(r, 10_000))
+  for (let i = 0; i < 6; i += 1) {
+    await advanceCampaignQueue(app.deps, { campaignStuckMs: 3_600_000, maxStartsPerTick: 64 })
+    if ((await app.deps.campaigns.findById(workspaceId, dispatchId))?.status !== 'running') break
+    await new Promise((r) => setTimeout(r, 3_000))
+  }
+
+  const dispatched = await app.deps.campaigns.armsForCampaign(workspaceId, dispatchId)
+  const modelArm = dispatched.find((entry) => entry.arm.model === GAP_MODEL)
+  const ownArm = dispatched.find((entry) => entry.arm.model === null)
+  const snapshotsOf = async (entry: typeof dispatched[number] | undefined) => {
+    const ids = (entry?.runs ?? []).flatMap((row) => (row.agentRunId === null ? [] : [row.agentRunId]))
+    const found = await Promise.all(ids.map((id) => app.deps.agentRuns.findById(workspaceId, id)))
+    return found.flatMap((row) => (row === null ? [] : [row]))
+  }
+  const modelRuns = await snapshotsOf(modelArm)
+  const ownRuns = await snapshotsOf(ownArm)
+  check(
+    'the model arm’s runs were dispatched on the model the arm names',
+    modelRuns.length > 0 && modelRuns.every((run) => run.persona.model === GAP_MODEL),
+    [...new Set(modelRuns.map((run) => run.persona.model))].join(',') || 'none',
+  )
+  check(
+    'the control’s runs were dispatched on the persona’s own model, untouched by the override',
+    ownRuns.length > 0 && ownRuns.every((run) => run.persona.model === 'claude-haiku-4-5-20251001'),
+    [...new Set(ownRuns.map((run) => run.persona.model))].join(',') || 'none',
+  )
+  check(
+    'and both arms carried the *same* document — a gap of models is not a gap of documents',
+    modelRuns.length > 0 &&
+      modelRuns.every((run) => run.persona.systemPrompt.includes(LIVE_MARKER)) &&
+      ownRuns.every((run) => run.persona.systemPrompt.includes(LIVE_MARKER)),
+  )
+  check(
+    'the reused items are the set’s items and no others',
+    dispatched.every((entry) =>
+      entry.runs.every((row) => itemOrder.includes(row.replayItemId as string)),
+    ) && (modelArm?.runs.length ?? 0) === itemOrder.length,
+    `${modelArm?.runs.length ?? 0} of ${itemOrder.length}`,
+  )
+
+  const dispatchReport = await campaignReport(app.deps, { workspaceId, campaignId: dispatchId })
+  check(
+    'a campaign opened to measure a gap and left without verdicts says why, rather than showing nothing',
+    (dispatchReport?.gap?.report.gaps.length ?? -1) === 0 &&
+      (dispatchReport?.gap?.report.notes.length ?? 0) > 0,
+    dispatchReport?.gap?.report.notes[0] ?? 'no note',
+  )
+
+  /**
+   * The scored pair. Outcomes written here rather than earned — the header's substitution —
+   * and written so that one item is a verdict on *one* side only, because the pairing rule
+   * this instrument turns on is that a gap is taken over the items both arms answered.
+   */
+  const scoreArm = async (
+    entry: typeof dispatched[number],
+    outcomeByItem: readonly ('passed' | 'failed' | 'not-scored')[],
+    model: string,
+  ) => {
+    for (const row of entry.runs) {
+      const outcome = outcomeByItem[itemOrder.indexOf(row.replayItemId as string)] ?? 'not-scored'
+      await app.deps.campaigns.recordCampaignRunOutcome(workspaceId, row.id, {
+        outcome,
+        reason: null,
+        model: outcome === 'not-scored' ? null : model,
+        costUsd: 0,
+      })
+    }
+  }
+
+  const paired = itemOrder.length - 1
+  const openScored = async (label: string, subjectPasses: number) => {
+    const opened = await client.campaign.open({
+      personaId: persona.id,
+      label,
+      capUsd: 5,
+      revisionIds: [],
+      models: [GAP_MODEL],
+      replaySetId: baselineSet,
+    })
+    check(`"${label}" opened on the same set`, opened.opened === true, opened.detail)
+    const id = asReplayCampaignId(opened.campaignId)
+    const arms = await app.deps.campaigns.armsForCampaign(workspaceId, id)
+    const control = arms.find((entry) => entry.arm.model === null)!
+    const subject = arms.find((entry) => entry.arm.model === GAP_MODEL)!
+    // The control passes everything; the subject passes `subjectPasses` of the shared items,
+    // and the last item is left unscored on its side so the pairing has something to drop.
+    await scoreArm(
+      control,
+      itemOrder.map(() => 'passed' as const),
+      'claude-haiku-4-5-20251001',
+    )
+    await scoreArm(
+      subject,
+      itemOrder.map((_, index) =>
+        index === itemOrder.length - 1 ? ('not-scored' as const) : index < subjectPasses ? ('passed' as const) : ('failed' as const),
+      ),
+      GAP_MODEL,
+    )
+    await advanceCampaignQueue(app.deps, { campaignStuckMs: 3_600_000, maxStartsPerTick: 64 })
+    return id
+  }
+
+  const baselineId = await openScored('campaign-check-gap-baseline', 1)
+  const baselineReport = await campaignReport(app.deps, { workspaceId, campaignId: baselineId })
+  const baselineGap = baselineReport?.gap?.report.gaps[0]
+  const expectedBaseline = Math.round(((paired - 1) / paired) * 100)
+  check(
+    'the gap is taken over the items both arms answered, not over each arm’s own',
+    baselineGap?.sharedItems === paired && baselineGap?.unpairedItems === 1,
+    `${baselineGap?.sharedItems ?? '?'} paired, ${baselineGap?.unpairedItems ?? '?'} dropped of ${itemOrder.length} items`,
+  )
+  check(
+    'and it is the difference those items actually show',
+    baselineGap?.gapPoints === expectedBaseline &&
+      baselineGap?.referencePassed === paired &&
+      baselineGap?.subjectPassed === 1,
+    `${baselineGap?.gapPoints ?? '?'} points, expected ${expectedBaseline}`,
+  )
+  check(
+    'the paragraph names both models and says a gap is not a closure',
+    (baselineReport?.gap?.detail ?? '').includes(GAP_MODEL) &&
+      (baselineReport?.gap?.detail ?? '').includes('not a closure'),
+    (baselineReport?.gap?.detail ?? '').slice(0, 90),
+  )
+
+  const firstCurve = await modelGapCurveFor(app.deps, { workspaceId, personaId: asAgentPersonaId(persona.id) })
+  check(
+    'one campaign is a baseline and not a curve — no closure figure is offered for it',
+    firstCurve.points.length === 1 && /No closure figure yet/.test(firstCurve.detail),
+    `${firstCurve.points.length} point(s)`,
+  )
+
+  console.log('\n— and a second generation over the same items closes some of it —')
+  const laterId = await openScored('campaign-check-gap-generation-1', paired - 1)
+  const laterReport = await campaignReport(app.deps, { workspaceId, campaignId: laterId })
+  const laterGap = laterReport?.gap?.report.gaps[0]
+  const expectedLater = Math.round(((paired - (paired - 1)) / paired) * 100)
+  check(
+    'the later campaign measured the same pair over the same items',
+    laterGap?.sharedItems === paired && laterGap?.gapPoints === expectedLater,
+    `${laterGap?.gapPoints ?? '?'} points, expected ${expectedLater}`,
+  )
+
+  const curve = await modelGapCurveFor(app.deps, { workspaceId, personaId: asAgentPersonaId(persona.id) })
+  check(
+    'the curve joins the two, oldest first, into a closure figure',
+    curve.points.length === 2 &&
+      curve.detail.includes(`closed by ${expectedBaseline - expectedLater} points`),
+    curve.detail.split('\n').find((line) => line.includes('Closure')) ?? curve.detail.slice(0, 120),
+  )
+  check(
+    'and the dispatched campaign, which reached no verdict, is not a point on it',
+    !curve.points.some((point) => point.campaignId === (dispatchId as string)),
+    `${curve.points.length} point(s)`,
+  )
+
+  console.log('\n— a gap on a different set is a separate reading, never a closure —')
+  const elsewhere = await client.campaign.open({
+    personaId: persona.id,
+    label: 'campaign-check-gap-other-set',
+    capUsd: 5,
+    revisionIds: [],
+    models: [GAP_MODEL],
+  })
+  check('a campaign on a freshly assembled set opened', elsewhere.opened === true, elsewhere.detail)
+  const elsewhereId = asReplayCampaignId(elsewhere.campaignId)
+  const elsewhereArms = await app.deps.campaigns.armsForCampaign(workspaceId, elsewhereId)
+  const elsewhereItems = (
+    await app.deps.screens.listReplayItems(
+      workspaceId,
+      (await app.deps.campaigns.findById(workspaceId, elsewhereId))!.replaySetId,
+    )
+  ).map((item) => item.id as string)
+  check(
+    'and it is a different set from the baseline’s',
+    elsewhereItems.some((id) => !itemOrder.includes(id)) || elsewhereItems.length !== itemOrder.length,
+    `${elsewhereItems.length} items, ${elsewhereItems.filter((id) => itemOrder.includes(id)).length} shared`,
+  )
+  for (const entry of elsewhereArms) {
+    for (const row of entry.runs) {
+      await app.deps.campaigns.recordCampaignRunOutcome(workspaceId, row.id, {
+        outcome: entry.arm.model === null ? 'passed' : 'failed',
+        reason: null,
+        model: entry.arm.model === null ? 'claude-haiku-4-5-20251001' : GAP_MODEL,
+        costUsd: 0,
+      })
+    }
+  }
+  await advanceCampaignQueue(app.deps, { campaignStuckMs: 3_600_000, maxStartsPerTick: 64 })
+  const mixedCurve = await modelGapCurveFor(app.deps, {
+    workspaceId,
+    personaId: asAgentPersonaId(persona.id),
+  })
+  check(
+    'the third point is reported as a separate reading rather than folded into the curve',
+    mixedCurve.points.length === 3 && mixedCurve.detail.includes('a separate reading'),
+    `${mixedCurve.points.length} point(s)`,
+  )
+  check(
+    'and the closure figure is still the one taken over the fixed set',
+    (mixedCurve.detail.match(/closed by/g) ?? []).length === 1,
+    mixedCurve.detail.split('\n').filter((line) => line.includes('Closure')).join(' | '),
   )
 
   console.log('\n— the cap: a campaign halts rather than quietly costing more —')

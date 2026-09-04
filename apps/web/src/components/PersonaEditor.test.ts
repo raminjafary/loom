@@ -530,6 +530,7 @@ describe('the variant search panel', () => {
       haltReason: null,
       createdAt: new Date(0),
       finishedAt: null,
+      replaySetId: 'set_1',
       ...over,
     })
 
@@ -539,6 +540,7 @@ describe('the variant search panel', () => {
       open?: (input: unknown) => Promise<{ opened: boolean; campaignId: string | null; detail: string }>
       cancel?: (campaignId: string) => Promise<{ cancelled: boolean; detail: string }>
       revisions?: PersonaRevision[]
+      curve?: string
     } = {}) => {
       const wrapper = mount(PersonaEditor, {
         props: {
@@ -552,6 +554,9 @@ describe('the variant search panel', () => {
             over.open ??
             (async () => ({ opened: true, campaignId: 'camp_1', detail: '2 arms over 8 items.' })),
           cancelCampaign: over.cancel ?? (async () => ({ cancelled: true, detail: 'Stopped.' })),
+          ...(over.curve === undefined
+            ? {}
+            : { gapCurve: async () => ({ detail: over.curve!, points: [] }) }),
         },
       })
       await wrapper.get('.row-actions .link').trigger('click')
@@ -607,6 +612,7 @@ describe('the variant search panel', () => {
           capUsd: 5,
           spentUsd: 5.4,
           arms: [],
+          gap: null,
         },
       })
       const text = wrapper.get('.campaigns').text()
@@ -631,6 +637,102 @@ describe('the variant search panel', () => {
       })
       await wrapper.get('.row-actions .link').trigger('click')
       expect(wrapper.find('.campaigns').exists()).toBe(false)
+    })
+
+    /**
+     * The gap, and the two ways a client could quietly make it dishonest: showing the points
+     * without the sentence saying what they are not, and offering a comparison across item
+     * sets as though it were a curve.
+     */
+    it('renders the gap paragraph as the server wrote it, disclaimers included', async () => {
+      const wrapper = await openedEditor({
+        campaigns: [row({ id: 'camp_1', status: 'finished' })],
+        report: {
+          label: 'swe — 2026-09-04',
+          status: 'finished' as const,
+          detail: 'Finished: every arm ran every item.',
+          capUsd: 5,
+          spentUsd: 1.2,
+          arms: [],
+          gap: {
+            detail:
+              '- Over the 6 items both arms scored: local/qwen passed 1, claude-sonnet-5 ' +
+              'passed 4. claude-sonnet-5 is ahead by +50 points.\nThis is a gap, not a closure.',
+            partial: false,
+            notes: [],
+            gaps: [
+              {
+                subjectModel: 'local/qwen',
+                referenceModel: 'claude-sonnet-5',
+                sharedItems: 6,
+                subjectPassed: 1,
+                referencePassed: 4,
+                gapPoints: 50,
+                unpairedItems: 0,
+              },
+            ],
+          },
+        },
+      })
+      const text = wrapper.get('.campaign-gap').text()
+      expect(text).toContain('+50 points')
+      expect(text).toContain('not a closure')
+    })
+
+    it('asks for the gap’s second side, and sends it as a model arm', async () => {
+      const calls: unknown[] = []
+      const wrapper = await openedEditor({
+        open: async (input) => {
+          calls.push(input)
+          return { opened: true, campaignId: 'camp_1', detail: '2 arms over 8 items.' }
+        },
+      })
+      const inputs = wrapper.findAll('.campaign-form input')
+      await inputs[1]!.setValue('local/qwen2.5-coder-32b')
+      await wrapper.get('.campaign-form button').trigger('click')
+      await flushPromises()
+      expect(calls[0]).toMatchObject({ models: ['local/qwen2.5-coder-32b'] })
+    })
+
+    /**
+     * Reuse is only offered when there is something to reuse, and it is on by default —
+     * a gap over freshly assembled items is a point nothing can be compared with.
+     */
+    it('replays the last campaign’s items by default, and only when there are some', async () => {
+      const calls: unknown[] = []
+      const open = async (input: unknown) => {
+        calls.push(input)
+        return { opened: true, campaignId: 'camp_2', detail: 'ok' }
+      }
+      const fresh = await openedEditor({ open })
+      expect(fresh.find('.campaign-reuse').exists()).toBe(false)
+      await fresh.get('.campaign-form button').trigger('click')
+      await flushPromises()
+      expect(calls[0]).toMatchObject({ replaySetId: null })
+
+      const extending = await openedEditor({
+        open,
+        campaigns: [row({ id: 'camp_1', status: 'finished', replaySetId: 'set_7' })],
+      })
+      expect(extending.find('.campaign-reuse').exists()).toBe(true)
+      await extending.get('.campaign-form button').trigger('click')
+      await flushPromises()
+      expect(calls[1]).toMatchObject({ replaySetId: 'set_7' })
+
+      await extending.get('.campaign-reuse input').setValue(false)
+      await extending.get('.campaign-form button').trigger('click')
+      await flushPromises()
+      expect(calls[2]).toMatchObject({ replaySetId: null })
+    })
+
+    it('shows the curve when there is one, and nothing when the mount does not offer it', async () => {
+      const withCurve = await openedEditor({
+        campaigns: [row({ id: 'camp_1', status: 'finished' })],
+        curve: 'local/qwen against claude-sonnet-5, over one fixed item set — 2 campaigns:',
+      })
+      expect(withCurve.get('.campaign-curve').text()).toContain('one fixed item set')
+      const without = await openedEditor({ campaigns: [row({ id: 'camp_1' })] })
+      expect(without.find('.campaign-curve').exists()).toBe(false)
     })
   })
 

@@ -149,14 +149,22 @@ import {
   asUserId,
   campaignMayStart,
   describeCampaign,
+  describeGapCurve,
+  describeModelGap,
+  readModelGap,
   userActor,
   type CampaignArmTally,
+  type GapArm,
+  type GapPoint,
+  type ModelGapReport,
+  type ReplaySetId,
   type ReplayCampaignId,
   type ReplayCampaignArmRecord,
   type ReplayCampaignRecord,
   type ReplayCampaignRunRecord,
   type ReplayCheckOutcome,
   type ReplayItemRecord,
+  type ReplaySetRecord,
   type ScreenDecision,
   type ScreenRunOutcome,
   type VariantScreenRunRecord,
@@ -1139,6 +1147,22 @@ export const openReplayCampaign = async (
      * documents on two different models compare nothing.
      */
     models?: readonly string[]
+    /**
+     * An existing set of this persona's to replay, instead of assembling a fresh one.
+     *
+     * This is what makes a *curve* possible rather than a series of unrelated points. A gap
+     * measured on one set and a gap measured on another differ in which work was asked for,
+     * so subtracting them attributes that difference to the document — which is the whole
+     * claim a closure figure makes. Later generations therefore replay the baseline's items,
+     * at the baseline's commits.
+     *
+     * Reuse is a campaign-only affordance and the asymmetry is deliberate: the retirement
+     * rule exists because a *gate* that keeps screening candidates against the same held-out
+     * items admits the ones that fit those items. A campaign gates nothing, admits nothing
+     * and promotes nothing, so reuse costs it no validity — and the set's gate count is left
+     * alone here, because a campaign is not a gating.
+     */
+    replaySetId?: ReplaySetId | null
   },
 ): Promise<
   | { ok: true; campaign: ReplayCampaignRecord; detail: string }
@@ -1191,18 +1215,44 @@ export const openReplayCampaign = async (
   }
 
   /**
-   * A fresh set, assembled exactly as the screen assembles one — same eligibility, same
-   * ceiling on any one outcome, same retirement rule. A campaign that built its set some
-   * other way would produce scores nothing else in this platform could be compared with.
+   * The set: an existing one when a curve is being extended, or a fresh one assembled exactly
+   * as the screen assembles one — same eligibility, same ceiling on any one outcome, same
+   * retirement rule. A campaign that built its set some other way would produce scores nothing
+   * else in this platform could be compared with.
    */
-  const history = await deps.screens.listDecidedRunsForPersona(
-    input.workspaceId,
-    persona.name,
-    REPLAY_HISTORY_WINDOW,
-  )
+  let reused: { set: ReplaySetRecord; items: readonly ReplayItemRecord[] } | null = null
+  if (input.replaySetId) {
+    const set = await deps.screens.findReplaySet(input.workspaceId, input.replaySetId)
+    if (!set) return { ok: false, reason: 'That item set no longer exists.' }
+    if ((set.personaId as string) !== (input.personaId as string)) {
+      return {
+        ok: false,
+        reason:
+          "That item set belongs to another persona, and a campaign cannot borrow one: the " +
+          'measurement is "how does this document do on the work this persona actually gets".',
+      }
+    }
+    const items = await deps.screens.listReplayItems(input.workspaceId, input.replaySetId)
+    if (items.length < MIN_REPLAY_ITEMS) {
+      return {
+        ok: false,
+        reason:
+          `That set has ${items.length} items and a campaign needs ${MIN_REPLAY_ITEMS}.`,
+      }
+    }
+    reused = { set, items }
+  }
+
+  const history = reused
+    ? []
+    : await deps.screens.listDecidedRunsForPersona(
+        input.workspaceId,
+        persona.name,
+        REPLAY_HISTORY_WINDOW,
+      )
   const draft = assembleReplaySet(history)
-  const detail = describeReplaySet(draft)
-  if (draft.items.length < MIN_REPLAY_ITEMS) {
+  const detail = reused ? reused.set.detail : describeReplaySet(draft)
+  if (!reused && draft.items.length < MIN_REPLAY_ITEMS) {
     return {
       ok: false,
       reason:
@@ -1250,12 +1300,14 @@ export const openReplayCampaign = async (
     })),
   ]
 
-  const set = await deps.screens.openReplaySet({
-    workspaceId: input.workspaceId,
-    personaId: input.personaId,
-    draft,
-    detail,
-  })
+  const set =
+    reused ??
+    (await deps.screens.openReplaySet({
+      workspaceId: input.workspaceId,
+      personaId: input.personaId,
+      draft,
+      detail,
+    }))
   const opened = await deps.campaigns.open({
     workspaceId: input.workspaceId,
     personaId: input.personaId,
@@ -1279,6 +1331,9 @@ export const openReplayCampaign = async (
       arms: arms.length,
       items: set.items.length,
       capUsd: input.capUsd,
+      /** Which set, and whether it was reused — a curve is only readable across shared sets. */
+      replaySetId: set.set.id,
+      reusedSet: reused !== null,
     },
   })
 
@@ -1287,7 +1342,12 @@ export const openReplayCampaign = async (
     campaign: opened.campaign,
     detail:
       `${arms.length} arms over ${set.items.length} items — up to ` +
-      `${arms.length * set.items.length} runs. ${detail}`,
+      `${arms.length * set.items.length} runs. ` +
+      (reused
+        ? `Replaying set v${set.set.version}, the same items at the same commits as the ` +
+          'campaigns before it, which is what makes their gaps comparable. '
+        : '') +
+      detail,
   }
 }
 
@@ -1578,6 +1638,12 @@ export const campaignReport = async (
   arms: CampaignArmTally[]
   detail: string
   spentUsd: number
+  /**
+   * The one comparison a campaign can make without the vintage confound: the same document on
+   * two models, paired per item. Null when this campaign has no model arm — a vintage campaign
+   * has no gap, and an empty section claiming otherwise would be worse than no section.
+   */
+  gap: { report: ModelGapReport; detail: string } | null
 } | null> => {
   const campaign = await deps.campaigns.findById(input.workspaceId, input.campaignId)
   if (!campaign) return null
@@ -1588,6 +1654,7 @@ export const campaignReport = async (
   ])
 
   const tallies = arms.map(({ arm, runs }) => campaignTally(arm, runs))
+  const gap = readModelGap({ status: campaign.status, arms: arms.map(toGapArm) })
   return {
     campaign,
     arms: tallies,
@@ -1598,7 +1665,82 @@ export const campaignReport = async (
       haltReason: campaign.haltReason,
     }),
     spentUsd,
+    gap: gap === null ? null : { report: gap, detail: describeModelGap(gap) },
   }
+}
+
+/** An arm's rows as the gap reads them: the document, and what each item said, with its model. */
+const toGapArm = (entry: {
+  arm: ReplayCampaignArmRecord
+  runs: readonly ReplayCampaignRunRecord[]
+}): GapArm => ({
+  armId: entry.arm.id as string,
+  label: entry.arm.label,
+  declaredModel: entry.arm.model,
+  revisionId: entry.arm.revisionId === null ? null : (entry.arm.revisionId as string),
+  markdownSource: entry.arm.markdownSource,
+  items: entry.runs.map((run) => ({
+    itemId: run.replayItemId as string,
+    outcome: run.outcome,
+    model: run.model,
+  })),
+})
+
+/** How many of a persona's campaigns the curve reads. A curve is a series; this bounds it. */
+export const MAX_GAP_CURVE_CAMPAIGNS = 20
+
+/**
+ * The punch-up curve: every gap this persona's campaigns have measured, oldest first per leg.
+ *
+ * Two reads and no writes, and it computes nothing a campaign did not already record — the
+ * gaps come from the same rows the report reads, so a point on the curve and the paragraph on
+ * the campaign can never disagree.
+ *
+ * A cancelled or halted campaign's point is included and flagged, never dropped: the money
+ * bought a reading, and the domain refuses it as a closure *endpoint* rather than pretending
+ * it does not exist.
+ */
+export const modelGapCurveFor = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; personaId: AgentPersonaId },
+): Promise<{ points: GapPoint[]; detail: string }> => {
+  const campaigns = await deps.campaigns.listByPersona(
+    input.workspaceId,
+    input.personaId,
+    MAX_GAP_CURVE_CAMPAIGNS,
+  )
+  if (campaigns.length === 0) return { points: [], detail: describeGapCurve([]) }
+
+  const rows = await deps.campaigns.armsForCampaigns(
+    input.workspaceId,
+    campaigns.map((campaign) => campaign.id),
+  )
+  const byCampaign = new Map<string, typeof rows>()
+  for (const row of rows) {
+    const key = row.campaignId as string
+    const existing = byCampaign.get(key)
+    if (existing) existing.push(row)
+    else byCampaign.set(key, [row])
+  }
+
+  const points = campaigns.flatMap((campaign) => {
+    const arms = byCampaign.get(campaign.id as string) ?? []
+    const gap = readModelGap({ status: campaign.status, arms: arms.map(toGapArm) })
+    if (gap === null) return []
+    return gap.gaps.map((paired) => ({
+      campaignId: campaign.id as string,
+      campaignLabel: campaign.label,
+      openedAt: campaign.createdAt,
+      replaySetId: campaign.replaySetId as string,
+      subjectModel: paired.subjectModel,
+      referenceModel: paired.referenceModel,
+      gapPoints: paired.gapPoints,
+      sharedItems: paired.sharedItems,
+      partial: gap.partial,
+    }))
+  })
+
+  return { points, detail: describeGapCurve(points) }
 }
 
 /** One arm's rows reduced to its score. The screen's tally, plus the pending count. */

@@ -111,6 +111,7 @@ export const useAgentStore = defineStore('agent', () => {
       session.openCampaign(input),
     listCampaigns: (personaId: string) => session.listCampaigns(personaId),
     campaignReport: (campaignId: string) => session.campaignReport(campaignId),
+    gapCurve: (personaId: string) => session.gapCurve(personaId),
     cancelCampaign: (campaignId: string) => session.cancelCampaign(campaignId),
     /** Memory — pass-throughs for the campaigns' reason, and read on the same trigger. */
     listExperience: (personaId: string) => session.listExperience(personaId),

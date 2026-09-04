@@ -766,6 +766,16 @@ export const contract = {
            * frontier question, and the only reason a model belongs in a campaign.
            */
           models: z.array(z.string()).max(3).optional(),
+          /**
+           * An existing set of this persona's to replay instead of assembling a fresh one.
+           *
+           * What turns a series of gaps into a curve: two campaigns over two different sets
+           * differ in which work was asked for, so a closure figure across them would
+           * attribute that difference to the document. Campaign-only — a screen may not reuse
+           * a set, because a gate that keeps screening against the same items admits the
+           * candidates that fit them.
+           */
+          replaySetId: z.string().nullable().optional(),
         }),
       )
       .output(
@@ -791,6 +801,8 @@ export const contract = {
           haltReason: z.string().nullable(),
           createdAt: z.date(),
           finishedAt: z.date().nullable(),
+          /** Which items it replayed — what a later campaign passes back to extend a curve. */
+          replaySetId: z.string(),
         }),
       ),
     ),
@@ -825,8 +837,64 @@ export const contract = {
               models: z.array(z.string()),
             }),
           ),
+          /**
+           * The same document on two models, paired per item — the one comparison a campaign
+           * can make that the vintage confound does not reach, and the punch-up curve's first
+           * point. Null when this campaign has no model arm at all.
+           */
+          gap: z
+            .object({
+              /** `describeModelGap`'s paragraph: the counts, the points, and both disclaimers. */
+              detail: z.string(),
+              partial: z.boolean(),
+              /** Why a model arm produced no gap. Never silent when one was asked for. */
+              notes: z.array(z.string()),
+              gaps: z.array(
+                z.object({
+                  subjectModel: z.string(),
+                  referenceModel: z.string(),
+                  /** Items *both* arms reached a verdict on. Every count is over these. */
+                  sharedItems: z.number().int(),
+                  subjectPassed: z.number().int(),
+                  referencePassed: z.number().int(),
+                  /** Percentage points, reference minus subject. Negative means no gap. */
+                  gapPoints: z.number().int(),
+                  /** Verdicts only one arm reached, dropped from the pairing. */
+                  unpairedItems: z.number().int(),
+                }),
+              ),
+            })
+            .nullable(),
         })
         .nullable(),
+    ),
+
+    /**
+     * The punch-up curve: every gap this persona's campaigns measured, and the closure figure
+     * where one is readable.
+     *
+     * A closure figure exists only within a leg — one item set, one model pair — because two
+     * campaigns over two sets differ in which work was asked for. Points outside a leg are
+     * reported separately rather than subtracted.
+     */
+    gapCurve: oc.input(z.object({ personaId: z.string() })).output(
+      z.object({
+        detail: z.string(),
+        points: z.array(
+          z.object({
+            campaignId: z.string(),
+            campaignLabel: z.string(),
+            openedAt: z.date(),
+            replaySetId: z.string(),
+            subjectModel: z.string(),
+            referenceModel: z.string(),
+            gapPoints: z.number().int(),
+            sharedItems: z.number().int(),
+            /** From a halted or cancelled campaign: shown, never a closure endpoint. */
+            partial: z.boolean(),
+          }),
+        ),
+      }),
     ),
 
     /** A person stops it. The partial score is kept — the money bought something. */

@@ -839,6 +839,38 @@ export const campaignRepository = (db: Database): CampaignRepositoryPort => ({
     }))
   },
 
+  async armsForCampaigns(workspaceId, campaignIds) {
+    if (campaignIds.length === 0) return []
+    const armRows = await db
+      .select()
+      .from(replayCampaignArm)
+      .where(
+        and(
+          eq(replayCampaignArm.workspaceId, workspaceId),
+          inArray(replayCampaignArm.campaignId, [...campaignIds]),
+        ),
+      )
+      .orderBy(asc(replayCampaignArm.campaignId), asc(replayCampaignArm.position))
+    if (armRows.length === 0) return []
+
+    const runRows = await db
+      .select()
+      .from(replayCampaignRun)
+      .where(
+        inArray(
+          replayCampaignRun.armId,
+          armRows.map((row) => row.id),
+        ),
+      )
+      .orderBy(asc(replayCampaignRun.createdAt), asc(replayCampaignRun.id))
+
+    return armRows.map((armRow) => ({
+      campaignId: asReplayCampaignId(armRow.campaignId),
+      arm: toCampaignArm(armRow),
+      runs: runRows.filter((row) => row.armId === armRow.id).map(toCampaignRun),
+    }))
+  },
+
   async claimCampaignRun(workspaceId, campaignRunId) {
     /** The screen's claim, for its reason: two sweeps ticking at once is the ordinary case. */
     const [row] = await db

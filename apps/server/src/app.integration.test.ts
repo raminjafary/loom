@@ -1028,6 +1028,7 @@ describe('contract completeness', () => {
       'open',
       'listForPersona',
       'report',
+      'gapCurve',
       'cancel',
     ])
     expect(Object.keys(contract.supervision)).toEqual(['ledger'])

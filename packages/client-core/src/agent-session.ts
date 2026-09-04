@@ -35,6 +35,8 @@ import type { LoomApi } from './api.js'
 
 /** One campaign row, as the contract puts it on the wire. */
 export type CampaignRow = Awaited<ReturnType<LoomApi['campaign']['listForPersona']>>[number]
+/** Every gap a persona's campaigns measured, with the closure figure where one is readable. */
+export type GapCurve = Awaited<ReturnType<LoomApi['campaign']['gapCurve']>>
 /** What one campaign measured — arms, scores, spend, and the sentence. */
 export type CampaignReport = NonNullable<Awaited<ReturnType<LoomApi['campaign']['report']>>>
 /**
@@ -547,8 +549,18 @@ export interface AgentSession {
     capUsd: number | null
     revisionIds: readonly string[]
     models?: readonly string[]
+    /**
+     * An earlier campaign's item set, replayed instead of a fresh one. What makes two gaps
+     * two readings of one curve rather than two unrelated numbers.
+     */
+    replaySetId?: string | null
   }): Promise<{ opened: boolean; campaignId: string | null; detail: string }>
   listCampaigns(personaId: string): Promise<CampaignRow[]>
+  /**
+   * The punch-up curve: every gap this persona's campaigns measured, and the closure figure
+   * where the item set and the model pair held still long enough for one to exist.
+   */
+  gapCurve(personaId: string): Promise<GapCurve>
   /**
    * What a persona remembers, and a human's one write against it.
    *
@@ -1670,6 +1682,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
           capUsd: input.capUsd,
           revisionIds: [...input.revisionIds],
           ...(input.models === undefined ? {} : { models: [...input.models] }),
+          ...(input.replaySetId === undefined ? {} : { replaySetId: input.replaySetId }),
         })
         return result
       } catch (error) {
@@ -1685,6 +1698,15 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       } catch (error) {
         patch({ error: errorMessage(error) })
         return []
+      }
+    },
+
+    async gapCurve(personaId) {
+      try {
+        return await options.api.campaign.gapCurve({ personaId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return { detail: '', points: [] }
       }
     },
 

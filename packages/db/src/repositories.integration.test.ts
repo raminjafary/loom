@@ -2509,6 +2509,51 @@ describe('campaigns', () => {
       opened.campaign.id,
     )
   })
+
+  /**
+   * The curve's read: several campaigns' arms in one query, each row carrying which campaign
+   * it belongs to.
+   *
+   * Checked against two campaigns rather than one, because the failure this read invites is a
+   * join that returns every arm and loses whose it was — which would draw a curve out of a
+   * mixture of campaigns and report the result as a persona's progress.
+   */
+  it('reads several campaigns’ arms in one query, each row knowing its campaign', async () => {
+    const s = await scaffold(WS)
+    const first = await open(s, 'baseline')
+    await campaigns.close(WS, first.campaign.id, { status: 'finished', reason: null })
+    const second = await open(s, 'generation 1')
+
+    const rows = await campaigns.armsForCampaigns(WS, [first.campaign.id, second.campaign.id])
+    expect(rows).toHaveLength(4)
+    const byCampaign = new Map<string, number>()
+    for (const row of rows) {
+      byCampaign.set(row.campaignId as string, (byCampaign.get(row.campaignId as string) ?? 0) + 1)
+    }
+    expect(byCampaign.get(first.campaign.id as string)).toBe(2)
+    expect(byCampaign.get(second.campaign.id as string)).toBe(2)
+    // Every arm still carries its own per-item rows, which is what the pairing reads.
+    expect(rows.every((row) => row.runs.length === 2)).toBe(true)
+    // And nothing is returned for a campaign the caller did not ask about.
+    expect(await campaigns.armsForCampaigns(WS, [])).toHaveLength(0)
+  })
+
+  /**
+   * Two campaigns over **one** set, which is what a closure figure requires — and the reason
+   * reuse is expressible at all: `replay_set` is not consumed by a campaign, because a
+   * campaign gates nothing.
+   */
+  it('lets a second campaign replay the first one’s set', async () => {
+    const s = await scaffold(WS)
+    const first = await open(s, 'baseline')
+    await campaigns.close(WS, first.campaign.id, { status: 'finished', reason: null })
+    const second = await open(s, 'generation 1')
+    expect(second.campaign.replaySetId).toBe(first.campaign.replaySetId)
+    const rows = await campaigns.armsForCampaigns(WS, [second.campaign.id])
+    expect(rows.flatMap((row) => row.runs.map((run) => run.replayItemId)).sort()).toEqual(
+      [...s.itemIds, ...s.itemIds].sort(),
+    )
+  })
 })
 
 /**
