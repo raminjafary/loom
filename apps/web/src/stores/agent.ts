@@ -109,6 +109,19 @@ export const useAgentStore = defineStore('agent', () => {
      */
     openCampaign: (input: Parameters<typeof session.openCampaign>[0]) =>
       session.openCampaign(input),
+    /** Workflows — pass-throughs for the campaigns' reason, and read on the same trigger. */
+    listWorkflows: () => session.listWorkflows(),
+    readWorkflow: (workflowId: string) => session.readWorkflow(workflowId),
+    listWorkflowRuns: (workflowId: string) => session.listWorkflowRuns(workflowId),
+    readWorkflowRun: (runId: string) => session.readWorkflowRun(runId),
+    startWorkflow: (input: {
+      workflowId: string
+      repositoryId: string
+      threadId: string
+      input: string
+      capUsd: number | null
+    }) => session.startWorkflow(input),
+    cancelWorkflowRun: (runId: string) => session.cancelWorkflowRun(runId),
     listCampaigns: (personaId: string) => session.listCampaigns(personaId),
     campaignReport: (campaignId: string) => session.campaignReport(campaignId),
     gapCurve: (personaId: string) => session.gapCurve(personaId),

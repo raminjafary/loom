@@ -35,6 +35,15 @@ import type { LoomApi } from './api.js'
 
 /** One campaign row, as the contract puts it on the wire. */
 export type CampaignRow = Awaited<ReturnType<LoomApi['campaign']['listForPersona']>>[number]
+/**
+ * The workflow shapes, derived from the contract rather than restated.
+ *
+ * `graph` is `unknown` all the way through — see `listWorkflows` below.
+ */
+export type WorkflowRow = Awaited<ReturnType<LoomApi['workflow']['list']>>[number]
+export type WorkflowDetail = NonNullable<Awaited<ReturnType<LoomApi['workflow']['read']>>>
+export type WorkflowRunRow = Awaited<ReturnType<LoomApi['workflow']['listRuns']>>[number]
+export type WorkflowRunDetail = NonNullable<Awaited<ReturnType<LoomApi['workflow']['run']>>>
 /** Every gap a persona's campaigns measured, with the closure figure where one is readable. */
 export type GapCurve = Awaited<ReturnType<LoomApi['campaign']['gapCurve']>>
 /** What one campaign measured — arms, scores, spend, and the sentence. */
@@ -576,6 +585,28 @@ export interface AgentSession {
   personaEvolution(personaId: string): Promise<PersonaLineage | null>
   listExperience(personaId: string): Promise<PersonaLesson[]>
   retireLesson(input: { lessonId: string; reason: string }): Promise<{ invalidated: number }>
+  /**
+   * Workflows — read on demand and never held in session state, for the campaigns' reason: a
+   * drawn shape changes when somebody redraws it and an execution changes when the executor
+   * ticks, neither of which is an event a panel should re-fetch on.
+   *
+   * The graph crosses as `unknown` and stays `unknown` here. The server validated it with the one
+   * validator that exists, and a second parse on this side would be a second definition of what a
+   * workflow may be — the thing the contract deliberately refuses to write twice.
+   */
+  listWorkflows(): Promise<WorkflowRow[]>
+  readWorkflow(workflowId: string): Promise<WorkflowDetail | null>
+  listWorkflowRuns(workflowId: string): Promise<WorkflowRunRow[]>
+  readWorkflowRun(runId: string): Promise<WorkflowRunDetail | null>
+  startWorkflow(input: {
+    workflowId: string
+    repositoryId: string
+    /** Where its steps render. A workflow's runs live in a thread like everybody else's. */
+    threadId: string
+    input: string
+    capUsd: number | null
+  }): Promise<{ runId: string | null; detail: string }>
+  cancelWorkflowRun(runId: string): Promise<{ cancelled: boolean; detail: string }>
   campaignReport(campaignId: string): Promise<CampaignReport | null>
   cancelCampaign(campaignId: string): Promise<{ cancelled: boolean; detail: string }>
   /**
@@ -1734,6 +1765,64 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       } catch (error) {
         patch({ error: errorMessage(error) })
         return { invalidated: 0 }
+      }
+    },
+
+    async listWorkflows() {
+      try {
+        return await options.api.workflow.list()
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return []
+      }
+    },
+
+    async readWorkflow(workflowId) {
+      try {
+        return await options.api.workflow.read({ workflowId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return null
+      }
+    },
+
+    async listWorkflowRuns(workflowId) {
+      try {
+        return await options.api.workflow.listRuns({ workflowId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return []
+      }
+    },
+
+    async readWorkflowRun(runId) {
+      try {
+        return await options.api.workflow.run({ runId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return null
+      }
+    },
+
+    async startWorkflow(input) {
+      try {
+        return await options.api.workflow.start(input)
+      } catch (error) {
+        // A refusal already arrives as a `detail`; this is the transport failing, and it has
+        // to read the same way so a panel has one place to show what happened.
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { runId: null, detail }
+      }
+    },
+
+    async cancelWorkflowRun(runId) {
+      try {
+        return await options.api.workflow.cancel({ runId })
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { cancelled: false, detail }
       }
     },
 

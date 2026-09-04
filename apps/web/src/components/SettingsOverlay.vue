@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import type {
+  WorkflowDetail,
+  WorkflowRow,
+  WorkflowRunDetail,
+  WorkflowRunRow,
+} from '@loom/client-core'
+import type {
   AgentPersona,
   AtlasEdge,
   Capability,
@@ -25,6 +31,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import CapabilityPanel from './CapabilityPanel.vue'
 import HandoffPolicyPanel from './HandoffPolicyPanel.vue'
 import AtlasPanel from './AtlasPanel.vue'
+import WorkflowPanel from './WorkflowPanel.vue'
 import ColosseumPanel from './ColosseumPanel.vue'
 import MasteryPanel from './MasteryPanel.vue'
 import PersonaEditor from './PersonaEditor.vue'
@@ -94,6 +101,33 @@ const props = defineProps<{
   colosseumView: ColosseumView | null
   /** The atlas — cross-project relations awaiting a human, fetched with the tab. */
   atlasProposals: AtlasEdge[]
+  /** The drawn harnesses, fetched with their tab for the atlas queue's reason. */
+  workflows: WorkflowRow[]
+  /**
+   * Where a started execution's steps will render — the thread the person is already looking
+   * at, rather than a second picker on this panel.
+   */
+  workflowThreadId: string | null
+  readWorkflow: (workflowId: string) => Promise<WorkflowDetail | null>
+  listWorkflowRuns: (workflowId: string) => Promise<WorkflowRunRow[]>
+  readWorkflowRun: (runId: string) => Promise<WorkflowRunDetail | null>
+  startWorkflow: (input: {
+    workflowId: string
+    repositoryId: string
+    threadId: string
+    input: string
+    capUsd: number | null
+  }) => Promise<{ runId: string | null; detail: string }>
+  cancelWorkflowRun: (runId: string) => Promise<{ cancelled: boolean; detail: string }>
+  /**
+   * Callbacks rather than events, and not for symmetry with the reads above.
+   *
+   * This overlay's emit map has a documented ceiling — see `SettingsOverlayEmits` — past which
+   * *every* handler in the parent silently degrades to `any`, and adding two events crossed it
+   * again. A prop costs nothing here because the parent already hands this panel five of them.
+   */
+  refreshWorkflows: () => void
+  openWorkflowRun: (agentRunId: string) => void
   /** The workspace's own policy row — where the handoff threshold and cap live. */
   runControl: RunControl | null
   /**
@@ -217,12 +251,19 @@ type SettingsOverlayEmits = {
 
 const emit = defineEmits<SettingsOverlayEmits>()
 
-type Tab = 'infrastructure' | 'personas' | 'expertise' | 'colosseum' | 'capabilities'
+type Tab =
+  | 'infrastructure'
+  | 'personas'
+  | 'expertise'
+  | 'workflows'
+  | 'colosseum'
+  | 'capabilities'
 
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: 'infrastructure', label: 'Runners & repositories' },
   { id: 'personas', label: 'Personas & groups' },
   { id: 'expertise', label: 'Expertise' },
+  { id: 'workflows', label: 'Workflows' },
   { id: 'colosseum', label: 'Colosseum' },
   { id: 'capabilities', label: 'Capabilities' },
 ]
@@ -239,6 +280,9 @@ watch(tab, (next) => {
   if (next === 'colosseum') emit('colosseum-refresh')
   // The atlas queue lives on the expertise tab because a relation is between two maps.
   if (next === 'expertise') emit('atlas-refresh')
+  // The shapes, on the same discipline: fetched when the tab is first opened rather than on
+  // mount, because most sessions never look at them.
+  if (next === 'workflows') props.refreshWorkflows()
 })
 
 const onKeydown = (event: KeyboardEvent) => {
@@ -490,6 +534,21 @@ onMounted(() => scrim.value?.focus())
             @set-retrieval="(input) => emit('set-retrieval', input)"
             :curation="masteryCuration"
             @curate="(mapId) => emit('curate', mapId)"
+          />
+        </template>
+
+        <template v-else-if="tab === 'workflows'">
+          <WorkflowPanel
+            :workflows="workflows"
+            :repositories="repositories"
+            :thread-id="workflowThreadId"
+            :read="readWorkflow"
+            :list-runs="listWorkflowRuns"
+            :read-run="readWorkflowRun"
+            :start="startWorkflow"
+            :cancel="cancelWorkflowRun"
+            @refresh="refreshWorkflows()"
+            @open="(agentRunId) => openWorkflowRun(agentRunId)"
           />
         </template>
 

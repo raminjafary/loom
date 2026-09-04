@@ -16,6 +16,7 @@ import {
   SELECTABLE_MODELS,
   threadsByParentMessage,
   type BriefSource,
+  type WorkflowRow,
   waitingCount,
 } from '@loom/client-core'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -443,6 +444,13 @@ const atlasProposals = ref<AtlasEdge[]>([])
 
 const refreshAtlas = async () => {
   atlasProposals.value = await agent.listAtlasProposals()
+}
+
+/** The drawn harnesses, fetched with their tab for the atlas queue's reason. */
+const workflows = ref<WorkflowRow[]>([])
+
+const refreshWorkflows = async () => {
+  workflows.value = await agent.listWorkflows()
 }
 
 /**
@@ -1361,6 +1369,15 @@ onBeforeUnmount(() => {
       :colosseum-sessions="colosseumSessions"
       :colosseum-view="colosseumView"
       :atlas-proposals="atlasProposals"
+      :workflows="workflows"
+      :workflow-thread-id="snapshot.activeThread?.id ?? null"
+      :read-workflow="agent.readWorkflow"
+      :list-workflow-runs="agent.listWorkflowRuns"
+      :read-workflow-run="agent.readWorkflowRun"
+      :start-workflow="agent.startWorkflow"
+      :cancel-workflow-run="agent.cancelWorkflowRun"
+      :refresh-workflows="() => void refreshWorkflows()"
+      :open-workflow-run="openRun"
       @set-plan-review="(required) => void agent.setPlanReviewRequired(required)"
       :set-model-routing="setModelRouting"
       @atlas-refresh="() => void refreshAtlas()"
