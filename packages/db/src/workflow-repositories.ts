@@ -355,6 +355,33 @@ export const workflowRepository = (db: Database): WorkflowRepositoryPort => ({
       )
   },
 
+  async findStepByRun(workspaceId, agentRunId) {
+    const [row] = await db
+      .select()
+      .from(workflowStepRun)
+      .where(
+        and(
+          eq(workflowStepRun.workspaceId, workspaceId),
+          eq(workflowStepRun.agentRunId, agentRunId),
+        ),
+      )
+      .limit(1)
+    return row ? toStep(row) : null
+  },
+
+  async recordStepAnswer(workspaceId, stepId, answer) {
+    await db
+      .update(workflowStepRun)
+      .set({ answer })
+      .where(
+        and(
+          eq(workflowStepRun.workspaceId, workspaceId),
+          eq(workflowStepRun.id, stepId),
+          eq(workflowStepRun.status, 'running'),
+        ),
+      )
+  },
+
   async releaseStep(workspaceId, stepId) {
     /**
      * The row goes rather than reverting to pending. A step is written *at* the moment it is

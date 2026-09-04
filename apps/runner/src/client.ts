@@ -56,6 +56,7 @@ import { createSelfTool } from './self-tool.js'
 import { createExperienceTool } from './experience-tool.js'
 import { createProposalTool } from './proposal-tool.js'
 import { createVerdictTool } from './verdict-tool.js'
+import { createWorkflowAnswerTool } from './workflow-answer-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
@@ -590,6 +591,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
      * Its presence is what gives the agent `submit_variant_verdict` at all.
      */
     verifyVariants?: { optionKeys: string[] }
+    /**
+     * Present when this run is a step of a drawn workflow: the fields its answer must carry,
+     * which is what bounds `submit_workflow_answer`'s arguments.
+     */
+    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string }[] }
     proposeVariants?: { personaName: string }
   }): Promise<void> => {
     // Async, and awaited by whoever produces events (the SDK loop in-process, the
@@ -868,6 +874,35 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         : null
 
     /**
+     * The workflow answer channel, present only when the platform started this run as a step of
+     * a drawn workflow — the same gating `verdictTool` has, and the same reason.
+     */
+    const onWorkflowAnswer = (
+      answer: Record<string, unknown>,
+    ): Promise<{ ok: true; outcome: string } | { ok: false; error: string }> => {
+      const requestId = nextNoteRequestId()
+      send({ type: 'workflow_answer_submitted', runId: input.runId, requestId, answer })
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingSelfEdits.delete(requestId)
+          resolve({ ok: false, error: 'the platform did not answer in time — nothing recorded' })
+        }, NOTE_TIMEOUT_MS)
+        pendingSelfEdits.set(requestId, (result) => {
+          clearTimeout(timer)
+          resolve(
+            result.ok
+              ? { ok: true, outcome: result.outcome ?? '' }
+              : { ok: false, error: result.error ?? 'the platform refused it' },
+          )
+        })
+      })
+    }
+    const workflowTool =
+      input.answerWorkflow !== undefined
+        ? createWorkflowAnswerTool(input.answerWorkflow.fields, { submit: onWorkflowAnswer })
+        : null
+
+    /**
      * The handover. Offered to every run, unlike `record_map` — see `handoff-tool.ts`
      * for why the blast radius makes that the right trade.
      */
@@ -1105,6 +1140,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         handoffTool,
         ...(mapTool ? { mapTool } : {}),
         ...(verdictTool ? { verdictTool } : {}),
+        ...(workflowTool ? { workflowTool } : {}),
         ...(proposalTool ? { proposalTool } : {}),
         ...(selfTool ? { selfTool } : {}),
         ...(experienceTool ? { experienceTool } : {}),
@@ -1193,6 +1229,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
           : { experienceContext: input.experienceContext }),
         ...(input.mastery === undefined ? {} : { mastery: input.mastery }),
         ...(input.verifyVariants === undefined ? {} : { verifyVariants: input.verifyVariants }),
+        ...(input.answerWorkflow === undefined ? {} : { answerWorkflow: input.answerWorkflow }),
         ...(input.proposeVariants === undefined
           ? {}
           : { proposeVariants: input.proposeVariants }),
@@ -1218,6 +1255,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         onToolsEdit,
         onProposeVariants,
         ...(verdictTool ? { onVerdict } : {}),
+        ...(workflowTool ? { onWorkflowAnswer } : {}),
         ...(mapTool
           ? {
               onMapWrite: (fragment: Record<string, unknown>) =>
@@ -1554,6 +1592,17 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 ...(frame.verifyVariants === undefined
                   ? {}
                   : { verifyVariants: { optionKeys: [...frame.verifyVariants.optionKeys] } }),
+                // Forwarded rather than spread wholesale, for the reason every other field
+                // here is: a field the Runner declines to read is dropped with no type error,
+                // and a step that never reaches its tool is a step the workflow waits on until
+                // its run ends with nothing.
+                ...(frame.answerWorkflow === undefined
+                  ? {}
+                  : {
+                      answerWorkflow: {
+                        fields: frame.answerWorkflow.fields.map((field) => ({ ...field })),
+                      },
+                    }),
                 ...(frame.proposeVariants === undefined
                   ? {}
                   : { proposeVariants: { personaName: frame.proposeVariants.personaName } }),

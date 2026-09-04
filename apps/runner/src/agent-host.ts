@@ -11,6 +11,7 @@ import { createQuestionTool } from './question-tool.js'
 import { createSelfTool } from './self-tool.js'
 import { createProposalTool } from './proposal-tool.js'
 import { createVerdictTool } from './verdict-tool.js'
+import { createWorkflowAnswerTool } from './workflow-answer-tool.js'
 import {
   PLANNER_TOOL_NAME,
   PLAN_DELTA_TOOL_NAME,
@@ -484,6 +485,28 @@ const main = async (): Promise<void> => {
     : null
 
   /**
+   * The workflow answer channel inside the container, present only when the host said this run
+   * is a step of one — the same gating `verdictTool` has just above.
+   */
+  const workflowTool = command.answerWorkflow
+    ? createWorkflowAnswerTool(command.answerWorkflow.fields, {
+        submit: (answer) => {
+          const requestId = nextRequestId()
+          emit({ t: 'workflow_answer', requestId, answer })
+          return new Promise((resolve) => {
+            pendingSelfEdits.set(requestId, (result) =>
+              resolve(
+                result.ok
+                  ? { ok: true, outcome: result.outcome ?? '' }
+                  : { ok: false, error: result.error ?? 'the platform refused it' },
+              ),
+            )
+          })
+        },
+      })
+    : null
+
+  /**
    * The proposal channel inside the container, present only when the host said this is a
    * proposer — the same gating `verdictTool` has just above, and the same `variants_propose`
    * message the self tool uses, because it is the same request arriving from a different
@@ -526,6 +549,7 @@ const main = async (): Promise<void> => {
     atlasTool,
     ...(mapTool ? { mapTool } : {}),
     ...(verdictTool ? { verdictTool } : {}),
+    ...(workflowTool ? { workflowTool } : {}),
     ...(proposalTool ? { proposalTool } : {}),
     handoffTool,
     ...(selfTool ? { selfTool } : {}),

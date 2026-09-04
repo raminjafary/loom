@@ -144,6 +144,10 @@ export interface SandboxOptions {
     choice: string
     reason: string
   }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
+  /** A workflow step submitting its answer, answered on the host. */
+  readonly onWorkflowAnswer?: (
+    answer: Record<string, unknown>,
+  ) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
   /**
    * The agent asking a human a question and blocking on the answer.
    * Resolves with `answer: null` when nobody answered — the run must continue either
@@ -192,6 +196,8 @@ export interface SandboxOptions {
   }
   /** Present when this run is the surrogate verifier — the option letters it may pick. */
   readonly verifyVariants?: { optionKeys: string[] }
+  /** Present when this run is a workflow step — the fields its answer must carry. */
+  readonly answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string }[] }
   /** Present when this run is the proposer — the persona it writes candidates for. */
   readonly proposeVariants?: { personaName: string }
   readonly onSessionId?: (sessionId: string) => void
@@ -603,6 +609,9 @@ export const runAgentInSandbox = async (
         : { experienceContext: options.experienceContext }),
       ...(options.mastery === undefined ? {} : { mastery: options.mastery }),
       ...(options.verifyVariants === undefined ? {} : { verifyVariants: options.verifyVariants }),
+      ...(options.answerWorkflow === undefined
+        ? {}
+        : { answerWorkflow: { fields: options.answerWorkflow.fields.map((f) => ({ ...f })) } }),
       ...(options.proposeVariants === undefined
         ? {}
         : { proposeVariants: options.proposeVariants }),
@@ -856,6 +865,20 @@ export const runAgentInSandbox = async (
             choice: frame.choice,
             reason: frame.reason,
           })) ?? { ok: false, error: 'this run has no verdict channel' }
+          send({
+            t: 'self_edit_result',
+            requestId: frame.requestId,
+            ok: result.ok,
+            ...(result.ok ? { outcome: result.outcome } : { error: result.error }),
+          })
+        })()
+        return
+      case 'workflow_answer':
+        void (async () => {
+          const result = (await options.onWorkflowAnswer?.(frame.answer)) ?? {
+            ok: false,
+            error: 'this run has no workflow answer channel',
+          }
           send({
             t: 'self_edit_result',
             requestId: frame.requestId,

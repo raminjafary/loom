@@ -210,6 +210,7 @@ import type {
   PersonaRepositoryPort,
   PersonaVariantRepositoryPort,
   CampaignRepositoryPort,
+  WorkflowRepositoryPort,
   ScreenRepositoryPort,
   PlanSubtaskRecord,
   PlanSubtaskRepositoryPort,
@@ -267,6 +268,8 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
    * than to refuse a candidate. A separate port because nothing on it decides anything.
    */
   readonly campaigns: CampaignRepositoryPort
+  /** Drawn harnesses, their versions, and the journal one execution writes. */
+  readonly workflows: WorkflowRepositoryPort
   readonly personaGroups: PersonaGroupRepositoryPort
   readonly runControl: WorkspaceRunControlRepositoryPort
   /** The venue — a session is not a run and not a map, so it has its own port. */
@@ -4779,6 +4782,14 @@ export const startAgentRun = async (
      * The persona id never comes from the tool call — an id in a payload is model output.
      */
     proposeVariants?: { personaId: AgentPersonaId; shown: ProposerShown }
+    /**
+     * Start this run as a **step of a drawn workflow**: the fields its answer must carry,
+     * which is what gives it `submit_workflow_answer`.
+     *
+     * Which step it is never travels — it is resolved from the run when the submission
+     * arrives, the way a proposer's subject is resolved from its session row.
+     */
+    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string }[] }
   },
 ): Promise<AgentRun> => {
   const parent = input.parentRunId
@@ -5512,6 +5523,7 @@ export const startAgentRun = async (
       // message by starting a whole second fan-out.
       ...(input.relation === 'steer' ? { steering: true } : {}),
       ...(input.verifyVariants ? { verifyVariants: input.verifyVariants } : {}),
+      ...(input.answerWorkflow ? { answerWorkflow: input.answerWorkflow } : {}),
       /**
        * The subject's name, resolved here from the id the caller passed rather than taken
        * from the persona this run is: a proposer runs as `variant-proposer` and writes for

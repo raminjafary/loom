@@ -463,6 +463,22 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
    * wire: this frame cannot carry a model tier, a budget cap, an approval mode or an
    * envelope, so nothing has to refuse them.
    */
+  /**
+   * One workflow step's answer, in the shape its node declared.
+   *
+   * A flat map of the declared fields rather than free text, because everything downstream of
+   * this step reads it as data: a fan fans over a list here, a loop stops on a flag here, and a
+   * later step interpolates a value here. Prose in this frame would make every one of those a
+   * guess.
+   *
+   * No node id and no workflow id: the server resolves the step from the run.
+   */
+  z.object({
+    type: z.literal('workflow_answer_submitted'),
+    runId: z.string(),
+    requestId: z.string(),
+    answer: z.record(z.string().max(40), z.unknown()),
+  }),
   z.object({
     type: z.literal('persona_tools_revised'),
     runId: z.string(),
@@ -883,6 +899,28 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
      * this frame or in the submission that answers it would not be believed.
      */
     proposeVariants: z.object({ personaName: z.string().min(1).max(120) }).optional(),
+    /**
+     * Start this run as a **step of a drawn workflow**: the fields its answer must carry.
+     *
+     * The schema and nothing else — no workflow id, no step id, no node id. The server
+     * resolves which step this is from the run it started, so an identifier here or in the
+     * submission that answers it would be a step able to answer for another step. Same
+     * argument `verifyVariants` makes about a set id, and it bites harder here because a
+     * workflow deals many steps at once and they are siblings rather than strangers.
+     */
+    answerWorkflow: z
+      .object({
+        fields: z
+          .array(
+            z.object({
+              kind: z.enum(['text', 'flag', 'list']),
+              name: z.string().min(1).max(40),
+            }),
+          )
+          .min(1)
+          .max(12),
+      })
+      .optional(),
     /**
      * Start this run as a **reviewer** of another run's branch.
      *

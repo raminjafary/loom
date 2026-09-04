@@ -34,6 +34,7 @@ import {
   revisePersonaPrompt,
   proposeOwnVariants,
   recordVariantVerdict,
+  recordWorkflowAnswer,
   revisePersonaTools,
   renderProposalOutcome,
   readContextLedger,
@@ -337,6 +338,7 @@ export const createRunnerGateway = (
       steering,
       verifyVariants,
       proposeVariants,
+      answerWorkflow,
     }) {
       send(runnerId, {
         type: 'start_run',
@@ -390,6 +392,12 @@ export const createRunnerGateway = (
         ...(proposeVariants === undefined
           ? {}
           : { proposeVariants: { personaName: proposeVariants.personaName } }),
+        // Destructured above and forwarded here, for the reason the two comments above give.
+        // A step whose Runner was never told its answer schema is a step with no way to
+        // answer, and the workflow below it waits for a run that ended.
+        ...(answerWorkflow === undefined
+          ? {}
+          : { answerWorkflow: { fields: answerWorkflow.fields.map((field) => ({ ...field })) } }),
       })
     },
 
@@ -1225,6 +1233,38 @@ export const createRunnerGateway = (
             requestId: frame.requestId,
             ok: true,
             outcome: result.ok ? result.outcome : result.reason,
+          })
+        } catch (error) {
+          send(from, {
+            type: 'persona_prompt_result',
+            requestId: frame.requestId,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+        return
+      }
+
+      /**
+       * One workflow step's answer.
+       *
+       * Which step it is comes from the run, so this frame carries only the answer. A shape the
+       * node did not declare comes back as an outcome rather than an error, on tier 1's
+       * discipline: "that field is a list and you sent a sentence" is something the model can
+       * act on, and it has the rest of its run in which to act.
+       */
+      case 'workflow_answer_submitted': {
+        try {
+          const result = await recordWorkflowAnswer(deps, {
+            workspaceId,
+            agentRunId: asAgentRunId(frame.runId),
+            answer: frame.answer,
+          })
+          send(from, {
+            type: 'persona_prompt_result',
+            requestId: frame.requestId,
+            ok: true,
+            outcome: result.ok ? result.outcome : result.error,
           })
         } catch (error) {
           send(from, {

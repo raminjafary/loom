@@ -68,6 +68,7 @@ COPY apps/runner/src/experience-tool.ts src/
 COPY apps/runner/src/agent-backend.ts src/
 COPY apps/runner/src/chat-completions-adapter.ts src/
 COPY apps/runner/src/verdict-tool.ts src/
+COPY apps/runner/src/workflow-answer-tool.ts src/
 COPY apps/runner/src/proposal-tool.ts src/
 COPY apps/runner/src/planner-tool.ts src/
 COPY apps/runner/src/capabilities.ts src/

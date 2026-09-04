@@ -17,6 +17,10 @@ import { ATLAS_SERVER_NAME, ATLAS_TOOL_NAMES } from './atlas-tool.js'
 import { SELF_SERVER_NAME, SELF_TOOL_NAMES } from './self-tool.js'
 import { PROPOSAL_SERVER_NAME, SUBMIT_PROPOSALS_TOOL_NAME } from './proposal-tool.js'
 import { SUBMIT_VERDICT_TOOL_NAME, VERDICT_SERVER_NAME } from './verdict-tool.js'
+import {
+  SUBMIT_WORKFLOW_ANSWER_TOOL_NAME,
+  WORKFLOW_SERVER_NAME,
+} from './workflow-answer-tool.js'
 import { NOTES_SERVER_NAME, NOTES_TOOL_NAMES } from './notes-tool.js'
 import { ASK_HUMAN_TOOL_NAME, QUESTION_SERVER_NAME } from './question-tool.js'
 import { PLANNER_SERVER_NAME } from './planner-tool.js'
@@ -227,6 +231,8 @@ export interface RunAgentOptions {
    * would let any agent file a verdict on a search it was never shown.
    */
   readonly verdictTool?: McpSdkServerConfigWithInstance
+  /** Present only for a step of a drawn workflow — see `workflow-answer-tool.ts`. */
+  readonly workflowTool?: McpSdkServerConfigWithInstance
   /**
    * The proposal channel, present only on a run the platform started as a proposer.
    *
@@ -359,6 +365,7 @@ export const buildQueryOptions = (
     | 'questionTool'
     | 'mapTool'
     | 'verdictTool'
+    | 'workflowTool'
     | 'proposalTool'
     | 'handoffTool'
     | 'selfTool'
@@ -377,6 +384,7 @@ export const buildQueryOptions = (
   if (options.atlasTool) mcpServers[ATLAS_SERVER_NAME] = options.atlasTool
   if (options.mapTool) mcpServers[MAP_SERVER_NAME] = options.mapTool
   if (options.verdictTool) mcpServers[VERDICT_SERVER_NAME] = options.verdictTool
+  if (options.workflowTool) mcpServers[WORKFLOW_SERVER_NAME] = options.workflowTool
   if (options.proposalTool) mcpServers[PROPOSAL_SERVER_NAME] = options.proposalTool
   if (options.handoffTool) mcpServers[HANDOFF_SERVER_NAME] = options.handoffTool
   if (options.selfTool) mcpServers[SELF_SERVER_NAME] = options.selfTool
@@ -415,6 +423,7 @@ export const buildQueryOptions = (
     ...(options.atlasTool ? ATLAS_TOOL_NAMES : []),
     ...(options.mapTool ? MAP_TOOL_NAMES : []),
     ...(options.verdictTool ? [SUBMIT_VERDICT_TOOL_NAME] : []),
+    ...(options.workflowTool ? [SUBMIT_WORKFLOW_ANSWER_TOOL_NAME] : []),
     ...(options.proposalTool ? [SUBMIT_PROPOSALS_TOOL_NAME] : []),
     ...(options.handoffTool ? HANDOFF_TOOL_NAMES : []),
     ...(options.selfTool ? SELF_TOOL_NAMES : []),

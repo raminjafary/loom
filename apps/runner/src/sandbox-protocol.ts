@@ -69,6 +69,19 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
      * are. Declared here as well as on the wire for `verifyVariants`' reason — a container
      * that strips it runs a proposer with nothing to submit through.
      */
+    /**
+     * Present when this run is a step of a drawn workflow: the fields its answer must carry.
+     * Declared here as well as on the wire for `verifyVariants`' reason — a container that
+     * strips it runs a step with no way to answer, and the graph below it waits on nothing.
+     */
+    answerWorkflow: z
+      .object({
+        fields: z
+          .array(z.object({ kind: z.enum(['text', 'flag', 'list']), name: z.string().min(1).max(40) }))
+          .min(1)
+          .max(12),
+      })
+      .optional(),
     proposeVariants: z.object({ personaName: z.string().min(1).max(120) }).optional(),
     /** The tree's ledger, rendered and fenced server-side. */
     contextLedger: z.string().optional(),
@@ -333,6 +346,17 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
     requestId: z.string(),
     choice: z.string().max(2),
     reason: z.string().max(2_000),
+  }),
+  /**
+   * One workflow step's answer, answered on the host.
+   *
+   * In both paths for the reason the verdict channel is: a tool offered outside the container
+   * and not inside it is a feature that works until an operator turns the sandbox on.
+   */
+  z.object({
+    t: z.literal('workflow_answer'),
+    requestId: z.string(),
+    answer: z.record(z.string().max(40), z.unknown()),
   }),
   /** The agent asking a human a question, answered by `question_result`. */
   z.object({ t: z.literal('question_request'), requestId: z.string(), question: z.string() }),

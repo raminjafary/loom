@@ -1834,6 +1834,19 @@ export interface RunDispatchPort {
      * is writing. Which persona a submission lands on is resolved from the session row.
      */
     proposeVariants?: { personaName: string }
+    /**
+     * Start this run as a **step of a drawn workflow**: the fields its answer must carry,
+     * whose presence is what gives the run `submit_workflow_answer` at all.
+     *
+     * The fields and nothing else. Which step this is, which workflow it belongs to and what
+     * the graph does with the answer are all resolved server-side from the run — an id in this
+     * frame or in the submission that answers it would be a step able to answer for another
+     * one. The Runner's whole job here is to bound the tool's arguments.
+     *
+     * Declared here for the reason `verifyVariants` gives: a spread against a port that never
+     * declared the field compiles, and this layer has dropped one that way before.
+     */
+    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string }[] }
   }): Promise<void>
   /**
    * Aborts a run mid-flight. Fire-and-forget and
@@ -2680,6 +2693,26 @@ export interface WorkflowRepositoryPort {
     workspaceId: WorkspaceId,
     stepId: WorkflowStepRunId,
     agentRunId: AgentRunId,
+  ): Promise<void>
+
+  /** Which step a run belongs to, for the submission that arrives carrying only a run id. */
+  findStepByRun(
+    workspaceId: WorkspaceId,
+    agentRunId: AgentRunId,
+  ): Promise<WorkflowStepRunRecord | null>
+
+  /**
+   * Stores what a step answered, without settling it.
+   *
+   * Two writes rather than one because the two facts arrive at different times: the answer
+   * comes from the step's own tool call, mid-run, and what the step *cost* is only known when
+   * the run ends. Settling on the answer would record every step's spend as null, and the cap
+   * this execution is held to is summed from those rows.
+   */
+  recordStepAnswer(
+    workspaceId: WorkspaceId,
+    stepId: WorkflowStepRunId,
+    answer: Readonly<Record<string, unknown>>,
   ): Promise<void>
 
   /** Frees a claimed step whose run never started, so the next sweep may deal it again. */

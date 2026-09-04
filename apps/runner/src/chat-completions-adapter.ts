@@ -93,13 +93,21 @@ const BASH_TIMEOUT_MS = Number(process.env.LOOM_CHAT_COMPLETIONS_BASH_TIMEOUT_MS
 export const chatCompletionsRefusal = (
   options: Pick<
     RunAgentOptions,
-    'persona' | 'plannerTool' | 'mapTool' | 'verdictTool' | 'proposalTool' | 'selfTool' | 'experienceTool'
+    | 'persona'
+    | 'plannerTool'
+    | 'mapTool'
+    | 'verdictTool'
+    | 'proposalTool'
+    | 'selfTool'
+    | 'experienceTool'
+    | 'workflowTool'
   >,
 ): string | null => {
   const missing: string[] = []
   if (options.plannerTool) missing.push('planning (submit_plan)')
   if (options.mapTool) missing.push('mastery (record_map)')
   if (options.verdictTool) missing.push('the verifier verdict')
+  if (options.workflowTool) missing.push("a workflow step's answer")
   if (options.proposalTool) missing.push('candidate proposal')
   if (options.selfTool) missing.push('self-modification (revise_own_prompt)')
   if (options.experienceTool) missing.push('durable memory (record_experience)')
