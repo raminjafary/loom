@@ -36,6 +36,7 @@
 
 import type { WorkflowStepStatus } from './agents.js'
 import {
+  fanningOf,
   INPUT_REFERENCE,
   isRunNode,
   ITEM_REFERENCE,
@@ -140,11 +141,11 @@ export const laneSources = (
       }
     }
     const inherited = [...above][0] ?? null
-    if (node.kind === 'fan') {
+    if (fanningOf(node) !== null) {
       if (inherited !== null) {
         return {
           ok: false,
-          reason: `Fan "${node.id}" sits inside fan "${inherited}"'s lanes, which would need a lane index with two dimensions. A barrier above it collects the outer fan first.`,
+          reason: `"${node.id}" opens its own lanes inside "${inherited}"'s, which would need a lane index with two dimensions. A barrier above it collects the outer one first.`,
         }
       }
       sources.set(node.id, node.id)
@@ -395,31 +396,33 @@ export const nextWorkflowActions = (input: {
   }
 
   /** How many lanes a node runs in at this pass, or null while the fan above it has not answered. */
-  const laneCount = (nodeId: string, pass: number): number | null => {
+  /** The list a lane's opener fans over, at this pass, or null while it has not answered. */
+  const laneList = (nodeId: string, pass: number): readonly unknown[] | null | undefined => {
     const fanId = laneOf.get(nodeId) ?? null
-    if (fanId === null) return 1
-    const fan = byId.get(fanId)
-    if (fan === undefined || fan.kind !== 'fan') return 1
-    const sourcePass = passFor(fan.source, pass, loopFor(fanId))
+    if (fanId === null) return undefined
+    const opener = byId.get(fanId)
+    const fanning = opener === undefined ? null : fanningOf(opener)
+    if (fanning === null) return undefined
+    const sourcePass = passFor(fanning.source, pass, loopFor(fanId))
     if (sourcePass === null) return null
-    const source = byKey.get(keyOf(fan.source, sourcePass, 0))
+    const source = byKey.get(keyOf(fanning.source, sourcePass, 0))
     if (source === undefined || source.status !== 'answered') return null
-    const list = source.answer?.[fan.over]
-    if (!Array.isArray(list)) return 0
-    return Math.min(list.length, fan.maxWidth)
+    const list = source.answer?.[fanning.field]
+    if (!Array.isArray(list)) return []
+    return list.slice(0, fanning.maxWidth)
+  }
+
+  const laneCount = (nodeId: string, pass: number): number | null => {
+    const list = laneList(nodeId, pass)
+    if (list === undefined) return 1
+    return list === null ? null : list.length
   }
 
   const itemFor = (nodeId: string, pass: number, itemIndex: number): string | null => {
-    const fanId = laneOf.get(nodeId) ?? null
-    if (fanId === null) return null
-    const fan = byId.get(fanId)
-    if (fan === undefined || fan.kind !== 'fan') return null
-    const sourcePass = passFor(fan.source, pass, loopFor(fanId))
-    if (sourcePass === null) return null
-    const source = byKey.get(keyOf(fan.source, sourcePass, 0))
-    const list = source?.answer?.[fan.over]
-    if (!Array.isArray(list)) return null
-    return typeof list[itemIndex] === 'string' ? (list[itemIndex] as string) : null
+    const list = laneList(nodeId, pass)
+    if (list === undefined || list === null) return null
+    const entry = list[itemIndex]
+    return typeof entry === 'string' ? entry : null
   }
 
   /** Every settled instance of `from` that `to`'s instance in lane `itemIndex` depends on. */

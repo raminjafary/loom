@@ -219,11 +219,32 @@ describe('parseWorkflowGraph', () => {
               task: 'refute {{item}}',
               verifies: 'claims',
               over: 'findings',
+              maxWidth: 4,
             },
           ],
           edges: [{ from: 'claims', to: 'refute' }],
         }),
       ).toContain('An author does not refute itself')
+    })
+
+    it('refuses a per-item verifier with no width, since the audited step wrote the list', () => {
+      expect(
+        refusal({
+          nodes: [
+            author,
+            {
+              kind: 'verifier',
+              id: 'refute',
+              title: 'refute',
+              persona: 'Skeptic',
+              task: 'refute {{item}}',
+              verifies: 'claims',
+              over: 'findings',
+            },
+          ],
+          edges: [{ from: 'claims', to: 'refute' }],
+        }),
+      ).toContain('needs a whole `maxWidth`')
     })
 
     it('accepts a different persona refuting one finding at a time', () => {
@@ -239,6 +260,7 @@ describe('parseWorkflowGraph', () => {
               task: 'refute {{item}}',
               verifies: 'claims',
               over: 'findings',
+              maxWidth: 4,
             },
           ],
           edges: [{ from: 'claims', to: 'refute' }],

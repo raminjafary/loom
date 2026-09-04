@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import {
   BARRIER_PASSED,
+  BUILTIN_WORKFLOWS,
   canonicalWorkflow,
   describeWorkflowCost,
   ForbiddenError,
@@ -107,6 +108,21 @@ export const createWorkflow = async (
   const name = input.name.trim()
   if (name.length === 0) throw new ValidationError('A workflow needs a name.')
 
+  /**
+   * The name is checked before the shape, because a duplicate is the likelier mistake and the
+   * one whose refusal is useful: a workspace ships five harnesses, so "migration sweep" is
+   * already taken on a fresh workspace. The unique index is still the real guard — two people
+   * naming one workflow at once lose the race there — but an index violation reaching a person
+   * as a 500 is the platform declining to say what happened.
+   */
+  const existing = await deps.workflows.listWorkflows(input.workspaceId, MAX_WORKFLOWS_LISTED)
+  if (existing.some((workflow) => workflow.name === name)) {
+    throw new ValidationError(
+      `This workspace already has a workflow called "${name}". Redraw that one to change its ` +
+        'shape, which keeps its versions, or pick another name.',
+    )
+  }
+
   const personas = await deps.personas.listByWorkspace(input.workspaceId)
   const verdict = validateWorkflowGraph(input.graph, personas)
   if (!verdict.ok) throw new ValidationError(verdict.reason)
@@ -210,6 +226,54 @@ export const startWorkflowRun = async (
     startedByUserId: actorUserId(input.actor),
   })
   return { run, detail: describeWorkflowVersion(version.graph, personas) }
+}
+
+/**
+ * The harnesses a workspace ships with.
+ *
+ * **Create-if-absent, and never update** — the rule `seedBuiltinTeams` keeps, and for a sharper
+ * version of its reason. A version is append-only and a digest is what a measurement cites, so
+ * re-seeding an edited built-in would not overwrite an operator's work; it would fork it into a
+ * second version and quietly change what the next execution runs. A workflow that exists by name
+ * is left entirely alone.
+ *
+ * Runs on every membership check, like the persona and team seeding, for the same reason: a
+ * workspace made before a shape existed would otherwise never receive it, silently.
+ *
+ * A shape naming a persona this workspace does not have is **skipped**, not trimmed. A team can
+ * lose a member and still be a team; a graph that lost a node would be a different shape with
+ * the same name, which is exactly what versioning exists to prevent.
+ */
+export const seedBuiltinWorkflows = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId },
+): Promise<void> => {
+  const [personas, existing] = await Promise.all([
+    deps.personas.listByWorkspace(input.workspaceId),
+    deps.workflows.listWorkflows(input.workspaceId, MAX_WORKFLOWS_LISTED),
+  ])
+  const taken = new Set(existing.map((workflow) => workflow.name))
+
+  for (const builtin of BUILTIN_WORKFLOWS) {
+    if (taken.has(builtin.name)) continue
+    const verdict = validateWorkflowGraph(builtin.graph, personas)
+    if (!verdict.ok) continue
+    /**
+     * Written through the **port** rather than through `createWorkflow`, and for the reason
+     * `seedBuiltinTeams` writes through its own: that use case is human-only on purpose, and
+     * seeding is the platform rather than an actor. What is given up is validation of *human*
+     * input; the shapes here are ours, and `builtin-workflows.test.ts` refuses one the validator
+     * would reject — which fails a build rather than a workspace's first login.
+     */
+    await deps.workflows.create({
+      workspaceId: input.workspaceId,
+      name: builtin.name,
+      description: builtin.description,
+      createdByUserId: null,
+      graph: verdict.graph,
+      digest: workflowDigest(verdict.graph),
+    })
+  }
 }
 
 /** How many workflows and executions a list returns. Bounded here, so no caller invents one. */

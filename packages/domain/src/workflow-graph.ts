@@ -157,7 +157,36 @@ export interface WorkflowVerifierNode extends RunNodeShared {
   readonly verifies: string
   /** A `list` field of that node's answer, verified one element at a time, or null for the whole answer. */
   readonly over: string | null
+  /**
+   * How many elements it may refute, when it refutes them one at a time. Null when `over` is.
+   *
+   * Required for the reason a fan's is, and it bites harder here: the list a verifier fans over
+   * was written by the very step it is checking, so a bound the *graph* did not set would be a
+   * bound the audited step chose for its own audit.
+   */
+  readonly maxWidth: number | null
   readonly answer: WorkflowAnswer | null
+}
+
+/**
+ * What makes a node run once per element, whichever kind it is: where the list comes from, which
+ * field of that answer it is, and how wide a human said it may get.
+ *
+ * Two node kinds fan — a `fan` over a predecessor's list, and a `verifier` refuting one claim at
+ * a time — and every rule about lanes applies to both. Derived through one function so a rule
+ * cannot apply to one and quietly skip the other, which is exactly how a per-item verifier ran
+ * once, against an empty item, before this existed.
+ */
+export const fanningOf = (
+  node: WorkflowNode,
+): { readonly source: string; readonly field: string; readonly maxWidth: number } | null => {
+  if (node.kind === 'fan') {
+    return { source: node.source, field: node.over, maxWidth: node.maxWidth }
+  }
+  if (node.kind === 'verifier' && node.over !== null && node.maxWidth !== null) {
+    return { source: node.verifies, field: node.over, maxWidth: node.maxWidth }
+  }
+  return null
 }
 
 /**
@@ -347,16 +376,34 @@ const parseNode = (value: unknown, index: number): WorkflowNode | string => {
   }
 
   if (kind === 'verifier') {
-    const { verifies, over } = raw
+    const { verifies, over, maxWidth } = raw
     if (!isString(verifies) || !SLUG.test(verifies)) {
       return `Verifier "${id}" needs a \`verifies\` node id.`
     }
     if (over !== null && over !== undefined && (!isString(over) || !SLUG.test(over))) {
       return `Verifier "${id}" has an \`over\` that is not a field name: ${JSON.stringify(over)}.`
     }
+    const perItem = isString(over)
+    if (perItem) {
+      if (typeof maxWidth !== 'number' || !Number.isInteger(maxWidth) || maxWidth < 1) {
+        return `Verifier "${id}" refutes one item at a time and needs a whole \`maxWidth\` of at least 1.`
+      }
+      if (maxWidth > MAX_FAN_WIDTH) {
+        return `Verifier "${id}" asks for a width of ${maxWidth}; ${MAX_FAN_WIDTH} is the ceiling.`
+      }
+    } else if (maxWidth !== null && maxWidth !== undefined) {
+      return `Verifier "${id}" has a \`maxWidth\` but refutes the whole answer at once.`
+    }
     const answer = parseAnswer(raw.answer, `Verifier "${id}"`)
     if (isString(answer)) return answer
-    return { kind: 'verifier', ...shared, verifies, over: isString(over) ? over : null, answer }
+    return {
+      kind: 'verifier',
+      ...shared,
+      verifies,
+      over: perItem ? over : null,
+      maxWidth: perItem ? (maxWidth as number) : null,
+      answer,
+    }
   }
 
   return `Node "${id}" has kind ${JSON.stringify(kind)}; the vocabulary is step, fan, router, verifier and barrier.`
@@ -735,7 +782,7 @@ export const describeWorkflowCost = (
 
   const ceiling = runNodes.reduce((sum, node) => {
     const cap = capOf.get(node.id) ?? 0
-    const width = node.kind === 'fan' ? node.maxWidth : 1
+    const width = fanningOf(node)?.maxWidth ?? 1
     const passes = inLoop.has(node.id) ? MAX_LOOP_ITERATIONS : 1
     return sum + cap * width * passes
   }, 0)
@@ -749,9 +796,10 @@ export const describeWorkflowCost = (
         : `, behind ${barriers} barrier(s) that each wait for every inbound lane.`),
   ]
   for (const node of runNodes) {
-    if (node.kind !== 'fan') continue
+    const fanning = fanningOf(node)
+    if (fanning === null) continue
     lines.push(
-      `- "${node.id}" runs once per item of ${node.source}.${node.over}, up to ${node.maxWidth} times.`,
+      `- "${node.id}" runs once per item of ${fanning.source}.${fanning.field}, up to ${fanning.maxWidth} times.`,
     )
   }
   if (inLoop.size > 0) {
@@ -786,12 +834,12 @@ export const canonicalWorkflow = (graph: WorkflowGraph): string => {
       node.id,
       isRunNode(node) ? node.persona : '',
       isRunNode(node) ? node.task : '',
-      node.kind === 'fan'
-        ? [node.source, node.over, node.maxWidth]
-        : node.kind === 'router'
-          ? [...node.choices].sort()
-          : node.kind === 'verifier'
-            ? [node.verifies, node.over ?? '']
+      node.kind === 'router'
+        ? [...node.choices].sort()
+        : node.kind === 'verifier'
+          ? [node.verifies, node.over ?? '', node.maxWidth ?? 0]
+          : node.kind === 'fan'
+            ? [node.source, node.over, node.maxWidth]
             : [],
       (answerOf(node)?.fields ?? [])
         .map((field) => [field.kind, field.name])

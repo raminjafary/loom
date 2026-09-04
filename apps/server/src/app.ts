@@ -4,6 +4,7 @@ import {
   startVariantProposer,
   advanceCampaignQueue,
   advanceWorkflowQueue,
+  seedBuiltinWorkflows,
   advanceScreenQueue,
   advanceVerificationQueue,
   curateIdleWorkspaces,
@@ -174,6 +175,9 @@ export const buildApp = async (
         // After the personas, necessarily: a team is a roster of them, and a member
         // whose persona has not been seeded yet would simply be dropped.
         await seedBuiltinTeams(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
+        // After the personas for the team's reason, and skipped rather than trimmed when one
+        // is missing: a graph that lost a node would be a different shape under the same name.
+        await seedBuiltinWorkflows(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
         return result
       },
     })

@@ -1,5 +1,9 @@
 import { ApprovalModeSchema, contract, type Contract } from '@loom/api-contract'
-import { seedBuiltinPersonas, seedBuiltinTeams } from '@loom/application'
+import {
+  seedBuiltinPersonas,
+  seedBuiltinTeams,
+  seedBuiltinWorkflows,
+} from '@loom/application'
 import { createDatabase, seedWorkspace, truncateDomainTables } from '@loom/db'
 import { APPROVAL_MODES, BUILTIN_TEAMS, asWorkspaceId } from '@loom/domain'
 import { createORPCClient } from '@orpc/client'
@@ -426,10 +430,36 @@ describe('removal over HTTP', () => {
       'Do the work.',
     ].join('\n')
 
+    /**
+     * The shipped shapes, seeded on the membership check like the personas and the teams. Worth
+     * asserting over the wire rather than only in the domain test: a shape that the validator
+     * accepts in isolation and names a persona this deployment does not seed would arrive as an
+     * empty list, which is exactly what an operator would read as "workflows do not work".
+     */
+    it('ships the five built-in shapes, already drawn', async () => {
+      await seedBuiltinPersonas(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+      await seedBuiltinWorkflows(app.deps, { workspaceId: asWorkspaceId(workspaceId) })
+
+      const workflows = await client.workflow.list()
+      const names = workflows.map((workflow) => workflow.name)
+      for (const shipped of [
+        'deep research',
+        'code review',
+        'security analysis',
+        'agent team',
+        'migration sweep',
+      ]) {
+        expect(names).toContain(shipped)
+      }
+      const review = workflows.find((workflow) => workflow.name === 'code review')
+      expect(review?.version).toBe(1)
+      expect(review?.digest).toHaveLength(64)
+    })
+
     it('draws a workflow, reads it back with its ceiling, and versions a redraw', async () => {
       const persona = await client.persona.create({ markdownSource: personaSource })
       const created = await client.workflow.create({
-        name: 'migration sweep',
+        name: 'a sweep of my own',
         description: 'discover, transform each, report',
         graph: sweepGraph(),
       })
@@ -450,6 +480,18 @@ describe('removal over HTTP', () => {
       expect(redrawn.detail).toContain('Version 1 keeps its digest')
 
       await client.workflow.archive({ workflowId: created.workflowId as string })
+      await client.persona.delete({ personaId: persona.id })
+    })
+
+    it('refuses a second workflow with a name already taken, and says what to do instead', async () => {
+      const persona = await client.persona.create({ markdownSource: personaSource })
+      const created = await client.workflow.create({
+        name: 'migration sweep',
+        description: null,
+        graph: sweepGraph(),
+      })
+      expect(created.workflowId).toBeNull()
+      expect(created.detail).toContain('already has a workflow called')
       await client.persona.delete({ personaId: persona.id })
     })
 

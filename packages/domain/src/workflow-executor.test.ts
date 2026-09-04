@@ -298,6 +298,51 @@ describe('nextWorkflowActions', () => {
     })
   })
 
+  /**
+   * A verifier that refutes one claim at a time opens lanes exactly as a fan does — the bug this
+   * covers is the one where every rule about lanes was written for `kind === 'fan'` and a
+   * per-item verifier ran once, against an empty item.
+   */
+  describe('a per-item verifier', () => {
+    const review = graphOf({
+      nodes: [
+        {
+          kind: 'step',
+          id: 'claims',
+          title: 'claims',
+          persona: 'Researcher',
+          task: 'research {{input}}',
+          answer: { fields: [{ kind: 'list', name: 'findings' }] },
+        },
+        {
+          kind: 'verifier',
+          id: 'refute',
+          title: 'refute',
+          persona: 'Skeptic',
+          task: 'try to refute {{item}}',
+          verifies: 'claims',
+          over: 'findings',
+          maxWidth: 4,
+          answer: { fields: [{ kind: 'flag', name: 'stands' }] },
+        },
+      ],
+      edges: [{ from: 'claims', to: 'refute' }],
+    })
+
+    it('runs once per claim, each with its own claim in the prompt', () => {
+      const steps = [step('claims', { answer: { findings: ['one', 'two'] } })]
+      expect(plan(review, steps).deal.map((entry) => entry.task)).toEqual([
+        'try to refute one',
+        'try to refute two',
+      ])
+    })
+
+    it('honours the width the graph set rather than the length the audited step wrote', () => {
+      const steps = [step('claims', { answer: { findings: ['a', 'b', 'c', 'd', 'e', 'f'] } })]
+      expect(plan(review, steps).deal).toHaveLength(4)
+    })
+  })
+
   describe('router', () => {
     const triage = graphOf({
       nodes: [
