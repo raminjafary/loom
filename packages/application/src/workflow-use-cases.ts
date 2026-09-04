@@ -212,6 +212,41 @@ export const startWorkflowRun = async (
   return { run, detail: describeWorkflowVersion(version.graph, personas) }
 }
 
+/** How many workflows and executions a list returns. Bounded here, so no caller invents one. */
+export const MAX_WORKFLOWS_LISTED = 50
+export const MAX_WORKFLOW_RUNS_LISTED = 20
+
+/**
+ * One execution, step by step, with the graph beside it.
+ *
+ * The steps are rows rather than a tree, and the graph travels with them: a workflow is a DAG,
+ * so the edges are what makes the rows readable, and a tree would have to name one predecessor
+ * "the parent" and assert something false about which answers a step actually had.
+ */
+export const readWorkflowRun = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; runId: WorkflowRunId },
+): Promise<{
+  run: WorkflowRunRecord
+  workflowName: string
+  version: WorkflowVersionRecord
+  spentUsd: number
+  steps: WorkflowStepRunRecord[]
+} | null> => {
+  const run = await deps.workflows.findRun(input.workspaceId, input.runId)
+  if (!run) return null
+  const version = await deps.workflows.findVersion(input.workspaceId, run.workflowVersionId)
+  if (!version) return null
+  const workflow = await deps.workflows.findById(input.workspaceId, version.workflowId)
+  return {
+    run,
+    workflowName: workflow?.name ?? 'a workflow that has been deleted',
+    version,
+    spentUsd: await deps.workflows.spentOnRun(input.workspaceId, input.runId),
+    steps: await deps.workflows.stepsForRun(input.workspaceId, input.runId),
+  }
+}
+
 export const cancelWorkflowRun = async (
   deps: AgentDeps,
   input: { workspaceId: WorkspaceId; actor: Actor; runId: WorkflowRunId },

@@ -152,6 +152,22 @@ const EnvSchema = z.object({
   EVOLUTION_TRIGGER_CHECK_FAILURES: z.coerce.number().int().positive().optional(),
   CAMPAIGN_STUCK_TIMEOUT_MS: z.coerce.number().int().positive().default(21_600_000),
   CAMPAIGN_MAX_STARTS_PER_TICK: z.coerce.number().int().nonnegative().default(1),
+  /**
+   * How long one workflow step may sit before the executor writes it off.
+   *
+   * Longer than a merge and shorter than a campaign's: a step is one ordinary run doing
+   * ordinary work, but everything below it in the graph waits on it, so a step that hangs
+   * stalls a whole execution rather than one measurement.
+   */
+  WORKFLOW_STEP_STUCK_TIMEOUT_MS: z.coerce.number().int().positive().default(3_600_000),
+  /**
+   * How many workflow steps one tick may start.
+   *
+   * Higher than a campaign's, and deliberately: a fan is *meant* to open several lanes at
+   * once, and a budget of one would turn the shape a person drew as parallel into a queue
+   * that runs it one lane per tick. The workspace concurrency limit is still the real bound.
+   */
+  WORKFLOW_MAX_STARTS_PER_TICK: z.coerce.number().int().nonnegative().default(4),
 })
 
 export type Config = z.infer<typeof EnvSchema>

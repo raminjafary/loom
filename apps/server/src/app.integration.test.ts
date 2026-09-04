@@ -382,6 +382,111 @@ describe('removal over HTTP', () => {
   })
 
   /**
+   * Workflows, over the wire.
+   *
+   * The refusals are the half worth asserting here, because the whole argument for drawing a
+   * harness rather than scripting one is that the shape is refused *before* it can spend. A
+   * refusal arrives as a sentence beside the canvas rather than as an error code, so what these
+   * assert is that the sentence names the rule.
+   */
+  describe('workflows', () => {
+    const sweepGraph = (over: Record<string, unknown> = {}) => ({
+      nodes: [
+        {
+          kind: 'step',
+          id: 'discover',
+          title: 'Find the sites',
+          persona: 'flow-scout',
+          task: 'List every place {{input}} appears.',
+          answer: { fields: [{ kind: 'list', name: 'sites' }] },
+        },
+        {
+          kind: 'fan',
+          id: 'transform',
+          title: 'Rewrite each',
+          persona: 'flow-scout',
+          task: 'Rewrite {{item}}.',
+          source: 'discover',
+          over: 'sites',
+          maxWidth: 4,
+          answer: { fields: [{ kind: 'text', name: 'diff' }] },
+        },
+      ],
+      edges: [{ from: 'discover', to: 'transform' }],
+      ...over,
+    })
+
+    const personaSource = [
+      '---',
+      'name: flow-scout',
+      'description: draws and runs',
+      'model: claude-haiku-4-5-20251001',
+      'tools: [Read]',
+      '---',
+      'Do the work.',
+    ].join('\n')
+
+    it('draws a workflow, reads it back with its ceiling, and versions a redraw', async () => {
+      const persona = await client.persona.create({ markdownSource: personaSource })
+      const created = await client.workflow.create({
+        name: 'migration sweep',
+        description: 'discover, transform each, report',
+        graph: sweepGraph(),
+      })
+      expect(created.workflowId).not.toBeNull()
+
+      const read = await client.workflow.read({ workflowId: created.workflowId as string })
+      expect(read?.version).toBe(1)
+      expect(read?.digest).toHaveLength(64)
+      // The ceiling names the fan and its bound, which is the number a person refuses on.
+      expect(read?.detail).toContain('up to 4 times')
+
+      const redrawn = await client.workflow.redraw({
+        workflowId: created.workflowId as string,
+        graph: sweepGraph(),
+      })
+      expect(redrawn.version).toBe(2)
+      // The previous version is not edited — that is what lets a measurement cite a shape.
+      expect(redrawn.detail).toContain('Version 1 keeps its digest')
+
+      await client.workflow.archive({ workflowId: created.workflowId as string })
+      await client.persona.delete({ personaId: persona.id })
+    })
+
+    it('refuses a shape naming a persona this workspace does not have', async () => {
+      const created = await client.workflow.create({
+        name: 'nobody home',
+        description: null,
+        graph: sweepGraph(),
+      })
+      expect(created.workflowId).toBeNull()
+      expect(created.detail).toContain('which this workspace does not have')
+    })
+
+    it('refuses a fan whose runs would all be identical, naming the rule', async () => {
+      const persona = await client.persona.create({ markdownSource: personaSource })
+      const graph = sweepGraph()
+      const nodes = [...graph.nodes]
+      nodes[1] = { ...nodes[1], task: 'Rewrite everything.' } as (typeof nodes)[number]
+      const created = await client.workflow.create({
+        name: 'identical fan',
+        description: null,
+        graph: { ...graph, nodes },
+      })
+      expect(created.workflowId).toBeNull()
+      expect(created.detail).toContain('the same instructions')
+      await client.persona.delete({ personaId: persona.id })
+    })
+
+    it('reads nothing for an execution that does not exist, and refuses to cancel it', async () => {
+      const absent = '00000000-0000-0000-0000-000000000043'
+      expect(await client.workflow.run({ runId: absent })).toBeNull()
+      const cancelled = await client.workflow.cancel({ runId: absent })
+      expect(cancelled.cancelled).toBe(false)
+    })
+  })
+
+  /**
    * The divergence set, over the wire.
    *
    * A fresh persona is the state worth asserting here, because it is the one a reader would
@@ -982,6 +1087,8 @@ describe('contract completeness', () => {
       'cost',
       // Vintages replayed against a persona's own past work, at real cost. An instrument.
       'campaign',
+      // A harness for a task class, drawn as a graph and validated before it can spend.
+      'workflow',
       // How much human judgement the workspace spent, against the work that needed it.
       'supervision',
       'persona',

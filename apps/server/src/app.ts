@@ -3,6 +3,7 @@ import {
   advanceMergeQueue,
   startVariantProposer,
   advanceCampaignQueue,
+  advanceWorkflowQueue,
   advanceScreenQueue,
   advanceVerificationQueue,
   curateIdleWorkspaces,
@@ -219,6 +220,19 @@ export const buildApp = async (
             await advanceScreenQueue(deps, {
               screenStuckMs: config.SCREEN_STUCK_TIMEOUT_MS,
               maxStartsPerTick: config.SCREEN_MAX_STARTS_PER_TICK,
+            })
+            /**
+             * The workflow executor, after the verification harness and the screen for the
+             * same reason the campaign is behind them: a step's run has to be terminal before
+             * the executor can settle it with what it cost, and everything above this line
+             * moves runs a person is waiting for.
+             *
+             * Ahead of campaigns rather than behind, though — a workflow is work somebody
+             * asked for, and a campaign is an experiment.
+             */
+            await advanceWorkflowQueue(deps, {
+              stepStuckMs: config.WORKFLOW_STEP_STUCK_TIMEOUT_MS,
+              maxStartsPerTick: config.WORKFLOW_MAX_STARTS_PER_TICK,
             })
             /**
              * Campaigns after screens, and with their own smaller start budget: a screen is

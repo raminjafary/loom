@@ -95,6 +95,14 @@ import {
   promptTrialFor,
   supervisionLedgerFor,
   MAX_CAMPAIGNS_LISTED,
+  MAX_WORKFLOWS_LISTED,
+  MAX_WORKFLOW_RUNS_LISTED,
+  cancelWorkflowRun,
+  createWorkflow,
+  describeWorkflowVersion,
+  readWorkflowRun,
+  redrawWorkflow,
+  startWorkflowRun,
   listVariantSearches,
   promoteVariant,
   discardVariantSearch,
@@ -134,6 +142,8 @@ import {
   parsePersonaMarkdown,
   asPersonaRevisionId,
   asReplayCampaignId,
+  asWorkflowId,
+  asWorkflowRunId,
   asReplaySetId,
   asAgentRunId,
   asPersonaLessonId,
@@ -1097,6 +1107,232 @@ export const router = os.router({
                 'money and discard the answer.',
             }
           : { cancelled: false, detail: result.reason }
+      }),
+    ),
+  },
+
+  /**
+   * Workflows.
+   *
+   * The graph arrives as unknown JSON and is parsed by the one validator that exists. Every
+   * refusal here is an *output* rather than a thrown error, for the reason a campaign's is:
+   * "your barrier joins one lane" is something a person acts on at the canvas, and an HTTP
+   * error code is not where that sentence belongs.
+   */
+  workflow: {
+    create: os.workflow.create.handler(({ context, input }) =>
+      guard(async () => {
+        try {
+          const created = await createWorkflow(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            name: input.name,
+            description: input.description,
+            graph: input.graph,
+          })
+          return {
+            workflowId: created.workflow.id as string,
+            versionId: created.version.id as string,
+            detail: `Drawn as version 1 of "${created.workflow.name}".`,
+          }
+        } catch (error) {
+          if (error instanceof ValidationError) {
+            return { workflowId: null, versionId: null, detail: error.message }
+          }
+          throw error
+        }
+      }),
+    ),
+
+    redraw: os.workflow.redraw.handler(({ context, input }) =>
+      guard(async () => {
+        try {
+          const version = await redrawWorkflow(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            workflowId: asWorkflowId(input.workflowId),
+            graph: input.graph,
+          })
+          return {
+            versionId: version.id as string,
+            version: version.version,
+            detail:
+              `Drawn as version ${version.version}. Version ${version.version - 1} keeps its ` +
+              'digest and every execution that ran against it.',
+          }
+        } catch (error) {
+          if (error instanceof ValidationError) {
+            return { versionId: null, version: null, detail: error.message }
+          }
+          throw error
+        }
+      }),
+    ),
+
+    list: os.workflow.list.handler(({ context }) =>
+      guard(async () => {
+        const workflows = await context.deps.workflows.listWorkflows(
+          context.principal.workspaceId,
+          MAX_WORKFLOWS_LISTED,
+        )
+        const rows = await Promise.all(
+          workflows.map(async (workflow) => {
+            const version = await context.deps.workflows.latestVersion(
+              context.principal.workspaceId,
+              workflow.id,
+            )
+            return {
+              id: workflow.id as string,
+              name: workflow.name,
+              description: workflow.description,
+              createdAt: workflow.createdAt,
+              version: version?.version ?? 0,
+              digest: version?.digest ?? '',
+            }
+          }),
+        )
+        return rows
+      }),
+    ),
+
+    read: os.workflow.read.handler(({ context, input }) =>
+      guard(async () => {
+        const workflow = await context.deps.workflows.findById(
+          context.principal.workspaceId,
+          asWorkflowId(input.workflowId),
+        )
+        if (!workflow) return null
+        const version = await context.deps.workflows.latestVersion(
+          context.principal.workspaceId,
+          workflow.id,
+        )
+        if (!version) return null
+        const personas = await context.deps.personas.listByWorkspace(
+          context.principal.workspaceId,
+        )
+        return {
+          id: workflow.id as string,
+          name: workflow.name,
+          description: workflow.description,
+          version: version.version,
+          digest: version.digest,
+          graph: version.graph,
+          detail: describeWorkflowVersion(version.graph, personas),
+        }
+      }),
+    ),
+
+    archive: os.workflow.archive.handler(({ context, input }) =>
+      guard(async () => {
+        const archived = await context.deps.workflows.archive(
+          context.principal.workspaceId,
+          asWorkflowId(input.workflowId),
+        )
+        return archived === null
+          ? { archived: false, detail: 'That workflow is already archived, or is not here.' }
+          : {
+              archived: true,
+              detail:
+                'Archived. Its versions and everything they ran are kept — an execution that ' +
+                'cited this shape still resolves.',
+            }
+      }),
+    ),
+
+    start: os.workflow.start.handler(({ context, input }) =>
+      guard(async () => {
+        try {
+          const started = await startWorkflowRun(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            workflowId: asWorkflowId(input.workflowId),
+            repositoryId: asRepositoryId(input.repositoryId),
+            threadId: asThreadId(input.threadId),
+            input: input.input,
+            capUsd: input.capUsd,
+          })
+          return { runId: started.run.id as string, detail: started.detail }
+        } catch (error) {
+          if (error instanceof ValidationError) return { runId: null, detail: error.message }
+          throw error
+        }
+      }),
+    ),
+
+    run: os.workflow.run.handler(({ context, input }) =>
+      guard(async () => {
+        const report = await readWorkflowRun(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          runId: asWorkflowRunId(input.runId),
+        })
+        if (!report) return null
+        return {
+          id: report.run.id as string,
+          workflowName: report.workflowName,
+          version: report.version.version,
+          input: report.run.input,
+          status: report.run.status,
+          capUsd: report.run.capUsd,
+          spentUsd: report.spentUsd,
+          haltReason: report.run.haltReason,
+          createdAt: report.run.createdAt,
+          finishedAt: report.run.finishedAt,
+          graph: report.version.graph,
+          steps: report.steps.map((step) => ({
+            id: step.id as string,
+            nodeId: step.nodeId,
+            pass: step.pass,
+            itemIndex: step.itemIndex,
+            item: step.item,
+            status: step.status,
+            agentRunId: step.agentRunId === null ? null : (step.agentRunId as string),
+            reason: step.reason,
+            costUsd: step.costUsd,
+            finishedAt: step.finishedAt,
+          })),
+        }
+      }),
+    ),
+
+    listRuns: os.workflow.listRuns.handler(({ context, input }) =>
+      guard(async () => {
+        const runs = await context.deps.workflows.listRunsByWorkflow(
+          context.principal.workspaceId,
+          asWorkflowId(input.workflowId),
+          MAX_WORKFLOW_RUNS_LISTED,
+        )
+        return runs.map((run) => ({
+          id: run.id as string,
+          input: run.input,
+          status: run.status,
+          capUsd: run.capUsd,
+          haltReason: run.haltReason,
+          createdAt: run.createdAt,
+          finishedAt: run.finishedAt,
+        }))
+      }),
+    ),
+
+    cancel: os.workflow.cancel.handler(({ context, input }) =>
+      guard(async () => {
+        try {
+          await cancelWorkflowRun(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            runId: asWorkflowRunId(input.runId),
+          })
+          return {
+            cancelled: true,
+            detail:
+              'Stopped. The steps that finished keep their answers, and runs already in flight ' +
+              'are left to finish — cancelling them would spend the money and discard the work.',
+          }
+        } catch (error) {
+          if (error instanceof NotFoundError) {
+            return { cancelled: false, detail: 'That execution is already over.' }
+          }
+          throw error
+        }
       }),
     ),
   },

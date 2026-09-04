@@ -914,6 +914,168 @@ export const contract = {
   },
 
   /**
+   * Workflows: a harness for a task class, drawn as a graph rather than written as a script.
+   *
+   * The graph crosses this boundary as **unvalidated JSON** and is parsed server-side by the
+   * one validator that exists, rather than being re-described here in zod. A second schema
+   * would be a second definition of what a workflow may be, and the two would agree until the
+   * day they did not — on the very boundary whose entire job is to refuse a shape before it
+   * can spend. What comes back is the parsed graph, so a client renders what the server
+   * accepted rather than what it sent.
+   */
+  workflow: {
+    /** Draws a new one. Human-only; the refusal names the rule the shape broke. */
+    create: oc
+      .input(
+        z.object({
+          name: z.string().min(1).max(120),
+          description: z.string().max(2_000).nullable(),
+          graph: z.unknown(),
+        }),
+      )
+      .output(
+        z.object({
+          workflowId: z.string().nullable(),
+          versionId: z.string().nullable(),
+          /** What was drawn, or the one rule it broke. A refusal is an output, not an error. */
+          detail: z.string(),
+        }),
+      ),
+
+    /**
+     * Draws a new *version* of one. Never an edit: the previous version keeps its digest and
+     * every execution that ran against it, which is what lets a measurement refer to a shape.
+     */
+    redraw: oc
+      .input(z.object({ workflowId: z.string(), graph: z.unknown() }))
+      .output(
+        z.object({ versionId: z.string().nullable(), version: z.number().int().nullable(), detail: z.string() }),
+      ),
+
+    list: oc.output(
+      z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          description: z.string().nullable(),
+          createdAt: z.date(),
+          /** The version in use — the one a `start` would run. */
+          version: z.number().int(),
+          digest: z.string(),
+        }),
+      ),
+    ),
+
+    /** One shape, as the server holds it, with the ceiling a person reads before starting it. */
+    read: oc.input(z.object({ workflowId: z.string() })).output(
+      z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          description: z.string().nullable(),
+          version: z.number().int(),
+          digest: z.string(),
+          /** The validated graph. Unknown on the wire, for the reason `create`'s input is. */
+          graph: z.unknown(),
+          /** `describeWorkflowCost`'s paragraph: the stages, the fans, and the worst case. */
+          detail: z.string(),
+        })
+        .nullable(),
+    ),
+
+    archive: oc
+      .input(z.object({ workflowId: z.string() }))
+      .output(z.object({ archived: z.boolean(), detail: z.string() })),
+
+    /**
+     * Opens an execution. Human-only for a campaign's reason: it authorizes spend against a
+     * cap, and every step is then dealt as that person.
+     */
+    start: oc
+      .input(
+        z.object({
+          workflowId: z.string(),
+          repositoryId: z.string(),
+          threadId: z.string(),
+          /** What this execution is about — every node's task may read it as `{{input}}`. */
+          input: z.string().min(1).max(20_000),
+          /** Dollars. Null is uncapped, which a workspace should be very deliberate about. */
+          capUsd: z.number().positive().nullable(),
+        }),
+      )
+      .output(
+        z.object({
+          runId: z.string().nullable(),
+          /** What was started and what it may cost, or why nothing was. */
+          detail: z.string(),
+        }),
+      ),
+
+    /**
+     * One execution, step by step.
+     *
+     * The steps come back as rows rather than as a tree, because a workflow is a DAG: a step
+     * often reads two predecessors, and a tree would have to name one of them the parent and
+     * assert something false about which answers that step actually had. The edges are in the
+     * graph, and the graph is here beside them.
+     */
+    run: oc.input(z.object({ runId: z.string() })).output(
+      z
+        .object({
+          id: z.string(),
+          workflowName: z.string(),
+          version: z.number().int(),
+          input: z.string(),
+          status: z.enum(['running', 'finished', 'halted', 'cancelled', 'failed']),
+          capUsd: z.number().nullable(),
+          spentUsd: z.number(),
+          haltReason: z.string().nullable(),
+          createdAt: z.date(),
+          finishedAt: z.date().nullable(),
+          graph: z.unknown(),
+          steps: z.array(
+            z.object({
+              id: z.string(),
+              nodeId: z.string(),
+              /** Which turn of a loop, and which lane of a fan. Both 0 in an ordinary graph. */
+              pass: z.number().int(),
+              itemIndex: z.number().int(),
+              /** What this lane was working on, for a step below a fan. */
+              item: z.string().nullable(),
+              status: z.enum(['pending', 'running', 'answered', 'refused', 'skipped']),
+              /** The run this step was dealt to, so a reader can open it. */
+              agentRunId: z.string().nullable(),
+              /** Why it was refused, or which path was not taken. */
+              reason: z.string().nullable(),
+              costUsd: z.number().nullable(),
+              finishedAt: z.date().nullable(),
+            }),
+          ),
+        })
+        .nullable(),
+    ),
+
+    listRuns: oc.input(z.object({ workflowId: z.string() })).output(
+      z.array(
+        z.object({
+          id: z.string(),
+          input: z.string(),
+          status: z.enum(['running', 'finished', 'halted', 'cancelled', 'failed']),
+          capUsd: z.number().nullable(),
+          haltReason: z.string().nullable(),
+          createdAt: z.date(),
+          finishedAt: z.date().nullable(),
+        }),
+      ),
+    ),
+
+    /** A person stops it. The steps that finished keep their answers. */
+    cancel: oc
+      .input(z.object({ runId: z.string() }))
+      .output(z.object({ cancelled: z.boolean(), detail: z.string() })),
+  },
+
+  /**
    * How much human judgement this workspace is spending, against the work that needed it.
    *
    * Read-only, and there is deliberately no target: the number that matters is a trend of
