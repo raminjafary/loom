@@ -343,6 +343,24 @@ describe('parseWorkflowGraph', () => {
       ).toContain('is a text and not a flag')
     })
 
+    it('refuses a node inside two loops, which has no single pass number', () => {
+      expect(
+        refusal({
+          nodes: [
+            step('a'),
+            step('b', { answer: { fields: [{ kind: 'flag', name: 'done' }] } }),
+            step('c', { answer: { fields: [{ kind: 'flag', name: 'done' }] } }),
+          ],
+          edges: [
+            { from: 'a', to: 'b' },
+            { from: 'b', to: 'c' },
+            { from: 'b', to: 'a', loop: { until: 'done' } },
+            { from: 'c', to: 'a', loop: { until: 'done' } },
+          ],
+        }),
+      ).toContain('inside more than one loop')
+    })
+
     it('refuses stopping on a field the looping node does not answer', () => {
       expect(
         refusal({
@@ -354,6 +372,26 @@ describe('parseWorkflowGraph', () => {
         }),
       ).toContain('which "critique" does not answer')
     })
+  })
+})
+
+describe('a barrier answers nothing of its own', () => {
+  it('refuses a template that reads one', () => {
+    expect(
+      refusal({
+        nodes: [
+          step('a'),
+          step('b'),
+          { kind: 'barrier', id: 'wait', title: 'wait' },
+          step('c', { task: 'read {{wait}}' }),
+        ],
+        edges: [
+          { from: 'a', to: 'wait' },
+          { from: 'b', to: 'wait' },
+          { from: 'wait', to: 'c' },
+        ],
+      }),
+    ).toContain('Name the step above it')
   })
 })
 

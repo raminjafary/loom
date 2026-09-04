@@ -230,6 +230,15 @@ const REFERENCE = /\{\{\s*([a-z0-9-]+)(?:\.([a-z0-9-]+))?\s*\}\}/g
  */
 export const ITEM_REFERENCE = 'item'
 
+/**
+ * What this execution was opened on, readable from every node's task.
+ *
+ * Reserved alongside the item because the alternative is worse: without it a graph's first node
+ * would have to be a step whose whole job is to restate the request, and every later node would
+ * read the request through that node's paraphrase of it.
+ */
+export const INPUT_REFERENCE = 'input'
+
 export interface TemplateReference {
   readonly node: string
   readonly field: string | null
@@ -414,6 +423,28 @@ const ancestorsOf = (graph: WorkflowGraph): Map<string, Set<string>> => {
   return ancestors
 }
 
+/**
+ * How many loops one node re-runs inside.
+ *
+ * More than one has no honest `pass` number — the executor keys a step by which turn of *the*
+ * loop it is on, and a node inside two would need two — so it is refused here rather than
+ * resolved there.
+ */
+const loopsContaining = (graph: WorkflowGraph, nodeId: string): number => {
+  const ancestors = ancestorsOf(graph)
+  let count = 0
+  for (const edge of graph.edges) {
+    if (edge.loop === null) continue
+    const inside =
+      nodeId === edge.from ||
+      nodeId === edge.to ||
+      ((ancestors.get(nodeId)?.has(edge.to) ?? false) &&
+        (ancestors.get(edge.from)?.has(nodeId) ?? false))
+    if (inside) count += 1
+  }
+  return count
+}
+
 const checkStructure = (graph: WorkflowGraph, byId: Map<string, WorkflowNode>): string | null => {
   const cycle = detectDependencyCycle(
     forwardDependencies(graph).map((dependsOn) => ({ dependsOn })),
@@ -521,6 +552,10 @@ const checkStructure = (graph: WorkflowGraph, byId: Map<string, WorkflowNode>): 
       }
     }
 
+    if (loopsContaining(graph, node.id) > 1) {
+      return `"${node.id}" sits inside more than one loop, so there is no single count of how many times it has run. Nest loops behind a barrier instead.`
+    }
+
     for (const edge of out) {
       if (edge.loop === null) continue
       if (!(ancestors.get(node.id)?.has(edge.to) ?? false)) {
@@ -547,13 +582,16 @@ const checkStructure = (graph: WorkflowGraph, byId: Map<string, WorkflowNode>): 
       }
 
       for (const reference of references) {
-        if (reference.node === ITEM_REFERENCE) continue
+        if (reference.node === ITEM_REFERENCE || reference.node === INPUT_REFERENCE) continue
         const target = byId.get(reference.node)
         if (target === undefined) {
           return `"${node.id}" reads {{${reference.node}}}, which is not a node.`
         }
         if (!(ancestors.get(node.id)?.has(reference.node) ?? false)) {
           return `"${node.id}" reads {{${reference.node}}}, which is not one of its ancestors — that answer does not exist yet when this step starts.`
+        }
+        if (target.kind === 'barrier') {
+          return `"${node.id}" reads {{${reference.node}}}, which is a barrier and answers nothing of its own. Name the step above it.`
         }
         if (reference.field !== null && fieldOf(target, reference.field) === null) {
           return `"${node.id}" reads {{${reference.node}.${reference.field}}}, which "${reference.node}" does not answer.`
