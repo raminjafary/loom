@@ -117,8 +117,8 @@ describe('laneSources', () => {
         },
         {
           kind: 'fan',
-          id: 'left',
-          title: 'left',
+          id: 'east',
+          title: 'east',
           persona: 'W',
           task: 'do {{item}}',
           source: 'seed',
@@ -128,8 +128,8 @@ describe('laneSources', () => {
         },
         {
           kind: 'fan',
-          id: 'right',
-          title: 'right',
+          id: 'west',
+          title: 'west',
           persona: 'W',
           task: 'do {{item}}',
           source: 'seed',
@@ -140,15 +140,15 @@ describe('laneSources', () => {
         { kind: 'step', id: 'join', title: 'join', persona: 'W', task: 'join', answer: null },
       ],
       edges: [
-        { from: 'seed', to: 'left' },
-        { from: 'seed', to: 'right' },
-        { from: 'left', to: 'join' },
-        { from: 'right', to: 'join' },
+        { from: 'seed', to: 'east' },
+        { from: 'seed', to: 'west' },
+        { from: 'east', to: 'join' },
+        { from: 'west', to: 'join' },
       ],
     })
     const lanes = laneSources(graph)
     expect(lanes.ok).toBe(false)
-    if (!lanes.ok) expect(lanes.reason).toContain('2 different fans (left, right)')
+    if (!lanes.ok) expect(lanes.reason).toContain('2 different fans (east, west)')
   })
 
   it('refuses a fan inside a fan, which would need two lane indexes', () => {
@@ -529,5 +529,244 @@ describe('workflowMayStart', () => {
     const verdict = workflowMayStart({ capUsd: 1, spentUsd: 1 })
     expect(verdict.ok).toBe(false)
     if (!verdict.ok) expect(verdict.reason).toContain('partial')
+  })
+})
+
+/**
+ * A tournament: three attempts made in parallel, then judged two at a time until one is left.
+ *
+ * The claims worth holding down here are the ones a bracket gets wrong silently — a round that
+ * pairs by the order a model wrote its list, a judge shown one side, a champion produced by a
+ * match nobody judged, and a second round dealt before the first has finished.
+ */
+const tournament = graphOf({
+  nodes: [
+    {
+      kind: 'step',
+      id: 'approaches',
+      title: 'approaches',
+      persona: 'Architect',
+      task: 'name the approaches to {{input}}',
+      answer: { fields: [{ kind: 'list', name: 'approaches' }] },
+    },
+    {
+      kind: 'fan',
+      id: 'attempt',
+      title: 'attempt',
+      persona: 'Worker',
+      task: 'try {{item}}',
+      source: 'approaches',
+      over: 'approaches',
+      maxWidth: 6,
+      answer: { fields: [{ kind: 'text', name: 'result' }] },
+    },
+    { kind: 'barrier', id: 'attempted', title: 'every attempt in' },
+    {
+      kind: 'bracket',
+      id: 'judge',
+      title: 'judge',
+      persona: 'Judge',
+      task: 'which is better for {{input}} — {{left}} or {{right}}?',
+      entrants: 'attempt',
+      over: 'result',
+      maxEntrants: 6,
+      answer: { fields: [{ kind: 'text', name: 'why' }] },
+    },
+    {
+      kind: 'step',
+      id: 'ship',
+      title: 'ship',
+      persona: 'Worker',
+      task: 'carry out {{judge.champion}}, chosen because {{judge.why}}',
+      answer: null,
+    },
+  ],
+  edges: [
+    { from: 'approaches', to: 'attempt' },
+    { from: 'attempt', to: 'attempted' },
+    { from: 'approaches', to: 'attempted' },
+    { from: 'attempted', to: 'judge' },
+    { from: 'judge', to: 'ship' },
+  ],
+})
+
+/** The journal of a tournament whose attempts have all answered, before any match is judged. */
+const attempts = (results: readonly string[]): WorkflowStepState[] => [
+  step('approaches', { answer: { approaches: results.map((_r, at) => `approach ${at}`) } }),
+  ...results.map((result, at) =>
+    step('attempt', { itemIndex: at, answer: { result } }),
+  ),
+  step('attempted', { answer: {} }),
+]
+
+const SEED = 'workflow-run-under-test'
+
+const matchesOf = (steps: readonly WorkflowStepState[], round: number) =>
+  nextWorkflowActions({ graph: tournament, steps, input: 'the ask', seed: SEED }).deal.filter(
+    (entry) => entry.nodeId === 'judge' && entry.pass === round,
+  )
+
+describe('a bracket', () => {
+  it('deals one match per pair of entrants, not one run per entrant', () => {
+    const first = matchesOf(attempts(['a', 'b', 'c', 'd']), 0)
+    expect(first).toHaveLength(2)
+  })
+
+  it('shows each judge both sides, and each side is a whole entrant', () => {
+    const [match] = matchesOf(attempts(['alpha', 'beta']), 0)
+    expect(match?.task).toMatch(/^which is better for the ask — (alpha|beta) or (alpha|beta)\?$/)
+    expect(match?.task).toContain('alpha')
+    expect(match?.task).toContain('beta')
+  })
+
+  it('names the pair on the row, so two matches are told apart in the journal', () => {
+    const [match] = matchesOf(attempts(['alpha', 'beta']), 0)
+    expect(['alpha ⟂ beta', 'beta ⟂ alpha']).toContain(match?.item)
+  })
+
+  /**
+   * The seeding property, asserted the only way it can be: the same entrants, written in the
+   * opposite order, meet the same opponents. A bracket that paired by list position would give
+   * the first-written attempt the same short path every time.
+   */
+  it('pairs by the seed rather than by the order the entrants were written', () => {
+    const pairsOf = (results: readonly string[]) =>
+      matchesOf(attempts(results), 0)
+        .map((match) => [match.task.match(/— (.*) or (.*)\?$/)?.slice(1, 3) ?? []])
+        .map(([pair]) => [...(pair ?? [])].sort().join('/'))
+        .sort()
+    // Rotated rather than reversed: reversing four entrants pairs them the same way even by
+    // list position, so it would pass against the bias this is asserting is gone.
+    expect(pairsOf(['a', 'b', 'c', 'd'])).toEqual(pairsOf(['b', 'c', 'd', 'a']))
+  })
+
+  it('sits one entrant out rather than paying for a match against nothing', () => {
+    expect(matchesOf(attempts(['a', 'b', 'c']), 0)).toHaveLength(1)
+  })
+
+  it('does not deal the second round until the first has settled', () => {
+    const steps = [...attempts(['a', 'b', 'c', 'd']), step('judge', { itemIndex: 0, answer: { winner: 'left', why: 'w' } })]
+    expect(matchesOf(steps, 1)).toHaveLength(0)
+    expect(plan(tournament, steps).done).toBe(false)
+  })
+
+  it('advances the winners and pairs them in the next round', () => {
+    const first = matchesOf(attempts(['a', 'b', 'c', 'd']), 0)
+    const steps = [
+      ...attempts(['a', 'b', 'c', 'd']),
+      ...first.map((match) =>
+        step('judge', { itemIndex: match.itemIndex, answer: { winner: 'left', why: 'w' } }),
+      ),
+    ]
+    const second = matchesOf(steps, 1)
+    expect(second).toHaveLength(1)
+    const winners = first.map((match) => match.task.match(/— (.*) or/)?.[1])
+    for (const winner of winners) expect(second[0]?.task).toContain(String(winner))
+  })
+
+  it('hands the champion down as an answer the step below reads', () => {
+    const state = (results: readonly string[]) => {
+      let steps: WorkflowStepState[] = attempts(results)
+      for (let round = 0; round < 4; round += 1) {
+        const matches = matchesOf(steps, round)
+        if (matches.length === 0) break
+        steps = [
+          ...steps,
+          ...matches.map((match) =>
+            step('judge', {
+              pass: round,
+              itemIndex: match.itemIndex,
+              answer: { winner: 'right', why: `round ${round}` },
+            }),
+          ),
+        ]
+      }
+      return steps
+    }
+    const steps = state(['a', 'b', 'c', 'd'])
+    const ship = nextWorkflowActions({
+      graph: tournament,
+      steps,
+      input: 'the ask',
+      seed: SEED,
+    }).deal.find((entry) => entry.nodeId === 'ship')
+    expect(ship).toBeDefined()
+    expect(ship?.task).toMatch(/^carry out [abcd], chosen because round 1$/)
+  })
+
+  /**
+   * The rule that keeps a bracket evidence rather than a rosette: a refusal advances nobody, so
+   * a champion is always something a judge actually chose.
+   */
+  it('advances nobody out of a match that answered nothing', () => {
+    const first = matchesOf(attempts(['a', 'b', 'c', 'd']), 0)
+    const steps = [
+      ...attempts(['a', 'b', 'c', 'd']),
+      step('judge', { itemIndex: first[0]!.itemIndex, status: 'refused', answer: null }),
+      step('judge', { itemIndex: first[1]!.itemIndex, answer: { winner: 'left', why: 'w' } }),
+    ]
+    // One survivor of four: the refused match sent neither of its entrants on.
+    const ship = plan(tournament, steps)
+    expect(matchesOf(steps, 1)).toHaveLength(0)
+    expect(ship.deal.some((entry) => entry.nodeId === 'ship')).toBe(true)
+  })
+
+  it('treats a side outside the vocabulary as a match that judged nothing', () => {
+    const first = matchesOf(attempts(['a', 'b']), 0)
+    const steps = [
+      ...attempts(['a', 'b']),
+      step('judge', { itemIndex: first[0]!.itemIndex, answer: { winner: 'the second one', why: 'w' } }),
+    ]
+    const outcome = nextWorkflowActions({ graph: tournament, steps, input: 'x', seed: SEED })
+    expect(outcome.deal.some((entry) => entry.nodeId === 'ship')).toBe(false)
+    expect(outcome.skip.some((entry) => entry.nodeId === 'ship')).toBe(true)
+    expect(outcome.skip.find((entry) => entry.nodeId === 'ship')?.reason).toContain('no champion')
+  })
+
+  it('carries a lone entrant through without a match, rather than losing the work', () => {
+    const steps = attempts(['only one'])
+    const outcome = nextWorkflowActions({ graph: tournament, steps, input: 'x', seed: SEED })
+    expect(outcome.deal.filter((entry) => entry.nodeId === 'judge')).toHaveLength(0)
+    const ship = outcome.deal.find((entry) => entry.nodeId === 'ship')
+    expect(ship?.task).toBe('carry out only one, chosen because ')
+  })
+
+  it('is not done while its entrants are still being made', () => {
+    const outcome = nextWorkflowActions({
+      graph: tournament,
+      steps: [step('approaches', { answer: { approaches: ['x', 'y'] } })],
+      input: 'x',
+      seed: SEED,
+    })
+    expect(outcome.done).toBe(false)
+  })
+
+  it('closes as failed when every attempt was refused, rather than running forever', () => {
+    const steps = [
+      step('approaches', { answer: { approaches: ['x', 'y'] } }),
+      step('attempt', { itemIndex: 0, status: 'refused', answer: null }),
+      step('attempt', { itemIndex: 1, status: 'refused', answer: null }),
+      step('attempted', { answer: {} }),
+    ]
+    const outcome = nextWorkflowActions({ graph: tournament, steps, input: 'x', seed: SEED })
+    expect(outcome.deal.filter((entry) => entry.nodeId === 'judge')).toHaveLength(0)
+    expect(outcome.skip.some((entry) => entry.nodeId === 'ship')).toBe(true)
+  })
+
+  it('seats two executions of one shape differently, given different seeds', () => {
+    const pairing = (seed: string) =>
+      nextWorkflowActions({
+        graph: tournament,
+        steps: attempts(['a', 'b', 'c', 'd', 'e', 'f']),
+        input: 'x',
+        seed,
+      })
+        .deal.filter((entry) => entry.nodeId === 'judge')
+        .map((entry) => entry.task)
+        .join('|')
+    const seeds = new Set(
+      Array.from({ length: 12 }, (_unused, at) => pairing(`execution-${at}`)),
+    )
+    expect(seeds.size).toBeGreaterThan(1)
   })
 })

@@ -1,4 +1,6 @@
 import {
+  bracketMatches,
+  bracketSeeding,
   asAgentPersonaId,
   asAgentRunId,
   asRepositoryId,
@@ -122,6 +124,7 @@ const harness = (options: {
   claimSucceeds?: boolean
   runnerConnected?: boolean
   personas?: AgentPersona[]
+  graph?: WorkflowGraph
 }) => {
   const finishStep = vi.fn(async () => {})
   const closeRun = vi.fn(async () => null)
@@ -202,7 +205,7 @@ const harness = (options: {
         id: VERSION,
         workflowId: 'wf_1',
         version: 1,
-        graph: GRAPH,
+        graph: options.graph ?? GRAPH,
         digest: 'd',
         createdByUserId: null,
         createdAt: new Date(0),
@@ -409,5 +412,175 @@ describe('recordWorkflowAnswer', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toContain('already settled')
+  })
+})
+
+/**
+ * A tournament, where the seeding meets the money.
+ *
+ * The domain decides who meets whom; what only this layer can get wrong is *what it seeds from*.
+ * A seed taken from a clock or a counter would seat the same execution differently on every tick,
+ * and a bracket that cannot be re-derived from its own rows is not evidence about the attempts.
+ */
+const BRACKET_GRAPH = ((): WorkflowGraph => {
+  const verdict = parseWorkflowGraph({
+    nodes: [
+      {
+        kind: 'step',
+        id: 'approaches',
+        title: 'approaches',
+        persona: 'Scout',
+        task: 'name the approaches to {{input}}',
+        answer: { fields: [{ kind: 'list', name: 'approaches' }] },
+      },
+      {
+        kind: 'fan',
+        id: 'attempt',
+        title: 'attempt',
+        persona: 'Worker',
+        task: 'try {{item}}',
+        source: 'approaches',
+        over: 'approaches',
+        maxWidth: 4,
+        answer: { fields: [{ kind: 'text', name: 'result' }] },
+      },
+      { kind: 'barrier', id: 'attempted', title: 'attempts in' },
+      {
+        kind: 'bracket',
+        id: 'judge',
+        title: 'judge',
+        persona: 'Judge',
+        task: 'better, {{left}} or {{right}}?',
+        entrants: 'attempt',
+        over: 'result',
+        maxEntrants: 4,
+        answer: { fields: [{ kind: 'text', name: 'why' }] },
+      },
+    ],
+    edges: [
+      { from: 'approaches', to: 'attempt' },
+      { from: 'attempt', to: 'attempted' },
+      { from: 'approaches', to: 'attempted' },
+      { from: 'attempted', to: 'judge' },
+    ],
+  })
+  if (!verdict.ok) throw new Error(verdict.reason)
+  return verdict.graph
+})()
+
+const ATTEMPTED = ['first way', 'second way'] as const
+
+const bracketSteps = (): WorkflowStepRunRecord[] => [
+  step('approaches', {
+    status: 'answered',
+    answer: { approaches: ['one', 'two'] },
+    agentRunId: asAgentRunId('ar_1'),
+  }),
+  ...ATTEMPTED.map((result, at) =>
+    step('attempt', {
+      id: asWorkflowStepRunId(`attempt_${at}`),
+      itemIndex: at,
+      status: 'answered',
+      answer: { result },
+    }),
+  ),
+  step('attempted', { status: 'answered', answer: {}, agentRunId: null }),
+]
+
+describe('a bracket, through the tick', () => {
+  const judges = [persona('Scout'), persona('Worker'), persona('Judge')]
+
+  it('deals one match with both entrants in the prompt it is given', async () => {
+    const { deps, started } = harness({
+      graph: BRACKET_GRAPH,
+      steps: bracketSteps(),
+      personas: judges,
+    })
+    await tick(deps)
+    const matches = started.filter((entry) => String(entry.task).startsWith('better,'))
+    expect(matches).toHaveLength(1)
+    expect(matches[0]?.task).toContain('first way')
+    expect(matches[0]?.task).toContain('second way')
+  })
+
+  /**
+   * The assertion that pins the seed to a row: the pairing dealt is the one `bracketSeeding` and
+   * `bracketMatches` produce for *this execution's id*. Seeded from anything else — a clock, a
+   * counter, the graph alone — this is a different pair.
+   */
+  it('seats the match from the execution’s own id, not from a clock', async () => {
+    const { deps, started } = harness({
+      graph: BRACKET_GRAPH,
+      steps: bracketSteps(),
+      personas: judges,
+    })
+    await tick(deps)
+    const seeded = bracketSeeding(RUN as string, 'judge', [...ATTEMPTED], 4)
+    const { matches } = bracketMatches(RUN as string, 'judge', 0, seeded)
+    expect(started.find((entry) => String(entry.task).startsWith('better,'))?.task).toBe(
+      `better, ${matches[0]?.left} or ${matches[0]?.right}?`,
+    )
+  })
+
+  it('records the pair on the row, so the journal says which match this was', async () => {
+    const { deps, claimStep } = harness({
+      graph: BRACKET_GRAPH,
+      steps: bracketSteps(),
+      personas: judges,
+    })
+    await tick(deps)
+    const claimed = callsOf(claimStep).map((call) => call[0] as { nodeId: string; item: string })
+    const match = claimed.find((entry) => entry.nodeId === 'judge')
+    expect(match?.item).toContain('⟂')
+  })
+
+  /**
+   * The vocabulary reaches the Runner as the tool's own enum, so a side that does not exist is a
+   * tool error the model can still fix rather than a refusal it never saw.
+   */
+  it('hands the judge a winner field whose vocabulary is the two sides', async () => {
+    const { deps, started } = harness({
+      graph: BRACKET_GRAPH,
+      steps: bracketSteps(),
+      personas: judges,
+    })
+    await tick(deps)
+    const match = started.find((entry) => String(entry.task).startsWith('better,')) as {
+      answerWorkflow?: { fields: { name: string; choices?: readonly string[] }[] }
+    }
+    const winner = match.answerWorkflow?.fields.find((field) => field.name === 'winner')
+    expect(winner?.choices).toEqual(['left', 'right'])
+    expect(match.answerWorkflow?.fields.map((field) => field.name)).toEqual(['winner', 'why'])
+  })
+
+  it('refuses a side outside the vocabulary and says what the two words are', async () => {
+    const { deps, recordStepAnswer } = harness({
+      graph: BRACKET_GRAPH,
+      steps: [step('judge', { status: 'running' })],
+      personas: judges,
+    })
+    const result = await recordWorkflowAnswer(deps, {
+      workspaceId: WS,
+      agentRunId: asAgentRunId('ar_1'),
+      answer: { winner: 'the second one', why: 'it is better' },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('left, right')
+    expect(recordStepAnswer).not.toHaveBeenCalled()
+  })
+
+  it('takes a side that is one of them', async () => {
+    const { deps, recordStepAnswer } = harness({
+      graph: BRACKET_GRAPH,
+      steps: [step('judge', { status: 'running' })],
+      personas: judges,
+    })
+    const result = await recordWorkflowAnswer(deps, {
+      workspaceId: WS,
+      agentRunId: asAgentRunId('ar_1'),
+      answer: { winner: 'right', why: 'it ran' },
+    })
+    expect(result.ok).toBe(true)
+    expect(callsOf(recordStepAnswer)[0]?.[2]).toEqual({ winner: 'right', why: 'it ran' })
   })
 })

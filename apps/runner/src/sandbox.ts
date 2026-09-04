@@ -197,7 +197,7 @@ export interface SandboxOptions {
   /** Present when this run is the surrogate verifier — the option letters it may pick. */
   readonly verifyVariants?: { optionKeys: string[] }
   /** Present when this run is a workflow step — the fields its answer must carry. */
-  readonly answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string }[] }
+  readonly answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] | undefined }[] }
   /** Present when this run is the proposer — the persona it writes candidates for. */
   readonly proposeVariants?: { personaName: string }
   readonly onSessionId?: (sessionId: string) => void
@@ -611,7 +611,15 @@ export const runAgentInSandbox = async (
       ...(options.verifyVariants === undefined ? {} : { verifyVariants: options.verifyVariants }),
       ...(options.answerWorkflow === undefined
         ? {}
-        : { answerWorkflow: { fields: options.answerWorkflow.fields.map((f) => ({ ...f })) } }),
+        : {
+            answerWorkflow: {
+              fields: options.answerWorkflow.fields.map((field) => ({
+                kind: field.kind,
+                name: field.name,
+                ...(field.choices === undefined ? {} : { choices: [...field.choices] }),
+              })),
+            },
+          }),
       ...(options.proposeVariants === undefined
         ? {}
         : { proposeVariants: options.proposeVariants }),

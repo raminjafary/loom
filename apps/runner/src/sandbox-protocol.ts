@@ -77,7 +77,13 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
     answerWorkflow: z
       .object({
         fields: z
-          .array(z.object({ kind: z.enum(['text', 'flag', 'list']), name: z.string().min(1).max(40) }))
+          .array(
+            z.object({
+              kind: z.enum(['text', 'flag', 'list']),
+              name: z.string().min(1).max(40),
+              choices: z.array(z.string().min(1).max(40)).min(2).max(8).optional(),
+            }),
+          )
           .min(1)
           .max(12),
       })

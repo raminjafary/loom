@@ -30,6 +30,9 @@
  *    sentence, and a run that is not a step at all — through the same use case the Runner's
  *    tool calls.
  * 6. **The cap halts rather than degrades.**
+ * 7. **A bracket seats a real tournament from the execution's own id**, its second round is a
+ *    row rather than a collision with the first, and the step below it is handed the champion
+ *    rather than whichever match happened to be last.
  *
  * What it does *not* prove, stated plainly because it is this driver's limit: the answers below
  * are written by the driver through `recordWorkflowAnswer` rather than earned by a model, since
@@ -53,7 +56,13 @@ import {
   recordWorkflowAnswer,
 } from '../packages/application/src/index.js'
 import { createDatabase, seedWorkspace } from '../packages/db/src/index.js'
-import { asAgentRunId, asWorkflowRunId, asWorkspaceId } from '../packages/domain/src/index.js'
+import {
+  asAgentRunId,
+  asWorkflowRunId,
+  asWorkspaceId,
+  bracketMatches,
+  bracketSeeding,
+} from '../packages/domain/src/index.js'
 
 const execFileAsync = promisify(execFile)
 const REPO_ROOT = new URL('..', import.meta.url).pathname
@@ -151,6 +160,64 @@ const graph = {
     { from: 'verify', to: 'swept' },
     { from: 'discover', to: 'swept' },
     { from: 'swept', to: 'report' },
+  ],
+}
+
+/**
+ * approaches -> attempt each -> barrier -> a bracket that judges them two at a time -> ship.
+ *
+ * The one shape whose rows are *rounds*, and the only claim in this file that a stub cannot make
+ * about itself: that the pairing a real execution deals is the pairing the seed produces from the
+ * execution's own id, and that a second round is dealt from what the first round answered.
+ */
+const bracketGraph = {
+  nodes: [
+    {
+      kind: 'step',
+      id: 'approaches',
+      title: 'Name the ways',
+      persona: SCOUT,
+      task: 'Name the ways to: {{input}}',
+      answer: { fields: [{ kind: 'list', name: 'ways' }] },
+    },
+    {
+      kind: 'fan',
+      id: 'attempt',
+      title: 'Attempt each way',
+      persona: HAND,
+      task: 'Attempt this one way: {{item}}',
+      source: 'approaches',
+      over: 'ways',
+      maxWidth: 4,
+      answer: { fields: [{ kind: 'text', name: 'result' }] },
+    },
+    { kind: 'barrier', id: 'attempted', title: 'Every attempt in' },
+    {
+      kind: 'bracket',
+      id: 'judge',
+      title: 'Judge two at a time',
+      persona: CHECKER,
+      task: 'Which is better, {{left}} or {{right}}?',
+      entrants: 'attempt',
+      over: 'result',
+      maxEntrants: 4,
+      answer: { fields: [{ kind: 'text', name: 'why' }] },
+    },
+    {
+      kind: 'step',
+      id: 'ship',
+      title: 'Carry out the winner',
+      persona: SCOUT,
+      task: 'Carry out {{judge.champion}} because {{judge.why}}',
+      answer: null,
+    },
+  ],
+  edges: [
+    { from: 'approaches', to: 'attempt' },
+    { from: 'attempt', to: 'attempted' },
+    { from: 'approaches', to: 'attempted' },
+    { from: 'attempted', to: 'judge' },
+    { from: 'judge', to: 'ship' },
   ],
 }
 
@@ -491,6 +558,201 @@ const main = async () => {
     'and the halt says what it produced is partial',
     String(cappedRun?.haltReason).includes('partial'),
     String(cappedRun?.haltReason),
+  )
+
+  console.log('\n— a bracket seats a real tournament, from the execution’s own id —')
+  const selfJudged = await client.workflow.create({
+    name: 'a judge that wrote what it judges',
+    description: null,
+    graph: {
+      ...bracketGraph,
+      nodes: bracketGraph.nodes.map((node) =>
+        node.id === 'judge' ? { ...node, persona: HAND } : node,
+      ),
+    },
+  })
+  check(
+    'a judge running the persona that made the attempts is refused',
+    selfJudged.workflowId === null && String(selfJudged.detail).includes('tournament'),
+    String(selfJudged.detail),
+  )
+
+  const drawn = await client.workflow.create({
+    name: 'workflow-check tournament',
+    description: 'name the ways, attempt each, judge them two at a time, carry out the winner',
+    graph: bracketGraph,
+  })
+  check('the tournament was drawn', drawn.workflowId !== null, String(drawn.detail))
+  const drawnDetail = await client.workflow.read({ workflowId: drawn.workflowId })
+  check(
+    'and its ceiling prices the matches rather than the entrants',
+    String(drawnDetail?.detail).includes('3 match(es)'),
+    String(drawnDetail?.detail).split('\n').join(' | '),
+  )
+
+  const tournamentRun = await client.workflow.start({
+    workflowId: drawn.workflowId,
+    repositoryId: repo.id,
+    threadId: channel.rootThread.id,
+    input: 'the-hard-problem',
+    capUsd: 5,
+  })
+  const bracketRunId = asWorkflowRunId(tournamentRun.runId)
+  await tick()
+
+  let bracketSteps = await app.deps.workflows.stepsForRun(workspaceId, bracketRunId)
+  const ways = bracketSteps.find((entry) => entry.nodeId === 'approaches')
+  await recordWorkflowAnswer(app.deps, {
+    workspaceId,
+    agentRunId: ways!.agentRunId!,
+    answer: { ways: ['way-alpha', 'way-beta', 'way-gamma'] },
+  })
+  await tick()
+
+  bracketSteps = await app.deps.workflows.stepsForRun(workspaceId, bracketRunId)
+  const tries = bracketSteps.filter((entry) => entry.nodeId === 'attempt')
+  check('every way was attempted in its own lane', tries.length === 3, `${tries.length} lane(s)`)
+  const RESULTS: Record<string, string> = {
+    'way-alpha': 'the alpha attempt',
+    'way-beta': 'the beta attempt',
+    'way-gamma': 'the gamma attempt',
+  }
+  for (const attempt of tries) {
+    if (attempt.agentRunId === null) continue
+    await recordWorkflowAnswer(app.deps, {
+      workspaceId,
+      agentRunId: attempt.agentRunId,
+      answer: { result: RESULTS[String(attempt.item)] ?? `an attempt at ${attempt.item}` },
+    })
+  }
+  await tick()
+
+  /**
+   * Two ticks, not one. The first settles the attempts and writes the barrier's row; the plan is
+   * computed once per tick, so the round the barrier opened onto is dealt by the next one.
+   */
+  bracketSteps = await app.deps.workflows.stepsForRun(workspaceId, bracketRunId)
+  check(
+    'the barrier below the attempts opened once every lane had settled',
+    bracketSteps.find((entry) => entry.nodeId === 'attempted')?.status === 'answered',
+    String(bracketSteps.find((entry) => entry.nodeId === 'attempted')?.status),
+  )
+  await tick()
+
+  bracketSteps = await app.deps.workflows.stepsForRun(workspaceId, bracketRunId)
+  const firstRound = bracketSteps.filter((entry) => entry.nodeId === 'judge' && entry.pass === 0)
+  check(
+    'three entrants make one match and one bye, not three runs',
+    firstRound.length === 1,
+    `${firstRound.length} match(es) in round 0`,
+  )
+  /**
+   * The pairing is re-derived here from the execution's id and compared against the prompt the
+   * Runner was actually given. Seeded from anything else — a clock, a counter, the graph alone —
+   * these are different two entrants.
+   */
+  const entrants = bracketSeeding(
+    tournamentRun.runId,
+    'judge',
+    tries
+      .map((attempt) => RESULTS[String(attempt.item)] ?? '')
+      .filter((result) => result !== ''),
+    4,
+  )
+  const expected = bracketMatches(tournamentRun.runId, 'judge', 0, entrants).matches[0]
+  const firstMatch = firstRound[0]
+  if (firstMatch === undefined || firstMatch.agentRunId === null) {
+    check('a first-round match was dealt to a real run', false, 'nothing to judge')
+    console.log(`\n${failures} check(s) FAILED`)
+    runner.kill('SIGTERM')
+    await app.fastify.close()
+    await closeDb()
+    process.exit(1)
+  }
+  const matchRun = await app.deps.agentRuns.findById(workspaceId, firstMatch.agentRunId)
+  check(
+    'the match a real judge was dealt is the one this execution’s id seats',
+    matchRun?.task === `Which is better, ${expected?.left} or ${expected?.right}?`,
+    `${String(matchRun?.task)} — expected ${expected?.left} / ${expected?.right}`,
+  )
+  check(
+    'the row names the pair, so two matches are told apart in the journal',
+    String(firstMatch.item).includes('⟂'),
+    String(firstMatch.item),
+  )
+
+  const badSide = await recordWorkflowAnswer(app.deps, {
+    workspaceId,
+    agentRunId: firstMatch.agentRunId,
+    answer: { winner: 'the second one', why: 'it looked better' },
+  })
+  check(
+    'a side outside the vocabulary is refused, naming the two words',
+    badSide.ok === false && String((badSide as any).error).includes('left, right'),
+    String((badSide as any).error ?? ''),
+  )
+  const judged = await recordWorkflowAnswer(app.deps, {
+    workspaceId,
+    agentRunId: firstMatch.agentRunId,
+    answer: { winner: 'left', why: 'it carried the work further' },
+  })
+  check('and a side that is one of them is taken', judged.ok === true)
+  await tick()
+
+  bracketSteps = await app.deps.workflows.stepsForRun(workspaceId, bracketRunId)
+  const secondRound = bracketSteps.filter((entry) => entry.nodeId === 'judge' && entry.pass === 1)
+  check(
+    'the next round is a row of its own rather than a collision with the first',
+    secondRound.length === 1,
+    `${secondRound.length} match(es) in round 1`,
+  )
+  const secondMatch = secondRound[0]
+  const secondRun =
+    secondMatch === undefined || secondMatch.agentRunId === null
+      ? null
+      : await app.deps.agentRuns.findById(workspaceId, secondMatch.agentRunId)
+  check(
+    'and it pairs the winner of round 0 against the entrant that sat it out',
+    String(secondRun?.task).includes(String(expected?.left)) &&
+      !String(secondRun?.task).includes(String(expected?.right)),
+    String(secondRun?.task),
+  )
+
+  if (secondMatch?.agentRunId != null) {
+    await recordWorkflowAnswer(app.deps, {
+      workspaceId,
+      agentRunId: secondMatch.agentRunId,
+      answer: { winner: 'right', why: 'it holds up under the tests' },
+    })
+  }
+  await tick()
+  await tick()
+
+  bracketSteps = await app.deps.workflows.stepsForRun(workspaceId, bracketRunId)
+  const shipped = bracketSteps.find((entry) => entry.nodeId === 'ship')
+  const shippedRun =
+    shipped?.agentRunId === null || shipped?.agentRunId === undefined
+      ? null
+      : await app.deps.agentRuns.findById(workspaceId, shipped.agentRunId)
+  check(
+    'the step below the bracket is given the champion, not a match',
+    /^Carry out the (alpha|beta|gamma) attempt because it holds up under the tests$/.test(
+      String(shippedRun?.task),
+    ),
+    String(shippedRun?.task),
+  )
+  check(
+    'with no unrendered reference left in it',
+    shippedRun !== null && !String(shippedRun?.task).includes('{{'),
+  )
+  const bracketView = await client.workflow.run({ runId: tournamentRun.runId })
+  check(
+    'and a person reads the rounds back over the contract',
+    (bracketView?.steps ?? []).some((entry: any) => entry.nodeId === 'judge' && entry.pass === 1),
+    (bracketView?.steps ?? [])
+      .filter((entry: any) => entry.nodeId === 'judge')
+      .map((entry: any) => `${entry.pass}:${entry.itemIndex}:${entry.status}`)
+      .join(' '),
   )
 
   console.log(`\n${failures === 0 ? 'all checks passed' : `${failures} check(s) FAILED`}`)

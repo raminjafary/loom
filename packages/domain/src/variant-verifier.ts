@@ -44,6 +44,7 @@
  */
 
 import type { PersonaVariantId, PersonaVariantSetId } from './ids.js'
+import { seededOrder } from './seeded-choice.js'
 
 /**
  * One blinded option. `variantId` null is the prompt in use, and the verifier is not told
@@ -57,20 +58,6 @@ export interface BlindedOption {
 
 /** The keys, in order. Two candidates plus the incumbent is the common case. */
 const KEYS = ['A', 'B', 'C', 'D', 'E'] as const
-
-/**
- * FNV-1a, 32-bit. A hash rather than an ordering by id so the blinding does not correlate
- * with the order candidates were proposed in — the first-proposed candidate must not
- * reliably be option A, or the shuffle is decoration.
- */
-const hash = (value: string): number => {
-  let h = 0x811c9dc5
-  for (let i = 0; i < value.length; i += 1) {
-    h ^= value.charCodeAt(i)
-    h = Math.imul(h, 0x01000193) >>> 0
-  }
-  return h >>> 0
-}
 
 /**
  * Assigns option keys to the candidates and the prompt in use, deterministically.
@@ -91,9 +78,12 @@ export const blindVariantOptions = (input: {
       seed: candidate.id as string,
     })),
   ]
-  return entries
-    .map((entry) => ({ ...entry, rank: hash(`${input.setId}:${entry.seed}`) }))
-    .sort((a, b) => (a.rank === b.rank ? a.seed.localeCompare(b.seed) : a.rank - b.rank))
+  /**
+   * The order is `seededOrder`'s — the hash-seeded choice the bracket judges with, and the same
+   * one for the same reason. Two shuffles would be two answers to "does this correlate with the
+   * order the candidates arrived in", and the blinding is worth nothing if the answer is yes.
+   */
+  return seededOrder(input.setId as string, entries, (entry) => entry.seed)
     .slice(0, KEYS.length)
     .map((entry, index) => ({
       key: KEYS[index] as string,

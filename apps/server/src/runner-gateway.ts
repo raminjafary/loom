@@ -397,7 +397,15 @@ export const createRunnerGateway = (
         // answer, and the workflow below it waits for a run that ended.
         ...(answerWorkflow === undefined
           ? {}
-          : { answerWorkflow: { fields: answerWorkflow.fields.map((field) => ({ ...field })) } }),
+          : {
+              answerWorkflow: {
+                fields: answerWorkflow.fields.map((field) => ({
+                  kind: field.kind,
+                  name: field.name,
+                  ...(field.choices === undefined ? {} : { choices: [...field.choices] }),
+                })),
+              },
+            }),
       })
     },
 

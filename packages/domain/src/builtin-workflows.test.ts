@@ -20,6 +20,7 @@ describe('BUILTIN_WORKFLOWS', () => {
       'code review',
       'security analysis',
       'agent team',
+      'tournament',
       'migration sweep',
     ])
     for (const workflow of BUILTIN_WORKFLOWS) {
@@ -82,17 +83,35 @@ describe('BUILTIN_WORKFLOWS', () => {
    * homogenization is worst where two agents share a model, so a refutation by the author is a
    * refutation that agrees.
    */
-  it('never has a step checked by the persona that wrote it', () => {
+  it('never has a step checked or judged by the persona that wrote it', () => {
     for (const workflow of BUILTIN_WORKFLOWS) {
       const byId = new Map(workflow.graph.nodes.map((node) => [node.id, node]))
       for (const node of workflow.graph.nodes) {
-        if (node.kind !== 'verifier') continue
-        const verified = byId.get(node.verifies)
-        expect(verified !== undefined && isRunNode(verified) ? verified.persona : null).not.toBe(
-          node.persona,
+        const read =
+          node.kind === 'verifier' ? node.verifies : node.kind === 'bracket' ? node.entrants : null
+        if (read === null) continue
+        const author = byId.get(read)
+        expect(author !== undefined && isRunNode(author) ? author.persona : null).not.toBe(
+          isRunNode(node) ? node.persona : null,
         )
       }
     }
+  })
+
+  /**
+   * The tournament earns its place only if the comparison is between the attempts themselves.
+   * A bracket judging a summary somebody wrote of them would be a bracket judging the summary.
+   */
+  it('judges the attempts themselves rather than a collated list of them', () => {
+    const tournament = BUILTIN_WORKFLOWS.find((workflow) => workflow.name === 'tournament')
+    const bracket = tournament?.graph.nodes.find((node) => node.kind === 'bracket')
+    expect(bracket?.kind === 'bracket' ? bracket.entrants : null).toBe('attempt')
+    const attempt = tournament?.graph.nodes.find((node) => node.id === 'attempt')
+    expect(attempt?.kind).toBe('fan')
+    // Every attempt that ran can enter: a bracket narrower than the fan above it would judge
+    // a subset and report a champion of the whole.
+    const width = attempt !== undefined ? (fanningOf(attempt)?.maxWidth ?? 0) : 0
+    expect(bracket?.kind === 'bracket' ? bracket.maxEntrants : 0).toBeGreaterThanOrEqual(width)
   })
 
   /**

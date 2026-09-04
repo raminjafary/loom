@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import {
   BARRIER_PASSED,
+  BRACKET_WINNER_FIELD,
+  BRACKET_WINNER_SIDES,
   BUILTIN_WORKFLOWS,
   canonicalWorkflow,
   describeWorkflowCost,
@@ -11,6 +13,7 @@ import {
   NotFoundError,
   parseWorkflowAnswer,
   parseWorkflowGraph,
+  ROUTER_FIELD,
   userActor,
   ValidationError,
   workflowMayStart,
@@ -350,17 +353,35 @@ export const recordWorkflowAnswer = async (
   if (!node || !isRunNode(node)) {
     return { ok: false, error: 'The shape this step belongs to no longer has a node for it.' }
   }
-  const schema = node.kind === 'router' ? ROUTER_ANSWER : (node.kind === 'step' || node.kind === 'fan' || node.kind === 'verifier' ? node.answer : null)
-
-  const parsed = parseWorkflowAnswer(schema, input.answer)
+  const fields = answerFieldsOf(node)
+  const parsed = parseWorkflowAnswer(
+    fields.length === 0 ? null : { fields: fields.map(({ kind, name }) => ({ kind, name })) },
+    input.answer,
+  )
   if (!parsed.ok) return { ok: false, error: parsed.reason }
+
+  /**
+   * A platform-owned vocabulary is checked here as well as in the tool's own schema, because the
+   * schema on the Runner is a convenience and this is the authority: an answer arriving through a
+   * container that stripped the enum, or through any path but the tool, still cannot record a
+   * side that does not exist. Told now, the model can answer again; discovered later, the step is
+   * a refusal it never saw.
+   */
+  for (const field of fields) {
+    if (field.choices === undefined) continue
+    const value = parsed.answer[field.name]
+    if (typeof value === 'string' && field.choices.includes(value)) continue
+    return {
+      ok: false,
+      error:
+        `"${field.name}" has to be exactly one of ${field.choices.join(', ')}, and it came back ` +
+        `as ${JSON.stringify(value)}. Answer again with one of those words.`,
+    }
+  }
 
   await deps.workflows.recordStepAnswer(input.workspaceId, step.id, parsed.answer)
   return { ok: true, outcome: 'Answer recorded. Finish up; the workflow moves on when this run ends.' }
 }
-
-/** A router's answer is one field and the vocabulary is its own choices, so it declares nothing. */
-const ROUTER_ANSWER = { fields: [{ kind: 'text' as const, name: 'choice' }] }
 
 const nodeOf = async (
   deps: AgentDeps,
@@ -428,7 +449,13 @@ const advanceWorkflowRun = async (
   await settleFinishedSteps(deps, workspaceId, runId, options.stepStuckMs)
 
   const steps = await deps.workflows.stepsForRun(workspaceId, runId)
-  const plan = nextWorkflowActions({ graph: version.graph, steps, input: run.input })
+  /**
+   * The seed every hash-seeded choice in this execution is taken from is the execution's own id:
+   * a bracket seats the same way on every tick and after any restart, and two executions of one
+   * shape seat independently. A clock or a counter here would make a tournament unreplayable,
+   * which is the whole objection to randomness in a shape that is meant to be evidence.
+   */
+  const plan = nextWorkflowActions({ graph: version.graph, steps, input: run.input, seed: runId })
 
   // 2. Barriers and skipped paths cost nothing, so they are written before the cap is consulted.
   for (const entry of [...plan.collect, ...plan.skip]) {
@@ -526,7 +553,12 @@ const advanceWorkflowRun = async (
 
   // 4. Close when nothing is running and nothing more can be dealt.
   const after = await deps.workflows.stepsForRun(workspaceId, runId)
-  const settled = nextWorkflowActions({ graph: version.graph, steps: after, input: run.input })
+  const settled = nextWorkflowActions({
+    graph: version.graph,
+    steps: after,
+    input: run.input,
+    seed: runId,
+  })
   if (settled.done) {
     await deps.workflows.closeRun(workspaceId, runId, {
       status: settled.failure === null ? 'finished' : 'failed',
@@ -539,11 +571,24 @@ const advanceWorkflowRun = async (
 /**
  * What a node's answer tool must accept.
  *
- * A router's is fixed rather than authored, because its vocabulary *is* its declared choices and
- * asking an author to also write a matching schema would be two places to change one thing.
+ * A router's and a bracket's are fixed rather than authored, because the vocabulary *is* the
+ * drawn thing — a router's declared choices, a match's two sides — and asking an author to also
+ * write a matching schema would be two places for one fact to be wrong. Both carry `choices`, so
+ * the tool call itself refuses a value outside the vocabulary while the model can still answer
+ * again.
  */
-export const answerFieldsOf = (node: WorkflowNode): { kind: 'text' | 'flag' | 'list'; name: string }[] => {
-  if (node.kind === 'router') return [{ kind: 'text', name: 'choice' }]
+export const answerFieldsOf = (
+  node: WorkflowNode,
+): { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] }[] => {
+  if (node.kind === 'router') {
+    return [{ kind: 'text', name: ROUTER_FIELD, choices: node.choices }]
+  }
+  if (node.kind === 'bracket') {
+    return [
+      { kind: 'text', name: BRACKET_WINNER_FIELD, choices: BRACKET_WINNER_SIDES },
+      ...(node.answer?.fields ?? []).map((field) => ({ kind: field.kind, name: field.name })),
+    ]
+  }
   if (node.kind === 'step' || node.kind === 'fan' || node.kind === 'verifier') {
     return (node.answer?.fields ?? []).map((field) => ({ kind: field.kind, name: field.name }))
   }

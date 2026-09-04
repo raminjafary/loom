@@ -209,6 +209,75 @@ describe('WorkflowPanel', () => {
     })
   })
 
+  /**
+   * A bracket's rows are matches over rounds, and "6 lanes" is the reading a person cannot act
+   * on: what they want to know is how far the tournament has got.
+   */
+  describe('with a tournament in the shape', () => {
+    const bracketGraph = {
+      nodes: [
+        {
+          kind: 'fan',
+          id: 'attempt',
+          title: 'Attempt each',
+          persona: 'hand',
+          source: 'approaches',
+          over: 'approaches',
+          maxWidth: 4,
+        },
+        {
+          kind: 'bracket',
+          id: 'judge',
+          title: 'Judge two at a time',
+          persona: 'checker',
+          entrants: 'attempt',
+          over: 'result',
+          maxEntrants: 4,
+        },
+      ],
+      edges: [{ from: 'attempt', to: 'judge' }],
+    }
+    const match = (pass: number, itemIndex: number, id: string) => ({
+      id,
+      nodeId: 'judge',
+      pass,
+      itemIndex,
+      item: 'one attempt ⟂ another',
+      status: 'answered' as const,
+      agentRunId: `run-${id}`,
+      reason: null,
+      costUsd: 0.1,
+      finishedAt: new Date(0),
+    })
+
+    const opened = async () => {
+      const wrapper = panel({
+        read: vi.fn(async () => ({ ...detail, graph: bracketGraph })),
+        readRun: vi.fn(async () => ({
+          ...runDetail,
+          graph: bracketGraph,
+          steps: [match(0, 0, 'm1'), match(0, 1, 'm2'), match(1, 0, 'm3')],
+        })),
+      })
+      await settle(wrapper)
+      await wrapper.find('.runs .open').trigger('click')
+      await settle(wrapper)
+      return wrapper
+    }
+
+    it('says how many entrants may come forward before it is run', async () => {
+      const wrapper = panel({ read: vi.fn(async () => ({ ...detail, graph: bracketGraph })) })
+      await settle(wrapper)
+      expect(wrapper.find('svg').text()).toContain('up to 4 entrants')
+      expect(wrapper.find('svg').text()).toContain('two at a time')
+    })
+
+    it('counts matches and rounds rather than lanes', async () => {
+      const wrapper = await opened()
+      expect(wrapper.find('g.node.bracket').text()).toContain('3 match(es) in 2 round(s)')
+    })
+  })
+
   it('will not start an execution with nowhere for its steps to render', async () => {
     const wrapper = panel({ threadId: null })
     await settle(wrapper)

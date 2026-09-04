@@ -4789,7 +4789,7 @@ export const startAgentRun = async (
      * Which step it is never travels — it is resolved from the run when the submission
      * arrives, the way a proposer's subject is resolved from its session row.
      */
-    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string }[] }
+    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] | undefined }[] }
   },
 ): Promise<AgentRun> => {
   const parent = input.parentRunId

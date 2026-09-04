@@ -35,14 +35,22 @@
  */
 
 import type { WorkflowStepStatus } from './agents.js'
+import { seededOrder, seededPair } from './seeded-choice.js'
 import {
+  BRACKET_CHAMPION_FIELD,
+  BRACKET_WINNER_FIELD,
+  BRACKET_WINNER_SIDES,
   fanningOf,
   INPUT_REFERENCE,
   isRunNode,
   ITEM_REFERENCE,
+  LEFT_REFERENCE,
   MAX_LOOP_ITERATIONS,
+  opensLanes,
+  RIGHT_REFERENCE,
   templateReferences,
   type WorkflowAnswer,
+  type WorkflowBracketNode,
   type WorkflowEdge,
   type WorkflowGraph,
   type WorkflowNode,
@@ -122,6 +130,7 @@ export const laneSources = (
   graph: WorkflowGraph,
 ): { readonly ok: true; readonly sources: Map<string, string | null> } | { readonly ok: false; readonly reason: string } => {
   const order = topological(graph)
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const sources = new Map<string, string | null>()
   for (const node of order) {
     if (node.kind === 'barrier') {
@@ -131,6 +140,13 @@ export const laneSources = (
     const above = new Set<string>()
     for (const edge of graph.edges) {
       if (edge.to !== node.id || edge.loop !== null) continue
+      /**
+       * A bracket's lanes stop at the bracket. It is the second node that collapses lanes and
+       * the only one that also opens them: a tournament of six runs six-ish matches and hands
+       * *one* champion down, so what follows it runs once — the shape of a barrier from below
+       * and of a fan from above.
+       */
+      if (byId.get(edge.from)?.kind === 'bracket') continue
       const inherited = sources.get(edge.from) ?? null
       if (inherited !== null) above.add(inherited)
     }
@@ -141,7 +157,7 @@ export const laneSources = (
       }
     }
     const inherited = [...above][0] ?? null
-    if (fanningOf(node) !== null) {
+    if (opensLanes(node)) {
       if (inherited !== null) {
         return {
           ok: false,
@@ -295,6 +311,103 @@ export const resolveRouterChoice = (
 /** The one field a router's answer must carry. Fixed, so a drawn router needs no schema. */
 export const ROUTER_FIELD = 'choice'
 
+/** One match of a bracket: which two entrants, in the order the judge is shown them. */
+export interface BracketMatch {
+  readonly index: number
+  readonly left: string
+  readonly right: string
+}
+
+/**
+ * Which entrants come forward, and in what order they are seated.
+ *
+ * Truncated first and seeded second, and that order is the honest one: the bound is a human's, so
+ * *which* entrants are admitted stays the same however the hash falls — a bracket that dropped a
+ * random three of six would be a measurement of five sixths of the work, differently each time.
+ * What the seed decides is only the seating, which is what pairing bias lives in.
+ */
+export const bracketSeeding = (
+  seed: string,
+  nodeId: string,
+  entrants: readonly string[],
+  maxEntrants: number,
+): string[] =>
+  seededOrder(`${seed}:${nodeId}`, entrants.slice(0, maxEntrants), (entrant) => entrant)
+
+/**
+ * One round's pairs, plus the entrant that sits it out.
+ *
+ * A bye rather than a phantom opponent: an odd round is the ordinary case for anything but a
+ * power of two, and a match against nothing would be a paid run whose answer is already known.
+ * Which entrant gets it is the last seat in the seeded order — "last" being a fact about the
+ * hash rather than about who wrote the list first, which is the whole reason for seeding.
+ */
+export const bracketMatches = (
+  seed: string,
+  nodeId: string,
+  round: number,
+  entrants: readonly string[],
+): { readonly matches: readonly BracketMatch[]; readonly bye: string | null } => {
+  const matches: BracketMatch[] = []
+  for (let at = 0; at + 1 < entrants.length; at += 2) {
+    const index = at / 2
+    const [left, right] = seededPair(
+      `${seed}:${nodeId}:${round}:${index}`,
+      entrants[at] as string,
+      entrants[at + 1] as string,
+    )
+    matches.push({ index, left, right })
+  }
+  return {
+    matches,
+    bye: entrants.length % 2 === 1 ? (entrants[entrants.length - 1] as string) : null,
+  }
+}
+
+/**
+ * Which entrant a judged match advanced, or null when it advanced nobody.
+ *
+ * Null covers two cases that are one fact: a match whose run was refused, and a match that
+ * answered a side the vocabulary does not have. Both mean *nothing was judged here*, and the
+ * alternative — advancing a side by default — would let a refusal produce a champion.
+ */
+export const bracketWinner = (
+  match: BracketMatch,
+  answer: Readonly<Record<string, unknown>> | null,
+): string | null => {
+  const side = answer?.[BRACKET_WINNER_FIELD]
+  if (side === LEFT_REFERENCE) return match.left
+  if (side === RIGHT_REFERENCE) return match.right
+  return null
+}
+
+/** How a bracket stands: which round is being judged, and who has come out of it. */
+export interface BracketState {
+  /**
+   * False while what it judges has not settled. The distinction the executor turns on: an
+   * unknown bracket is pending, and a known one with no entrants is finished and lost.
+   */
+  readonly known: boolean
+  /** The round whose matches may be dealt now. */
+  readonly dealing: number
+  /** That round's pairs, already seated. Empty once the tournament is over. */
+  readonly matches: readonly BracketMatch[]
+  readonly settled: boolean
+  /** The entrant that survived, or null when nothing did. */
+  readonly champion: string | null
+  /** What the match that produced the champion answered, for the step below to read. */
+  readonly answer: Readonly<Record<string, unknown>> | null
+}
+
+/** A pair, in the words a person scanning the journal can tell two matches apart by. */
+const briefly = (entrant: string): string => {
+  const line = entrant.trim().split('\n')[0] ?? ''
+  return line.length > 60 ? `${line.slice(0, 57)}…` : line
+}
+
+export const describeMatch = (match: BracketMatch): string =>
+  `${briefly(match.left)} ⟂ ${briefly(match.right)}`
+
 const renderValue = (value: unknown): string => {
   if (Array.isArray(value)) return value.map((entry, at) => `${at + 1}. ${String(entry)}`).join('\n')
   if (typeof value === 'boolean') return value ? 'yes' : 'no'
@@ -320,11 +433,15 @@ export const renderWorkflowTask = (input: {
   readonly task: string
   readonly input: string
   readonly item: string | null
+  /** The two entrants of a bracket's match, and null for every other node. */
+  readonly sides?: { readonly left: string; readonly right: string } | null
   readonly answers: ReadonlyMap<string, readonly Readonly<Record<string, unknown>>[]>
 }): string =>
   input.task.replace(/\{\{\s*([a-z0-9-]+)(?:\.([a-z0-9-]+))?\s*\}\}/g, (_whole, node: string, field?: string) => {
     if (node === ITEM_REFERENCE) return input.item ?? ''
     if (node === INPUT_REFERENCE) return input.input
+    if (node === LEFT_REFERENCE) return input.sides?.left ?? ''
+    if (node === RIGHT_REFERENCE) return input.sides?.right ?? ''
     const answers = input.answers.get(node) ?? []
     const values = answers.map((answer) => (field === undefined ? answer : answer[field]))
     if (values.length === 1) return renderValue(values[0])
@@ -350,6 +467,21 @@ export const nextWorkflowActions = (input: {
   readonly graph: WorkflowGraph
   readonly steps: readonly WorkflowStepState[]
   readonly input: string
+  /**
+   * What every hash-seeded choice in this execution is seeded from — the execution's own id.
+   *
+   * Per *execution* rather than per platform, so two executions of one shape seat their brackets
+   * independently; and from a row rather than a clock, so the same execution re-derives the same
+   * seating on every tick and after any restart.
+   *
+   * Optional because most shapes hold no choice at all, and the fallback is the empty string
+   * rather than anything generated: a seating that is a pure function of the entrants' own text
+   * is still decorrelated from the order they were written in, which is the property that
+   * matters, and it is still the same on every tick. What it loses is independence *between*
+   * executions, which is why the application passes the execution's id and the live driver
+   * asserts that it does.
+   */
+  readonly seed?: string
 }): WorkflowPlan => {
   const lanes = laneSources(input.graph)
   if (!lanes.ok) return { deal: [], skip: [], collect: [], done: true, failure: lanes.reason }
@@ -424,12 +556,28 @@ export const nextWorkflowActions = (input: {
   }
 
   const laneCount = (nodeId: string, pass: number): number | null => {
+    /**
+     * A bracket's lanes are the matches of one round, so its width is arithmetic on the entrants
+     * that survived rather than the length of a list. Every round but the one being dealt is
+     * zero wide: the rows of a finished round are in the journal and are not dealt again.
+     */
+    const node = byId.get(nodeId)
+    if (node?.kind === 'bracket') {
+      const state = bracketState(node)
+      if (!state.known) return null
+      return state.dealing === pass ? state.matches.length : 0
+    }
     const list = laneList(nodeId, pass)
     if (list === undefined) return 1
     return list === null ? null : list.length
   }
 
   const itemFor = (nodeId: string, pass: number, itemIndex: number): string | null => {
+    const node = byId.get(nodeId)
+    if (node?.kind === 'bracket') {
+      const match = bracketState(node).matches.find((entry) => entry.index === itemIndex)
+      return match === undefined ? null : describeMatch(match)
+    }
     const list = laneList(nodeId, pass)
     if (list === undefined || list === null) return null
     const entry = list[itemIndex]
@@ -457,7 +605,129 @@ export const nextWorkflowActions = (input: {
     }
   }
 
+  /**
+   * A bracket, round by round, from the rows and the seed alone.
+   *
+   * Re-derived on every tick like everything else here, and memoized only within one tick: the
+   * champion is a *function* of the seeding and the matches, so nothing has to be stored and
+   * nothing can drift from what the rows say. A stored champion would be a summary of the
+   * journal that could disagree with it.
+   */
+  const brackets = new Map<string, BracketState>()
+  const bracketState = (node: WorkflowBracketNode): BracketState => {
+    const known = brackets.get(node.id)
+    if (known !== undefined) return known
+    const state = deriveBracket(node)
+    brackets.set(node.id, state)
+    return state
+  }
+
+  const UNKNOWN_BRACKET: BracketState = {
+    known: false,
+    dealing: 0,
+    matches: [],
+    settled: false,
+    champion: null,
+    answer: null,
+  }
+
+  const deriveBracket = (node: WorkflowBracketNode): BracketState => {
+    const entered = entrantsOf(node)
+    if (entered === null) return UNKNOWN_BRACKET
+
+    let entrants = bracketSeeding(input.seed ?? '', node.id, entered, node.maxEntrants)
+    let round = 0
+    let answer: Readonly<Record<string, unknown>> | null = null
+    /**
+     * Bounded by the arithmetic rather than by trust: each round at least halves the field, so a
+     * bracket of `maxEntrants` cannot need more rounds than that many. The guard is here because
+     * a loop whose exit depends on rows is a loop a bad row could make infinite.
+     */
+    for (let guard = 0; guard <= node.maxEntrants; guard += 1) {
+      if (entrants.length <= 1) {
+        return {
+          known: true,
+          dealing: round,
+          matches: [],
+          settled: true,
+          champion: entrants[0] ?? null,
+          answer,
+        }
+      }
+      const { matches, bye } = bracketMatches(input.seed ?? '', node.id, round, entrants)
+      const rows = matches.map((match) => byKey.get(keyOf(node.id, round, match.index)))
+      if (rows.some((row) => row === undefined || !SETTLED.has(row.status))) {
+        return {
+          known: true,
+          dealing: round,
+          matches,
+          settled: false,
+          champion: null,
+          answer: null,
+        }
+      }
+      const survivors: string[] = []
+      const wonBy = new Map<string, Readonly<Record<string, unknown>>>()
+      for (const match of matches) {
+        const row = rows[match.index]
+        if (row?.status !== 'answered') continue
+        const winner = bracketWinner(match, row.answer)
+        if (winner === null) continue
+        survivors.push(winner)
+        wonBy.set(winner, row.answer ?? {})
+      }
+      if (bye !== null) survivors.push(bye)
+      entrants = survivors
+      answer = entrants.length === 1 ? (wonBy.get(entrants[0] as string) ?? null) : null
+      round += 1
+    }
+    return { known: true, dealing: round, matches: [], settled: true, champion: null, answer: null }
+  }
+
+  /**
+   * The entrants, before any seeding: one per answered lane of the node this bracket judges, or
+   * the elements of its list where that node runs once.
+   *
+   * Both read the same way — whatever that field holds, flattened — because the difference
+   * between them is a fact about the *source*, and asking here would be asking the same question
+   * the validator already answered when it checked the field's kind.
+   */
+  const entrantsOf = (node: WorkflowBracketNode): string[] | null => {
+    const { steps, missing } = requiredInstances(node.entrants, node.id, 0, 0)
+    if (missing) return null
+    if (steps.some((step) => step === undefined || !SETTLED.has(step.status))) return null
+    const entrants: string[] = []
+    for (const step of steps) {
+      if (step?.status !== 'answered') continue
+      const value = step.answer?.[node.over]
+      for (const entry of Array.isArray(value) ? value : [value]) {
+        if (typeof entry === 'string' && entry.trim() !== '') entrants.push(entry)
+      }
+    }
+    return entrants
+  }
+
   const edgeState = (edge: WorkflowEdge, pass: number, itemIndex: number): EdgeState => {
+    /**
+     * An edge out of a bracket is resolved from the *tournament* rather than from a row, because
+     * the two answers a reader wants — "who won" and "nobody did" — are both facts about the
+     * whole bracket. Reading the final match's row instead would also make a walkover
+     * unrepresentable: one entrant is a champion with no match to point at.
+     */
+    const from = byId.get(edge.from)
+    if (from?.kind === 'bracket') {
+      const state = bracketState(from)
+      if (!state.known || !state.settled) return { resolved: false, taken: false, reason: null }
+      if (state.champion === null) {
+        return {
+          resolved: true,
+          taken: false,
+          reason: `"${edge.from}" judged nothing to a winner, so it has no champion to hand on.`,
+        }
+      }
+      return { resolved: true, taken: true, reason: null }
+    }
+
     const { steps, missing } = requiredInstances(edge.from, edge.to, pass, itemIndex)
     if (missing) return { resolved: false, taken: false, reason: null }
     if (steps.length === 0) {
@@ -478,7 +748,6 @@ export const nextWorkflowActions = (input: {
             : `"${edge.from}" did not answer in this lane.`,
       }
     }
-    const from = byId.get(edge.from)
     if (from?.kind === 'router') {
       const choice = resolveRouterChoice(from.choices, answered[0]?.answer ?? null)
       if (!choice.ok) return { resolved: true, taken: false, reason: choice.reason }
@@ -496,7 +765,16 @@ export const nextWorkflowActions = (input: {
 
   for (const node of input.graph.nodes) {
     const loop = loopFor(node.id)
-    const pass = loop === null ? 0 : loopState(loop).dealing
+    /**
+     * A bracket's pass is its round, which is why the validator refuses a bracket inside a loop:
+     * the number would have to mean two things at once.
+     */
+    const pass =
+      node.kind === 'bracket'
+        ? bracketState(node).dealing
+        : loop === null
+          ? 0
+          : loopState(loop).dealing
     const width = laneCount(node.id, pass)
     if (width === null) {
       pending = true
@@ -550,7 +828,24 @@ export const nextWorkflowActions = (input: {
     const answers = new Map<string, Readonly<Record<string, unknown>>[]>()
     for (const reference of isRunNode(node) ? templateReferences(node.task) : []) {
       if (reference.node === ITEM_REFERENCE || reference.node === INPUT_REFERENCE) continue
+      if (reference.node === LEFT_REFERENCE || reference.node === RIGHT_REFERENCE) continue
       if (answers.has(reference.node)) continue
+      const referenced = byId.get(reference.node)
+      /**
+       * A bracket hands down one answer with `champion` in it, synthesized here rather than
+       * stored: the rows below a bracket are its matches, and a step reading `{{final.champion}}`
+       * is asking about the tournament rather than about whichever match happened to be last.
+       */
+      if (referenced?.kind === 'bracket') {
+        const state = bracketState(referenced)
+        answers.set(
+          reference.node,
+          state.champion === null
+            ? []
+            : [{ ...(state.answer ?? {}), [BRACKET_CHAMPION_FIELD]: state.champion }],
+        )
+        continue
+      }
       const { steps } = requiredInstances(reference.node, node.id, pass, itemIndex)
       answers.set(
         reference.node,
@@ -560,6 +855,10 @@ export const nextWorkflowActions = (input: {
       )
     }
     const item = itemFor(node.id, pass, itemIndex)
+    const match =
+      node.kind === 'bracket'
+        ? (bracketState(node).matches.find((entry) => entry.index === itemIndex) ?? null)
+        : null
     return {
       nodeId: node.id,
       pass,
@@ -567,13 +866,35 @@ export const nextWorkflowActions = (input: {
       item,
       persona: isRunNode(node) ? node.persona : '',
       task: isRunNode(node)
-        ? renderWorkflowTask({ task: node.task, input: input.input, item, answers })
+        ? renderWorkflowTask({
+            task: node.task,
+            input: input.input,
+            item,
+            sides: match === null ? null : { left: match.left, right: match.right },
+            answers,
+          })
         : '',
     }
   }
 
   const done = !pending && deal.length === 0 && skip.length === 0 && collect.length === 0
-  return { deal, skip, collect, done, failure: done ? failureOf(input.graph, byNode) : null }
+  /**
+   * A bracket that ended in a walkover produced an answer and no row: one entrant is a champion
+   * with nothing to judge it against. Named here so a terminal bracket in that state is not
+   * reported as a workflow that answered nothing.
+   */
+  const championed = new Set(
+    input.graph.nodes
+      .filter((node) => node.kind === 'bracket' && bracketState(node).champion !== null)
+      .map((node) => node.id),
+  )
+  return {
+    deal,
+    skip,
+    collect,
+    done,
+    failure: done ? failureOf(input.graph, byNode, championed) : null,
+  }
 }
 
 /**
@@ -587,12 +908,15 @@ export const BARRIER_PASSED = 'The lanes above this barrier were collected.'
 const failureOf = (
   graph: WorkflowGraph,
   byNode: ReadonlyMap<string, readonly WorkflowStepState[]>,
+  championed: ReadonlySet<string> = new Set(),
 ): string | null => {
   const terminals = graph.nodes.filter(
     (node) => !graph.edges.some((edge) => edge.from === node.id && edge.loop === null),
   )
-  const answered = terminals.some((node) =>
-    (byNode.get(node.id) ?? []).some((step) => step.status === 'answered'),
+  const answered = terminals.some(
+    (node) =>
+      championed.has(node.id) ||
+      (byNode.get(node.id) ?? []).some((step) => step.status === 'answered'),
   )
   if (answered) return null
   return (

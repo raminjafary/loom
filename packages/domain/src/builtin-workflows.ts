@@ -3,8 +3,8 @@
  *
  * A workspace that opened onto an empty canvas and a "New workflow" button would teach an
  * operator that a harness is something they invent, when the whole argument for drawing one is
- * that the shapes worth drawing are already known and few. These five are that list: the six
- * named patterns, composed into the five jobs people actually run.
+ * that the shapes worth drawing are already known and few. These six are that list: the named
+ * patterns, composed into the jobs people actually run.
  *
  * They are **drawn graphs, not special-cased code paths**, and that is the load-bearing part.
  * Deep research is not a `deepResearch()` function with a flag — it is nodes and edges the same
@@ -14,9 +14,10 @@
  *
  * Four rules each of these follows, and each is a decision rather than a default:
  *
- * - **A verifier is never the author.** Every refutation step runs a different persona from the
- *   one whose answer it is checking, which the validator enforces and these obey rather than
- *   work around. That is the same construction the surrogate verifier uses, one level up.
+ * - **Nobody grades their own work.** Every refutation step, and every bracket's judge, runs a
+ *   different persona from the one whose answer it is reading — which the validator enforces and
+ *   these obey rather than work around. That is the same construction the surrogate verifier
+ *   uses, one level up.
  * - **A fan's width is small.** Four to six, not sixteen. A shipped harness is the first one an
  *   operator runs, and the number it teaches them is the number they will leave alone.
  * - **A barrier only where a stage genuinely needs every lane.** The reported mistake is
@@ -419,6 +420,103 @@ export const BUILTIN_WORKFLOWS: readonly BuiltinWorkflow[] = [
         { from: 'work', to: 'assembled', when: null, loop: null },
         { from: 'split', to: 'assembled', when: null, loop: null },
         { from: 'assembled', to: 'check', when: null, loop: null },
+      ],
+    },
+  },
+
+  {
+    name: 'tournament',
+    description:
+      'Attack one hard problem several ways at once and judge the attempts against each other, ' +
+      'two at a time. Reach for it when the approach is the thing in doubt.',
+    graph: {
+      nodes: [
+        {
+          kind: 'step',
+          id: 'approaches',
+          title: 'Name the approaches',
+          persona: 'solution-architect',
+          task:
+            'The problem: {{input}}\n\n' +
+            'Name three or four genuinely different *approaches* to it — different in what they ' +
+            'would actually do, not in how they are described. Each will be attempted by ' +
+            'somebody who cannot see the others, and the attempts will then be judged against ' +
+            'each other, so two approaches that would produce the same work waste an attempt. ' +
+            'Do not attempt any of them here, and do not say which you prefer: the point of ' +
+            'this shape is that the answer comes from the attempts rather than from a guess ' +
+            'made before them.',
+          answer: { fields: [{ kind: 'list', name: 'approaches' }] },
+        },
+        {
+          kind: 'fan',
+          id: 'attempt',
+          title: 'Attempt each approach',
+          persona: 'swe',
+          task:
+            'Solve this problem using this one approach, and only this one: {{item}}\n\n' +
+            'The problem: {{input}}\n\n' +
+            'Somebody else is attempting a different approach to the same problem, and the two ' +
+            'attempts will be compared. So carry yours far enough to be judged: what you did, ' +
+            'what it costs, where it breaks. An attempt that argues for its approach without ' +
+            'carrying it out loses to one that carried a worse approach out.',
+          source: 'approaches',
+          over: 'approaches',
+          maxWidth: 4,
+          answer: { fields: [{ kind: 'text', name: 'result' }] },
+        },
+        {
+          kind: 'barrier',
+          id: 'attempted',
+          title: 'Every attempt in',
+        },
+        {
+          /**
+           * The judge is `qa` and the attempts are `swe`, which the validator enforces: a judge
+           * comparing work its own persona wrote is the self-preference this whole shape is a
+           * route around.
+           */
+          kind: 'bracket',
+          id: 'judge',
+          title: 'Judge the attempts, two at a time',
+          persona: 'qa',
+          task:
+            'Two attempts at the same problem. The problem was: {{input}}\n\n' +
+            '--- LEFT ---\n{{left}}\n\n' +
+            '--- RIGHT ---\n{{right}}\n\n' +
+            'Say which of these two is better and answer `winner` with the side: left or ' +
+            'right. You are comparing the *work*, not the writing — check what each one ' +
+            'claims where you can, and prefer the attempt whose weaknesses you can see over ' +
+            'the one whose weaknesses are merely unstated. Neither side is favoured by being ' +
+            'first: which one you were shown first was decided by a hash. In `why`, name the ' +
+            'specific thing that decided it, because that is what the person reading the ' +
+            'result of the tournament has to be able to check.',
+          entrants: 'attempt',
+          over: 'result',
+          maxEntrants: 4,
+          answer: { fields: [{ kind: 'text', name: 'why' }] },
+        },
+        {
+          kind: 'step',
+          id: 'report',
+          title: 'Report the winner',
+          persona: 'product-manager',
+          task:
+            'The problem: {{input}}\n\n' +
+            'The approaches tried:\n\n{{approaches.approaches}}\n\n' +
+            'The attempt that survived every comparison:\n\n{{judge.champion}}\n\n' +
+            'Why it survived the last one: {{judge.why}}\n\n' +
+            'Write up the winning approach as the answer, and say what it beat. An approach ' +
+            'that lost is part of the result: the next person to ask this question needs to ' +
+            'know it was tried, or they will try it again.',
+          answer: null,
+        },
+      ],
+      edges: [
+        { from: 'approaches', to: 'attempt', when: null, loop: null },
+        { from: 'attempt', to: 'attempted', when: null, loop: null },
+        { from: 'approaches', to: 'attempted', when: null, loop: null },
+        { from: 'attempted', to: 'judge', when: null, loop: null },
+        { from: 'judge', to: 'report', when: null, loop: null },
       ],
     },
   },

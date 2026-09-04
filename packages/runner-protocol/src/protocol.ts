@@ -915,6 +915,17 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
             z.object({
               kind: z.enum(['text', 'flag', 'list']),
               name: z.string().min(1).max(40),
+              /**
+               * The whole vocabulary this field admits, where the platform rather than the
+               * author owns it — a bracket's `winner` and a router's `choice`.
+               *
+               * On the wire so the *tool call* refuses a value outside it, which is the
+               * difference between a model being told while it can still answer again and the
+               * server discovering it afterwards and recording a refusal nobody saw. The server
+               * checks it again on the way in regardless: a schema the Runner holds is a
+               * convenience, never the authority.
+               */
+              choices: z.array(z.string().min(1).max(40)).min(2).max(8).optional(),
             }),
           )
           .min(1)

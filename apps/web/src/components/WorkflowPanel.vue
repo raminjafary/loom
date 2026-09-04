@@ -153,6 +153,14 @@ const progress = computed(() =>
 
 const laneLabel = (node: WorkflowShapeNode): string | null => {
   if (node.lanes.length === 0) return null
+  /**
+   * A bracket's lanes are matches and its passes are rounds, so "6 lanes" would be the one
+   * reading a person cannot act on. Rounds are what tells them how far the tournament has got.
+   */
+  if (node.kind === 'bracket') {
+    const rounds = new Set(node.lanes.map((lane) => lane.pass)).size
+    return `${node.lanes.length} match(es) in ${rounds} round(s)`
+  }
   if (node.lanes.length === 1) return node.lanes[0]?.item ?? null
   return `${node.lanes.length} lanes`
 }
@@ -242,7 +250,7 @@ watch(
                 {{ node.persona }}<template v-if="laneLabel(node)"> · {{ laneLabel(node) }}</template>
               </text>
               <text v-if="node.fans" :x="node.x + 10" :y="node.y + 44" class="fan">
-                per {{ node.fans }}
+                {{ node.kind === 'bracket' ? 'two at a time from' : 'per' }} {{ node.fans }}
               </text>
             </template>
             <text v-else :x="node.x + node.width / 2" :y="node.y - 5" class="barrier-label">
@@ -448,6 +456,10 @@ figcaption {
 }
 .node.mixed rect {
   stroke: #b98a2f;
+}
+/** A bracket is the one node whose rows are rounds, and it reads as heavier for that reason. */
+.node.bracket rect {
+  stroke-width: 1.8;
 }
 .node.skipped rect {
   stroke-dasharray: 3 3;

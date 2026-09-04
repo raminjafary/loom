@@ -31,7 +31,14 @@ export interface WorkflowStepRow {
   readonly costUsd: number | null
 }
 
-export type WorkflowNodeKind = 'step' | 'fan' | 'router' | 'verifier' | 'barrier' | 'unknown'
+export type WorkflowNodeKind =
+  | 'step'
+  | 'fan'
+  | 'router'
+  | 'verifier'
+  | 'bracket'
+  | 'barrier'
+  | 'unknown'
 
 /** What one node's lanes add up to, which is what a reader is actually asking. */
 export type WorkflowNodeState =
@@ -94,6 +101,8 @@ interface RawNode {
   readonly over?: string | null
   readonly verifies?: string
   readonly maxWidth?: number | null
+  readonly entrants?: string
+  readonly maxEntrants?: number | null
 }
 
 interface RawEdge {
@@ -121,6 +130,8 @@ const readNodes = (graph: unknown): RawNode[] => {
         ...(typeof node.over === 'string' ? { over: node.over } : {}),
         ...(typeof node.verifies === 'string' ? { verifies: node.verifies } : {}),
         ...(typeof node.maxWidth === 'number' ? { maxWidth: node.maxWidth } : {}),
+        ...(typeof node.entrants === 'string' ? { entrants: node.entrants } : {}),
+        ...(typeof node.maxEntrants === 'number' ? { maxEntrants: node.maxEntrants } : {}),
       },
     ]
   })
@@ -143,10 +154,17 @@ const readEdges = (graph: unknown): RawEdge[] => {
   })
 }
 
+const KINDS: readonly WorkflowNodeKind[] = [
+  'step',
+  'fan',
+  'router',
+  'verifier',
+  'bracket',
+  'barrier',
+]
+
 const kindOf = (raw: string): WorkflowNodeKind =>
-  raw === 'step' || raw === 'fan' || raw === 'router' || raw === 'verifier' || raw === 'barrier'
-    ? raw
-    : 'unknown'
+  (KINDS as readonly string[]).includes(raw) ? (raw as WorkflowNodeKind) : 'unknown'
 
 /**
  * What makes a node open lanes, in the words a reader needs: where the list comes from and how
@@ -158,6 +176,13 @@ const fansOf = (node: RawNode): string | null => {
   }
   if (node.kind === 'verifier' && node.verifies !== undefined && node.over != null) {
     return `${node.verifies}.${node.over}, up to ${node.maxWidth ?? '?'}`
+  }
+  /**
+   * A bracket's lanes are matches rather than items, so the number a reader needs is how many
+   * entrants may come forward — the matches follow from it, and the rounds from those.
+   */
+  if (node.kind === 'bracket' && node.entrants !== undefined && node.over !== undefined) {
+    return `${node.entrants}.${node.over}, up to ${node.maxEntrants ?? '?'} entrants`
   }
   return null
 }

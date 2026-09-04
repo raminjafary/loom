@@ -91,7 +91,7 @@ describe('parseWorkflowGraph', () => {
 
   it('refuses a vocabulary it cannot enumerate', () => {
     expect(refusal({ nodes: [{ ...step('a'), kind: 'subagent' }], edges: [] })).toContain(
-      'the vocabulary is step, fan, router, verifier and barrier',
+      'the vocabulary is step, fan, router, verifier, bracket and barrier',
     )
   })
 
@@ -504,5 +504,184 @@ describe('canonicalWorkflow', () => {
     const left = accepted({ nodes: [step('a', { task: 'x' }), step('b', { task: 'yz' })], edges: [] })
     const right = accepted({ nodes: [step('a', { task: 'xy' }), step('b', { task: 'z' })], edges: [] })
     expect(canonicalWorkflow(left)).not.toBe(canonicalWorkflow(right))
+  })
+})
+
+/**
+ * A bracket, whose refusals are all of one kind: a comparison that is not one.
+ *
+ * One entrant, one side named in the prompt, a judge that half-wrote the field, a round number
+ * that would have to mean two things — each of them parses, draws, and would only be wrong once
+ * it was paying for matches.
+ */
+describe('a bracket', () => {
+  const attempts = (over: Record<string, unknown> = {}) => [
+    step('approaches', { answer: listAnswer('approaches') }),
+    {
+      kind: 'fan',
+      id: 'attempt',
+      title: 'attempt',
+      persona: 'Worker',
+      task: 'try {{item}}',
+      source: 'approaches',
+      over: 'approaches',
+      maxWidth: 6,
+      answer: { fields: [{ kind: 'text', name: 'result' }] },
+    },
+    { kind: 'barrier', id: 'attempted', title: 'attempts in' },
+    {
+      kind: 'bracket',
+      id: 'judge',
+      title: 'judge',
+      persona: 'Judge',
+      task: 'is {{left}} better than {{right}}?',
+      entrants: 'attempt',
+      over: 'result',
+      maxEntrants: 6,
+      answer: { fields: [{ kind: 'text', name: 'why' }] },
+      ...over,
+    },
+  ]
+
+  const bracketGraph = (over: Record<string, unknown> = {}, extra: unknown[] = []) => ({
+    nodes: [...attempts(over), ...extra],
+    edges: [
+      { from: 'approaches', to: 'attempt' },
+      { from: 'attempt', to: 'attempted' },
+      { from: 'approaches', to: 'attempted' },
+      { from: 'attempted', to: 'judge' },
+    ],
+  })
+
+  it('accepts a tournament over the lanes of a fan', () => {
+    expect(accepted(bracketGraph()).nodes).toHaveLength(4)
+  })
+
+  it('refuses one that names a single side, which is a rating and not a comparison', () => {
+    expect(refusal(bracketGraph({ task: 'is {{left}} any good?' }))).toContain('{{right}}')
+  })
+
+  it('refuses {{left}} anywhere else, since nothing else runs against a pair', () => {
+    const graph = bracketGraph({}, [step('ship', { task: 'carry out {{left}}' })])
+    expect(refusal({ ...graph, edges: [...graph.edges, { from: 'judge', to: 'ship' }] })).toContain(
+      'only a bracket',
+    )
+  })
+
+  it('refuses a judge that wrote what it judges', () => {
+    expect(refusal(bracketGraph({ persona: 'Worker' }))).toContain('does not hold a tournament')
+  })
+
+  it('refuses a tournament of one', () => {
+    expect(refusal(bracketGraph({ maxEntrants: 1 }))).toContain('nothing to compare')
+  })
+
+  it('refuses more entrants than the ceiling admits', () => {
+    expect(refusal(bracketGraph({ maxEntrants: 32 }))).toContain('ceiling')
+  })
+
+  it('refuses one entrant per lane taken from a field that is a list', () => {
+    const graph = bracketGraph({ over: 'notes' })
+    const nodes = (graph.nodes as Record<string, unknown>[]).map((node) =>
+      node.id === 'attempt'
+        ? {
+            ...node,
+            answer: {
+              fields: [
+                { kind: 'text', name: 'result' },
+                { kind: 'list', name: 'notes' },
+              ],
+            },
+          }
+        : node,
+    )
+    expect(refusal({ ...graph, nodes })).toContain('text field')
+  })
+
+  it('refuses entrants from a step that runs once and answers text', () => {
+    const graph = {
+      nodes: [
+        step('ideas', { answer: { fields: [{ kind: 'text', name: 'blob' }] } }),
+        {
+          kind: 'bracket',
+          id: 'judge',
+          title: 'judge',
+          persona: 'Judge',
+          task: '{{left}} or {{right}}?',
+          entrants: 'ideas',
+          over: 'blob',
+          maxEntrants: 4,
+          answer: null,
+        },
+      ],
+      edges: [{ from: 'ideas', to: 'judge' }],
+    }
+    expect(refusal(graph)).toContain('has to be a list')
+  })
+
+  it('accepts entrants from the list a single step wrote', () => {
+    const graph = {
+      nodes: [
+        step('ideas', { answer: listAnswer('options') }),
+        {
+          kind: 'bracket',
+          id: 'judge',
+          title: 'judge',
+          persona: 'Judge',
+          task: '{{left}} or {{right}}?',
+          entrants: 'ideas',
+          over: 'options',
+          maxEntrants: 4,
+          answer: null,
+        },
+      ],
+      edges: [{ from: 'ideas', to: 'judge' }],
+    }
+    expect(accepted(graph).nodes).toHaveLength(2)
+  })
+
+  it('refuses a declared answer field the platform already writes', () => {
+    expect(refusal(bracketGraph({ answer: { fields: [{ kind: 'text', name: 'winner' }] } }))).toContain(
+      "platform's own",
+    )
+  })
+
+  it('lets the step below read the champion it never declared', () => {
+    const graph = bracketGraph({}, [step('ship', { task: 'carry out {{judge.champion}}' })])
+    expect(
+      accepted({ ...graph, edges: [...graph.edges, { from: 'judge', to: 'ship' }] }).nodes,
+    ).toHaveLength(5)
+  })
+
+  it('refuses a field the judge does not answer, champion or not', () => {
+    const graph = bracketGraph({}, [step('ship', { task: 'carry out {{judge.rosette}}' })])
+    expect(refusal({ ...graph, edges: [...graph.edges, { from: 'judge', to: 'ship' }] })).toContain(
+      'does not answer',
+    )
+  })
+
+  it('refuses a bracket inside a loop, whose rounds already use the pass number', () => {
+    const graph = bracketGraph({ answer: { fields: [{ kind: 'flag', name: 'settled' }] } }, [])
+    expect(
+      refusal({
+        ...graph,
+        edges: [...graph.edges, { from: 'judge', to: 'attempted', loop: { until: 'settled' } }],
+      }),
+    ).toContain('rounds already use the pass number')
+  })
+
+  it('prices it as one match per entrant less one, since each removes an entrant', () => {
+    const graph = accepted(bracketGraph())
+    const detail = describeWorkflowCost(
+      graph,
+      graph.nodes.map((node) => ({ id: node.id, budgetCapUsd: 1 })),
+    )
+    expect(detail).toContain('5 match(es)')
+    // approaches + 6 lanes + 5 matches, each capped at a dollar.
+    expect(detail).toContain('$12.00')
+  })
+
+  it('refuses a node named after something a template already means', () => {
+    expect(refusal({ nodes: [step('input')], edges: [] })).toContain('Reserved')
   })
 })

@@ -27,6 +27,16 @@ export const SUBMIT_WORKFLOW_ANSWER_TOOL_NAME = `mcp__${WORKFLOW_SERVER_NAME}__s
 export interface WorkflowAnswerField {
   readonly kind: 'text' | 'flag' | 'list'
   readonly name: string
+  /**
+   * The whole vocabulary this field admits, where the platform owns it rather than the author —
+   * a bracket's `winner`, a router's `choice`.
+   *
+   * Rendered as an enum, so a value outside it comes back as a tool error the model still has
+   * time to fix. Without this the same mistake arrives at the server as a well-shaped string,
+   * and the honest thing the server can do with it is refuse the step — a refusal the model
+   * never saw and could not have corrected.
+   */
+  readonly choices?: readonly string[] | undefined
 }
 
 export interface WorkflowAnswerToolCallbacks {
@@ -38,6 +48,16 @@ export interface WorkflowAnswerToolCallbacks {
 const shapeOf = (fields: readonly WorkflowAnswerField[]): z.ZodRawShape => {
   const shape: Record<string, z.ZodTypeAny> = {}
   for (const field of fields) {
+    const choices = field.choices ?? []
+    if (choices.length >= 2) {
+      shape[field.name] = z
+        .enum(choices as [string, ...string[]])
+        .describe(
+          `"${field.name}": exactly one of ${choices.join(', ')}. Nothing else is an answer ` +
+            'here — a description of what you preferred is not one of these words.',
+        )
+      continue
+    }
     shape[field.name] =
       field.kind === 'text'
         ? z.string().min(1).max(20_000).describe(`The "${field.name}" your step was asked for.`)

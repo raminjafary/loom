@@ -595,7 +595,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
      * Present when this run is a step of a drawn workflow: the fields its answer must carry,
      * which is what bounds `submit_workflow_answer`'s arguments.
      */
-    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string }[] }
+    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] | undefined }[] }
     proposeVariants?: { personaName: string }
   }): Promise<void> => {
     // Async, and awaited by whoever produces events (the SDK loop in-process, the
@@ -1600,7 +1600,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                   ? {}
                   : {
                       answerWorkflow: {
-                        fields: frame.answerWorkflow.fields.map((field) => ({ ...field })),
+                        fields: frame.answerWorkflow.fields.map((field) => ({
+                          kind: field.kind,
+                          name: field.name,
+                          ...(field.choices === undefined
+                            ? {}
+                            : { choices: [...field.choices] }),
+                        })),
                       },
                     }),
                 ...(frame.proposeVariants === undefined

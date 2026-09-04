@@ -1846,7 +1846,7 @@ export interface RunDispatchPort {
      * Declared here for the reason `verifyVariants` gives: a spread against a port that never
      * declared the field compiles, and this layer has dropped one that way before.
      */
-    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string }[] }
+    answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] | undefined }[] }
   }): Promise<void>
   /**
    * Aborts a run mid-flight. Fire-and-forget and

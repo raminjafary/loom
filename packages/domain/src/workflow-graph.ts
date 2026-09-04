@@ -77,6 +77,16 @@ export const MAX_LOOP_ITERATIONS = 5
 export const MAX_ROUTER_CHOICES = 8
 
 /**
+ * How many entrants one `bracket` may judge.
+ *
+ * Eight, which is three rounds and seven matches — the point past which a tournament is paying
+ * for comparisons nobody reads. It is deliberately half a fan's ceiling: a fan of sixteen is
+ * sixteen runs, and a bracket of sixteen is fifteen *judgements* on top of the sixteen runs that
+ * produced the entrants.
+ */
+export const MAX_BRACKET_ENTRANTS = 8
+
+/**
  * The shape of an answer a step must return, in the smallest vocabulary that supports the
  * checks other nodes make against it.
  *
@@ -169,6 +179,83 @@ export interface WorkflowVerifierNode extends RunNodeShared {
 }
 
 /**
+ * A single-elimination tournament: N answers, judged **two at a time**, until one is left.
+ *
+ * The shape exists because the alternative does not work. Asked to pick the best of six answers
+ * in one call, a model reads six long texts in one context and returns a preference; the reported
+ * failure modes of exactly that construction are self-preferential bias and a verdict that
+ * correlates with position rather than with quality. A bracket replaces one wide judgement with
+ * a series of narrow ones, each between two answers and each in its own context — the same remedy
+ * a verifier applies to a claim, applied to a comparison.
+ *
+ * Three things make it a measurement rather than a knockout with a rosette:
+ *
+ * - **A round is a `pass` and a match is an `item`**, so the journal already keys it: round 2's
+ *   match 1 is a row, not a collision. Nothing new was needed to record a bracket.
+ * - **The seeding is hash-seeded, not authored.** Who meets whom, and which of a pair is shown
+ *   first, come from a hash of the execution and the node — so the entrant a model happened to
+ *   write first has no shorter path to the final and no reliable side of the page. That is the
+ *   one place this vocabulary admits a random choice, and it is random in distribution and
+ *   byte-reproducible from the rows.
+ * - **The judge is never an author.** The same rule a verifier keeps, and here it is load-bearing
+ *   twice over: a persona judging a pair it half-wrote is the self-preference the shape exists
+ *   to route around.
+ *
+ * A match that answers nothing advances nobody — deliberately, over the alternative of advancing
+ * a side by default. A default side would be the hash deciding the tournament rather than
+ * deciding the seating, and a bracket whose winner can be produced by a refusal is not evidence
+ * about the entrants.
+ */
+export interface WorkflowBracketNode extends RunNodeShared {
+  readonly kind: 'bracket'
+  /** The node whose answers are the entrants. */
+  readonly entrants: string
+  /**
+   * Which field of that node's answer an entrant comes from — one entrant per lane where that
+   * node fans, and one per list element where it runs once.
+   */
+  readonly over: string
+  /**
+   * How many entrants may come forward, and the ceiling on the whole tournament: a bracket of
+   * `n` costs `n - 1` matches.
+   *
+   * Mandatory for the reason a fan's width is: the list of entrants is model-authored, so a bound
+   * chosen when the shape was drawn is the only bound a human chose at all.
+   */
+  readonly maxEntrants: number
+  /** What a match answers **beside** `winner`, which is fixed. Usually one text field: why. */
+  readonly answer: WorkflowAnswer | null
+}
+
+/**
+ * The two entrants of one match, as a judge's task refers to them.
+ *
+ * Named sides rather than `{{item}}` because a match has two items and the whole question is
+ * which of them is better. They are legal only in a bracket's task and required there: a judge
+ * whose prompt names neither side has been handed a comparison with nothing in it.
+ */
+export const LEFT_REFERENCE = 'left'
+export const RIGHT_REFERENCE = 'right'
+
+/**
+ * The one field a match's answer must carry, and its whole vocabulary is `left` and `right`.
+ *
+ * A side rather than an entrant, so a judge cannot answer with a paraphrase of the text it
+ * preferred and leave the executor guessing which entrant that was.
+ */
+export const BRACKET_WINNER_FIELD = 'winner'
+export const BRACKET_WINNER_SIDES: readonly string[] = [LEFT_REFERENCE, RIGHT_REFERENCE]
+
+/**
+ * What a bracket answers to everything below it: the entrant that survived, verbatim.
+ *
+ * Derived from the rows rather than stored, and that is what makes a bracket replayable — the
+ * champion is a function of the seeding and the matches, so re-reading the journal re-derives it
+ * rather than trusting a summary somebody wrote at the time.
+ */
+export const BRACKET_CHAMPION_FIELD = 'champion'
+
+/**
  * What makes a node run once per element, whichever kind it is: where the list comes from, which
  * field of that answer it is, and how wide a human said it may get.
  *
@@ -206,6 +293,7 @@ export type WorkflowNode =
   | WorkflowFanNode
   | WorkflowRouterNode
   | WorkflowVerifierNode
+  | WorkflowBracketNode
   | WorkflowBarrierNode
 
 export type WorkflowRunNode =
@@ -213,6 +301,21 @@ export type WorkflowRunNode =
   | WorkflowFanNode
   | WorkflowRouterNode
   | WorkflowVerifierNode
+  | WorkflowBracketNode
+
+/**
+ * Whether this node runs in lanes of its own — a fan's items, a per-item verifier's claims, or a
+ * bracket's matches.
+ *
+ * One question with three answers rather than three checks, because the rules about lanes are
+ * rules about *having* them: a lane-opener inside another's lanes needs a two-dimensional index
+ * whichever kind it is, and the executor derives that from here so a new opener cannot be added
+ * to one rule and forgotten in the other. What it does *not* say is how wide, because a bracket's
+ * width is a round of matches rather than the length of a list — that is `fanningOf`'s question
+ * and a bracket deliberately answers it with null.
+ */
+export const opensLanes = (node: WorkflowNode): boolean =>
+  node.kind === 'bracket' || fanningOf(node) !== null
 
 /**
  * A dependency edge.
@@ -268,6 +371,14 @@ export const ITEM_REFERENCE = 'item'
  */
 export const INPUT_REFERENCE = 'input'
 
+/** Every name a task template resolves itself, and therefore every name no node may take. */
+export const RESERVED_REFERENCES: readonly string[] = [
+  ITEM_REFERENCE,
+  INPUT_REFERENCE,
+  LEFT_REFERENCE,
+  RIGHT_REFERENCE,
+]
+
 export interface TemplateReference {
   readonly node: string
   readonly field: string | null
@@ -285,9 +396,25 @@ export const templateReferences = (task: string): TemplateReference[] => {
 
 export const isRunNode = (node: WorkflowNode): node is WorkflowRunNode => node.kind !== 'barrier'
 
-/** What a node answers, or null when it answers nothing structured a later node could read. */
-export const answerOf = (node: WorkflowNode): WorkflowAnswer | null =>
-  node.kind === 'step' || node.kind === 'fan' || node.kind === 'verifier' ? node.answer : null
+/**
+ * What a node answers, or null when it answers nothing structured a later node could read.
+ *
+ * A bracket's `champion` is in the list without having been declared, because it is what a
+ * bracket *is* for: `{{final.champion}}` in the step below has to validate at drawing time, and
+ * asking an author to declare a field the platform always writes would be a second place for the
+ * same fact to be wrong.
+ */
+export const answerOf = (node: WorkflowNode): WorkflowAnswer | null => {
+  if (node.kind === 'bracket') {
+    return {
+      fields: [
+        { kind: 'text', name: BRACKET_CHAMPION_FIELD },
+        ...(node.answer?.fields ?? []),
+      ],
+    }
+  }
+  return node.kind === 'step' || node.kind === 'fan' || node.kind === 'verifier' ? node.answer : null
+}
 
 const fieldOf = (node: WorkflowNode, name: string): WorkflowAnswerField | null =>
   answerOf(node)?.fields.find((field) => field.name === name) ?? null
@@ -325,6 +452,14 @@ const parseNode = (value: unknown, index: number): WorkflowNode | string => {
   const { id, title, kind } = raw
   if (!isString(id) || !SLUG.test(id)) {
     return `Node ${index + 1} needs a lower-case slug id, not ${JSON.stringify(id)}.`
+  }
+  /**
+   * A node may not take a name a template already means. `{{input}}` on a node called `input`
+   * renders the execution's own text and not that node's answer — which is not a validation
+   * nicety: it is a step being handed something other than what its author wrote, silently.
+   */
+  if (RESERVED_REFERENCES.includes(id)) {
+    return `Node ${index + 1} is called "${id}", which is what a task template already means. Reserved: ${RESERVED_REFERENCES.join(', ')}.`
   }
   if (!isString(title) || title.trim() === '') return `Node "${id}" needs a title.`
 
@@ -406,7 +541,33 @@ const parseNode = (value: unknown, index: number): WorkflowNode | string => {
     }
   }
 
-  return `Node "${id}" has kind ${JSON.stringify(kind)}; the vocabulary is step, fan, router, verifier and barrier.`
+  if (kind === 'bracket') {
+    const { entrants, over, maxEntrants } = raw
+    if (!isString(entrants) || !SLUG.test(entrants)) {
+      return `Bracket "${id}" needs an \`entrants\` node id.`
+    }
+    if (!isString(over) || !SLUG.test(over)) return `Bracket "${id}" needs an \`over\` field name.`
+    if (typeof maxEntrants !== 'number' || !Number.isInteger(maxEntrants) || maxEntrants < 2) {
+      return `Bracket "${id}" needs a whole \`maxEntrants\` of at least 2; a tournament of one has nothing to compare.`
+    }
+    if (maxEntrants > MAX_BRACKET_ENTRANTS) {
+      return `Bracket "${id}" admits ${maxEntrants} entrants; ${MAX_BRACKET_ENTRANTS} is the ceiling.`
+    }
+    const answer = parseAnswer(raw.answer, `Bracket "${id}"`)
+    if (isString(answer)) return answer
+    for (const field of answer?.fields ?? []) {
+      if (field.name === BRACKET_WINNER_FIELD || field.name === BRACKET_CHAMPION_FIELD) {
+        return (
+          `Bracket "${id}" declares an answer field called "${field.name}", which is the ` +
+          'platform\'s own: a match always answers `winner` and a bracket always answers ' +
+          '`champion`, so declaring one would be two definitions of which entrant won.'
+        )
+      }
+    }
+    return { kind: 'bracket', ...shared, entrants, over, maxEntrants, answer }
+  }
+
+  return `Node "${id}" has kind ${JSON.stringify(kind)}; the vocabulary is step, fan, router, verifier, bracket and barrier.`
 }
 
 const parseEdge = (value: unknown, index: number): WorkflowEdge | string => {
@@ -599,6 +760,41 @@ const checkStructure = (graph: WorkflowGraph, byId: Map<string, WorkflowNode>): 
       }
     }
 
+    if (node.kind === 'bracket') {
+      const source = byId.get(node.entrants)
+      if (source === undefined) {
+        return `Bracket "${node.id}" judges "${node.entrants}", which is not a node.`
+      }
+      if (!(ancestors.get(node.id)?.has(node.entrants) ?? false)) {
+        return `Bracket "${node.id}" judges "${node.entrants}", which is not one of its ancestors.`
+      }
+      if (source.kind === 'barrier') {
+        return `Bracket "${node.id}" judges barrier "${node.entrants}", which answers nothing of its own. Name the step above it.`
+      }
+      if (isRunNode(source) && source.persona === node.persona) {
+        return `Bracket "${node.id}" runs the persona that wrote what it judges (${node.persona}). A judge that half-wrote the field does not hold a tournament.`
+      }
+      const field = fieldOf(source, node.over)
+      if (field === null) {
+        return `Bracket "${node.id}" judges "${node.entrants}.${node.over}", which that node does not answer.`
+      }
+      /**
+       * Where the entrants come from decides which field kind is the honest one, and both are
+       * legal because both are real shapes: several attempts made in parallel are one lane each
+       * and one text each, and several ideas from one step are one list.
+       */
+      if (opensLanes(source)) {
+        if (field.kind !== 'text') {
+          return `Bracket "${node.id}" takes one entrant per lane of "${node.entrants}", so "${node.over}" has to be a text field and it is a ${field.kind}.`
+        }
+      } else if (field.kind !== 'list') {
+        return `Bracket "${node.id}" takes its entrants from "${node.entrants}", which runs once, so "${node.over}" has to be a list and it is a ${field.kind}.`
+      }
+      if (loopsContaining(graph, node.id) > 0) {
+        return `Bracket "${node.id}" sits inside a loop, and its rounds already use the pass number. Put the bracket behind a barrier outside the loop.`
+      }
+    }
+
     if (loopsContaining(graph, node.id) > 1) {
       return `"${node.id}" sits inside more than one loop, so there is no single count of how many times it has run. Nest loops behind a barrier instead.`
     }
@@ -628,8 +824,24 @@ const checkStructure = (graph: WorkflowGraph, byId: Map<string, WorkflowNode>): 
         return `"${node.id}" mentions {{${ITEM_REFERENCE}}} but does not run once per item.`
       }
 
+      /**
+       * A match's two sides, checked the way a fan's item is and for the same failure: a judge
+       * whose prompt names one side is being asked to rate one answer, which is not a comparison
+       * and would come back as a preference for the only text it was shown.
+       */
+      const sides = [LEFT_REFERENCE, RIGHT_REFERENCE].filter((side) =>
+        references.some((reference) => reference.node === side),
+      )
+      if (node.kind === 'bracket' && sides.length < 2) {
+        return `Bracket "${node.id}" judges two entrants at a time and its task names ${sides.length === 0 ? 'neither' : `only {{${sides[0]}}}`}. A judge has to be shown both {{${LEFT_REFERENCE}}} and {{${RIGHT_REFERENCE}}}.`
+      }
+      if (node.kind !== 'bracket' && sides.length > 0) {
+        return `"${node.id}" mentions {{${sides[0]}}}, which only a bracket's match has — nothing else in a workflow runs against a pair.`
+      }
+
       for (const reference of references) {
         if (reference.node === ITEM_REFERENCE || reference.node === INPUT_REFERENCE) continue
+        if (reference.node === LEFT_REFERENCE || reference.node === RIGHT_REFERENCE) continue
         const target = byId.get(reference.node)
         if (target === undefined) {
           return `"${node.id}" reads {{${reference.node}}}, which is not a node.`
@@ -756,6 +968,18 @@ export const loopedNodes = (graph: WorkflowGraph): Set<string> => {
   return inside
 }
 
+/**
+ * How many runs one node is worth at worst, on a single pass.
+ *
+ * A fan's is its width. A bracket's is `maxEntrants - 1`, which is the arithmetic of single
+ * elimination rather than a bound somebody chose: every match removes exactly one entrant, so
+ * eight entrants are seven matches however the seeding falls, byes included.
+ */
+export const worstCaseRuns = (node: WorkflowNode): number => {
+  if (node.kind === 'bracket') return node.maxEntrants - 1
+  return fanningOf(node)?.maxWidth ?? 1
+}
+
 /** What one node could cost, for the disclosure a human reads before approving a shape. */
 export interface WorkflowNodeCost {
   readonly id: string
@@ -782,9 +1006,8 @@ export const describeWorkflowCost = (
 
   const ceiling = runNodes.reduce((sum, node) => {
     const cap = capOf.get(node.id) ?? 0
-    const width = fanningOf(node)?.maxWidth ?? 1
     const passes = inLoop.has(node.id) ? MAX_LOOP_ITERATIONS : 1
-    return sum + cap * width * passes
+    return sum + cap * worstCaseRuns(node) * passes
   }, 0)
 
   const stages = workflowStages(graph)
@@ -796,6 +1019,14 @@ export const describeWorkflowCost = (
         : `, behind ${barriers} barrier(s) that each wait for every inbound lane.`),
   ]
   for (const node of runNodes) {
+    if (node.kind === 'bracket') {
+      lines.push(
+        `- "${node.id}" judges the entrants from ${node.entrants}.${node.over} two at a time, ` +
+          `up to ${node.maxEntrants} of them — ${node.maxEntrants - 1} match(es), since every ` +
+          'one of them removes an entrant.',
+      )
+      continue
+    }
     const fanning = fanningOf(node)
     if (fanning === null) continue
     lines.push(
@@ -840,7 +1071,9 @@ export const canonicalWorkflow = (graph: WorkflowGraph): string => {
           ? [node.verifies, node.over ?? '', node.maxWidth ?? 0]
           : node.kind === 'fan'
             ? [node.source, node.over, node.maxWidth]
-            : [],
+            : node.kind === 'bracket'
+              ? [node.entrants, node.over, node.maxEntrants]
+              : [],
       (answerOf(node)?.fields ?? [])
         .map((field) => [field.kind, field.name])
         .sort((a, b) => (a[1] ?? '').localeCompare(b[1] ?? '')),
