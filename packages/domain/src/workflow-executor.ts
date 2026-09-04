@@ -406,7 +406,18 @@ export const nextWorkflowActions = (input: {
     const sourcePass = passFor(fanning.source, pass, loopFor(fanId))
     if (sourcePass === null) return null
     const source = byKey.get(keyOf(fanning.source, sourcePass, 0))
-    if (source === undefined || source.status !== 'answered') return null
+    if (source === undefined || !SETTLED.has(source.status)) return null
+    /**
+     * A source that settled without answering opens **no lanes**, rather than leaving them
+     * unknown forever.
+     *
+     * The difference is the difference between "still coming" and "will never come", and
+     * conflating them is how an execution whose first step was refused ran until somebody
+     * noticed: nothing was ready, nothing could be skipped, and the run stayed `running` with
+     * an empty graph beneath it. Zero lanes lets the edges below resolve as not-taken, which
+     * is what closes the execution and reports it failed.
+     */
+    if (source.status !== 'answered') return []
     const list = source.answer?.[fanning.field]
     if (!Array.isArray(list)) return []
     return list.slice(0, fanning.maxWidth)

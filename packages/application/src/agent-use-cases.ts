@@ -5275,20 +5275,27 @@ export const startAgentRun = async (
     runnerId: repository.runnerId,
     persona: personaSpec,
     /**
-     * A relation without a parent is allowed for exactly one case: a **measurement run**.
+     * A relation without a parent is allowed for two cases, and both are runs the platform
+     * started rather than runs a parent handed down.
      *
      * A screening run hangs off the run that proposed its search, but a campaign's runs are
      * started by a sweep on a human's standing instruction and have nothing to hang off. The
      * relation still has to be stored, because `relation = 'screen'` is what every exclusion
      * query reads — the replay set's own material, the routing table, the failing-check
      * histogram, the divergence set — and a parentless measurement run without it would fold
-     * a measurement's output back into the population it measures. Nothing else reads a
-     * relation without an edge: the tree and the graph both draw from `parentRunId`.
+     * a measurement's output back into the population it measures.
+     *
+     * A **workflow** step is the second, and it is parentless by design rather than by
+     * circumstance: a workflow is a DAG, so naming one of a step's two predecessors "the
+     * parent" would make the tree assert something false about which answers that step had.
+     * The relation is what makes eight sibling runs appearing at once read as a harness rather
+     * than as a runaway swarm, and it was dropped here in silence until a live driver looked
+     * at the stored row — an allow-list of one is a list that is wrong the first time it grows.
      */
     ...(parent
       ? { parentRunId: parent.id, relation: input.relation ?? 'delegation' }
-      : input.relation === 'screen'
-        ? { relation: 'screen' as const }
+      : input.relation === 'screen' || input.relation === 'workflow'
+        ? { relation: input.relation }
         : {}),
     // Recorded so a re-planning turn can read back the goal and the plan. Stored before
     // dispatch: a run that fails to start still answers "what was it asked to do", which is

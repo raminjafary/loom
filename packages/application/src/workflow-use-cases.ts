@@ -394,7 +394,15 @@ export const advanceWorkflowQueue = async (
         maxStarts: Math.max(0, budget),
       })
     } catch {
-      // Left running on purpose: the next tick tries again.
+      /**
+       * Left running on purpose: the next tick tries again, and an execution closed by an error
+       * would report a partial result as if a cap had been reached.
+       *
+       * What this swallows is worth naming, because it swallowed a real one: a relation the
+       * database's own mapper did not list threw on the *read back*, so every step was claimed,
+       * released and lost in silence. A tick that cannot be advanced is invisible from the
+       * outside by design, which is why the live driver exists.
+       */
     }
   }
 }

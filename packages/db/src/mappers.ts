@@ -528,7 +528,7 @@ const toAgentRunBranchDisposition = (value: string | null): AgentRunBranchDispos
   throw new Error(`unknown agent_run branch_disposition: ${value}`)
 }
 
-const AGENT_RUN_RELATIONS: readonly AgentRunRelation[] = [
+const AGENT_RUN_RELATIONS = [
   'delegation',
   'review',
   'reconcile',
@@ -537,7 +537,22 @@ const AGENT_RUN_RELATIONS: readonly AgentRunRelation[] = [
   'handoff',
   'screen',
   'escalate',
-]
+  'workflow',
+] as const satisfies readonly AgentRunRelation[]
+
+/**
+ * Compile-time proof that the list above is the *whole* union, not a subset of it.
+ *
+ * `readonly AgentRunRelation[]` accepts a list that is missing one, which is how `workflow` got
+ * as far as a live driver: the domain had the relation, the contract had it, the run was created
+ * with it — and then reading that row back threw, so the step was released and the execution
+ * dealt nothing, in silence. This makes a new relation a type error here rather than a runtime
+ * one at the first read, and the error names the relation that was forgotten.
+ */
+type UnlistedRelation = Exclude<AgentRunRelation, (typeof AGENT_RUN_RELATIONS)[number]>
+export const EVERY_AGENT_RUN_RELATION_IS_LISTED: [UnlistedRelation] extends [never]
+  ? true
+  : UnlistedRelation = true
 
 const toAgentRunRelation = (value: string | null): AgentRunRelation | null => {
   if (value === null) return null

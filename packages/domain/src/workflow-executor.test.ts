@@ -264,6 +264,42 @@ describe('nextWorkflowActions', () => {
     expect(report?.task).toBe('write up 1. first\n2. second')
   })
 
+  /**
+   * "Still coming" and "will never come" are different, and conflating them is how an execution
+   * whose first step was refused ran forever: nothing ready, nothing skippable, an empty graph
+   * beneath it and a `running` status.
+   */
+  it('closes a graph whose fan source was refused rather than waiting on lanes that cannot open', () => {
+    const steps = [step('discover', { status: 'refused', answer: null }), step('lint')]
+    const verdict = plan(sweep, steps)
+    // No lanes opened, so the fan and the step in its lane have no rows at all — there was
+    // nothing to run rather than something that was skipped.
+    expect(verdict.deal).toEqual([])
+    expect(verdict.collect.map((entry) => entry.nodeId)).toEqual(['all-done'])
+    // And the barrier opens on the lane that did answer, rather than waiting on lanes that
+    // will never exist.
+    expect(plan(sweep, [...steps, step('all-done')]).deal.map((entry) => entry.nodeId)).toEqual([
+      'report',
+    ])
+  })
+
+  it('reports a graph that answered nowhere as a failure, with the reason', () => {
+    const settled = [
+      step('discover', { status: 'refused', answer: null }),
+      step('lint', { status: 'refused', answer: null }),
+    ]
+    const verdict = plan(sweep, settled)
+    expect(verdict.deal).toEqual([])
+    expect(verdict.skip.map((entry) => entry.nodeId)).toEqual(['all-done'])
+    // The skip cascades one stage per tick, and the execution closes as failed once it
+    // reaches the bottom — the shape stays failed rather than running forever.
+    const past = [...settled, step('all-done', { status: 'skipped', answer: null })]
+    expect(plan(sweep, past).skip.map((entry) => entry.nodeId)).toEqual(['report'])
+    const closed = plan(sweep, [...past, step('report', { status: 'skipped', answer: null })])
+    expect(closed.done).toBe(true)
+    expect(closed.failure).toContain('every terminal step was refused')
+  })
+
   it('is done only when nothing is running and nothing more can be dealt', () => {
     expect(plan(sweep, []).done).toBe(false)
     const running = [step('discover', { status: 'running', answer: null }), step('lint')]
