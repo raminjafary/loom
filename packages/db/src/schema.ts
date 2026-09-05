@@ -2576,6 +2576,51 @@ export const workflowRun = pgTable(
  * other snapshot here is: the persona document can change afterwards, and this has to keep
  * saying what was true when the proposal was made.
  */
+/**
+ * One task of a harness's class, dealt to one arm of the trial that decides whether the harness
+ * was worth drawing.
+ *
+ * The claim a drawn shape has to survive is that it beats a planner and its workers on the same
+ * work — dispositions first, cost second. This row is what makes that measurable: it says which
+ * way a task was done, and points at the thing it started, so the outcome can be read off the
+ * runs afterwards rather than copied here and going stale.
+ *
+ * Exactly one of `workflow_run_id` and `agent_run_id` is set, and which one *is* the arm. The
+ * `arm` column is still written, because a row whose run was deleted must still say which side
+ * it was on — a trial that silently loses its control arm reports the candidate winning.
+ *
+ * `planner_persona_name` records what stood in for "no harness", snapshotted: the persona
+ * document can change afterwards, and a trial that averaged two different baselines has to be
+ * able to say so.
+ */
+export const workflowTrialEntry = pgTable(
+  'workflow_trial_entry',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    /** The harness whose class of work this task belongs to. */
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflow.id, { onDelete: 'cascade' }),
+    /** `workflow | planner`. */
+    arm: text('arm').notNull(),
+    /** What the task was, so two arms can be shown to have been given the same work. */
+    input: text('input').notNull(),
+    workflowRunId: uuid('workflow_run_id').references(() => workflowRun.id, {
+      onDelete: 'set null',
+    }),
+    agentRunId: uuid('agent_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    plannerPersonaName: text('planner_persona_name'),
+    startedByUserId: text('started_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('workflow_trial_entry_idx').on(t.workspaceId, t.workflowId, t.arm)],
+)
+
 export const workflowDesign = pgTable(
   'workflow_design',
   {

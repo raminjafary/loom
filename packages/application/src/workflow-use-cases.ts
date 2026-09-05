@@ -12,8 +12,10 @@ import {
   nextWorkflowActions,
   NotFoundError,
   parseWorkflowAnswer,
+  nextWorkflowTrialArm,
   parseWorkflowGraph,
   ROUTER_FIELD,
+  summarizeWorkflowTrial,
   userActor,
   ValidationError,
   workflowMayStart,
@@ -21,6 +23,7 @@ import {
   systemActor,
   type Actor,
   type AgentPersona,
+  type AgentPersonaId,
   type AgentRunId,
   type RepositoryId,
   type ThreadId,
@@ -31,6 +34,8 @@ import {
   type WorkflowRunId,
   type WorkflowRunRecord,
   type WorkflowStepRunRecord,
+  type WorkflowTrialArm,
+  type WorkflowTrialEffect,
   type WorkflowVersionRecord,
   type WorkspaceId,
 } from '@loom/domain'
@@ -393,6 +398,137 @@ const nodeOf = async (
   const version = await deps.workflows.findVersion(workspaceId, run.workflowVersionId)
   return version?.graph.nodes.find((node) => node.id === step.nodeId) ?? null
 }
+
+/**
+ * Runs one task of a harness's class — on whichever arm the trial is owed.
+ *
+ * This is the whole of the trial's mechanism, and it is deliberately the *only* way a task
+ * enters it: an arm assigned by the platform at the moment work is started, rather than a label
+ * somebody applies afterwards to runs that already happened. A trial whose arms are decided in
+ * hindsight is a trial whose arms were decided by whoever chose what to look at.
+ *
+ * Which arm is a pure function of the counts, so a person can be told which way the next task
+ * will go *before* they press the button — and so two readings of the same rows agree.
+ *
+ * Human-only for `startWorkflowRun`'s reason, which applies twice over here: this authorizes
+ * spend and it decides how the work will be attempted.
+ */
+export const runTrialTask = async (
+  deps: AgentDeps,
+  input: {
+    workspaceId: WorkspaceId
+    actor: Actor
+    workflowId: WorkflowId
+    repositoryId: RepositoryId
+    threadId: ThreadId
+    input: string
+    capUsd: number | null
+    /** The persona that stands in for "no harness" — a planner, which decomposes and delegates. */
+    plannerPersonaId: AgentPersonaId
+  },
+): Promise<{ arm: WorkflowTrialArm; runId: string; detail: string }> => {
+  requireHuman(input.actor, 'run a task of a trial')
+  const task = input.input.trim()
+  if (task.length === 0) throw new ValidationError('A task needs something to run on.')
+
+  const workflow = await deps.workflows.findById(input.workspaceId, input.workflowId)
+  if (!workflow) throw new NotFoundError('Workflow')
+  const planner = await deps.personas.findById(input.workspaceId, input.plannerPersonaId)
+  if (!planner) throw new NotFoundError('AgentPersona')
+  /**
+   * The control has to be able to do the work without the shape, and a persona that cannot
+   * delegate cannot: it would be one agent against a harness, which measures something else and
+   * would quietly favour the harness on every task big enough to need splitting.
+   */
+  if (!planner.harnessPlanner) {
+    throw new ValidationError(
+      `The unaided arm has to be a planner — ${planner.name} cannot delegate, so it would be one ` +
+        'agent against a harness rather than the alternative this trial is about.',
+    )
+  }
+
+  const used = await deps.workflows.countTrialArms(input.workspaceId, input.workflowId)
+  const arm = nextWorkflowTrialArm(used)
+
+  if (arm === 'workflow') {
+    const started = await startWorkflowRun(deps, {
+      workspaceId: input.workspaceId,
+      actor: input.actor,
+      workflowId: input.workflowId,
+      repositoryId: input.repositoryId,
+      threadId: input.threadId,
+      input: task,
+      capUsd: input.capUsd,
+    })
+    await deps.workflows.recordTrialEntry({
+      workspaceId: input.workspaceId,
+      workflowId: input.workflowId,
+      arm,
+      input: task,
+      workflowRunId: started.run.id,
+      agentRunId: null,
+      plannerPersonaName: null,
+      startedByUserId: actorUserId(input.actor),
+    })
+    return {
+      arm,
+      runId: started.run.id as string,
+      detail:
+        `This one goes through "${workflow.name}", because the trial is owed a task on that ` +
+        `side. ${started.detail}`,
+    }
+  }
+
+  const run = await startAgentRun(deps, {
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    threadId: input.threadId,
+    repositoryId: input.repositoryId,
+    personaId: planner.id,
+    task,
+    ...(input.capUsd === null ? {} : { budgetCapUsd: input.capUsd }),
+  })
+  await deps.workflows.recordTrialEntry({
+    workspaceId: input.workspaceId,
+    workflowId: input.workflowId,
+    arm,
+    input: task,
+    workflowRunId: null,
+    agentRunId: run.id,
+    plannerPersonaName: planner.name,
+    startedByUserId: actorUserId(input.actor),
+  })
+  return {
+    arm,
+    runId: run.id as string,
+    detail:
+      `This one goes to ${planner.name} and whatever it delegates to, with no harness — that is ` +
+      `the side the trial is owed, and it is what "${workflow.name}" has to beat.`,
+  }
+}
+
+/** Which way the next task of this class will go, so a person is told before they press. */
+export const nextTrialArmFor = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; workflowId: WorkflowId },
+): Promise<WorkflowTrialArm> =>
+  nextWorkflowTrialArm(await deps.workflows.countTrialArms(input.workspaceId, input.workflowId))
+
+/**
+ * What the trial has measured so far, and what it settles.
+ *
+ * Recomputed from the rows on every read rather than stored, the rule every trial here keeps: a
+ * stored verdict goes stale the moment another task is decided, and a shape redrawn since is a
+ * different shape being judged by an old number.
+ */
+export const readWorkflowTrial = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; workflowId: WorkflowId },
+): Promise<WorkflowTrialEffect> =>
+  summarizeWorkflowTrial(
+    await deps.workflows.trialOutcomes(input.workspaceId, input.workflowId),
+    await deps.workflows.trialControls(input.workspaceId, input.workflowId),
+  )
 
 /**
  * The executor's tick.

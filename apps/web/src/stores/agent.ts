@@ -123,6 +123,15 @@ export const useAgentStore = defineStore('agent', () => {
     }) => session.startWorkflow(input),
     cancelWorkflowRun: (runId: string) => session.cancelWorkflowRun(runId),
     listWorkflowProposals: () => session.listWorkflowProposals(),
+    workflowTrial: (workflowId: string) => session.workflowTrial(workflowId),
+    runTrialTask: (input: {
+      workflowId: string
+      repositoryId: string
+      threadId: string
+      input: string
+      capUsd: number | null
+      plannerPersonaId: string
+    }) => session.runTrialTask(input),
     designWorkflow: (input: {
       personaId: string
       repositoryId: string

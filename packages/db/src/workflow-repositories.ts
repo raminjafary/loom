@@ -16,6 +16,7 @@ import {
   type WorkflowRunStatus,
   type WorkflowStepRunRecord,
   type WorkflowStepStatus,
+  type WorkflowTrialEntryOutcome,
   type WorkflowVersionRecord,
 } from '@loom/domain'
 import type { WorkflowRepositoryPort } from '@loom/application'
@@ -26,6 +27,7 @@ import {
   workflowDesign,
   workflowRun,
   workflowStepRun,
+  workflowTrialEntry,
   workflowVersion,
 } from './schema.js'
 
@@ -549,6 +551,136 @@ export const workflowRepository = (db: Database): WorkflowRepositoryPort => ({
         ),
       )
     return row?.count ?? 0
+  },
+
+  async recordTrialEntry(input) {
+    await db.insert(workflowTrialEntry).values({
+      workspaceId: input.workspaceId,
+      workflowId: input.workflowId,
+      arm: input.arm,
+      input: input.input,
+      workflowRunId: input.workflowRunId,
+      agentRunId: input.agentRunId,
+      plannerPersonaName: input.plannerPersonaName,
+      startedByUserId: input.startedByUserId,
+    })
+  },
+
+  async countTrialArms(workspaceId, workflowId) {
+    const rows = await db
+      .select({ arm: workflowTrialEntry.arm, count: sql<number>`count(*)::int` })
+      .from(workflowTrialEntry)
+      .where(
+        and(
+          eq(workflowTrialEntry.workspaceId, workspaceId),
+          eq(workflowTrialEntry.workflowId, workflowId),
+        ),
+      )
+      .groupBy(workflowTrialEntry.arm)
+    const countOf = (arm: string) => rows.find((row) => row.arm === arm)?.count ?? 0
+    return { workflow: countOf('workflow'), planner: countOf('planner') }
+  },
+
+  async trialControls(workspaceId, workflowId) {
+    const rows = await db
+      .selectDistinct({ name: workflowTrialEntry.plannerPersonaName })
+      .from(workflowTrialEntry)
+      .where(
+        and(
+          eq(workflowTrialEntry.workspaceId, workspaceId),
+          eq(workflowTrialEntry.workflowId, workflowId),
+          eq(workflowTrialEntry.arm, 'planner'),
+        ),
+      )
+    return rows.flatMap((row) => (row.name === null ? [] : [row.name]))
+  },
+
+  /**
+   * One query, and the recursive half is the point: a planner's task is its whole tree, so the
+   * cost and the dispositions of a task are the cost and the dispositions of every run under it.
+   * A workflow's task is its steps, which are already rows pointing at their runs.
+   *
+   * `depth < 32` bounds the walk the way `listTree` does — far past any configured delegation
+   * depth, so reaching it means the data has a cycle rather than a legitimately deep tree.
+   *
+   * The aggregates are `bool_or` over the runs of one entry, which is what makes a task the unit:
+   * one branch taken is a task whose work was wanted, however many branches it produced.
+   */
+  async trialOutcomes(workspaceId, workflowId) {
+    const rows = await db.execute<{
+      arm: string
+      decided: boolean
+      merged: boolean
+      discarded: boolean
+      failed: boolean
+      verification_failed: boolean
+      failing_check: string | null
+      cost_usd: number
+      runs: number
+    }>(sql`
+      with recursive tree as (
+        select e.id as entry_id, e.arm, r.id as run_id, 0 as depth
+          from workflow_trial_entry e
+          join agent_run r on r.id = e.agent_run_id and r.workspace_id = ${workspaceId}
+          where e.workspace_id = ${workspaceId} and e.workflow_id = ${workflowId}
+        union all
+        select tree.entry_id, tree.arm, child.id, tree.depth + 1
+          from agent_run child
+          join tree on child.parent_run_id = tree.run_id
+          where child.workspace_id = ${workspaceId} and tree.depth < 32
+      ),
+      stepped as (
+        select e.id as entry_id, e.arm, s.agent_run_id as run_id
+          from workflow_trial_entry e
+          join workflow_step_run s on s.workflow_run_id = e.workflow_run_id
+          where e.workspace_id = ${workspaceId}
+            and e.workflow_id = ${workflowId}
+            and s.agent_run_id is not null
+      ),
+      task_runs as (
+        select entry_id, arm, run_id from tree
+        union
+        select entry_id, arm, run_id from stepped
+      )
+      select
+        task_runs.arm as arm,
+        bool_or(
+          r.branch_disposition is not null or r.status = 'failed' or v.status = 'failed'
+        ) as decided,
+        bool_or(r.branch_disposition in ('merged', 'pushed')) as merged,
+        bool_or(r.branch_disposition = 'discarded') as discarded,
+        bool_or(r.status = 'failed') as failed,
+        bool_or(v.status = 'failed') as verification_failed,
+        mode() within group (
+          order by jsonb_path_query_first(v.checks, '$[*] ? (@.status == "failed")') ->> 'name'
+        ) filter (where v.status = 'failed') as failing_check,
+        coalesce(sum(r.total_cost_usd), 0)::double precision as cost_usd,
+        count(*)::int as runs
+      from task_runs
+      join agent_run r on r.id = task_runs.run_id
+      left join run_verification v on v.agent_run_id = r.id
+      group by task_runs.entry_id, task_runs.arm
+    `)
+
+    const outcomes: WorkflowTrialEntryOutcome[] = []
+    for (const row of rows as unknown as Array<Record<string, unknown>>) {
+      // Narrowed rather than validated, the way every other arm column here is: the column is
+      // written only by this package, and an unrecognized value is not an arm.
+      const arm = row.arm
+      if (arm !== 'workflow' && arm !== 'planner') continue
+      outcomes.push({
+        arm,
+        decided: row.decided === true,
+        merged: row.merged === true,
+        discarded: row.discarded === true,
+        failed: row.failed === true,
+        verificationFailed: row.verification_failed === true,
+        failingCheck: typeof row.failing_check === 'string' ? row.failing_check : null,
+        costUsd: Number(row.cost_usd ?? 0),
+        runs: Number(row.runs ?? 0),
+      })
+    }
+    return outcomes
   },
 
   async decideDesign(workspaceId, designId, input) {

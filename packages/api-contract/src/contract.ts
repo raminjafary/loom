@@ -1140,6 +1140,67 @@ export const contract = {
     declineDesign: oc
       .input(z.object({ designId: z.string(), note: z.string().max(1_200).nullable() }))
       .output(z.object({ declined: z.boolean(), detail: z.string() })),
+
+    /**
+     * The claim a drawn shape has to survive: the same class of work, the harness against a
+     * planner and its workers, dispositions first and cost second.
+     *
+     * Recomputed from the rows on every read. A stored verdict goes stale the moment another
+     * task is decided, and a shape redrawn since is a different shape judged by an old number.
+     */
+    trial: oc.input(z.object({ workflowId: z.string() })).output(
+      z.object({
+        /** Which way the *next* task will go, so a person is told before they press. */
+        nextArm: z.enum(['workflow', 'planner']),
+        verdict: z.enum(['undecided', 'harness', 'planner', 'no-better']),
+        /** The paragraph a person reads instead of doing the arithmetic. */
+        detail: z.string(),
+        arms: z.array(
+          z.object({
+            arm: z.enum(['workflow', 'planner']),
+            /** Tasks, not runs: the two arms differ in how many runs a task takes. */
+            tasks: z.number().int(),
+            decided: z.number().int(),
+            merged: z.number().int(),
+            discarded: z.number().int(),
+            failed: z.number().int(),
+            verificationFailed: z.number().int(),
+            failingCheck: z.string().nullable(),
+            successRate: z.number(),
+            meanCostUsd: z.number(),
+            /** Runs per decided task — the machinery each arm spent. */
+            meanRuns: z.number(),
+          }),
+        ),
+      }),
+    ),
+
+    /**
+     * Runs one task of the class, on whichever arm the trial is owed.
+     *
+     * The arm is assigned when the work starts rather than labelled afterwards: a trial whose
+     * arms are decided in hindsight is a trial whose arms were decided by whoever chose what to
+     * look at.
+     */
+    trialRun: oc
+      .input(
+        z.object({
+          workflowId: z.string(),
+          repositoryId: z.string(),
+          threadId: z.string(),
+          input: z.string().min(1).max(20_000),
+          capUsd: z.number().positive().nullable(),
+          /** The planner that stands in for "no harness" on the control arm. */
+          plannerPersonaId: z.string(),
+        }),
+      )
+      .output(
+        z.object({
+          arm: z.enum(['workflow', 'planner']).nullable(),
+          runId: z.string().nullable(),
+          detail: z.string(),
+        }),
+      ),
   },
 
   /**

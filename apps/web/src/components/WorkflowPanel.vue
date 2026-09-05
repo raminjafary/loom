@@ -8,6 +8,7 @@ import {
   type WorkflowRunDetail,
   type WorkflowProposal,
   type WorkflowRunRow,
+  type WorkflowTrialReport,
   type WorkflowShapeNode,
 } from '@loom/client-core'
 
@@ -82,6 +83,21 @@ const props = defineProps<{
     designId: string
     note: string | null
   }) => Promise<{ declined: boolean; detail: string }>
+  /**
+   * The trial: whether this harness beats a planner and its workers on its own class of work.
+   *
+   * Read per selected harness rather than held in the panel's props, because the verdict changes
+   * when a task is decided somewhere else entirely.
+   */
+  readTrial: (workflowId: string) => Promise<WorkflowTrialReport | null>
+  runTrialTask: (input: {
+    workflowId: string
+    repositoryId: string
+    threadId: string
+    input: string
+    capUsd: number | null
+    plannerPersonaId: string
+  }) => Promise<{ arm: 'workflow' | 'planner' | null; runId: string | null; detail: string }>
 }>()
 
 const emit = defineEmits<{
@@ -103,6 +119,45 @@ const designAsk = ref('')
 const designerId = ref('')
 const openProposalId = ref<string | null>(null)
 const declineNote = ref('')
+const trial = ref<WorkflowTrialReport | null>(null)
+const trialTask = ref('')
+
+const armOf = (arm: 'workflow' | 'planner') =>
+  trial.value?.arms.find((entry) => entry.arm === arm) ?? null
+
+/**
+ * Runs the next task of this class, on whichever arm the trial is owed.
+ *
+ * The arm is not a choice on this form, and that is the point: assignment is the platform's, from
+ * the counts, so a person cannot settle the question by choosing which side to send the easy work
+ * to. What they are shown instead is which way it will go before they press.
+ */
+const runNextTask = async () => {
+  const workflowId = selectedId.value
+  const threadId = props.threadId
+  if (workflowId === null || threadId === null || trialTask.value.trim() === '') return
+  if (repositoryId.value === '' || designerId.value === '') return
+  working.value = true
+  try {
+    const parsedCap = Number.parseFloat(capUsd.value)
+    const result = await props.runTrialTask({
+      workflowId,
+      repositoryId: repositoryId.value,
+      threadId,
+      input: trialTask.value.trim(),
+      capUsd: Number.isFinite(parsedCap) && parsedCap > 0 ? parsedCap : null,
+      plannerPersonaId: designerId.value,
+    })
+    notice.value = result.detail
+    if (result.runId !== null) {
+      trialTask.value = ''
+      trial.value = await props.readTrial(workflowId)
+      runs.value = await props.listRuns(workflowId)
+    }
+  } finally {
+    working.value = false
+  }
+}
 
 /**
  * The proposal being read, drawn with the same layout an execution is.
@@ -174,6 +229,7 @@ const select = async (workflowId: string) => {
   try {
     detail.value = await props.read(workflowId)
     runs.value = await props.listRuns(workflowId)
+    trial.value = await props.readTrial(workflowId)
   } finally {
     working.value = false
   }
@@ -544,6 +600,61 @@ watch(
 
       <p v-if="notice" class="notice">{{ notice }}</p>
 
+      <!--
+        The claim this shape has to survive. A harness costs a run per step every time it is
+        used, so "as good as a planner" is not a result in its favour — which is why the verdict
+        is here, beside the button that spends money on it, rather than on a page nobody opens.
+      -->
+      <template v-if="trial !== null">
+        <h4>Is it worth it?</h4>
+        <p class="verdict" :class="trial.verdict">{{ trial.detail }}</p>
+        <table class="arms">
+          <thead>
+            <tr>
+              <th>Arm</th>
+              <th>Tasks</th>
+              <th>Taken</th>
+              <th>Cost / task</th>
+              <th>Runs / task</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="arm in trial.arms" :key="arm.arm">
+              <th scope="row">{{ arm.arm === 'workflow' ? 'this harness' : 'a planner' }}</th>
+              <td>{{ arm.decided }} of {{ arm.tasks }}</td>
+              <td>{{ Math.round(arm.successRate * 100) }}%</td>
+              <td>${{ arm.meanCostUsd.toFixed(4) }}</td>
+              <td>{{ arm.meanRuns.toFixed(1) }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <form class="trial" @submit.prevent="runNextTask">
+          <label>
+            <span>Run the next task of this class</span>
+            <textarea
+              v-model="trialTask"
+              rows="2"
+              placeholder="A task this harness exists for. The platform picks the side."
+            />
+          </label>
+          <div class="row">
+            <p class="hint">
+              The next one goes to
+              <strong>{{ trial.nextArm === 'workflow' ? 'the harness' : 'a planner' }}</strong
+              >, because that is the side the trial is owed. You do not get to choose — an arm
+              somebody picked is a comparison they made.
+            </p>
+            <button
+              type="submit"
+              :disabled="working || trialTask.trim() === '' || props.threadId === null"
+            >
+              Run it
+            </button>
+          </div>
+        </form>
+      </template>
+
       <h4 v-if="runs.length > 0">Executions</h4>
       <ul v-if="runs.length > 0" class="runs">
         <li v-for="run in runs" :key="run.id" :class="['run', run.status]">
@@ -718,7 +829,8 @@ figcaption {
 }
 .start,
 .designer,
-.decide {
+.decide,
+.trial {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -749,6 +861,39 @@ figcaption {
   list-style: none;
   margin: 0.2rem 0;
   padding: 0;
+}
+.trial label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.75rem;
+  gap: 0.15rem;
+}
+.trial .row {
+  align-items: flex-end;
+  display: flex;
+  gap: 0.5rem;
+}
+.verdict {
+  font-size: 0.8rem;
+  margin: 0.2rem 0;
+}
+.verdict.planner,
+.verdict.no-better {
+  color: #b8402f;
+}
+.verdict.harness {
+  color: #2f8f4e;
+}
+.arms {
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  width: 100%;
+}
+.arms th,
+.arms td {
+  border-bottom: 1px solid var(--line, #e2e5ea);
+  padding: 0.15rem 0.3rem;
+  text-align: left;
 }
 .start label {
   display: flex;

@@ -5,11 +5,15 @@ import {
   asAgentRunId,
   asRepositoryId,
   asThreadId,
+  asUserId,
+  asWorkflowId,
   asWorkflowRunId,
   asWorkflowStepRunId,
   asWorkflowVersionId,
   asWorkspaceId,
   parseWorkflowGraph,
+  systemActor,
+  userActor,
   type AgentPersona,
   type AgentRun,
   type WorkflowGraph,
@@ -20,7 +24,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AgentDeps } from './agent-use-cases.js'
 import {
   advanceWorkflowQueue,
+  nextTrialArmFor,
   recordWorkflowAnswer,
+  runTrialTask,
   validateWorkflowGraph,
   workflowDigest,
 } from './workflow-use-cases.js'
@@ -582,5 +588,132 @@ describe('a bracket, through the tick', () => {
     })
     expect(result.ok).toBe(true)
     expect(callsOf(recordStepAnswer)[0]?.[2]).toEqual({ winner: 'right', why: 'it ran' })
+  })
+})
+
+/**
+ * The trial, where an arm becomes a decision to spend.
+ *
+ * The domain decides which arm is owed; what only this layer can get wrong is what it does with
+ * that answer — starting the wrong kind of work, recording an entry that points at nothing, or
+ * letting the arm be chosen by whoever is asking.
+ */
+describe('runTrialTask', () => {
+  const HUMAN = userActor(asUserId('u_1'))
+
+  const trialHarness = (used: { workflow: number; planner: number }) => {
+    const base = harness({ steps: [], personas: [persona('Scout'), persona('Worker')] })
+    const entries: Record<string, unknown>[] = []
+    const workflows = base.deps.workflows as unknown as Record<string, unknown>
+    workflows.findById = vi.fn(async () => ({
+      id: 'wf_1',
+      workspaceId: WS,
+      name: 'the harness',
+      description: null,
+      createdByUserId: null,
+      createdAt: new Date(0),
+      archivedAt: null,
+    }))
+    workflows.openRun = vi.fn(async () => ({
+      id: RUN,
+      workspaceId: WS,
+      workflowVersionId: VERSION,
+      repositoryId: asRepositoryId('repo_1'),
+      threadId: asThreadId('t_1'),
+      input: 'a task',
+      status: 'running' as const,
+      capUsd: 5,
+      startedByUserId: 'u_1',
+      haltReason: null,
+      createdAt: new Date(0),
+      finishedAt: null,
+    }))
+    workflows.latestVersion = vi.fn(async () => ({
+      id: VERSION,
+      workflowId: asWorkflowId('wf_1'),
+      version: 1,
+      graph: GRAPH,
+      digest: 'd',
+      createdByUserId: null,
+      createdAt: new Date(0),
+    }))
+    workflows.countTrialArms = vi.fn(async () => used)
+    workflows.recordTrialEntry = vi.fn(async (entry: Record<string, unknown>) => {
+      entries.push(entry)
+    })
+    const personas = base.deps.personas as unknown as Record<string, unknown>
+    personas.findById = vi.fn(async () => ({ ...persona('Scout'), harnessPlanner: true }))
+    const deps = base.deps as unknown as Record<string, unknown>
+    deps.personaGroups = { listByWorkspace: vi.fn(async () => []) }
+    deps.notes = { listForTree: vi.fn(async () => []), append: vi.fn(async () => ({})) }
+    return { ...base, entries }
+  }
+
+  const ask = (deps: AgentDeps) =>
+    runTrialTask(deps, {
+      workspaceId: WS,
+      actor: HUMAN,
+      workflowId: asWorkflowId('wf_1'),
+      repositoryId: asRepositoryId('repo_1'),
+      threadId: asThreadId('t_1'),
+      input: 'a task of this class',
+      capUsd: 5,
+      plannerPersonaId: asAgentPersonaId('p_Scout'),
+    })
+
+  it('sends the first task of a class to a planner, and records what it started', async () => {
+    const { deps, entries, started } = trialHarness({ workflow: 0, planner: 0 })
+    const dealt = await ask(deps)
+    expect(dealt.arm).toBe('planner')
+    expect(started).toHaveLength(1)
+    expect(entries[0]?.arm).toBe('planner')
+    expect(entries[0]?.agentRunId).toBeDefined()
+    expect(entries[0]?.workflowRunId).toBeNull()
+    // And the person is told what it is being compared against.
+    expect(dealt.detail).toContain('has to beat')
+  })
+
+  it('sends the next one through the harness, opening an execution rather than a run', async () => {
+    const { deps, entries, started } = trialHarness({ workflow: 0, planner: 1 })
+    const dealt = await ask(deps)
+    expect(dealt.arm).toBe('workflow')
+    expect(entries[0]?.workflowRunId).toBe(RUN)
+    expect(entries[0]?.agentRunId).toBeNull()
+    // The execution's steps are dealt by the sweep, so nothing is dispatched here.
+    expect(started).toHaveLength(0)
+  })
+
+  /**
+   * The control has to be able to do the work without the shape. One agent against a harness
+   * measures something else, and it would favour the harness on every task big enough to split.
+   */
+  it('refuses a control that cannot delegate', async () => {
+    const { deps } = trialHarness({ workflow: 0, planner: 0 })
+    const personas = deps.personas as unknown as Record<string, unknown>
+    personas.findById = vi.fn(async () => ({ ...persona('Worker'), harnessPlanner: false }))
+    await expect(ask(deps)).rejects.toThrow(/cannot delegate/)
+  })
+
+  it('refuses to be run by anything but a person', async () => {
+    const { deps } = trialHarness({ workflow: 0, planner: 0 })
+    await expect(
+      runTrialTask(deps, {
+        workspaceId: WS,
+        actor: systemActor(),
+        workflowId: asWorkflowId('wf_1'),
+        repositoryId: asRepositoryId('repo_1'),
+        threadId: asThreadId('t_1'),
+        input: 'a task',
+        capUsd: null,
+        plannerPersonaId: asAgentPersonaId('p_Scout'),
+      }),
+    ).rejects.toThrow(/Only a person/)
+  })
+
+  it('reports which side the next task will go to, from the counts alone', async () => {
+    const { deps } = trialHarness({ workflow: 2, planner: 1 })
+    expect(
+      await nextTrialArmFor(deps, { workspaceId: WS, workflowId: asWorkflowId('wf_1') }),
+    ).toBe('planner')
   })
 })

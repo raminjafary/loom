@@ -3,6 +3,7 @@ import type {
   WorkflowDetail,
   WorkflowProposal,
   WorkflowRow,
+  WorkflowTrialReport,
   WorkflowRunDetail,
   WorkflowRunRow,
 } from '@loom/client-core'
@@ -140,6 +141,16 @@ const props = defineProps<{
     designId: string
     note: string | null
   }) => Promise<{ declined: boolean; detail: string }>
+  /** The trial each harness has to survive, read per harness rather than with the tab. */
+  readWorkflowTrial: (workflowId: string) => Promise<WorkflowTrialReport | null>
+  runTrialTask: (input: {
+    workflowId: string
+    repositoryId: string
+    threadId: string
+    input: string
+    capUsd: number | null
+    plannerPersonaId: string
+  }) => Promise<{ arm: 'workflow' | 'planner' | null; runId: string | null; detail: string }>
   /**
    * Callbacks rather than events, and not for symmetry with the reads above.
    *
@@ -573,6 +584,8 @@ onMounted(() => scrim.value?.focus())
             :design="designWorkflow"
             :approve-design="approveWorkflowDesign"
             :decline-design="declineWorkflowDesign"
+            :read-trial="readWorkflowTrial"
+            :run-trial-task="runTrialTask"
             @refresh="refreshWorkflows()"
             @open="(agentRunId) => openWorkflowRun(agentRunId)"
           />

@@ -111,6 +111,40 @@ const runDetail: WorkflowRunDetail = {
   ],
 }
 
+const trialReport = {
+  nextArm: 'planner' as const,
+  verdict: 'undecided' as const,
+  detail: 'Still measuring: 1 decided task(s) run through the harness against 0 given to a planner.',
+  arms: [
+    {
+      arm: 'workflow' as const,
+      tasks: 2,
+      decided: 1,
+      merged: 1,
+      discarded: 0,
+      failed: 0,
+      verificationFailed: 0,
+      failingCheck: null,
+      successRate: 1,
+      meanCostUsd: 1.2345,
+      meanRuns: 6,
+    },
+    {
+      arm: 'planner' as const,
+      tasks: 1,
+      decided: 0,
+      merged: 0,
+      discarded: 0,
+      failed: 0,
+      verificationFailed: 0,
+      failingCheck: null,
+      successRate: 0,
+      meanCostUsd: 0,
+      meanRuns: 0,
+    },
+  ],
+}
+
 const panel = (over: Partial<Record<string, unknown>> = {}) =>
   mount(WorkflowPanel, {
     props: {
@@ -127,6 +161,12 @@ const panel = (over: Partial<Record<string, unknown>> = {}) =>
       design: vi.fn(async () => ({ runId: 'ar1', detail: 'drawing' })),
       approveDesign: vi.fn(async () => ({ versionId: 'v2', version: 2, detail: 'drawn as v2' })),
       declineDesign: vi.fn(async () => ({ declined: true, detail: 'declined' })),
+      readTrial: vi.fn(async () => trialReport),
+      runTrialTask: vi.fn(async () => ({
+        arm: 'planner' as const,
+        runId: 'ar-planner',
+        detail: 'This one goes to planner and whatever it delegates to, with no harness',
+      })),
       ...over,
     },
   })
@@ -397,6 +437,51 @@ describe('WorkflowPanel', () => {
       await settle(wrapper)
       expect(wrapper.find('.decide').exists()).toBe(false)
       expect(wrapper.text()).toContain('too wide')
+    })
+  })
+
+  /**
+   * The verdict lives beside the button that spends money on the harness, because the claim it
+   * has to survive is exactly the one a person is making when they press it.
+   */
+  describe('the trial the shape has to survive', () => {
+    it('shows the verdict and both arms in tasks rather than runs', async () => {
+      const wrapper = panel()
+      await settle(wrapper)
+      expect(wrapper.find('.verdict').text()).toContain('Still measuring')
+      const rows = wrapper.findAll('.arms tbody tr').map((row) => row.text())
+      expect(rows[0]).toContain('this harness')
+      expect(rows[0]).toContain('1 of 2')
+      expect(rows[0]).toContain('6.0')
+      expect(rows[1]).toContain('a planner')
+    })
+
+    it('says which side the next task goes to before the person presses', async () => {
+      const wrapper = panel()
+      await settle(wrapper)
+      expect(wrapper.find('form.trial .hint').text()).toContain('a planner')
+      expect(wrapper.find('form.trial .hint').text()).toContain('do not get to choose')
+    })
+
+    it('runs the next task without letting the person pick the arm', async () => {
+      const runTrialTask = vi.fn(async () => ({
+        arm: 'workflow' as const,
+        runId: 'wfr9',
+        detail: 'This one goes through "migration sweep"',
+      }))
+      const wrapper = panel({ runTrialTask })
+      await settle(wrapper)
+      await wrapper.find('form.trial textarea').setValue('the next flaky test')
+      await wrapper.find('form.trial').trigger('submit')
+      await settle(wrapper)
+      const sent = (runTrialTask.mock.calls as unknown as unknown[][])[0]?.[0] as Record<
+        string,
+        unknown
+      >
+      expect(sent.workflowId).toBe('wf1')
+      expect(sent.input).toBe('the next flaky test')
+      expect(Object.keys(sent)).not.toContain('arm')
+      expect(wrapper.find('.notice').text()).toContain('goes through')
     })
   })
 

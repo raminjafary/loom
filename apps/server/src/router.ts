@@ -103,6 +103,9 @@ import {
   readWorkflowRun,
   redrawWorkflow,
   startWorkflowRun,
+  runTrialTask,
+  readWorkflowTrial,
+  nextTrialArmFor,
   startWorkflowDesigner,
   listWorkflowDesigns,
   approveWorkflowDesign,
@@ -1432,6 +1435,62 @@ export const router = os.router({
           }
         } catch (error) {
           if (error instanceof ValidationError) return { declined: false, detail: error.message }
+          throw error
+        }
+      }),
+    ),
+
+    trial: os.workflow.trial.handler(({ context, input }) =>
+      guard(async () => {
+        const workflowId = asWorkflowId(input.workflowId)
+        const effect = await readWorkflowTrial(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          workflowId,
+        })
+        // Field by field, as everywhere else here: a spread skips the excess-property check.
+        const arm = (summary: typeof effect.workflow) => ({
+          arm: summary.arm,
+          tasks: summary.tasks,
+          decided: summary.decided,
+          merged: summary.merged,
+          discarded: summary.discarded,
+          failed: summary.failed,
+          verificationFailed: summary.verificationFailed,
+          failingCheck: summary.failingCheck,
+          successRate: summary.successRate,
+          meanCostUsd: summary.meanCostUsd,
+          meanRuns: summary.meanRuns,
+        })
+        return {
+          nextArm: await nextTrialArmFor(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            workflowId,
+          }),
+          verdict: effect.verdict,
+          detail: effect.detail,
+          arms: [arm(effect.workflow), arm(effect.planner)],
+        }
+      }),
+    ),
+
+    trialRun: os.workflow.trialRun.handler(({ context, input }) =>
+      guard(async () => {
+        try {
+          const dealt = await runTrialTask(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            workflowId: asWorkflowId(input.workflowId),
+            repositoryId: asRepositoryId(input.repositoryId),
+            threadId: asThreadId(input.threadId),
+            input: input.input,
+            capUsd: input.capUsd,
+            plannerPersonaId: asAgentPersonaId(input.plannerPersonaId),
+          })
+          return { arm: dealt.arm, runId: dealt.runId, detail: dealt.detail }
+        } catch (error) {
+          if (error instanceof ValidationError) {
+            return { arm: null, runId: null, detail: error.message }
+          }
           throw error
         }
       }),

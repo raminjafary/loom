@@ -113,6 +113,8 @@ import type {
   WorkflowStepRunId,
   WorkflowStepRunRecord,
   WorkflowStepStatus,
+  WorkflowTrialArm,
+  WorkflowTrialEntryOutcome,
   WorkflowVersionId,
   WorkflowVersionRecord,
   WorkspaceId,
@@ -2812,4 +2814,43 @@ export interface WorkflowRepositoryPort {
       note: string | null
     },
   ): Promise<WorkflowDesignRecord | null>
+
+  /**
+   * Records one task of a harness's class as having been done one way or the other.
+   *
+   * The row points at what it started rather than copying an outcome, because a disposition is
+   * set long after a run begins — a copy would be a second write that can be missed, which is
+   * how a measurement ends up describing only the tasks somebody remembered to close.
+   */
+  recordTrialEntry(input: {
+    workspaceId: WorkspaceId
+    workflowId: WorkflowId
+    arm: WorkflowTrialArm
+    input: string
+    workflowRunId: WorkflowRunId | null
+    agentRunId: AgentRunId | null
+    plannerPersonaName: string | null
+    startedByUserId: string | null
+  }): Promise<void>
+
+  /** How many tasks of this class each arm has had, which is what the next assignment reads. */
+  countTrialArms(
+    workspaceId: WorkspaceId,
+    workflowId: WorkflowId,
+  ): Promise<{ workflow: number; planner: number }>
+
+  /**
+   * What became of each task, one row per entry.
+   *
+   * Per *entry* rather than per run, because the two arms differ in how many runs a task takes:
+   * a planner's whole tree and a workflow's steps are each "what this task cost to attempt", and
+   * counting runs would compare the arms on how mergeable their smallest branch was.
+   */
+  trialOutcomes(
+    workspaceId: WorkspaceId,
+    workflowId: WorkflowId,
+  ): Promise<WorkflowTrialEntryOutcome[]>
+
+  /** The personas that stood in for "no harness", so an averaged baseline can say so. */
+  trialControls(workspaceId: WorkspaceId, workflowId: WorkflowId): Promise<string[]>
 }

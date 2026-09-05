@@ -46,6 +46,8 @@ export type WorkflowRunRow = Awaited<ReturnType<LoomApi['workflow']['listRuns']>
 export type WorkflowRunDetail = NonNullable<Awaited<ReturnType<LoomApi['workflow']['run']>>>
 /** One harness a designer proposed and nobody has decided about, as the wire puts it. */
 export type WorkflowProposal = Awaited<ReturnType<LoomApi['workflow']['proposals']>>[number]
+/** What the trial has measured about one harness, and which way the next task goes. */
+export type WorkflowTrialReport = Awaited<ReturnType<LoomApi['workflow']['trial']>>
 /** Every gap a persona's campaigns measured, with the closure figure where one is readable. */
 export type GapCurve = Awaited<ReturnType<LoomApi['campaign']['gapCurve']>>
 /** What one campaign measured — arms, scores, spend, and the sentence. */
@@ -632,6 +634,20 @@ export interface AgentSession {
     designId: string
     note: string | null
   }): Promise<{ declined: boolean; detail: string }>
+  /**
+   * The trial a drawn shape has to survive, and one task of its class run on whichever arm is
+   * owed. Read on demand like everything else here: the verdict changes when a task is decided,
+   * which is not an event a panel should re-fetch on.
+   */
+  workflowTrial(workflowId: string): Promise<WorkflowTrialReport | null>
+  runTrialTask(input: {
+    workflowId: string
+    repositoryId: string
+    threadId: string
+    input: string
+    capUsd: number | null
+    plannerPersonaId: string
+  }): Promise<{ arm: 'workflow' | 'planner' | null; runId: string | null; detail: string }>
   campaignReport(campaignId: string): Promise<CampaignReport | null>
   cancelCampaign(campaignId: string): Promise<{ cancelled: boolean; detail: string }>
   /**
@@ -1887,6 +1903,25 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         const detail = errorMessage(error)
         patch({ error: detail })
         return { declined: false, detail }
+      }
+    },
+
+    async workflowTrial(workflowId) {
+      try {
+        return await options.api.workflow.trial({ workflowId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return null
+      }
+    },
+
+    async runTrialTask(input) {
+      try {
+        return await options.api.workflow.trialRun(input)
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { arm: null, runId: null, detail }
       }
     },
 
