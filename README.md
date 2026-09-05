@@ -3,7 +3,7 @@
 [![check](https://github.com/raminjafary/loom/actions/workflows/check.yml/badge.svg)](https://github.com/raminjafary/loom/actions/workflows/check.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![node](https://img.shields.io/badge/node-%E2%89%A522-5FA04E)
-![tests](https://img.shields.io/badge/tests-2%2C361-brightgreen)
+![tests](https://img.shields.io/badge/tests-2%2C491-brightgreen)
 
 **Run ten coding agents at once, each in its own git clone and container. Nothing any of them
 says about its own work is taken as evidence: spend is counted at the network boundary, "done"
@@ -46,11 +46,15 @@ session that was never shown who wrote what, or a human reading the exact comman
   run being edited, shown what has already lost — a session grading its own transcript writes the
   prompt that would have made its own last hour look better
 - 🕸️ **A harness you draw rather than write** — the shapes worth reusing (deep research, code
-  review, security analysis, a standing team, a migration sweep) are a graph the server validates
-  before it can spend, not a script an agent authored and the host executes. Every step is an
-  ordinary run, so the meter, the envelope, approvals and steering all apply unchanged; a bar
-  across the lane is a barrier, and everywhere else a step starts the moment its own predecessor
-  finished
+  review, security analysis, a standing team, a migration sweep, a tournament) are a graph the
+  server validates before it can spend, not a script an agent authored and the host executes.
+  Every step is an ordinary run, so the meter, the envelope, approvals and steering all apply
+  unchanged; a bar across the lane is a barrier, and everywhere else a step starts the moment its
+  own predecessor finished. There is deliberately **no editor**: an edit is a new version, and a
+  version arrives as a **proposal an agent drew and a person approved** — bounded by that
+  designer's own envelope, because a shape that names a persona is a grant made by drawing.
+  And a shape has to **beat a planner and its workers** on its own class of work, measured, or it
+  is a diagram that costs a run per step
 - 🗺️ **[Expertise](#expertise-and-the-colosseum): a map an agent built and can be held to** — a
   mastery run's deliverable is a graph of a codebase rather than a diff, every claim carries how
   it was arrived at, and retrieval is a trial with a deliberately-withheld baseline, because an
@@ -115,7 +119,10 @@ nine cents.
 | 🎚️ | **Model routing on the one honest signal** | A branch that fails the repository's checks is retried once, one tier up — never on a crashed run, which says nothing about capability. Optionally, a run's model comes from what has already happened on that persona's work, which only ever routes *down*: the table is read from runs nobody randomised, so it is biased against whichever model a human reached for on the hard tasks |
 | ⬆️ | **It can replace itself, and has to prove the replacement** | A revision of Loom's own source is built in a worktree with a frozen lockfile, started on a port of its own until `/healthz` says the schema it expects is the schema the database has, and checked against what the running revision could do. Only then does a pointer move — and a rollback is the same pointer moving back |
 | ⏮️ | **A rehearsed rollback** | A scripted drill promotes a knowingly-broken change to Loom's own source and recovers from it — with the recovery running from a checkout pinned before the change, so the broken code cannot take part in its own repair |
-| 🕸️ | **Workflows, drawn rather than scripted** | A closed vocabulary of nodes and edges the server validates before anything runs. A fan splits work into lanes that flow independently; a barrier is the only thing that collects them; a refusal stops its own lane rather than the execution. Five ship drawn: deep research, code review, security analysis, agent teams, migration sweep |
+| 🕸️ | **Workflows, drawn rather than scripted** | A closed vocabulary of nodes and edges the server validates before anything runs. A fan splits work into lanes that flow independently; a barrier is the only thing that collects them; a refusal stops its own lane rather than the execution. Six ship drawn: deep research, code review, security analysis, agent teams, migration sweep, tournament |
+| ⚖️ | **A tournament, seated by a hash nobody chose** | N attempts at one problem, judged two at a time until one is left. Which attempt meets which — and which side of the page each is shown on — comes from a hash of the execution's id, so position bias in pairwise judging has nothing to bite on, and the bracket re-derives identically from its own rows. A match that answers nothing advances nobody |
+| ✍️ | **A harness is asked for, not typed** | There is no workflow editor: a designer agent reads the repository, is told the roster and the vocabulary, and submits a shape. Nothing it submits runs. It lands as a drawing beside its ceiling, and approving is what writes the version — with every persona it names attenuated against that designer's own envelope first |
+| ⚖️ | **A shape has to earn its place** | The same class of work, the harness against a planner and its workers, dispositions first and cost second. The unit is a *task*, not a run — a planner's whole tree and an execution's steps are each "what this task cost to attempt" — and ties go to the planner, because the shape is the thing that costs more |
 | 📐 | **A shape is a configuration, so it is versioned** | Editing a workflow writes a new version with its own digest; nothing rewrites one. An execution renders the version *it* ran, and its journal is what a resumed execution replays from — there is no cache and no separate resume path |
 | 🧪 | **Campaigns: growth measured, not asserted** | Any past version of a persona replayed against its own past work, at the commits that work opened at, scored by the repository's checks. It gates nothing and promotes nothing; a hard cap **halts** it, and a halted campaign's score says "partial" first. No growth figure is ever computed — a difference between two vintages is a difference in everything that moved |
 | 📉 | **The raw gap between two models, paired per item** | The same document on a small model and a frontier one over one item set, paired over the items *both* arms scored, with the dropped verdicts counted. The first point of a punch-up curve, and it is a curve only within one leg — two campaigns over two sets differ in which work was asked for |
@@ -139,6 +146,12 @@ open Settings → Workflows, pick a shape, read what it may cost at worst, and r
 shows where the work waits: a bar across the lane is a barrier, and everywhere else a step starts
 the moment its own predecessor finished. Where the decomposition *is* the hard part, the Planner
 is still the right answer and a workflow would be a guess frozen into a diagram.
+
+Nobody draws one by hand. Ask for it in the same panel — *"something for triaging a flaky test
+without one agent grading its own change"* — and a designer reads the repository and proposes a
+shape you approve or decline. Beneath it is the answer to whether the harness was worth drawing
+at all: run the next task of that class and the platform picks the side, alternating, until one
+arm has beaten the other on dispositions and on cost.
 
 ### Three ideas that do not exist elsewhere
 
@@ -416,7 +429,9 @@ called.
 
 ```bash
 docker compose up -d postgres valkey
-npx tsx tools/workflow-check.mts   # 30 checks: a drawn shape dealing real runs, no tokens
+npx tsx tools/workflow-check.mts   # 46 checks: a drawn shape dealing real runs, and a bracket
+npx tsx tools/designer-check.mts   # 36 checks: a harness asked for, refused, proposed, approved
+npx tsx tools/trial-check.mts      # 15 checks: the arms alternating, and a task as the unit
 npx tsx tools/campaign-check.mts   # a campaign against a real repository, no tokens
 ```
 
@@ -474,16 +489,17 @@ Loom is built in phases, and the phase boundaries are architectural rather than 
 each one exists because the next depends on it.
 
 **Recently landed:** workflows — the drawn vocabulary, the executor, the enforced budget, the
-answer channel, the five built-ins and a live driver that deals real runs against a real
-repository at zero tokens. Campaigns and the cross-model gap. The trigger that lets the
-improvement loop start itself.
+answer channel, six built-ins and a live driver that deals real runs against a real repository at
+zero tokens; a tournament bracket whose seating is hash-seeded and replayable; the designer agent
+that proposes a shape a person approves, since there is no editor; and the trial that decides
+whether a harness beat a planner on its own class of work. Campaigns and the cross-model gap.
+The trigger that lets the improvement loop start itself.
 
 **Next:**
 
 | | |
 |---|---|
-| **The trial a workflow has to survive** | The shape is built; the claim is not settled. Same task class, planner-and-delegate against workflow, judged on dispositions first and cost second — the trial machinery's answer rather than an argument. It needs traffic, not code (Phase 3) |
-| **A designer agent** | There is deliberately no workflow editor. A shape is a configuration a measurement cites, so an edit is a new version — and the way configuration should become a conversation is an agent proposing one that a human approves, not a form (Phase 3) |
+| **Traffic through the workflow trial** | The machinery is built and driven live; what it has never had is real tasks. Five decided tasks a side on one class is the first verdict, and it is the claim the whole shape rests on (Phase 3) |
 | **Platform channels on the second backend** | The execution port now has two adapters and the second is driven live, so replaceability is demonstrated rather than architectural — but a model served over the chat-completions protocol gets file and shell tools only. A run needing the planner, mastery, verifier, proposer, self-edit, memory or workflow-answer channel is refused with the channel named rather than run without it (Phase 3) |
 | **microVM isolation** | Containers alone are insufficient; Kata or microsandbox is the boundary (Phase 3) |
 
