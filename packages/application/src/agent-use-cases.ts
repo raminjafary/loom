@@ -31,6 +31,7 @@ import {
   type ReviewExpectation,
   describeCrossPlanOverlaps,
   delegationDesign,
+  isParentlessRelation,
   delegationMatrix,
   describeDelegationRoster,
   describeReportingLines,
@@ -3949,7 +3950,7 @@ export const detachCapability = async (
  * not silently widen it. A capability row that vanished between attach and start
  * is skipped rather than failing the run — the attachment is stale, not the run.
  */
-const resolveCapabilities = async (
+export const resolveCapabilities = async (
   deps: AgentDeps,
   workspaceId: WorkspaceId,
   personaId: AgentPersonaId,
@@ -4790,6 +4791,15 @@ export const startAgentRun = async (
      * arrives, the way a proposer's subject is resolved from its session row.
      */
     answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] | undefined }[] }
+    /**
+     * Start this run as a **designer**: what it was asked to draw a harness for, which is what
+     * gives it `submit_workflow_design`.
+     *
+     * The ask travels rather than a flag, so the tool's own description can name it — a long
+     * session's most reliable drift is away from what it was asked for, and the tool call is the
+     * last place that can be restated before it becomes a proposal somebody reads.
+     */
+    designWorkflow?: { ask: string }
   },
 ): Promise<AgentRun> => {
   const parent = input.parentRunId
@@ -5291,10 +5301,12 @@ export const startAgentRun = async (
      * The relation is what makes eight sibling runs appearing at once read as a harness rather
      * than as a runaway swarm, and it was dropped here in silence until a live driver looked
      * at the stored row — an allow-list of one is a list that is wrong the first time it grows.
+     * It has grown twice since (`design` is the third), so the list now lives in the domain
+     * beside the union it is a subset of, where an omission is visible.
      */
     ...(parent
       ? { parentRunId: parent.id, relation: input.relation ?? 'delegation' }
-      : input.relation === 'screen' || input.relation === 'workflow'
+      : isParentlessRelation(input.relation)
         ? { relation: input.relation }
         : {}),
     // Recorded so a re-planning turn can read back the goal and the plan. Stored before
@@ -5531,6 +5543,7 @@ export const startAgentRun = async (
       ...(input.relation === 'steer' ? { steering: true } : {}),
       ...(input.verifyVariants ? { verifyVariants: input.verifyVariants } : {}),
       ...(input.answerWorkflow ? { answerWorkflow: input.answerWorkflow } : {}),
+      ...(input.designWorkflow ? { designWorkflow: input.designWorkflow } : {}),
       /**
        * The subject's name, resolved here from the id the caller passed rather than taken
        * from the persona this run is: a proposer runs as `variant-proposer` and writes for

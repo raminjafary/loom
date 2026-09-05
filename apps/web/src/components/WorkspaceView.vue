@@ -16,6 +16,7 @@ import {
   SELECTABLE_MODELS,
   threadsByParentMessage,
   type BriefSource,
+  type WorkflowProposal,
   type WorkflowRow,
   waitingCount,
 } from '@loom/client-core'
@@ -449,8 +450,15 @@ const refreshAtlas = async () => {
 /** The drawn harnesses, fetched with their tab for the atlas queue's reason. */
 const workflows = ref<WorkflowRow[]>([])
 
+/**
+ * The harnesses, and the ones an agent has proposed — fetched together, since a person opening
+ * this tab is deciding between "run one" and "one of these should exist".
+ */
+const workflowProposals = ref<WorkflowProposal[]>([])
+
 const refreshWorkflows = async () => {
   workflows.value = await agent.listWorkflows()
+  workflowProposals.value = await agent.listWorkflowProposals()
 }
 
 /**
@@ -1376,6 +1384,10 @@ onBeforeUnmount(() => {
       :read-workflow-run="agent.readWorkflowRun"
       :start-workflow="agent.startWorkflow"
       :cancel-workflow-run="agent.cancelWorkflowRun"
+      :workflow-proposals="workflowProposals"
+      :design-workflow="agent.designWorkflow"
+      :approve-workflow-design="agent.approveWorkflowDesign"
+      :decline-workflow-design="agent.declineWorkflowDesign"
       :refresh-workflows="() => void refreshWorkflows()"
       :open-workflow-run="openRun"
       @set-plan-review="(required) => void agent.setPlanReviewRequired(required)"

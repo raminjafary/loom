@@ -44,6 +44,8 @@ export type WorkflowRow = Awaited<ReturnType<LoomApi['workflow']['list']>>[numbe
 export type WorkflowDetail = NonNullable<Awaited<ReturnType<LoomApi['workflow']['read']>>>
 export type WorkflowRunRow = Awaited<ReturnType<LoomApi['workflow']['listRuns']>>[number]
 export type WorkflowRunDetail = NonNullable<Awaited<ReturnType<LoomApi['workflow']['run']>>>
+/** One harness a designer proposed and nobody has decided about, as the wire puts it. */
+export type WorkflowProposal = Awaited<ReturnType<LoomApi['workflow']['proposals']>>[number]
 /** Every gap a persona's campaigns measured, with the closure figure where one is readable. */
 export type GapCurve = Awaited<ReturnType<LoomApi['campaign']['gapCurve']>>
 /** What one campaign measured — arms, scores, spend, and the sentence. */
@@ -607,6 +609,29 @@ export interface AgentSession {
     capUsd: number | null
   }): Promise<{ runId: string | null; detail: string }>
   cancelWorkflowRun(runId: string): Promise<{ cancelled: boolean; detail: string }>
+  /**
+   * Asking an agent for a harness, and deciding about what it drew.
+   *
+   * There is no editor to sit beside this, deliberately: a shape is a configuration a
+   * measurement cites, so an edit is a new version — and the version arrives as a proposal.
+   * `graph` crosses as `unknown` here too, and is laid out for reading rather than validated.
+   */
+  listWorkflowProposals(status?: 'proposed' | 'approved' | 'declined'): Promise<WorkflowProposal[]>
+  designWorkflow(input: {
+    personaId: string
+    repositoryId: string
+    threadId: string
+    ask: string
+  }): Promise<{ runId: string | null; detail: string }>
+  approveWorkflowDesign(designId: string): Promise<{
+    versionId: string | null
+    version: number | null
+    detail: string
+  }>
+  declineWorkflowDesign(input: {
+    designId: string
+    note: string | null
+  }): Promise<{ declined: boolean; detail: string }>
   campaignReport(campaignId: string): Promise<CampaignReport | null>
   cancelCampaign(campaignId: string): Promise<{ cancelled: boolean; detail: string }>
   /**
@@ -1823,6 +1848,45 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         const detail = errorMessage(error)
         patch({ error: detail })
         return { cancelled: false, detail }
+      }
+    },
+
+    async listWorkflowProposals(status) {
+      try {
+        return await options.api.workflow.proposals(status === undefined ? {} : { status })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return []
+      }
+    },
+
+    async designWorkflow(input) {
+      try {
+        return await options.api.workflow.design(input)
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { runId: null, detail }
+      }
+    },
+
+    async approveWorkflowDesign(designId) {
+      try {
+        return await options.api.workflow.approveDesign({ designId })
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { versionId: null, version: null, detail }
+      }
+    },
+
+    async declineWorkflowDesign(input) {
+      try {
+        return await options.api.workflow.declineDesign(input)
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { declined: false, detail }
       }
     },
 

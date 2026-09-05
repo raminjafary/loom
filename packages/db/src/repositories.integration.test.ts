@@ -13,6 +13,7 @@ import {
   agentRunActor,
   asAgentPersonaId,
   asAgentRunId,
+  asRunnerId,
   asRepositoryId,
   asUserId,
   asWorkspaceId,
@@ -20,7 +21,7 @@ import {
   type VerificationStatus,
   type WorkspaceId,
 } from '@loom/domain'
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { createDatabase, type Database } from './client.js'
 import { schemaStatus } from './schema-status.js'
@@ -3560,5 +3561,127 @@ describe('workflows', () => {
     ).toBeNull()
     expect((await workflows.findRun(WS, run.id))?.haltReason).toBe('the cap')
     expect(await workflows.listRunningWorkflowRuns()).toEqual([])
+  })
+
+  /**
+   * A proposal is the only way a shape ever changes, so the rows have to hold two things the
+   * rest of this table does not: which harness a proposal is a *version of*, and the fact that
+   * exactly one person decided it.
+   */
+  describe('proposals', () => {
+    const propose = async (over: Record<string, unknown> = {}) =>
+      workflows.proposeDesign({
+        workspaceId: WS,
+        workflowId: null,
+        name: `proposed-${(seq += 1)}`,
+        description: null,
+        rationale: 'because the work has two halves nobody runs together',
+        graph: graph(),
+        digest: 'digest-proposal',
+        proposedByRunId: null,
+        personaName: 'workflow-designer',
+        ...over,
+      })
+
+    it('records one against the harness it would be the next version of', async () => {
+      const { workflow: existing } = await workflows.create({
+        workspaceId: WS,
+        name: `for-proposal-${(seq += 1)}`,
+        description: null,
+        createdByUserId: 'user_integration',
+        graph: graph(),
+        digest: 'digest-1',
+      })
+      const proposal = await propose({ workflowId: existing.id })
+      expect(proposal.status).toBe('proposed')
+      expect(proposal.workflowId).toBe(existing.id)
+      expect((await workflows.findDesign(WS, proposal.id))?.rationale).toContain('two halves')
+    })
+
+    it('is decided once, so two people approving write one version between them', async () => {
+      const proposal = await propose()
+      const first = await workflows.decideDesign(WS, proposal.id, {
+        status: 'approved',
+        decidedByUserId: 'user_integration',
+        note: null,
+      })
+      expect(first?.status).toBe('approved')
+      expect(first?.decidedAt).not.toBeNull()
+      expect(
+        await workflows.decideDesign(WS, proposal.id, {
+          status: 'declined',
+          decidedByUserId: 'somebody_else',
+          note: 'too wide',
+        }),
+      ).toBeNull()
+      expect((await workflows.findDesign(WS, proposal.id))?.status).toBe('approved')
+    })
+
+    it('keeps the reason a person declined it, which is what a later designer is shown', async () => {
+      const proposal = await propose()
+      const declined = await workflows.decideDesign(WS, proposal.id, {
+        status: 'declined',
+        decidedByUserId: 'user_integration',
+        note: 'three barriers where one plain edge would do',
+      })
+      expect(declined?.decisionNote).toContain('plain edge')
+      const open = await workflows.listDesigns({ workspaceId: WS, status: 'proposed', limit: 50 })
+      expect(open.map((entry) => entry.id)).not.toContain(proposal.id)
+    })
+
+    it('counts what one session has already left, so it cannot fill a review queue', async () => {
+      const place = await scaffold(WS)
+      const [row] = await db
+        .insert(agentRun)
+        .values({
+          workspaceId: WS,
+          threadId: place.threadId,
+          repositoryId: place.repositoryId,
+          runnerId: (
+            await db
+              .select({ id: repository.runnerId })
+              .from(repository)
+              .where(eq(repository.id, place.repositoryId))
+          )[0]!.id,
+          persona: { name: 'workflow-designer', model: 'claude-opus-5' },
+          relation: 'design',
+          status: 'running',
+        })
+        .returning({ id: agentRun.id })
+      const runId = asAgentRunId(row!.id)
+      expect(await workflows.countDesignsByRun(WS, runId)).toBe(0)
+      await propose({ proposedByRunId: runId })
+      await propose({ proposedByRunId: runId })
+      expect(await workflows.countDesignsByRun(WS, runId)).toBe(2)
+    })
+
+    /** A `design` relation that the mapper does not list throws on the way *out*, silently. */
+    it('reads a designer run back with its relation intact', async () => {
+      const place = await scaffold(WS)
+      const runs = agentRunRepository(db)
+      const created = await runs.create({
+        workspaceId: WS,
+        threadId: place.threadId,
+        repositoryId: place.repositoryId,
+        runnerId: asRunnerId(
+          (
+            await db
+              .select({ id: repository.runnerId })
+              .from(repository)
+              .where(eq(repository.id, place.repositoryId))
+          )[0]!.id,
+        ),
+        persona: {
+          name: 'workflow-designer',
+          systemPrompt: '',
+          model: 'claude-opus-5',
+          tools: [],
+          approvalMode: 'ask',
+          budgetCapUsd: null,
+        },
+        relation: 'design',
+      })
+      expect((await runs.findById(WS, created.id))?.relation).toBe('design')
+    })
   })
 })

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type {
   WorkflowDetail,
+  WorkflowProposal,
   WorkflowRow,
   WorkflowRunDetail,
   WorkflowRunRow,
@@ -119,6 +120,26 @@ const props = defineProps<{
     capUsd: number | null
   }) => Promise<{ runId: string | null; detail: string }>
   cancelWorkflowRun: (runId: string) => Promise<{ cancelled: boolean; detail: string }>
+  /**
+   * The designer, which is what the workflow panel has instead of an editor. Fetched with the
+   * tab, like the harnesses themselves.
+   */
+  workflowProposals: WorkflowProposal[]
+  designWorkflow: (input: {
+    personaId: string
+    repositoryId: string
+    threadId: string
+    ask: string
+  }) => Promise<{ runId: string | null; detail: string }>
+  approveWorkflowDesign: (designId: string) => Promise<{
+    versionId: string | null
+    version: number | null
+    detail: string
+  }>
+  declineWorkflowDesign: (input: {
+    designId: string
+    note: string | null
+  }) => Promise<{ declined: boolean; detail: string }>
   /**
    * Callbacks rather than events, and not for symmetry with the reads above.
    *
@@ -547,6 +568,11 @@ onMounted(() => scrim.value?.focus())
             :read-run="readWorkflowRun"
             :start="startWorkflow"
             :cancel="cancelWorkflowRun"
+            :personas="personas"
+            :proposals="workflowProposals"
+            :design="designWorkflow"
+            :approve-design="approveWorkflowDesign"
+            :decline-design="declineWorkflowDesign"
             @refresh="refreshWorkflows()"
             @open="(agentRunId) => openWorkflowRun(agentRunId)"
           />

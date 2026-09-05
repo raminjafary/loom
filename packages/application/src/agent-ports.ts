@@ -101,6 +101,9 @@ import type {
   SubjectMapStatus,
   TriggerPopulation,
   TriggerCandidate,
+  WorkflowDesignId,
+  WorkflowDesignRecord,
+  WorkflowDesignStatus,
   WorkflowGraph,
   WorkflowId,
   WorkflowRecord,
@@ -1847,6 +1850,20 @@ export interface RunDispatchPort {
      * declared the field compiles, and this layer has dropped one that way before.
      */
     answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] | undefined }[] }
+    /**
+     * Start this run as a **designer**: what it was asked to draw a harness for, whose presence
+     * is what gives the run `submit_workflow_design` at all.
+     *
+     * The ask and nothing else. The vocabulary a proposal must satisfy is *not* here and must
+     * not be: the server owns what a workflow may be, and a schema on the Runner would be a
+     * second definition of it — the same reason the contract carries a graph as unvalidated
+     * JSON. What comes back is checked by the one validator and refused, in words, as a tool
+     * result the session can act on.
+     *
+     * Declared here for the reason `verifyVariants` gives: a spread against a port that never
+     * declared the field compiles, and this layer has dropped one that way before.
+     */
+    designWorkflow?: { ask: string }
   }): Promise<void>
   /**
    * Aborts a run mid-flight. Fire-and-forget and
@@ -2747,4 +2764,52 @@ export interface WorkflowRepositoryPort {
     runId: WorkflowRunId,
     input: { status: Exclude<WorkflowRunStatus, 'running'>; reason: string | null },
   ): Promise<WorkflowRunRecord | null>
+
+  /**
+   * Records a shape a designer drew, as a proposal and never as a version.
+   *
+   * The graph is already validated when it arrives here — the same validator a hand-drawn shape
+   * goes through — because a proposal a person cannot approve without it being re-refused is a
+   * queue entry that wastes their attention.
+   */
+  proposeDesign(input: {
+    workspaceId: WorkspaceId
+    workflowId: WorkflowId | null
+    name: string
+    description: string | null
+    rationale: string
+    graph: WorkflowGraph
+    digest: string
+    proposedByRunId: AgentRunId | null
+    personaName: string | null
+  }): Promise<WorkflowDesignRecord>
+
+  findDesign(
+    workspaceId: WorkspaceId,
+    designId: WorkflowDesignId,
+  ): Promise<WorkflowDesignRecord | null>
+
+  /** Newest first. `status` omitted means every state, which is what a history reads. */
+  listDesigns(input: {
+    workspaceId: WorkspaceId
+    status?: WorkflowDesignStatus
+    limit: number
+  }): Promise<WorkflowDesignRecord[]>
+
+  /** How many one run has already left, so a session cannot fill a review queue. */
+  countDesignsByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<number>
+
+  /**
+   * Settles a proposal, and only one that is still open — so two people clicking at once
+   * cannot approve a shape twice and write two versions of it.
+   */
+  decideDesign(
+    workspaceId: WorkspaceId,
+    designId: WorkflowDesignId,
+    input: {
+      status: Exclude<WorkflowDesignStatus, 'proposed'>
+      decidedByUserId: string | null
+      note: string | null
+    },
+  ): Promise<WorkflowDesignRecord | null>
 }

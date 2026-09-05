@@ -6,6 +6,7 @@ import {
   type WorkflowDetail,
   type WorkflowRow,
   type WorkflowRunDetail,
+  type WorkflowProposal,
   type WorkflowRunRow,
   type WorkflowShapeNode,
 } from '@loom/client-core'
@@ -57,6 +58,30 @@ const props = defineProps<{
     capUsd: number | null
   }) => Promise<{ runId: string | null; detail: string }>
   cancel: (runId: string) => Promise<{ cancelled: boolean; detail: string }>
+  /**
+   * The designer, which is what stands in for the editor this panel does not have.
+   *
+   * Callback props rather than events, and not by preference: the parent's emit map has a
+   * documented inference ceiling past which every handler in it degrades to `any`, and four
+   * more events would cross it again.
+   */
+  personas: { id: string; name: string }[]
+  proposals: WorkflowProposal[]
+  design: (input: {
+    personaId: string
+    repositoryId: string
+    threadId: string
+    ask: string
+  }) => Promise<{ runId: string | null; detail: string }>
+  approveDesign: (designId: string) => Promise<{
+    versionId: string | null
+    version: number | null
+    detail: string
+  }>
+  declineDesign: (input: {
+    designId: string
+    note: string | null
+  }) => Promise<{ declined: boolean; detail: string }>
 }>()
 
 const emit = defineEmits<{
@@ -74,6 +99,72 @@ const repositoryId = ref('')
 const capUsd = ref('5')
 const notice = ref<string | null>(null)
 const working = ref(false)
+const designAsk = ref('')
+const designerId = ref('')
+const openProposalId = ref<string | null>(null)
+const declineNote = ref('')
+
+/**
+ * The proposal being read, drawn with the same layout an execution is.
+ *
+ * A diagram rather than a diff, because what a person is deciding about is a *shape*: where the
+ * work waits, how wide a fan may get, and who grades whose work. A JSON graph in a review queue
+ * would be a decision nobody can make.
+ */
+const openProposal = computed(
+  () => props.proposals.find((proposal) => proposal.id === openProposalId.value) ?? null,
+)
+
+const proposedShape = computed(() =>
+  openProposal.value === null ? null : layoutWorkflow(openProposal.value.graph),
+)
+
+const askForDesign = async () => {
+  const threadId = props.threadId
+  if (threadId === null || designAsk.value.trim() === '' || designerId.value === '') return
+  if (repositoryId.value === '') return
+  working.value = true
+  try {
+    const result = await props.design({
+      personaId: designerId.value,
+      repositoryId: repositoryId.value,
+      threadId,
+      ask: designAsk.value.trim(),
+    })
+    notice.value = result.detail
+    if (result.runId !== null) designAsk.value = ''
+  } finally {
+    working.value = false
+  }
+}
+
+const approveIt = async (designId: string) => {
+  working.value = true
+  try {
+    notice.value = (await props.approveDesign(designId)).detail
+    openProposalId.value = null
+    emit('refresh')
+  } finally {
+    working.value = false
+  }
+}
+
+const declineIt = async (designId: string) => {
+  working.value = true
+  try {
+    notice.value = (
+      await props.declineDesign({
+        designId,
+        note: declineNote.value.trim() === '' ? null : declineNote.value.trim(),
+      })
+    ).detail
+    declineNote.value = ''
+    openProposalId.value = null
+    emit('refresh')
+  } finally {
+    working.value = false
+  }
+}
 
 const select = async (workflowId: string) => {
   selectedId.value = workflowId
@@ -182,6 +273,19 @@ watch(
   },
   { immediate: true },
 )
+
+watch(
+  () => props.personas,
+  (list) => {
+    if (designerId.value === '') {
+      // The shipped designer if this workspace has it, since asking anything else for a harness
+      // is a deliberate choice rather than a default.
+      const shipped = list.find((persona) => persona.name === 'workflow-designer')
+      designerId.value = shipped?.id ?? list[0]?.id ?? ''
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -195,6 +299,140 @@ watch(
       No workflows here yet. A workflow is a harness for a task class — the same steps, in the
       same order, every time that kind of work comes round.
     </p>
+
+    <!--
+      Asking for one, which is what this panel has instead of an editor. A shape is a
+      configuration a measurement cites, so an edit is a new version — and a version arrives as
+      a proposal somebody approves rather than as a form somebody fills in.
+    -->
+    <form class="designer" @submit.prevent="askForDesign">
+      <label>
+        Ask for a harness
+        <textarea
+          v-model="designAsk"
+          rows="2"
+          placeholder="what the work is, and what keeps going wrong with it"
+        />
+      </label>
+      <div class="row">
+        <label>
+          Designer
+          <select v-model="designerId">
+            <option v-for="persona in props.personas" :key="persona.id" :value="persona.id">
+              {{ persona.name }}
+            </option>
+          </select>
+        </label>
+        <button
+          type="submit"
+          :disabled="
+            working ||
+            props.busy ||
+            props.threadId === null ||
+            designerId === '' ||
+            designAsk.trim() === ''
+          "
+        >
+          Ask
+        </button>
+      </div>
+      <p class="hint">
+        It reads the repository and draws. Nothing runs and nothing is configured until you
+        approve what it drew.
+      </p>
+    </form>
+
+    <template v-if="props.proposals.length > 0">
+      <h4>Proposed harnesses</h4>
+      <ul class="proposals">
+        <li v-for="proposal in props.proposals" :key="proposal.id">
+          <button
+            type="button"
+            class="pick"
+            :class="{ on: proposal.id === openProposalId }"
+            @click="openProposalId = openProposalId === proposal.id ? null : proposal.id"
+          >
+            <span class="name">{{ proposal.name }}</span>
+            <span class="version">
+              {{ proposal.workflowId === null ? 'new' : 'next version' }} ·
+              {{ proposal.status }}
+            </span>
+          </button>
+        </li>
+      </ul>
+
+      <template v-if="openProposal !== null">
+        <p class="description">
+          {{ openProposal.shape }}
+        </p>
+        <p class="rationale">{{ openProposal.rationale }}</p>
+        <!-- The ceiling for the shape as proposed, above the button that would make it real. -->
+        <pre class="ceiling">{{ openProposal.detail }}</pre>
+
+        <figure v-if="proposedShape !== null && proposedShape.nodes.length > 0" class="canvas">
+          <svg
+            :viewBox="`0 0 ${proposedShape.width} ${proposedShape.height}`"
+            role="img"
+            aria-label="the proposed shape"
+          >
+            <path
+              v-for="(edge, at) in proposedShape.edges"
+              :key="`p-${edge.from}-${edge.to}-${at}`"
+              :d="edge.path"
+              class="edge"
+              :class="{ loop: edge.loop }"
+              marker-end="url(#wf-arrow)"
+            />
+            <g
+              v-for="node in proposedShape.nodes"
+              :key="`p-${node.id}`"
+              :class="['node', node.kind]"
+            >
+              <rect
+                :x="node.x"
+                :y="node.y"
+                :width="node.width"
+                :height="node.height"
+                :rx="node.kind === 'barrier' ? 7 : 6"
+              />
+              <template v-if="node.kind !== 'barrier'">
+                <text :x="node.x + 10" :y="node.y + 18" class="title">{{ node.title }}</text>
+                <text :x="node.x + 10" :y="node.y + 32" class="sub">{{ node.persona }}</text>
+                <text v-if="node.fans" :x="node.x + 10" :y="node.y + 44" class="fan">
+                  {{ node.kind === 'bracket' ? 'two at a time from' : 'per' }} {{ node.fans }}
+                </text>
+              </template>
+              <text v-else :x="node.x + node.width / 2" :y="node.y - 5" class="barrier-label">
+                {{ node.title }}
+              </text>
+            </g>
+          </svg>
+          <figcaption>
+            Drawn by {{ openProposal.personaName ?? 'a designer' }}. A bar across the lane is a
+            barrier: everything above it has to finish before what follows starts.
+          </figcaption>
+        </figure>
+
+        <div v-if="openProposal.status === 'proposed'" class="decide">
+          <label>
+            If you decline, why
+            <input v-model="declineNote" type="text" placeholder="what would have to change" />
+          </label>
+          <div class="row">
+            <button type="button" :disabled="working" @click="approveIt(openProposal.id)">
+              Approve — draw it as a version
+            </button>
+            <button type="button" :disabled="working" @click="declineIt(openProposal.id)">
+              Decline
+            </button>
+          </div>
+        </div>
+        <p v-else class="hint">
+          {{ openProposal.status }}<template v-if="openProposal.decisionNote">
+            — {{ openProposal.decisionNote }}</template>
+        </p>
+      </template>
+    </template>
 
     <ul v-else class="picker">
       <li v-for="workflow in props.workflows" :key="workflow.id">
@@ -478,10 +716,39 @@ figcaption {
 .barrier-label {
   text-anchor: middle;
 }
-.start {
+.start,
+.designer,
+.decide {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+}
+.designer label,
+.decide label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.75rem;
+  gap: 0.15rem;
+}
+.designer .row,
+.decide .row {
+  align-items: flex-end;
+  display: flex;
+  gap: 0.5rem;
+}
+.hint,
+.rationale {
+  color: var(--muted, #667);
+  font-size: 0.78rem;
+  margin: 0;
+}
+.proposals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  list-style: none;
+  margin: 0.2rem 0;
+  padding: 0;
 }
 .start label {
   display: flex;

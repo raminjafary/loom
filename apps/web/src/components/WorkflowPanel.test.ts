@@ -122,6 +122,11 @@ const panel = (over: Partial<Record<string, unknown>> = {}) =>
       readRun: vi.fn(async () => runDetail),
       start: vi.fn(async () => ({ runId: 'wfr2', detail: 'started' })),
       cancel: vi.fn(async () => ({ cancelled: true, detail: 'stopped' })),
+      personas: [{ id: 'p1', name: 'workflow-designer' }],
+      proposals: [],
+      design: vi.fn(async () => ({ runId: 'ar1', detail: 'drawing' })),
+      approveDesign: vi.fn(async () => ({ versionId: 'v2', version: 2, detail: 'drawn as v2' })),
+      declineDesign: vi.fn(async () => ({ declined: true, detail: 'declined' })),
       ...over,
     },
   })
@@ -139,8 +144,9 @@ describe('WorkflowPanel', () => {
     await settle(wrapper)
     const ceiling = wrapper.find('.ceiling').text()
     expect(ceiling).toContain('up to 3 times')
-    // And the ceiling is above the button that spends it, not below.
-    expect(wrapper.html().indexOf('ceiling')).toBeLessThan(wrapper.html().indexOf('type="submit"'))
+    // And the ceiling is above the form that spends it, not below. Scoped to that form: the
+    // panel has a second one — asking a designer for a harness — and it spends nothing.
+    expect(wrapper.html().indexOf('ceiling')).toBeLessThan(wrapper.html().indexOf('class="start"'))
   })
 
   /** The distinction a script hides: waiting for every branch, versus not waiting. */
@@ -278,18 +284,134 @@ describe('WorkflowPanel', () => {
     })
   })
 
+  /**
+   * The panel has no editor, deliberately — so what stands in for one is this: a person asks,
+   * an agent draws, and what comes back is a *drawing* beside its ceiling rather than JSON in a
+   * review queue.
+   */
+  describe('the designer, which stands in for the editor', () => {
+    const proposal = {
+      id: 'wd1',
+      workflowId: null,
+      name: 'flaky test triage',
+      description: 'when a test fails twice a week',
+      rationale: 'one run cannot tell a flake from a break; two lanes can',
+      graph,
+      digest: 'b'.repeat(64),
+      status: 'proposed' as const,
+      proposedByRunId: 'ar-designer',
+      personaName: 'workflow-designer',
+      shape: 'discover → transform(×3) → [swept] → report',
+      detail: '4 step(s) in 4 stage(s)\nWorst case is $2.00 if every step spends its cap.',
+      decidedAt: null,
+      decisionNote: null,
+      createdAt: new Date(0),
+    }
+
+    it('asks the designer for one, in the thread the person is looking at', async () => {
+      const design = vi.fn(async () => ({ runId: 'ar1', detail: 'workflow-designer is drawing.' }))
+      const wrapper = panel({ design })
+      await settle(wrapper)
+      await wrapper.find('form.designer textarea').setValue('something for flaky tests')
+      await wrapper.find('form.designer').trigger('submit')
+      await settle(wrapper)
+      expect(design).toHaveBeenCalledWith({
+        personaId: 'p1',
+        repositoryId: 'repo1',
+        threadId: 'thread1',
+        ask: 'something for flaky tests',
+      })
+      expect(wrapper.find('.notice').text()).toContain('drawing')
+    })
+
+    it('will not ask with nowhere for the run to render', async () => {
+      const wrapper = panel({ threadId: null })
+      await settle(wrapper)
+      await wrapper.find('form.designer textarea').setValue('draw me something')
+      expect(
+        wrapper.find('form.designer button[type="submit"]').attributes('disabled'),
+      ).toBeDefined()
+    })
+
+    /** A JSON graph in a review queue is a decision nobody can make. */
+    it('draws a proposal as a shape, with the ceiling it would spend', async () => {
+      const wrapper = panel({ proposals: [proposal] })
+      await settle(wrapper)
+      await wrapper.findAll('.proposals .pick')[0]!.trigger('click')
+      await settle(wrapper)
+      expect(wrapper.findAll('figure.canvas').length).toBeGreaterThan(1)
+      expect(wrapper.text()).toContain('Worst case is $2.00')
+      expect(wrapper.text()).toContain('one run cannot tell a flake from a break')
+      // And who drew it, since the envelope it was attenuated against was that persona's.
+      expect(wrapper.text()).toContain('workflow-designer')
+    })
+
+    it('says whether approving would make a new harness or the next version of one', async () => {
+      const wrapper = panel({
+        proposals: [proposal, { ...proposal, id: 'wd2', workflowId: 'wf1', name: 'code review' }],
+      })
+      await settle(wrapper)
+      const labels = wrapper.findAll('.proposals .version').map((node) => node.text())
+      expect(labels[0]).toContain('new')
+      expect(labels[1]).toContain('next version')
+    })
+
+    it('approves through the callback and refreshes, since a version now exists', async () => {
+      const approveDesign = vi.fn(async () => ({
+        versionId: 'v1',
+        version: 1,
+        detail: 'Drawn as version 1 of "flaky test triage".',
+      }))
+      const wrapper = panel({ proposals: [proposal], approveDesign })
+      await settle(wrapper)
+      await wrapper.findAll('.proposals .pick')[0]!.trigger('click')
+      await settle(wrapper)
+      await wrapper.findAll('.decide button')[0]!.trigger('click')
+      await settle(wrapper)
+      expect(approveDesign).toHaveBeenCalledWith('wd1')
+      expect(wrapper.emitted('refresh')).toBeTruthy()
+      expect(wrapper.find('.notice').text()).toContain('version 1')
+    })
+
+    it('carries the reason with a decline, which is what a later designer is shown', async () => {
+      const declineDesign = vi.fn(async () => ({ declined: true, detail: 'declined' }))
+      const wrapper = panel({ proposals: [proposal], declineDesign })
+      await settle(wrapper)
+      await wrapper.findAll('.proposals .pick')[0]!.trigger('click')
+      await settle(wrapper)
+      await wrapper.find('.decide input').setValue('three barriers where one edge would do')
+      await wrapper.findAll('.decide button')[1]!.trigger('click')
+      await settle(wrapper)
+      expect(declineDesign).toHaveBeenCalledWith({
+        designId: 'wd1',
+        note: 'three barriers where one edge would do',
+      })
+    })
+
+    it('offers no decision on one already decided', async () => {
+      const wrapper = panel({
+        proposals: [{ ...proposal, status: 'declined' as const, decisionNote: 'too wide' }],
+      })
+      await settle(wrapper)
+      await wrapper.findAll('.proposals .pick')[0]!.trigger('click')
+      await settle(wrapper)
+      expect(wrapper.find('.decide').exists()).toBe(false)
+      expect(wrapper.text()).toContain('too wide')
+    })
+  })
+
   it('will not start an execution with nowhere for its steps to render', async () => {
     const wrapper = panel({ threadId: null })
     await settle(wrapper)
-    await wrapper.find('textarea').setValue('do the thing')
-    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('form.start textarea').setValue('do the thing')
+    expect(wrapper.find('form.start button[type="submit"]').attributes('disabled')).toBeDefined()
   })
 
   it('starts one on the thread the person is looking at, and shows what it says', async () => {
     const start = vi.fn(async () => ({ runId: 'wfr2', detail: 'Started: 4 steps in 4 stages.' }))
     const wrapper = panel({ start })
     await settle(wrapper)
-    await wrapper.find('textarea').setValue('rename the old helper')
+    await wrapper.find('form.start textarea').setValue('rename the old helper')
     await wrapper.find('form.start').trigger('submit')
     await settle(wrapper)
     expect(start).toHaveBeenCalledWith({

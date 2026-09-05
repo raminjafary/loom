@@ -2559,6 +2559,56 @@ export const workflowRun = pgTable(
  * downstream template interpolates. Null while pending, and null for a step whose answer did
  * not satisfy its schema, which is a refusal recorded in `reason` rather than a guess.
  */
+/**
+ * A shape a **designer proposed** and nobody has decided about yet.
+ *
+ * There is no workflow editor, deliberately: a drawn shape is a configuration a measurement
+ * cites, so an edit is a new version and never a mutation. This is where the next version comes
+ * from — an agent asked for one in words, and what it drew waiting on a person.
+ *
+ * `workflow_id` null means a harness this workspace does not have yet; set means a proposed new
+ * *version* of that one. Nothing here is a version until somebody approves it, and approval
+ * writes through the same validator a hand-drawn shape goes through.
+ *
+ * `persona_name` is the designer as snapshotted on its run, and it is the record of *which
+ * envelope this was attenuated against* — the personas a shape may name are bounded by what the
+ * designing run could have delegated to. Kept as a name rather than an id for the reason every
+ * other snapshot here is: the persona document can change afterwards, and this has to keep
+ * saying what was true when the proposal was made.
+ */
+export const workflowDesign = pgTable(
+  'workflow_design',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    /** Null for a harness that does not exist yet; set for a proposed new version of one. */
+    workflowId: uuid('workflow_id').references(() => workflow.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description'),
+    /** What this shape would make happen that one run of one agent would not. */
+    rationale: text('rationale').notNull(),
+    /** The validated `WorkflowGraph`. Written only by a path that ran `parseWorkflowGraph`. */
+    graph: jsonb('graph').notNull(),
+    digest: text('digest').notNull(),
+    /** `proposed | approved | declined`. */
+    status: text('status').notNull().default('proposed'),
+    proposedByRunId: uuid('proposed_by_run_id').references((): AnyPgColumn => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    personaName: text('persona_name'),
+    decidedByUserId: text('decided_by_user_id'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    decisionNote: text('decision_note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('workflow_design_workspace_idx').on(t.workspaceId, t.status, t.createdAt),
+    index('workflow_design_run_idx').on(t.proposedByRunId),
+  ],
+)
+
 export const workflowStepRun = pgTable(
   'workflow_step_run',
   {

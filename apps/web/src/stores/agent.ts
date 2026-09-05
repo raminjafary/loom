@@ -122,6 +122,16 @@ export const useAgentStore = defineStore('agent', () => {
       capUsd: number | null
     }) => session.startWorkflow(input),
     cancelWorkflowRun: (runId: string) => session.cancelWorkflowRun(runId),
+    listWorkflowProposals: () => session.listWorkflowProposals(),
+    designWorkflow: (input: {
+      personaId: string
+      repositoryId: string
+      threadId: string
+      ask: string
+    }) => session.designWorkflow(input),
+    approveWorkflowDesign: (designId: string) => session.approveWorkflowDesign(designId),
+    declineWorkflowDesign: (input: { designId: string; note: string | null }) =>
+      session.declineWorkflowDesign(input),
     listCampaigns: (personaId: string) => session.listCampaigns(personaId),
     campaignReport: (campaignId: string) => session.campaignReport(campaignId),
     gapCurve: (personaId: string) => session.gapCurve(personaId),

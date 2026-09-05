@@ -1433,6 +1433,14 @@ export const AgentRunRelationSchema = z.enum([
    * `screen` is on the wire.
    */
   'workflow',
+  /**
+   * A run asked to draw a harness, whose only effect is a proposal.
+   *
+   * On the wire because it is what a person needs to know about that run: it writes no
+   * configuration, starts no step, and what it submits waits for them. A designer rendered as
+   * an ordinary run would read as an agent changing the workspace.
+   */
+  'design',
 ])
 
 export const AgentRunSchema = z.object({

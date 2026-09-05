@@ -19,9 +19,9 @@ const asSpec = (persona: BuiltinPersona): PersonaSpec => ({
 })
 
 describe('BUILTIN_PERSONAS', () => {
-  it('has exactly twelve roles with unique names', () => {
-    expect(BUILTIN_PERSONAS).toHaveLength(12)
-    expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(12)
+  it('has exactly thirteen roles with unique names', () => {
+    expect(BUILTIN_PERSONAS).toHaveLength(13)
+    expect(new Set(BUILTIN_PERSONAS.map((p) => p.name)).size).toBe(13)
   })
 
   /**
@@ -274,5 +274,47 @@ describe('BUILTIN_PERSONAS autonomy', () => {
     for (const persona of BUILTIN_PERSONAS) {
       expect(persona.envelope, persona.name).toBeNull()
     }
+  })
+})
+
+/**
+ * The designer, whose shipped configuration *is* its security argument.
+ *
+ * Every one of these would be a mistake to relax, and each would fail in a different quiet way:
+ * a non-planner designer has no envelope to attenuate against, an `ask` designer produces shapes
+ * whose every step is refused at dispatch, and a designer with a shell is a designer that acts.
+ */
+describe('the workflow-designer built-in', () => {
+  const designer = BUILTIN_PERSONAS.find((persona) => persona.name === 'workflow-designer')
+
+  it('is a planner, because drawing a step is delegating to the persona it names', () => {
+    expect(designer?.harnessPlanner).toBe(true)
+    expect(designer?.harnessDelegates.length).toBeGreaterThan(0)
+  })
+
+  it('can name every shipped worker, or it ships a designer that cannot draw', () => {
+    const workers = BUILTIN_PERSONAS.filter(
+      (persona) => !persona.harnessPlanner && persona.name !== 'workflow-designer',
+    )
+    for (const worker of workers) {
+      for (const tool of worker.tools) {
+        expect(designer?.harnessDelegates).toContain(tool)
+      }
+    }
+  })
+
+  it('holds no acting tool itself', () => {
+    for (const tool of designer?.tools ?? []) {
+      expect(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch']).toContain(tool)
+    }
+  })
+
+  /** On a planner this is a ceiling, not a preference: an `ask` designer draws unrunnable shapes. */
+  it('is auto, so the shapes it draws are not refused at every step', () => {
+    expect(designer?.harnessApprovalMode).toBe('auto')
+  })
+
+  it('carries no self-modification envelope', () => {
+    expect(designer?.envelope).toBeNull()
   })
 })

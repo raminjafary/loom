@@ -148,6 +148,13 @@ export interface SandboxOptions {
   readonly onWorkflowAnswer?: (
     answer: Record<string, unknown>,
   ) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
+  /** A designer submitting a harness, proposed on the host. */
+  readonly onWorkflowDesign?: (design: {
+    name: string
+    description: string | null
+    rationale: string
+    graph: unknown
+  }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
   /**
    * The agent asking a human a question and blocking on the answer.
    * Resolves with `answer: null` when nobody answered — the run must continue either
@@ -198,6 +205,7 @@ export interface SandboxOptions {
   readonly verifyVariants?: { optionKeys: string[] }
   /** Present when this run is a workflow step — the fields its answer must carry. */
   readonly answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] | undefined }[] }
+  readonly designWorkflow?: { ask: string }
   /** Present when this run is the proposer — the persona it writes candidates for. */
   readonly proposeVariants?: { personaName: string }
   readonly onSessionId?: (sessionId: string) => void
@@ -623,6 +631,9 @@ export const runAgentInSandbox = async (
       ...(options.proposeVariants === undefined
         ? {}
         : { proposeVariants: options.proposeVariants }),
+      ...(options.designWorkflow === undefined
+        ? {}
+        : { designWorkflow: { ask: options.designWorkflow.ask } }),
       cwd: WORK_DIR,
       ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
       ...(options.steering ? { steering: true } : {}),
@@ -887,6 +898,22 @@ export const runAgentInSandbox = async (
             ok: false,
             error: 'this run has no workflow answer channel',
           }
+          send({
+            t: 'self_edit_result',
+            requestId: frame.requestId,
+            ok: result.ok,
+            ...(result.ok ? { outcome: result.outcome } : { error: result.error }),
+          })
+        })()
+        return
+      case 'workflow_design':
+        void (async () => {
+          const result = (await options.onWorkflowDesign?.({
+            name: frame.name,
+            description: frame.description,
+            rationale: frame.rationale,
+            graph: frame.graph,
+          })) ?? { ok: false, error: 'this run is not a designer' }
           send({
             t: 'self_edit_result',
             requestId: frame.requestId,

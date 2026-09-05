@@ -44,6 +44,8 @@ export type WorkflowVersionId = Brand<string, 'WorkflowVersionId'>
 export type WorkflowRunId = Brand<string, 'WorkflowRunId'>
 /** One node, on one pass of any loop it sits inside, against one item if it fans. */
 export type WorkflowStepRunId = Brand<string, 'WorkflowStepRunId'>
+/** A shape a designer proposed and nobody has decided about yet. */
+export type WorkflowDesignId = Brand<string, 'WorkflowDesignId'>
 
 export const asWorkspaceId = (v: string): WorkspaceId => v as WorkspaceId
 export const asUserId = (v: string): UserId => v as UserId
@@ -76,3 +78,4 @@ export const asWorkflowId = (v: string): WorkflowId => v as WorkflowId
 export const asWorkflowVersionId = (v: string): WorkflowVersionId => v as WorkflowVersionId
 export const asWorkflowRunId = (v: string): WorkflowRunId => v as WorkflowRunId
 export const asWorkflowStepRunId = (v: string): WorkflowStepRunId => v as WorkflowStepRunId
+export const asWorkflowDesignId = (v: string): WorkflowDesignId => v as WorkflowDesignId

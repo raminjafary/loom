@@ -57,6 +57,7 @@ import { createExperienceTool } from './experience-tool.js'
 import { createProposalTool } from './proposal-tool.js'
 import { createVerdictTool } from './verdict-tool.js'
 import { createWorkflowAnswerTool } from './workflow-answer-tool.js'
+import { createDesignTool } from './design-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
@@ -596,6 +597,11 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
      * which is what bounds `submit_workflow_answer`'s arguments.
      */
     answerWorkflow?: { fields: readonly { kind: 'text' | 'flag' | 'list'; name: string; choices?: readonly string[] | undefined }[] }
+    /**
+     * Present when this run is a designer: what it was asked to draw a harness for, whose
+     * presence is what gives the agent `submit_workflow_design` at all.
+     */
+    designWorkflow?: { ask: string }
     proposeVariants?: { personaName: string }
   }): Promise<void> => {
     // Async, and awaited by whoever produces events (the SDK loop in-process, the
@@ -903,6 +909,47 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         : null
 
     /**
+     * The design channel, present only when the platform started this run as a designer — the
+     * same gating the answer channel has, and the same reason: a tool that exists on every run
+     * is authority every run holds.
+     */
+    const onWorkflowDesign = (design: {
+      name: string
+      description: string | null
+      rationale: string
+      graph: unknown
+    }): Promise<{ ok: true; outcome: string } | { ok: false; error: string }> => {
+      const requestId = nextNoteRequestId()
+      send({
+        type: 'workflow_design_submitted',
+        runId: input.runId,
+        requestId,
+        name: design.name,
+        description: design.description,
+        rationale: design.rationale,
+        graph: design.graph,
+      })
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingSelfEdits.delete(requestId)
+          resolve({ ok: false, error: 'the platform did not answer in time — nothing proposed' })
+        }, NOTE_TIMEOUT_MS)
+        pendingSelfEdits.set(requestId, (result) => {
+          clearTimeout(timer)
+          resolve(
+            result.ok
+              ? { ok: true, outcome: result.outcome ?? '' }
+              : { ok: false, error: result.error ?? 'the platform refused it' },
+          )
+        })
+      })
+    }
+    const designTool =
+      input.designWorkflow !== undefined
+        ? createDesignTool(input.designWorkflow.ask, { submit: onWorkflowDesign })
+        : null
+
+    /**
      * The handover. Offered to every run, unlike `record_map` — see `handoff-tool.ts`
      * for why the blast radius makes that the right trade.
      */
@@ -1141,6 +1188,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         ...(mapTool ? { mapTool } : {}),
         ...(verdictTool ? { verdictTool } : {}),
         ...(workflowTool ? { workflowTool } : {}),
+        ...(designTool ? { designTool } : {}),
         ...(proposalTool ? { proposalTool } : {}),
         ...(selfTool ? { selfTool } : {}),
         ...(experienceTool ? { experienceTool } : {}),
@@ -1256,6 +1304,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         onProposeVariants,
         ...(verdictTool ? { onVerdict } : {}),
         ...(workflowTool ? { onWorkflowAnswer } : {}),
+        ...(designTool ? { onWorkflowDesign } : {}),
         ...(mapTool
           ? {
               onMapWrite: (fragment: Record<string, unknown>) =>
@@ -1612,6 +1661,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 ...(frame.proposeVariants === undefined
                   ? {}
                   : { proposeVariants: { personaName: frame.proposeVariants.personaName } }),
+                // Forwarded rather than spread wholesale, for the reason the fields above are.
+                ...(frame.designWorkflow === undefined
+                  ? {}
+                  : { designWorkflow: { ask: frame.designWorkflow.ask } }),
                 clonePath,
                 homePath,
                 abort,

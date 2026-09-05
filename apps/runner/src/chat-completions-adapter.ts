@@ -101,6 +101,7 @@ export const chatCompletionsRefusal = (
     | 'selfTool'
     | 'experienceTool'
     | 'workflowTool'
+    | 'designTool'
   >,
 ): string | null => {
   const missing: string[] = []
@@ -108,6 +109,7 @@ export const chatCompletionsRefusal = (
   if (options.mapTool) missing.push('mastery (record_map)')
   if (options.verdictTool) missing.push('the verifier verdict')
   if (options.workflowTool) missing.push("a workflow step's answer")
+  if (options.designTool) missing.push('a harness design (submit_workflow_design)')
   if (options.proposalTool) missing.push('candidate proposal')
   if (options.selfTool) missing.push('self-modification (revise_own_prompt)')
   if (options.experienceTool) missing.push('durable memory (record_experience)')

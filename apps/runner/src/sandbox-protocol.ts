@@ -89,6 +89,12 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
       })
       .optional(),
     proposeVariants: z.object({ personaName: z.string().min(1).max(120) }).optional(),
+    /**
+     * Present when this run is a designer: what it was asked to draw. Declared here as well as
+     * on the wire for `verifyVariants`' reason — a container that strips it runs a designer with
+     * nothing to submit through.
+     */
+    designWorkflow: z.object({ ask: z.string().min(1).max(4_000) }).optional(),
     /** The tree's ledger, rendered and fenced server-side. */
     contextLedger: z.string().optional(),
     /** Where the run's clone is mounted inside the container, not the host path. */
@@ -363,6 +369,20 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
     t: z.literal('workflow_answer'),
     requestId: z.string(),
     answer: z.record(z.string().max(40), z.unknown()),
+  }),
+  /**
+   * A harness a designer drew inside the container, proposed on the host.
+   *
+   * In both paths for the reason the answer channel is: a tool offered outside the container and
+   * not inside it is a feature that works until an operator turns the sandbox on.
+   */
+  z.object({
+    t: z.literal('workflow_design'),
+    requestId: z.string(),
+    name: z.string().max(200),
+    description: z.string().max(600).nullable(),
+    rationale: z.string().max(4_000),
+    graph: z.unknown(),
   }),
   /** The agent asking a human a question, answered by `question_result`. */
   z.object({ t: z.literal('question_request'), requestId: z.string(), question: z.string() }),

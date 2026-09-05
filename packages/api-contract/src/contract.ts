@@ -1073,6 +1073,73 @@ export const contract = {
     cancel: oc
       .input(z.object({ runId: z.string() }))
       .output(z.object({ cancelled: z.boolean(), detail: z.string() })),
+
+    /**
+     * Asks an agent for a harness.
+     *
+     * There is deliberately no editor: a shape is a configuration a measurement cites, so an
+     * edit is a new version — and the version is drawn by asking rather than by filling in a
+     * form. What comes back is a proposal, never a version.
+     */
+    design: oc
+      .input(
+        z.object({
+          personaId: z.string(),
+          repositoryId: z.string(),
+          threadId: z.string(),
+          /** What the harness is for, in the person's own words. */
+          ask: z.string().min(1).max(4_000),
+        }),
+      )
+      .output(z.object({ runId: z.string().nullable(), detail: z.string() })),
+
+    /** Every proposal, newest first, each with the ceiling a person reads before approving. */
+    proposals: oc
+      .input(z.object({ status: z.enum(['proposed', 'approved', 'declined']).optional() }))
+      .output(
+        z.array(
+          z.object({
+            id: z.string(),
+            /** Null for a harness this workspace does not have; set for a new version of one. */
+            workflowId: z.string().nullable(),
+            name: z.string(),
+            description: z.string().nullable(),
+            rationale: z.string(),
+            /** The validated graph. Unknown on the wire, for the reason `create`'s input is. */
+            graph: z.unknown(),
+            digest: z.string(),
+            status: z.enum(['proposed', 'approved', 'declined']),
+            /** The run that drew it, so its session is readable beside the drawing. */
+            proposedByRunId: z.string().nullable(),
+            /** The designer as snapshotted — the envelope this was attenuated against. */
+            personaName: z.string().nullable(),
+            /** One line: what happens, then what, with the lanes marked. */
+            shape: z.string(),
+            /** `describeWorkflowCost`'s paragraph, for the shape as proposed. */
+            detail: z.string(),
+            decidedAt: z.date().nullable(),
+            decisionNote: z.string().nullable(),
+            createdAt: z.date(),
+          }),
+        ),
+      ),
+
+    /** Approving is what writes the version. Human-only, and it re-validates first. */
+    approveDesign: oc
+      .input(z.object({ designId: z.string() }))
+      .output(
+        z.object({
+          versionId: z.string().nullable(),
+          version: z.number().int().nullable(),
+          /** What was drawn, or why the shape is no longer runnable here. */
+          detail: z.string(),
+        }),
+      ),
+
+    /** Declining, with the reason — which is the record a later designer can be shown. */
+    declineDesign: oc
+      .input(z.object({ designId: z.string(), note: z.string().max(1_200).nullable() }))
+      .output(z.object({ declined: z.boolean(), detail: z.string() })),
   },
 
   /**

@@ -538,6 +538,7 @@ const AGENT_RUN_RELATIONS = [
   'screen',
   'escalate',
   'workflow',
+  'design',
 ] as const satisfies readonly AgentRunRelation[]
 
 /**

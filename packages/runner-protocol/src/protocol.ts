@@ -479,6 +479,24 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
     requestId: z.string(),
     answer: z.record(z.string().max(40), z.unknown()),
   }),
+  /**
+   * A harness a designer drew, submitted as a **proposal**.
+   *
+   * The graph is unvalidated here on purpose — `parseWorkflowGraph` is the one validator, and a
+   * second schema on the wire would be a second answer to what a workflow may be. It is also
+   * the only honest place for the check: the vocabulary's rules are about the graph as a whole
+   * (a template may only read an ancestor, a verifier may not be its author), which a
+   * per-field schema cannot express at all.
+   */
+  z.object({
+    type: z.literal('workflow_design_submitted'),
+    runId: z.string(),
+    requestId: z.string(),
+    name: z.string().max(200),
+    description: z.string().max(600).nullable(),
+    rationale: z.string().max(4_000),
+    graph: z.unknown(),
+  }),
   z.object({
     type: z.literal('persona_tools_revised'),
     runId: z.string(),
@@ -932,6 +950,15 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
           .max(12),
       })
       .optional(),
+    /**
+     * Start this run as a **designer**: what a person asked a harness for.
+     *
+     * The ask and nothing else. What a workflow may *be* is the server's to decide — a schema
+     * here would be a second definition of the vocabulary, on the boundary whose whole job is
+     * to refuse a shape before it can spend — so the graph goes back as loose JSON and comes
+     * back refused in words the session can act on.
+     */
+    designWorkflow: z.object({ ask: z.string().min(1).max(4_000) }).optional(),
     /**
      * Start this run as a **reviewer** of another run's branch.
      *

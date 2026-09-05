@@ -35,6 +35,7 @@ import {
   proposeOwnVariants,
   recordVariantVerdict,
   recordWorkflowAnswer,
+  recordWorkflowDesign,
   revisePersonaTools,
   renderProposalOutcome,
   readContextLedger,
@@ -339,6 +340,7 @@ export const createRunnerGateway = (
       verifyVariants,
       proposeVariants,
       answerWorkflow,
+      designWorkflow,
     }) {
       send(runnerId, {
         type: 'start_run',
@@ -406,6 +408,11 @@ export const createRunnerGateway = (
                 })),
               },
             }),
+        // Destructured above and forwarded here, for the reason the fields above give: a
+        // designer whose Runner was never told is a designer with nothing to submit through.
+        ...(designWorkflow === undefined
+          ? {}
+          : { designWorkflow: { ask: designWorkflow.ask } }),
       })
     },
 
@@ -1267,6 +1274,41 @@ export const createRunnerGateway = (
             workspaceId,
             agentRunId: asAgentRunId(frame.runId),
             answer: frame.answer,
+          })
+          send(from, {
+            type: 'persona_prompt_result',
+            requestId: frame.requestId,
+            ok: true,
+            outcome: result.ok ? result.outcome : result.error,
+          })
+        } catch (error) {
+          send(from, {
+            type: 'persona_prompt_result',
+            requestId: frame.requestId,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+        return
+      }
+
+      /**
+       * A harness a designer drew.
+       *
+       * Refused *as an outcome* rather than as an error, on the same discipline the answer
+       * channel keeps: "that fan fans over a text field" is something the session can fix, and
+       * it has the rest of its run in which to fix it. Nothing here is configuration — what it
+       * writes is a proposal, and a person is what turns one into a version.
+       */
+      case 'workflow_design_submitted': {
+        try {
+          const result = await recordWorkflowDesign(deps, {
+            workspaceId,
+            agentRunId: asAgentRunId(frame.runId),
+            name: frame.name,
+            description: frame.description,
+            rationale: frame.rationale,
+            graph: frame.graph,
           })
           send(from, {
             type: 'persona_prompt_result',

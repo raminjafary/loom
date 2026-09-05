@@ -715,6 +715,37 @@ export type AgentRunRelation =
    * sibling runs appear at once reads a harness rather than a runaway swarm.
    */
   | 'workflow'
+  /**
+   * A run asked to **draw a harness**, whose only effect on the world is a proposal.
+   *
+   * Parentless like a workflow step, and for a different reason: a designer is not part of the
+   * work it designs. Its own relation rather than `delegation` because what a person watching
+   * needs to know about it is exactly what it cannot do — it writes no configuration, it starts
+   * no step, and what it submits waits for them.
+   */
+  | 'design'
+
+/**
+ * The relations a run carries **with no parent**, and which therefore have to be stored anyway.
+ *
+ * A list rather than a condition at the one call site, because that call site was an allow-list
+ * of one and it was wrong the first time it grew: `workflow` was dropped in silence, the step
+ * was claimed and released, and an execution dealt nothing. A relation added to the union and
+ * not to this list still reaches a reader as a parentless run with no relation at all, so the
+ * list is here, next to the union, where the omission is visible.
+ */
+export const PARENTLESS_RELATIONS = [
+  'screen',
+  'workflow',
+  'design',
+] as const satisfies readonly AgentRunRelation[]
+
+export const isParentlessRelation = (
+  relation: AgentRunRelation | null | undefined,
+): relation is AgentRunRelation =>
+  relation !== null &&
+  relation !== undefined &&
+  (PARENTLESS_RELATIONS as readonly string[]).includes(relation)
 
 export interface AgentRun {
   readonly id: AgentRunId

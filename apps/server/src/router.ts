@@ -103,6 +103,10 @@ import {
   readWorkflowRun,
   redrawWorkflow,
   startWorkflowRun,
+  startWorkflowDesigner,
+  listWorkflowDesigns,
+  approveWorkflowDesign,
+  declineWorkflowDesign,
   listVariantSearches,
   promoteVariant,
   discardVariantSearch,
@@ -142,6 +146,7 @@ import {
   parsePersonaMarkdown,
   asPersonaRevisionId,
   asReplayCampaignId,
+  asWorkflowDesignId,
   asWorkflowId,
   asWorkflowRunId,
   asReplaySetId,
@@ -1331,6 +1336,102 @@ export const router = os.router({
           if (error instanceof NotFoundError) {
             return { cancelled: false, detail: 'That execution is already over.' }
           }
+          throw error
+        }
+      }),
+    ),
+
+    design: os.workflow.design.handler(({ context, input }) =>
+      guard(async () => {
+        try {
+          const started = await startWorkflowDesigner(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            personaId: asAgentPersonaId(input.personaId),
+            repositoryId: asRepositoryId(input.repositoryId),
+            threadId: asThreadId(input.threadId),
+            ask: input.ask,
+          })
+          return {
+            runId: started.run.id as string,
+            detail:
+              `${started.run.persona.name} is drawing. What it submits is a proposal — nothing ` +
+              'runs and nothing is configured until you approve one.',
+          }
+        } catch (error) {
+          if (error instanceof ValidationError) return { runId: null, detail: error.message }
+          throw error
+        }
+      }),
+    ),
+
+    proposals: os.workflow.proposals.handler(({ context, input }) =>
+      guard(async () => {
+        const rows = await listWorkflowDesigns(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          ...(input.status === undefined ? {} : { status: input.status }),
+        })
+        // Field by field, as everywhere else here: a spread skips the excess-property check.
+        return rows.map(({ design, shape, detail }) => ({
+          id: design.id as string,
+          workflowId: design.workflowId === null ? null : (design.workflowId as string),
+          name: design.name,
+          description: design.description,
+          rationale: design.rationale,
+          graph: design.graph,
+          digest: design.digest,
+          status: design.status,
+          proposedByRunId:
+            design.proposedByRunId === null ? null : (design.proposedByRunId as string),
+          personaName: design.personaName,
+          shape,
+          detail,
+          decidedAt: design.decidedAt,
+          decisionNote: design.decisionNote,
+          createdAt: design.createdAt,
+        }))
+      }),
+    ),
+
+    approveDesign: os.workflow.approveDesign.handler(({ context, input }) =>
+      guard(async () => {
+        try {
+          const approved = await approveWorkflowDesign(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            designId: asWorkflowDesignId(input.designId),
+          })
+          return {
+            versionId: approved.version.id as string,
+            version: approved.version.version,
+            detail: approved.detail,
+          }
+        } catch (error) {
+          if (error instanceof ValidationError) {
+            return { versionId: null, version: null, detail: error.message }
+          }
+          throw error
+        }
+      }),
+    ),
+
+    declineDesign: os.workflow.declineDesign.handler(({ context, input }) =>
+      guard(async () => {
+        try {
+          await declineWorkflowDesign(context.deps, {
+            workspaceId: context.principal.workspaceId,
+            actor: context.principal.actor,
+            designId: asWorkflowDesignId(input.designId),
+            note: input.note,
+          })
+          return {
+            declined: true,
+            detail:
+              'Declined. What you said is kept with it, which is what a later designer can be ' +
+              'shown instead of being asked the same thing again.',
+          }
+        } catch (error) {
+          if (error instanceof ValidationError) return { declined: false, detail: error.message }
           throw error
         }
       }),

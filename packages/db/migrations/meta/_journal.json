@@ -505,6 +505,13 @@
       "when": 1788542795557,
       "tag": "0071_chunky_the_hood",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1788550035591,
+      "tag": "0072_solid_newton_destine",
+      "breakpoints": true
     }
   ]
 }

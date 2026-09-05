@@ -2,11 +2,14 @@ import {
   asAgentRunId,
   asRepositoryId,
   asThreadId,
+  asWorkflowDesignId,
   asWorkflowId,
   asWorkflowRunId,
   asWorkflowStepRunId,
   asWorkflowVersionId,
   asWorkspaceId,
+  type WorkflowDesignRecord,
+  type WorkflowDesignStatus,
   type WorkflowGraph,
   type WorkflowRecord,
   type WorkflowRunRecord,
@@ -18,7 +21,13 @@ import {
 import type { WorkflowRepositoryPort } from '@loom/application'
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
 import type { Database } from './client.js'
-import { workflow, workflowRun, workflowStepRun, workflowVersion } from './schema.js'
+import {
+  workflow,
+  workflowDesign,
+  workflowRun,
+  workflowStepRun,
+  workflowVersion,
+} from './schema.js'
 
 const toWorkflow = (row: {
   id: string
@@ -112,6 +121,40 @@ const toStep = (row: {
   reason: row.reason,
   costUsd: row.costUsd,
   finishedAt: row.finishedAt,
+})
+
+const toDesign = (row: {
+  id: string
+  workspaceId: string
+  workflowId: string | null
+  name: string
+  description: string | null
+  rationale: string
+  graph: unknown
+  digest: string
+  status: string
+  proposedByRunId: string | null
+  personaName: string | null
+  decidedByUserId: string | null
+  decidedAt: Date | null
+  decisionNote: string | null
+  createdAt: Date
+}): WorkflowDesignRecord => ({
+  id: asWorkflowDesignId(row.id),
+  workspaceId: asWorkspaceId(row.workspaceId),
+  workflowId: row.workflowId === null ? null : asWorkflowId(row.workflowId),
+  name: row.name,
+  description: row.description,
+  rationale: row.rationale,
+  graph: row.graph as WorkflowGraph,
+  digest: row.digest,
+  status: row.status as WorkflowDesignStatus,
+  proposedByRunId: row.proposedByRunId === null ? null : asAgentRunId(row.proposedByRunId),
+  personaName: row.personaName,
+  decidedByUserId: row.decidedByUserId,
+  decidedAt: row.decidedAt,
+  decisionNote: row.decisionNote,
+  createdAt: row.createdAt,
 })
 
 export const workflowRepository = (db: Database): WorkflowRepositoryPort => ({
@@ -448,5 +491,88 @@ export const workflowRepository = (db: Database): WorkflowRepositoryPort => ({
       )
       .returning()
     return row ? toRun(row) : null
+  },
+
+  async proposeDesign(input) {
+    const [row] = await db
+      .insert(workflowDesign)
+      .values({
+        workspaceId: input.workspaceId,
+        workflowId: input.workflowId,
+        name: input.name,
+        description: input.description,
+        rationale: input.rationale,
+        graph: input.graph,
+        digest: input.digest,
+        proposedByRunId: input.proposedByRunId,
+        personaName: input.personaName,
+      })
+      .returning()
+    if (!row) throw new Error('workflow_design insert returned nothing')
+    return toDesign(row)
+  },
+
+  async findDesign(workspaceId, designId) {
+    const [row] = await db
+      .select()
+      .from(workflowDesign)
+      .where(and(eq(workflowDesign.workspaceId, workspaceId), eq(workflowDesign.id, designId)))
+      .limit(1)
+    return row ? toDesign(row) : null
+  },
+
+  async listDesigns(input) {
+    const rows = await db
+      .select()
+      .from(workflowDesign)
+      .where(
+        input.status === undefined
+          ? eq(workflowDesign.workspaceId, input.workspaceId)
+          : and(
+              eq(workflowDesign.workspaceId, input.workspaceId),
+              eq(workflowDesign.status, input.status),
+            ),
+      )
+      .orderBy(desc(workflowDesign.createdAt))
+      .limit(input.limit)
+    return rows.map(toDesign)
+  },
+
+  async countDesignsByRun(workspaceId, agentRunId) {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(workflowDesign)
+      .where(
+        and(
+          eq(workflowDesign.workspaceId, workspaceId),
+          eq(workflowDesign.proposedByRunId, agentRunId),
+        ),
+      )
+    return row?.count ?? 0
+  },
+
+  async decideDesign(workspaceId, designId, input) {
+    const [row] = await db
+      .update(workflowDesign)
+      .set({
+        status: input.status,
+        decidedByUserId: input.decidedByUserId,
+        decisionNote: input.note,
+        decidedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(workflowDesign.workspaceId, workspaceId),
+          eq(workflowDesign.id, designId),
+          /**
+           * Only one still open. Two people approving at once would otherwise write two
+           * versions of one proposal, which is the shape's own rule broken by a race: a
+           * version is a thing somebody decided, once.
+           */
+          eq(workflowDesign.status, 'proposed'),
+        ),
+      )
+      .returning()
+    return row ? toDesign(row) : null
   },
 })

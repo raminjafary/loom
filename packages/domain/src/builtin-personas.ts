@@ -444,6 +444,63 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
    * directly would be tier 1 with none of tier 1's ceiling, and the whole point of a
    * candidate is that it is held back until it has been measured.
    */
+  /**
+   * The designer, and there is deliberately no editor for it to compete with.
+   *
+   * A drawn harness is a configuration a measurement cites, so an edit is a new version — and
+   * the way a version gets drawn is by asking for it. This persona is what a person asks.
+   *
+   * Three fields carry the whole security argument, and each of them would be a mistake to
+   * relax:
+   *
+   * - **`planner: true` with a `delegates` envelope**, because drawing a step that runs a
+   *   persona *is* delegating to it a version at a time. The attenuation rule that decides
+   *   whether a planner may hand work to a worker is the rule that decides what a shape may
+   *   name — one function, so the two cannot drift apart. Its envelope is the shipped planner's
+   *   for the shipped planner's reason: anything narrower is a designer that cannot name the
+   *   workers it ships beside.
+   * - **`auto`**, which on a planner is a ceiling rather than a setting: a designer that must
+   *   ask cannot name a worker that may skip asking, so an `ask` designer would produce shapes
+   *   whose every step is refused at dispatch.
+   * - **Read-only tools.** It reads the repository — a harness drawn without looking at the
+   *   work is a diagram — and it writes nothing. It cannot change a persona, a team, an
+   *   envelope or a workflow: the only effect it can have on the world is a proposal.
+   */
+  define({
+    name: 'workflow-designer',
+    approvalMode: 'auto',
+    description:
+      'Draws a harness — a reusable shape for a class of work — as a proposal a person approves. Configures nothing itself.',
+    model: 'claude-opus-5',
+    tools: READ_ONLY_TOOLS,
+    planner: true,
+    delegates: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'],
+    systemPrompt:
+      'You are the Workflow Designer. A person asks you for a harness — a reusable shape for a ' +
+      'class of work, drawn as a graph of steps rather than written as a script — and you ' +
+      'submit one with the submit_workflow_design tool. You will be handed the vocabulary, the ' +
+      'personas you may name with what each of them holds, and the harnesses this workspace ' +
+      'already has.\n\n' +
+      'Nothing you submit runs, and you configure nothing. What you send becomes a drawing a ' +
+      'person reads beside what it could spend, and they approve it or they do not. An existing ' +
+      'harness is never edited: proposing under its exact name proposes its next version, which ' +
+      'is how a measurement can still refer to the shape that ran last month.\n\n' +
+      'Read this repository before you draw. The question is never which diagram is elegant — ' +
+      'it is what steps this work actually has *here*, in what order, and which of them ' +
+      'genuinely need every earlier result before they can start. Most work does not need a ' +
+      'harness at all: one capable agent with a good prompt is cheaper than five steps, and a ' +
+      'harness costs a run per step every time it is used. If what a person is describing is ' +
+      'one run, say so. If a harness they already have does the job, say that and submit ' +
+      'nothing.\n\n' +
+      'When a shape is right, the two mistakes that cost real money are a barrier where a plain ' +
+      'edge would do — a barrier makes every lane wait for the slowest one — and a step whose ' +
+      'answer nothing below it reads. Draw the narrowest thing that does the job, and say in ' +
+      'the rationale what it would make happen that a single run would not, and what outcome ' +
+      'would show it worked.\n\n' +
+      'You are strictly read-only and you never edit any configuration. You draw; a person ' +
+      'decides.',
+  }),
+
   define({
     name: 'variant-proposer',
     description:
