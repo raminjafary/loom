@@ -315,6 +315,51 @@ describe('advanceWorkflowQueue', () => {
     })
   })
 
+  /**
+   * A node that declared no answer is dealt no answer tool — that is decided at dispatch, and
+   * deliberately. Settling it as a refusal for not answering therefore refused it every time,
+   * whatever its run did, and an execution ending in one could never finish: it closed
+   * "Nothing at the bottom of this workflow answered" on work that had actually been done.
+   * The node whose deliverable is the tree rather than a field is the ordinary case for this.
+   */
+  const NO_ANSWER_GRAPH = ((): WorkflowGraph => {
+    const verdict = parseWorkflowGraph({
+      nodes: [
+        {
+          kind: 'step',
+          id: 'discover',
+          title: 'discover',
+          persona: 'Scout',
+          task: 'find the sites for {{input}}',
+          answer: { fields: [{ kind: 'list', name: 'sites' }] },
+        },
+        { kind: 'step', id: 'ship', title: 'ship', persona: 'Scout', task: 'carry it out', answer: null },
+      ],
+      edges: [{ from: 'discover', to: 'ship' }],
+    })
+    if (!verdict.ok) throw new Error(verdict.reason)
+    return verdict.graph
+  })()
+
+  it('settles a step that declared no answer, because none was ever owed', async () => {
+    const { deps, finishStep } = harness({
+      steps: [step('ship')],
+      graph: NO_ANSWER_GRAPH,
+    })
+    await tick(deps)
+    expect(callsOf(finishStep)[0]?.[2]).toMatchObject({ status: 'answered', answer: null })
+  })
+
+  it('still refuses one whose run failed, since no answer due is not work done', async () => {
+    const { deps, finishStep } = harness({
+      steps: [step('ship')],
+      graph: NO_ANSWER_GRAPH,
+      run: agentRun({ status: 'failed' }),
+    })
+    await tick(deps)
+    expect(callsOf(finishStep)[0]?.[2]).toMatchObject({ status: 'refused' })
+  })
+
   it('leaves a step alone while its run is still going', async () => {
     const { deps, finishStep } = harness({
       steps: [step('discover')],

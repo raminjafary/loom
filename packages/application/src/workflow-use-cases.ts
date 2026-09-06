@@ -582,7 +582,7 @@ const advanceWorkflowRun = async (
   }
 
   // 1. Settle what has finished, with what it cost.
-  await settleFinishedSteps(deps, workspaceId, runId, options.stepStuckMs)
+  await settleFinishedSteps(deps, workspaceId, runId, version.graph, options.stepStuckMs)
 
   const steps = await deps.workflows.stepsForRun(workspaceId, runId)
   /**
@@ -743,9 +743,11 @@ const settleFinishedSteps = async (
   deps: AgentDeps,
   workspaceId: WorkspaceId,
   runId: WorkflowRunId,
+  graph: WorkflowGraph,
   stuckMs: number,
 ): Promise<void> => {
   const now = Date.now()
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]))
   for (const step of await deps.workflows.stepsForRun(workspaceId, runId)) {
     if (step.status !== 'running') continue
 
@@ -789,8 +791,21 @@ const settleFinishedSteps = async (
      * A run that ended without answering is a refusal even when the run itself "succeeded".
      * The step's contract is the shape it declared, and a step that produced prose where a
      * list belonged has not done the thing the graph below it is waiting for.
+     *
+     * **Unless it declared no shape.** A node with no answer fields is dealt no answer tool —
+     * that is decided a few lines below, at dispatch — so demanding an answer of it refuses
+     * every such step no matter how well its run went. A workflow ending in one could
+     * therefore never finish: the last step was always refused, and the execution always
+     * closed "Nothing at the bottom of this workflow answered". The node whose deliverable is
+     * the work in the tree rather than a field is the ordinary case for that, which is why it
+     * is the *graph* that says whether an answer was owed and not the row.
      */
-    const answered = step.answer !== null
+    const node = nodeById.get(step.nodeId)
+    const owedAnswer = node === undefined || answerFieldsOf(node).length > 0
+    // A run that failed or was cancelled is a refusal whatever the node owed: "no answer was
+    // due" is not the same claim as "the work was done", and only a completed run makes it.
+    const answered =
+      step.answer !== null || (!owedAnswer && agentRun.status === 'completed')
     await deps.workflows.finishStep(workspaceId, step.id, {
       status: answered ? 'answered' : 'refused',
       answer: step.answer,
