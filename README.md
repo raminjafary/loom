@@ -419,9 +419,8 @@ generating a migration — a migration applied only to `loom` shows up as integr
 out rather than as a missing-table error.
 
 **No automated test calls the real model API** (that costs real tokens). That path is covered by
-the live drivers in `tools/*-check.mts` — twenty-five of them, run by hand. Each drives a real
-server, a real Runner *process*, the real SDK and real git, and each **asserts** rather than
-prints.
+the live drivers in `tools/` — twenty-eight of them, run by hand. Each drives a real server, a
+real Runner *process*, the real SDK and real git, and each **asserts** rather than prints.
 
 Several spend no tokens at all: a run refused by the Runner's own unsandboxed guard is refused
 *after* its clone, so the workspace, the commit and the dispatch are real and no model is ever
@@ -434,6 +433,30 @@ npx tsx tools/designer-check.mts   # 36 checks: a harness asked for, refused, pr
 npx tsx tools/trial-check.mts      # 15 checks: the arms alternating, and a task as the unit
 npx tsx tools/campaign-check.mts   # a campaign against a real repository, no tokens
 ```
+
+The no-token drivers buy their cheapness by answering on the model's behalf, and that is exactly
+where three defects hid: a designer handed the *planner's* tool because one field was not
+forwarded into the container, a node that declared no answer refused for not giving one, and a
+planner persona on a workflow step answering with a plan. None of the three could fail — every run
+looked successful — and none is reachable from a driver that supplies the answer itself. So three
+drivers put a model behind the same machinery:
+
+```bash
+docker compose up -d postgres valkey egress-proxy
+docker build -f apps/runner/Dockerfile.sandbox -t loom-agent-sandbox:latest .
+export $(grep -E "^LOOM_EGRESS_CONTROL_SECRET=" .env | xargs)
+
+LOOM_USE_HOST_CLAUDE_AUTH=1 npx tsx tools/designer-live.mts    # a model draws a harness
+LOOM_USE_HOST_CLAUDE_AUTH=1 npx tsx tools/bracket-live.mts     # a judge compares real attempts
+LOOM_USE_HOST_CLAUDE_AUTH=1 npx tsx tools/trial-traffic.mts    # ten tasks, five a side
+```
+
+`trial-traffic.mts` is the one that answers the question the whole shape rests on, and its first
+verdict went **against** the harness: a planner and its workers took 100% of their tasks to the
+harness's 80%, on a class where the harness was cheaper and failed no checks at all. It lost one
+task by producing nothing — its scoping step did not answer, so the fan never opened. A planner
+that plans badly still leaves a tree of workers; a drawn shape has a single point of failure that
+planner-and-delegate does not.
 
 ```bash
 docker compose up -d
