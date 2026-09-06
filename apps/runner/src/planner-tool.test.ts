@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PLAN_SUBTASKS_SCHEMA } from './planner-tool.js'
+import { PLAN_SUBTASKS_SCHEMA, plannerChannelFor } from './planner-tool.js'
 
 /**
  * The pre-flight on `submit_plan`'s input.
@@ -74,5 +74,33 @@ describe('submit_plan pre-flight', () => {
     const many = Array.from({ length: 20 }, (_, index) => sub(`s${index}`))
     expect(PLAN_SUBTASKS_SCHEMA.safeParse(many).success).toBe(false)
     expect(PLAN_SUBTASKS_SCHEMA.safeParse([]).success).toBe(false)
+  })
+})
+
+describe('plannerChannelFor', () => {
+  const run = (over: Partial<Parameters<typeof plannerChannelFor>[0]> = {}) =>
+    plannerChannelFor({ planner: true, steering: false, isWorkflowStep: false, ...over })
+
+  it('gives an ordinary planner the plan channel', () => {
+    expect(run()).toBe('plan')
+  })
+
+  it('gives a re-planning turn the delta channel instead, never both', () => {
+    expect(run({ steering: true })).toBe('delta')
+  })
+
+  it('gives a run that is not a planner nothing', () => {
+    expect(run({ planner: false })).toBe('none')
+  })
+
+  /**
+   * The workflow is the decomposition. Given the plan channel as well as its step's answer tool,
+   * a planner persona on a scoping step submits the plan — so the step is refused for not
+   * answering while the run looks entirely successful, and the execution waits on a lane that
+   * will never open.
+   */
+  it('gives a step of a drawn workflow nothing, however it was reached', () => {
+    expect(run({ isWorkflowStep: true })).toBe('none')
+    expect(run({ isWorkflowStep: true, steering: true })).toBe('none')
   })
 })

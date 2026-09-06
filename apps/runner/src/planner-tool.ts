@@ -314,3 +314,28 @@ export const createPlanDeltaTool = (): PlanDeltaToolHandle => {
     taken: () => submitted,
   }
 }
+
+/**
+ * Which submission channel a run gets, if any.
+ *
+ * A planner has exactly one way to answer, and which one depends on what the run *is* rather
+ * than on what its persona is. Two exclusions, and they are the same exclusion:
+ *
+ * - A **re-planning turn** gets the delta channel instead of the plan channel, so a run
+ *   re-entered to adjust a plan cannot answer by submitting a whole second one beside the work
+ *   already running.
+ * - A **step of a drawn workflow** gets neither. The workflow is the decomposition — a step of
+ *   one has nothing to plan, and its lanes are already drawn. Given both channels, a planner
+ *   persona on a step that looks like a decomposition submits the plan: the step is then refused
+ *   for not answering, the plan's subtasks are queued under a run the workflow is waiting on, and
+ *   the run itself looks entirely successful. Observed on the first real traffic through the
+ *   workflow trial, where it refused the scoping step of every harness task.
+ */
+export const plannerChannelFor = (run: {
+  planner: boolean
+  steering: boolean
+  isWorkflowStep: boolean
+}): 'plan' | 'delta' | 'none' => {
+  if (!run.planner || run.isWorkflowStep) return 'none'
+  return run.steering ? 'delta' : 'plan'
+}

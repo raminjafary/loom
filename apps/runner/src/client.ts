@@ -38,6 +38,7 @@ import {
   PLAN_DELTA_TOOL_NAME,
   createPlanDeltaTool,
   createPlannerTool,
+  plannerChannelFor,
 } from './planner-tool.js'
 import { mergeRunBranch } from './merge.js'
 import { verifyRunBranch } from './verify.js'
@@ -800,8 +801,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
     // because it asked. A re-planning turn gets the delta channel *instead of* the plan
     // channel: a run re-entered to adjust a plan must not be able to answer by submitting a
     // whole new one beside the work still running.
-    const plannerTool = input.persona.planner && !input.steering ? createPlannerTool() : null
-    const deltaTool = input.persona.planner && input.steering ? createPlanDeltaTool() : null
+    const plannerChannel = plannerChannelFor({
+      planner: input.persona.planner === true,
+      steering: input.steering === true,
+      isWorkflowStep: input.answerWorkflow !== undefined,
+    })
+    const plannerTool = plannerChannel === 'plan' ? createPlannerTool() : null
+    const deltaTool = plannerChannel === 'delta' ? createPlanDeltaTool() : null
     // The notes channel is given to every run, planner included: a note is not a
     // capability, so it does not weaken `tools: []` (see notes-tool.ts).
     const notesTool = createNotesTool({ writeNote: onNote, readNotes: onNotesRequest })
