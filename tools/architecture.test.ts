@@ -169,6 +169,37 @@ describe('architectural boundaries', () => {
     expect(violations).toEqual([])
   })
 
+  /**
+   * Every run-shaping field the container's start frame can carry is passed at the one call
+   * site that builds it.
+   *
+   * A sandboxed designer shipped without `designWorkflow` for exactly this reason. The frame
+   * builder in `sandbox.ts` read it, the container knew what to do with it, and the call in
+   * `client.ts` simply did not pass it — so the run was handed the *planner* tool instead of
+   * `submit_workflow_design` and asked a human why the tool its brief named did not exist.
+   *
+   * Nothing could have failed. Each field is an optional spread on both sides, so omitting one
+   * is not a type error anywhere along the path, and no unit test reaches this call: it is the
+   * seam between a Runner and a container. The symptom is a run that completes looking normal
+   * with one channel silently absent — which is the same failure mode the frame builder's own
+   * comment warns about, one layer up from where it was written.
+   */
+  it('every field the sandbox start frame carries is passed where the sandbox is started', () => {
+    const sandbox = readFileSync(join(ROOT, 'apps/runner/src/sandbox.ts'), 'utf8')
+    const client = readFileSync(join(ROOT, 'apps/runner/src/client.ts'), 'utf8')
+
+    const frame = sandbox.slice(sandbox.indexOf('const sendStart = () => {'))
+    const carried = [...frame.slice(0, frame.indexOf('cwd: WORK_DIR')).matchAll(/options\.(\w+) === undefined/g)]
+      .map((match) => match[1] as string)
+    // Guards the guard: an extraction that finds nothing would pass this test forever.
+    expect(carried).toContain('designWorkflow')
+    expect(carried.length).toBeGreaterThan(5)
+
+    const call = client.slice(client.indexOf('await runAgentInSandbox(sandbox, {'))
+    const passed = call.slice(0, call.indexOf('\n    })'))
+    expect(carried.filter((field) => !passed.includes(`input.${field}`))).toEqual([])
+  })
+
   it('flags infrastructure leaking into inner layers', () => {
     // Guards the guard: if isInfra() stops matching, the checks above silently pass.
     expect(isInfra('drizzle-orm')).toBe(true)

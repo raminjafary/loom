@@ -1281,6 +1281,18 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         ...(input.proposeVariants === undefined
           ? {}
           : { proposeVariants: input.proposeVariants }),
+        /**
+         * Its presence is what builds `submit_workflow_design` inside the container, so a
+         * sandboxed designer that never receives it is handed the *planner* tool instead — a
+         * flat subtask list with no node kinds and no edges — and dutifully asks a human why
+         * the tool its brief names does not exist. Nothing fails: the run is well-formed, the
+         * brief is correct, and the shape it was asked for cannot be expressed.
+         *
+         * Forwarded one field at a time here, and that is what made this easy to omit: every
+         * neighbour is an optional spread, so leaving one out is not a type error anywhere
+         * between this call and the container.
+         */
+        ...(input.designWorkflow === undefined ? {} : { designWorkflow: input.designWorkflow }),
         clonePath: input.clonePath,
         homePath: input.homePath,
         egressToken,
