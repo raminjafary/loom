@@ -24,7 +24,10 @@
  *    prose in the brief. Nothing before this had tested that prose against a model.
  * 2. **A refusal is a correction rather than a dead end.** The validator answers in its own words
  *    as the tool result, so a model that draws a fan over a text field has the rest of its turn to
- *    fix it. This driver counts the refusals and asserts the session recovered from them.
+ *    fix it. Eleven shapes across three earlier sessions were refused zero times, so the second
+ *    ask here *baits* the loop: nested per-item work, whose obvious drawing is a fan inside a fan
+ *    and whose refusal is the one rule the vocabulary does not state. A loop that has never run
+ *    is a claim rather than a feature, so this driver fails when it does not run.
  * 3. **The envelope holds against a model**, not against a fixture. `SHELL` is in the workspace
  *    and out of the designer's envelope, and the brief names it as forbidden — the question is
  *    whether a shape naming it ever gets stored, which a driver writing its own graphs cannot ask.
@@ -241,6 +244,78 @@ const main = async () => {
     }),
   })
 
+  /**
+   * A design session is one turn of reading a brief and calling a tool; it does not touch the
+   * tree. Ten minutes is generous, and the wait ends the moment the run is terminal.
+   */
+  const settle = async (id: ReturnType<typeof asAgentRunId>) => {
+    const DEADLINE_MS = 10 * 60 * 1000
+    const startedAt = Date.now()
+    let run = await app.deps.agentRuns.findById(workspaceId, id)
+    while (Date.now() - startedAt < DEADLINE_MS) {
+      run = await app.deps.agentRuns.findById(workspaceId, id)
+      // `awaiting_approval` ends the wait too. It is not terminal, but a design session has no
+      // approval to give — it reads and calls one tool — so a parked one is a finding, and
+      // waiting out the deadline to report it would cost ten minutes to learn nothing more.
+      if (run !== null && ['completed', 'failed', 'cancelled', 'awaiting_approval'].includes(run.status)) {
+        break
+      }
+      await new Promise((r) => setTimeout(r, 3000))
+    }
+    console.log(
+      `\ndesign session ${String(run?.status)} after ${Math.round((Date.now() - startedAt) / 1000)}s, ` +
+        `cost $${String(run?.totalCostUsd ?? 0)}${run?.errorMessage ? ` — ${run.errorMessage}` : ''}`,
+    )
+    return run
+  }
+
+  /**
+   * The design tool's traffic in one thread: what was called, and what came back.
+   *
+   * Read from the thread rather than from the event table — a tool call and its result are
+   * already messages there, paired on `toolUseId`, which is what a person reads when they ask
+   * why a session took three goes. Asserting on the same rows keeps this driver honest about
+   * what is actually visible. Per *thread*, so two sessions cannot be read as one: the second
+   * ask below runs in a thread of its own for exactly that reason.
+   */
+  const toolTraffic = async (threadId: string) => {
+    const messages: any[] = []
+    let cursor: string | undefined
+    do {
+      const page = await client.message.list({
+        threadId,
+        limit: 100,
+        view: 'all',
+        ...(cursor === undefined ? {} : { cursor }),
+      })
+      messages.push(...page.messages)
+      cursor = page.nextCursor ?? undefined
+    } while (cursor !== undefined && messages.length < 1000)
+    const textOf = (message: any) => String(message?.body?.text ?? message?.text ?? '')
+    /**
+     * Matched on the tool's own name at the head of the line, never on the tool's name
+     * *appearing* in a message. The first version of this check searched the text, and passed on
+     * the run that found the bug: the model had asked a human why `submit_workflow_design` was
+     * not among its tools, and the question quoted the name. A check that a complaint about a
+     * missing tool satisfies is worse than no check.
+     */
+    const calls = messages.filter((message) =>
+      textOf(message).startsWith(`→ ${SUBMIT_WORKFLOW_DESIGN_TOOL_NAME}`),
+    )
+    const callIds = new Set(calls.map((message) => String(message.toolUseId)))
+    const results = messages.filter(
+      (message) =>
+        message.toolUseId !== null &&
+        callIds.has(String(message.toolUseId)) &&
+        !textOf(message).startsWith('→'),
+    )
+    const refusals = results.filter((message) => textOf(message).startsWith('✗'))
+    const askedForIt = messages.filter(
+      (message) => textOf(message).startsWith('→') && textOf(message).includes('ask_human'),
+    )
+    return { calls, refusals, askedForIt, textOf }
+  }
+
   const channel = await client.channel.create({ name: 'designer-live' })
   const drawn = await client.workflow.create({
     name: 'a harness drawn by hand',
@@ -262,23 +337,7 @@ const main = async () => {
   check('the designer was started', asked.runId !== null, String(asked.detail))
   const runId = asAgentRunId(asked.runId)
 
-  // A design session is one turn of reading a brief and calling a tool; it does not touch the
-  // tree. Ten minutes is generous, and the loop exits the moment the run is terminal.
-  const DEADLINE_MS = 10 * 60 * 1000
-  const started = Date.now()
-  let run = await app.deps.agentRuns.findById(workspaceId, runId)
-  while (Date.now() - started < DEADLINE_MS) {
-    run = await app.deps.agentRuns.findById(workspaceId, runId)
-    // `awaiting_approval` ends the wait too. It is not terminal, but a design session has no
-    // approval to give — it reads and calls one tool — so a parked one is a finding, and waiting
-    // out the deadline to report it would cost ten minutes to learn nothing more.
-    if (run !== null && ['completed', 'failed', 'cancelled', 'awaiting_approval'].includes(run.status)) break
-    await new Promise((r) => setTimeout(r, 3000))
-  }
-  console.log(
-    `\ndesign session ${String(run?.status)} after ${Math.round((Date.now() - started) / 1000)}s, ` +
-      `cost $${String(run?.totalCostUsd ?? 0)}${run?.errorMessage ? ` — ${run.errorMessage}` : ''}`,
-  )
+  const run = await settle(runId)
 
   check(
     'the session reached a model rather than being refused before one',
@@ -291,40 +350,7 @@ const main = async () => {
     `${String(run?.status)}${run?.errorMessage ? ` — ${run.errorMessage}` : ''}`,
   )
 
-  /**
-   * The refusal loop, read from the thread rather than from the event table — a tool call and its
-   * result are already messages there, paired on `toolUseId`, which is what a person reads when
-   * they ask why a session took three goes. Asserting on the same rows keeps this driver honest
-   * about what is actually visible.
-   */
-  const messages: any[] = []
-  let cursor: string | undefined
-  do {
-    const page = await client.message.list({
-      threadId: channel.rootThread.id,
-      limit: 100,
-      view: 'all',
-      ...(cursor === undefined ? {} : { cursor }),
-    })
-    messages.push(...page.messages)
-    cursor = page.nextCursor ?? undefined
-  } while (cursor !== undefined && messages.length < 1000)
-  const textOf = (message: any) => String(message?.body?.text ?? message?.text ?? '')
-  /**
-   * Matched on the tool's own name at the head of the line, never on the tool's name *appearing*
-   * in a message. The first version of this check searched the text, and passed on the run that
-   * found the bug: the model had asked a human why `submit_workflow_design` was not among its
-   * tools, and the question quoted the name. A check that a complaint about a missing tool
-   * satisfies is worse than no check.
-   */
-  const calls = messages.filter((message) =>
-    textOf(message).startsWith(`→ ${SUBMIT_WORKFLOW_DESIGN_TOOL_NAME}`),
-  )
-  const callIds = new Set(calls.map((message) => String(message.toolUseId)))
-  const results = messages.filter(
-    (message) => message.toolUseId !== null && callIds.has(String(message.toolUseId)) && !textOf(message).startsWith('→'),
-  )
-  const refusals = results.filter((message) => textOf(message).startsWith('✗'))
+  const { calls, refusals, askedForIt, textOf } = await toolTraffic(channel.rootThread.id)
   console.log(
     `\nthe session called the design tool ${calls.length} time(s); ` +
       `${refusals.length} came back as a refusal`,
@@ -340,9 +366,6 @@ const main = async () => {
    * tool by the name the brief gives, and asks a human. The run parks, costs a dollar and fails
    * nothing, so this is checked by name rather than left to whoever reads the status.
    */
-  const askedForIt = messages.filter(
-    (message) => textOf(message).startsWith('→') && textOf(message).includes('ask_human'),
-  )
   check(
     'and it did not have to ask a human where that tool was',
     askedForIt.length === 0,
@@ -455,9 +478,100 @@ const main = async () => {
     version?.digest === proposal.digest ? 'same digest' : `${String(version?.digest)} ≠ ${proposal.digest}`,
   )
 
+  /**
+   * The refusal loop, exercised on purpose rather than waited for.
+   *
+   * Three sessions across two earlier runs of this driver drew eleven shapes and were refused
+   * zero times, so the loop the brief exists to support — the validator answering in its own
+   * words, as a tool result, in time for the model to fix it — had never actually run. A loop
+   * that has never run is a claim, not a feature.
+   *
+   * This ask baits it. The obvious drawing of "for every suite, work through each of its failing
+   * tests" is a fan inside a fan, which `laneSources` refuses because a lane index would need two
+   * dimensions — and, unlike the two-fans-into-one-node case, it is a rule the vocabulary does
+   * *not* state. So the only way a session can arrive at a valid shape here is by being told, and
+   * that is precisely the thing being measured: whether the refusal carries the fix.
+   */
+  console.log('\n— a shape whose obvious drawing is invalid, so the refusal loop runs —')
+  const baitChannel = await client.channel.create({ name: 'designer-live-nested' })
+  const NESTED_ASK =
+    'a way to work through a flaky test report that names several suites: for every suite in the ' +
+    'report, go through each failing test in that suite one at a time, and then say per suite ' +
+    'whether that suite is fixed'
+  const baited = await client.workflow.design({
+    personaId: designer.id,
+    repositoryId: repo.id,
+    threadId: baitChannel.rootThread.id,
+    ask: NESTED_ASK,
+  })
+  check('the second designer was started', baited.runId !== null, String(baited.detail))
+  const baitedRunId = asAgentRunId(baited.runId)
+  const baitedRun = await settle(baitedRunId)
+  check(
+    'it reached a model and ran to the end',
+    Number(baitedRun?.totalCostUsd ?? 0) > 0 && baitedRun?.status === 'completed',
+    `${String(baitedRun?.status)} · $${String(baitedRun?.totalCostUsd ?? 0)}`,
+  )
+
+  const bait = await toolTraffic(baitChannel.rootThread.id)
+  console.log(
+    `\nthe baited session called the design tool ${bait.calls.length} time(s); ` +
+      `${bait.refusals.length} came back as a refusal`,
+  )
+  for (const refusal of bait.refusals) console.log(`  refused: ${bait.textOf(refusal).slice(0, 300)}`)
+  /**
+   * A driver whose job is to exercise the loop reports it as a failure when the loop did not run.
+   * The bait not biting is a finding about the *brief* — it drew a nested shape correctly with no
+   * help — and it leaves the loop exactly as unproven as it was before this ran.
+   */
+  check(
+    'the validator refused at least one submission, so the loop ran at all',
+    bait.refusals.length > 0,
+    bait.refusals.length === 0
+      ? `${bait.calls.length} call(s), none refused — the bait was drawn correctly first time`
+      : `${bait.refusals.length} refusal(s)`,
+  )
+  const baitedDesigns = (await app.deps.workflows.listDesigns({ workspaceId, limit: 20 })).filter(
+    (design) => design.proposedByRunId === baitedRunId,
+  )
+  if (bait.refusals.length > 0) {
+    check(
+      'the refusal came back in the validator’s own words, naming what to do instead',
+      bait.refusals.some((refusal) => /lane|barrier|list|dimension/i.test(bait.textOf(refusal))),
+      bait.refusals.map((refusal) => bait.textOf(refusal).slice(0, 160)).join(' | '),
+    )
+    check(
+      'and the session corrected it inside the same turn rather than ending on it',
+      baitedDesigns.length > 0,
+      `${bait.refusals.length} refusal(s), ${baitedDesigns.length} stored`,
+    )
+  }
+  const baitedShape = baitedDesigns[0]
+  if (baitedShape !== undefined) {
+    const baitedNodes = (baitedShape.graph as any).nodes as any[]
+    console.log(`\nthe model drew "${baitedShape.name}":`)
+    for (const node of baitedNodes) {
+      console.log(
+        `  ${node.kind} ${node.id}${node.persona ? ` · ${node.persona}` : ''} — ${node.title ?? ''}`,
+      )
+    }
+    console.log(`  because: ${baitedShape.rationale}`)
+    const fans = baitedNodes.filter((node) => node.kind === 'fan' || node.over !== undefined)
+    check(
+      'the shape it settled on is one the validator accepts, nested work and all',
+      baitedNodes.length >= 2,
+      `${fans.length} fanning node(s), ${baitedNodes.filter((node) => node.kind === 'barrier').length} barrier(s)`,
+    )
+    check(
+      'and it names no persona outside the designer’s envelope, under correction either',
+      baitedNodes.every((node) => node.persona !== SHELL),
+      baitedNodes.map((node) => String(node.persona ?? '—')).join(', '),
+    )
+  }
+
   console.log(
     `\n${failures === 0 ? 'all checks passed' : `${failures} check(s) FAILED`} — ` +
-      `spent $${String(run?.totalCostUsd ?? 0)}`,
+      `spent $${(Number(run?.totalCostUsd ?? 0) + Number(baitedRun?.totalCostUsd ?? 0)).toFixed(2)}`,
   )
   runner.kill('SIGTERM')
   await app.fastify.close()
