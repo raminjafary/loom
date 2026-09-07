@@ -731,6 +731,45 @@ export const parseDecomposition = (value: unknown): DecompositionVerdict => {
   }
 
   /**
+   * A reviewer may not run the persona that wrote what it reviews.
+   *
+   * The rule already exists one vocabulary over: the workflow validator refuses a verifier
+   * sharing a persona with the node it verifies, and a bracket judging entrants its own persona
+   * wrote — "an author does not refute itself". A plan's review edge is the same relation and
+   * had the weaker half of the rule: `parsePlanSubtask` refuses a subtask that reviews *itself*
+   * by index, so the only thing left unrefused was the case that actually happens. A planner
+   * with one competent worker gives it the work and gives it the review, two subtasks apart,
+   * and every check passes.
+   *
+   * It is self-review in everything but the index. The same document produces both runs, so
+   * the review inherits the blind spot that produced the branch — and the platform's whole
+   * argument for a reviewing role is that a *second* reading is worth two runs. A reading by
+   * the same persona is one reading, billed twice, wearing a second name.
+   *
+   * **Persona, not model.** Two personas on one model are still two documents, two tool lists
+   * and two prompts, and refusing them would make review impossible in a workspace that serves
+   * one model at all — which is the ordinary shape of a self-hosted deployment. Where the
+   * platform has an opinion about model diversity it belongs in a policy a human sets, not in
+   * a validator that throws away a plan.
+   */
+  const selfReviewed = subtasks.findIndex((subtask) => {
+    if (subtask.reviews === null) return false
+    const reviewed = subtasks[subtask.reviews]
+    return reviewed !== undefined && reviewed.personaName === subtask.personaName
+  })
+  if (selfReviewed !== -1) {
+    const subtask = subtasks[selfReviewed]
+    const reviewed = subtasks[subtask?.reviews ?? 0]
+    return {
+      ok: false,
+      reason:
+        `Subtask ${selfReviewed} ("${subtask?.title}") reviews "${reviewed?.title}", and both run ` +
+        `"${subtask?.personaName}" — an author does not review itself. Give the review to a ` +
+        'different persona, or drop the review edge and let the branch be read by a human.',
+    }
+  }
+
+  /**
    * The one refusal the collaboration topology asks for by name. Path overlap warns because
    * it is a guess about the future; a cycle is a statement about the plan itself, and a
    * plan that cannot be ordered cannot be run at all — so this is the one place a whole

@@ -97,6 +97,8 @@ beforeEach(async () => {
   // the fake Runner is re-paired per test rather than reused.
   const persona = await client.persona.create({ markdownSource: TEST_PERSONA_MARKDOWN })
   testPersonaId = persona.id
+  // The reviewing half of a plan needs a persona of its own — see TEST_REVIEWER_MARKDOWN.
+  await client.persona.create({ markdownSource: TEST_REVIEWER_MARKDOWN })
   /**
    * Plan review off for the file's default.
    *
@@ -187,6 +189,22 @@ const bindViaFakeRunner = async (
 const TEST_PERSONA_MARKDOWN = `---
 name: fake-worker
 description: A test persona, not a real worker.
+model: test-model
+tools: [Read]
+---
+
+irrelevant for this test`
+
+/**
+ * A second persona, for the reviewing half of a plan.
+ *
+ * Not decoration: a plan whose reviewer runs the persona that wrote what it reviews is refused
+ * — an author does not review itself — so a review fixture needs two personas the way a real
+ * plan does.
+ */
+const TEST_REVIEWER_MARKDOWN = `---
+name: fake-reviewer
+description: A test persona that reads work it did not do.
 model: test-model
 tools: [Read]
 ---
@@ -5952,7 +5970,7 @@ Decompose and delegate.`
         runId: run.id,
         subtasks: [
           { title: 'Build', task: 'Build it.', personaName: 'fake-worker', paths: ['src/api'] },
-          { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+          { title: 'Check', task: 'Check it.', personaName: 'fake-reviewer', reviews: 0 },
         ],
       }),
     )
@@ -5960,7 +5978,7 @@ Decompose and delegate.`
     // Held back without the planner having to write `dependsOn` — the edge is derived,
     // and the summary says why the subtask is waiting rather than only that it is.
     const summary = await waitForMessage(thread.id, 'Plan accepted')
-    expect(summary).toContain('⌕ Check → fake-worker (reviews "Build")')
+    expect(summary).toContain('⌕ Check → fake-reviewer (reviews "Build")')
 
     const [worker] = await waitForChildren(run.id, 1)
     const reviewerStart = nextFrame(socket, (v) => v.type === 'start_run' && v.runId !== worker!.id)
@@ -6002,7 +6020,7 @@ Decompose and delegate.`
         runId: run.id,
         subtasks: [
           { title: 'Build', task: 'Build it.', personaName: 'fake-worker', paths: ['src/api'] },
-          { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+          { title: 'Check', task: 'Check it.', personaName: 'fake-reviewer', reviews: 0 },
         ],
       }),
     )
@@ -6049,7 +6067,7 @@ Decompose and delegate.`
         runId: run.id,
         subtasks: [
           { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
-          { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+          { title: 'Check', task: 'Check it.', personaName: 'fake-reviewer', reviews: 0 },
         ],
       }),
     )
@@ -6089,7 +6107,7 @@ Decompose and delegate.`
         runId: run.id,
         subtasks: [
           { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
-          { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+          { title: 'Check', task: 'Check it.', personaName: 'fake-reviewer', reviews: 0 },
         ],
       }),
     )
@@ -6147,7 +6165,7 @@ Decompose and delegate.`
         runId: run.id,
         subtasks: [
           { title: 'Build', task: 'Build it.', personaName: 'fake-worker' },
-          { title: 'Check', task: 'Check it.', personaName: 'fake-worker', reviews: 0 },
+          { title: 'Check', task: 'Check it.', personaName: 'fake-reviewer', reviews: 0 },
         ],
       }),
     )

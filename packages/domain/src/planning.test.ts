@@ -532,6 +532,13 @@ describe('reviews', () => {
     personaName: 'swe',
     ...extra,
   })
+  /**
+   * A reviewer on another persona, which is what every valid review edge looks like: the
+   * platform refuses one whose reviewer runs the persona that wrote what it reviews, so a
+   * fixture sharing a persona would be testing the shape a plan may not have.
+   */
+  const reviewer = (title: string, extra: Record<string, unknown> = {}) =>
+    sub(title, { personaName: 'qa', ...extra })
 
   it('defaults to null, so every existing plan is unchanged', () => {
     const verdict = plan([sub('a'), sub('b')])
@@ -541,7 +548,7 @@ describe('reviews', () => {
   })
 
   it('derives the scheduling edge, so one scheduler runs the whole plan', () => {
-    const verdict = plan([sub('build'), sub('check', { reviews: 0 })])
+    const verdict = plan([sub('build'), reviewer('check', { reviews: 0 })])
     expect(verdict.ok).toBe(true)
     if (!verdict.ok) return
     expect(verdict.decomposition.subtasks[1]?.reviews).toBe(0)
@@ -553,14 +560,14 @@ describe('reviews', () => {
   it('keeps a dependency the planner also asked for', () => {
     // "Review the API once both halves of it are in" is a real plan, and dropping the
     // second edge would run the review against half the work.
-    const verdict = plan([sub('a'), sub('b'), sub('check', { reviews: 0, dependsOn: [1] })])
+    const verdict = plan([sub('a'), sub('b'), reviewer('check', { reviews: 0, dependsOn: [1] })])
     expect(verdict.ok).toBe(true)
     if (!verdict.ok) return
     expect(verdict.decomposition.subtasks[2]?.dependsOn).toEqual([1, 0])
   })
 
   it('does not duplicate an edge the planner wrote twice', () => {
-    const verdict = plan([sub('a'), sub('check', { reviews: 0, dependsOn: [0] })])
+    const verdict = plan([sub('a'), reviewer('check', { reviews: 0, dependsOn: [0] })])
     expect(verdict.ok).toBe(true)
     if (!verdict.ok) return
     expect(verdict.decomposition.subtasks[1]?.dependsOn).toEqual([0])
@@ -570,7 +577,7 @@ describe('reviews', () => {
     // The collaboration topology: "no path ownership of its own". Refused rather than
     // trimmed — a trimmed reviewer still believes it owns files, and the sibling that
     // really owns them would be reviewed by something editing them underneath it.
-    const verdict = plan([sub('a'), sub('check', { reviews: 0, paths: ['src/api'] })])
+    const verdict = plan([sub('a'), reviewer('check', { reviews: 0, paths: ['src/api'] })])
     expect(verdict.ok).toBe(false)
     if (verdict.ok) return
     expect(verdict.reason).toContain('src/api')
@@ -579,7 +586,11 @@ describe('reviews', () => {
 
   it('refuses a review of a review', () => {
     // A reviewer produces no branch, so there is nothing for the outer one to read.
-    const verdict = plan([sub('a'), sub('check', { reviews: 0 }), sub('meta', { reviews: 1 })])
+    const verdict = plan([
+      sub('a'),
+      reviewer('check', { reviews: 0 }),
+      sub('meta', { personaName: 'lead', reviews: 1 }),
+    ])
     expect(verdict.ok).toBe(false)
     if (verdict.ok) return
     expect(verdict.reason).toContain('itself a review')
@@ -591,11 +602,34 @@ describe('reviews', () => {
     expect(plan([sub('a'), sub('b', { reviews: 1.5 })]).ok).toBe(false)
   })
 
+  /**
+   * Self-review in everything but the index, and the case that actually happens: a planner
+   * with one competent worker gives it the work and gives it the review, two subtasks apart.
+   * Every other check passes, and the second reading inherits the blind spot that produced
+   * the branch — one reading, billed twice, wearing a second name.
+   *
+   * The rule already existed one vocabulary over: a drawn workflow refuses a verifier sharing
+   * a persona with what it verifies. This is the same rule on the planner's edge.
+   */
+  it('refuses a reviewer that runs the persona which wrote what it reviews', () => {
+    const verdict = plan([sub('build'), sub('check', { reviews: 0 })])
+    expect(verdict.ok).toBe(false)
+    if (verdict.ok) return
+    expect(verdict.reason).toContain('an author does not review itself')
+    // Both subtasks and the persona are named, so it is fixable in one edit.
+    expect(verdict.reason).toContain('"swe"')
+    expect(verdict.reason).toContain('build')
+  })
+
+  it('accepts the same relation across two personas, which is the point of the role', () => {
+    expect(plan([sub('build'), reviewer('check', { reviews: 0 })]).ok).toBe(true)
+  })
+
   it('refuses the cycle a review edge can form on its own', () => {
     // The derived edge is a real edge, so it is subject to the same refusal: A reviews
     // B while B waits for A is unrunnable, and the derivation is what makes the cycle
     // detector able to see it at all.
-    const verdict = plan([sub('a', { dependsOn: [1] }), sub('check', { reviews: 0 })])
+    const verdict = plan([sub('a', { dependsOn: [1] }), reviewer('check', { reviews: 0 })])
     expect(verdict.ok).toBe(false)
     if (verdict.ok) return
     expect(verdict.reason).toContain('cycle')
