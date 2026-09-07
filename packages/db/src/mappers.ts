@@ -640,6 +640,8 @@ export interface AgentPersonaRow {
   harnessBudgetCapUsd: number | null
   envelope?: Envelope | null
   builtinSource?: string | null
+  adoptedFrom?: string | null
+  adoptedDigest?: string | null
   createdAt: Date
   updatedAt: Date
 }
@@ -663,6 +665,8 @@ export const toAgentPersona = (row: AgentPersonaRow): AgentPersona => ({
   // not to give it one — it may not rewrite itself.
   envelope: row.envelope ?? null,
   builtinSource: row.builtinSource ?? null,
+  adoptedFrom: row.adoptedFrom ?? null,
+  adoptedDigest: row.adoptedDigest ?? null,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 })

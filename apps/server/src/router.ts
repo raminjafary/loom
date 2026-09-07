@@ -3,7 +3,9 @@ import {
   backfillMessages,
   bindRepository,
   createChannel,
+  adoptPersona,
   createPersona,
+  exportPersona,
   createPersonaGroup,
   createRunnerPairingToken,
   deleteChannel,
@@ -1571,6 +1573,32 @@ export const router = os.router({
           }),
         ),
       ),
+    ),
+
+    exportOne: os.persona.exportOne.handler(({ context, input }) =>
+      guard(async () => {
+        const exported = await exportPersona(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          personaId: asAgentPersonaId(input.personaId),
+          // The workspace id is what this deployment can name itself by at this seam, and the
+          // field is a claim either way — see `persona-bundle.ts`.
+          workspaceName: context.principal.workspaceId as string,
+        })
+        return { text: exported.text, digest: exported.bundle.digest }
+      }),
+    ),
+
+    adopt: os.persona.adopt.handler(({ context, input }) =>
+      guard(async () => {
+        const adopted = await adoptPersona(context.deps, {
+          workspaceId: context.principal.workspaceId,
+          actor: context.principal.actor,
+          bundleText: input.bundleText,
+          as: input.as ?? null,
+        })
+        return { persona: toWirePersona(adopted.persona), provenance: adopted.provenance }
+      }),
     ),
 
     update: os.persona.update.handler(({ context, input }) =>

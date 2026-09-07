@@ -221,6 +221,17 @@ export interface AgentPersona {
    * being the same observation — see `seedBuiltinPersonas` for what that cost.
    */
   readonly builtinSource: string | null
+  /**
+   * Where this persona claims to have come from, for one adopted from another workspace, and
+   * null for one written here.
+   *
+   * Prose rather than fields, because it is a *claim*: nothing signs a persona bundle, so the
+   * only thing the importing deployment verified is that the document was not corrupted in
+   * transit. A structured origin would invite a surface to render it as provenance.
+   */
+  readonly adoptedFrom: string | null
+  /** The digest of the document as adopted — so a later edit is distinguishable from the import. */
+  readonly adoptedDigest: string | null
   readonly createdAt: Date
   readonly updatedAt: Date
 }

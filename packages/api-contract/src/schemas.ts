@@ -1195,6 +1195,14 @@ export const AgentPersonaSchema = z.object({
    * leaves those alone; a human choosing is the honest resolution.
    */
   builtinStatus: z.enum(['current', 'stale']).nullable(),
+  /**
+   * Where an adopted persona claims to come from, or null for one written here.
+   *
+   * On the wire as the sentence it is stored as, including the part that says nothing signs a
+   * bundle — a client that received structured fields would render provenance the platform has
+   * not verified, and this is the one place that distinction is cheap to keep.
+   */
+  adoptedFrom: z.string().nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
 })

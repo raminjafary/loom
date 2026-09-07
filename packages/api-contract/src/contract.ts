@@ -1295,6 +1295,34 @@ export const contract = {
       .input(z.object({ markdownSource: z.string().min(1).max(40_000) }))
       .output(AgentPersonaSchema),
 
+    /**
+     * A persona as a bundle another workspace can adopt — the document, a claimed origin and
+     * a digest.
+     *
+     * The text is returned rather than written anywhere: where an operator puts it is their
+     * business, and a platform that offered to publish it would be a platform with a registry,
+     * which is Phase 4's.
+     */
+    exportOne: oc
+      .input(z.object({ personaId: z.string() }))
+      .output(z.object({ text: z.string(), digest: z.string() })),
+
+    /**
+     * Takes a bundle into this workspace, under its own name or another.
+     *
+     * `provenance` comes back as the sentence that will be stored on the row, so the surface
+     * shows the operator the claim they are accepting rather than presenting an import as a
+     * verified transfer.
+     */
+    adopt: oc
+      .input(
+        z.object({
+          bundleText: z.string().min(1).max(80_000),
+          as: z.string().max(120).nullable().optional(),
+        }),
+      )
+      .output(z.object({ persona: AgentPersonaSchema, provenance: z.string() })),
+
     update: oc
       .input(z.object({ personaId: z.string(), markdownSource: z.string().min(1).max(40_000) }))
       .output(AgentPersonaSchema),

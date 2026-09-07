@@ -1852,6 +1852,8 @@ export const personaRepository = (db: Database): PersonaRepositoryPort => ({
         harnessBudgetCapUsd: input.harnessBudgetCapUsd,
         envelope: input.envelope,
         ...(input.builtinSource === undefined ? {} : { builtinSource: input.builtinSource }),
+        ...(input.adoptedFrom === undefined ? {} : { adoptedFrom: input.adoptedFrom }),
+        ...(input.adoptedDigest === undefined ? {} : { adoptedDigest: input.adoptedDigest }),
       })
       .returning()
     if (!row) throw new Error('agent_persona insert returned no row')

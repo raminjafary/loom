@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   BUILTIN_PERSONAS,
   DEFAULT_RESPONSE_STYLE,
@@ -61,7 +62,12 @@ import {
   describeAppliedDelta,
   parseDecomposition,
   parsePlanDelta,
+  parsePersonaBundle,
   parsePersonaMarkdown,
+  PERSONA_BUNDLE_VERSION,
+  describePersonaOrigin,
+  serializePersonaBundle,
+  type PersonaBundle,
   parsedPromptBody,
   truncateEgressHost,
   revisePromptBody,
@@ -715,6 +721,139 @@ export const createPersona = async (
     envelope: parsed.envelope,
   })
 }
+
+/**
+ * A persona, as a bundle another workspace can adopt.
+ *
+ * The document and a claim about where it came from — see `persona-bundle.ts` for what
+ * deliberately does not travel with it (expertise, capabilities, history) and why carrying any
+ * of the three would be importing a conclusion nobody there has earned.
+ *
+ * Human-only, like every other administrative act on a persona. Not because the document is
+ * secret — it is the operator's own text — but because exporting is the act of handing this
+ * workspace's configuration to somewhere the platform cannot see, and that is a person's
+ * decision to make.
+ */
+export const exportPersona = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; personaId: AgentPersonaId; workspaceName: string },
+): Promise<{ bundle: PersonaBundle; text: string }> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError('Only a human may export a persona')
+  }
+  const persona = await deps.personas.findById(input.workspaceId, input.personaId)
+  if (!persona) throw new NotFoundError('AgentPersona')
+  const bundle: PersonaBundle = {
+    loomPersonaBundle: PERSONA_BUNDLE_VERSION,
+    origin: {
+      workspace: input.workspaceName,
+      personaName: persona.name,
+      exportedAt: new Date().toISOString().slice(0, 10),
+    },
+    document: persona.markdownSource,
+    digest: documentDigest(persona.markdownSource),
+  }
+  return { bundle, text: serializePersonaBundle(bundle) }
+}
+
+/**
+ * Takes a persona bundle into this workspace.
+ *
+ * Everything `createPersona` enforces is enforced here, through the same functions rather than
+ * a parallel path: the document is parsed by the one parser that decides what a persona means,
+ * a planner's tool list is checked, and the persona is checked against **its own envelope**. An
+ * adopt route that skipped any of those would be a way to write a persona the authoring route
+ * would have refused, which is the shape of every configuration bypass.
+ *
+ * Two things it adds. `as` renames on the way in, because a name collision is the ordinary case
+ * — two workspaces both have a `reviewer` — and refusing is unhelpful when the operator's
+ * intent is "take theirs as well as mine". And provenance is recorded on the row, labelled as
+ * the claim it is.
+ *
+ * What arrives is **narrower than what left**: no capability is attached, because capabilities
+ * are workspace-owned rows an operator added deliberately. A bundle cannot bring an MCP server
+ * with it, which is the property that makes adopting somebody else's persona a bounded act.
+ */
+export const adoptPersona = async (
+  deps: AgentDeps,
+  input: { workspaceId: WorkspaceId; actor: Actor; bundleText: string; as?: string | null },
+): Promise<{ persona: AgentPersona; provenance: string }> => {
+  if (!isHuman(input.actor)) {
+    throw new ForbiddenError('Only a human may adopt a persona')
+  }
+  const read = parsePersonaBundle(input.bundleText, documentDigest)
+  if (!read.ok) throw new ValidationError(read.reason)
+
+  const renamed =
+    input.as === undefined || input.as === null || input.as.trim() === ''
+      ? read.bundle.document
+      : renamePersonaDocument(read.bundle.document, input.as.trim())
+
+  const parsed = parsePersonaMarkdown(renamed)
+  assertPlannerToolsAreReadOnly(parsed)
+  assertFitsItsEnvelope(parsed)
+
+  const existing = await deps.personas.listByWorkspace(input.workspaceId)
+  if (existing.some((persona) => persona.name === parsed.name)) {
+    throw new ValidationError(
+      `Persona "${parsed.name}" already exists in this workspace. Adopt it under another name ` +
+        'rather than replacing one somebody here is using.',
+    )
+  }
+
+  const provenance = describePersonaOrigin(read.bundle)
+  const persona = await deps.personas.create({
+    workspaceId: input.workspaceId,
+    name: parsed.name,
+    description: parsed.description,
+    markdownSource: renamed,
+    model: parsed.model,
+    tools: parsed.tools,
+    harnessEffort: parsed.harnessEffort,
+    harnessMaxTurns: parsed.harnessMaxTurns,
+    harnessApprovalMode: parsed.harnessApprovalMode,
+    harnessPlanner: parsed.harnessPlanner,
+    harnessDelegates: parsed.harnessDelegates,
+    harnessBudgetCapUsd: parsed.harnessBudgetCapUsd,
+    envelope: parsed.envelope,
+    adoptedFrom: provenance,
+    // The digest of what was *adopted*, so an edit afterwards is visible as a difference.
+    adoptedDigest: documentDigest(renamed),
+  })
+  await deps.audit.record({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    action: 'persona.adopted',
+    subjectType: 'agent_persona',
+    subjectId: persona.id as string,
+    metadata: { provenance, digest: read.bundle.digest },
+  })
+  return { persona, provenance }
+}
+
+/**
+ * The document with its `name:` line replaced, so an adopted persona can be renamed on the way
+ * in without a second authoring format.
+ *
+ * The *document* is edited rather than the parsed fields, because the document is what is
+ * stored and what a human next edits: renaming the row and leaving the markdown saying
+ * something else would give the persona two names, one of which nothing enforces.
+ */
+const renamePersonaDocument = (document: string, name: string): string => {
+  let replaced = false
+  return document
+    .split('\n')
+    .map((line) => {
+      if (replaced || !/^name:\s*/.test(line)) return line
+      replaced = true
+      return `name: ${name}`
+    })
+    .join('\n')
+}
+
+/** `sha256:…` over a persona document. Corruption in transit, never a signature. */
+const documentDigest = (document: string): string =>
+  `sha256:${createHash('sha256').update(document).digest('hex')}`
 
 /**
  * Provisions the built-in personas. Not

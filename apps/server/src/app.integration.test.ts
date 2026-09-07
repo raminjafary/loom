@@ -1187,6 +1187,9 @@ describe('contract completeness', () => {
       'delegationPreview',
       'parse',
       'create',
+      // A persona leaving this workspace, and one arriving from another.
+      'exportOne',
+      'adopt',
       'update',
       'delete',
       'resetToBuiltin',

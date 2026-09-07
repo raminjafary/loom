@@ -816,6 +816,15 @@ export interface PersonaRepositoryPort {
     envelope: Envelope | null
     /** The markdown the platform seeded, for a built-in — see `seedBuiltinPersonas`. */
     builtinSource?: string
+    /**
+     * Where an adopted persona claims to come from, and the digest of the document adopted.
+     *
+     * Only `adoptPersona` sends these. A claim rather than a fact — nothing signs a bundle —
+     * which is why the sentence is stored as prose rather than as fields a surface could
+     * render as provenance the platform had verified.
+     */
+    adoptedFrom?: string
+    adoptedDigest?: string
   }): Promise<AgentPersona>
   findById(workspaceId: WorkspaceId, id: AgentPersonaId): Promise<AgentPersona | null>
   listByWorkspace(workspaceId: WorkspaceId): Promise<AgentPersona[]>

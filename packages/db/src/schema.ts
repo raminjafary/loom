@@ -576,6 +576,21 @@ export const agentPersona = pgTable(
      * work and is left alone.
      */
     builtinSource: text('builtin_source'),
+    /**
+     * Where an adopted persona says it came from — one sentence, and null for one written here.
+     *
+     * A **claim** rather than a fact, and stored as prose so it cannot be read as anything
+     * else: nothing signs a persona bundle, so the importing deployment knows only what the
+     * bundle said about itself. What it does know is that the document was not corrupted in
+     * transit, which is what `adopted_digest` is for.
+     *
+     * Kept beside the persona rather than only in the audit log, because the question it
+     * answers — "did we write this or take it" — is asked while reading the persona, and an
+     * answer that needs a separate query is an answer nobody looks up.
+     */
+    adoptedFrom: text('adopted_from'),
+    /** `sha256:…` of the document as adopted, so a later edit is distinguishable from an import. */
+    adoptedDigest: text('adopted_digest'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

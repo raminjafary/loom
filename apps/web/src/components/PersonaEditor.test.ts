@@ -40,6 +40,7 @@ const persona = (overrides: Partial<AgentPersona> = {}): AgentPersona => ({
   harnessBudgetCapUsd: null,
   envelope: null,
   builtinStatus: null,
+  adoptedFrom: null,
   createdAt: new Date(0),
   updatedAt: new Date(0),
   ...overrides,
