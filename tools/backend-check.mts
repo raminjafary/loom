@@ -27,8 +27,10 @@
  *    itself, on the run's own branch, in the run's own clone.
  * 3. **The persona's tool list means the same thing on both backends.** The endpoint is told
  *    exactly the tools the document declares, by the platform's own names.
- * 4. **A missing channel is a refusal, not a lesser run.** A mastery run on this backend fails
- *    with the channel named, rather than running as an agent that quietly cannot map.
+ * 4. **The platform's channels are here, not merely declarable.** A mastery run on this backend
+ *    is offered `record_map` — read off the same in-process server the other backend mounts —
+ *    calls it, and the map is in the database afterwards. This is the check that changed when
+ *    the channels landed: it used to assert the run *failed* with the channel named.
  * 5. **The cost figure is zero for a self-hosted model** — the honest answer about dollars,
  *    and the one the reviewed price table gives rather than a guess.
  *
@@ -69,11 +71,45 @@ const check = (label: string, ok: boolean, detail = '') => {
 /** The marker the scripted model writes, so "the work landed" cannot pass by accident. */
 const MARKER = `LOOM-BACKEND-${Date.now().toString(36).toUpperCase()}`
 
+/** The label the scripted model records, so "a map was written" cannot pass by accident. */
+const MAP_MARKER = `the merge queue (${MARKER})`
+
+/**
+ * What the scripted model sends on a channel it is offered.
+ *
+ * By tool name rather than derived from the declared schema: a valid map fragment is a
+ * structure, and a caller inventing one from JSON Schema would be testing its own generator.
+ * The names are the platform's exported constants — if a name here is wrong, the channel is
+ * simply never called and check 4 fails, which is the correct outcome for a driver whose claim
+ * is that both backends offer the same names.
+ */
+const CHANNEL_ARGUMENTS: Record<string, unknown> = {
+  'mcp__loom_map__record_map': {
+    nodes: [
+      {
+        key: 'merge-queue',
+        kind: 'concept',
+        label: MAP_MARKER,
+        summary: 'Serialized per repository, so two branches cannot land at once.',
+        paths: ['README.md'],
+        observationCount: 3,
+      },
+    ],
+    edges: [],
+  },
+}
+
 /**
  * The scripted endpoint.
  *
  * Three turns: write a file, commit it, say it is done. The requests it received are kept, so
  * the driver can assert what the platform actually sent — which is where check 3 lives.
+ *
+ * One departure from a fixed script, and it is the point of check 4: when a request offers a
+ * **platform channel** — any tool named `mcp__…` — the scripted model calls it instead of
+ * following the script. The arguments come from the table below, because a generic caller
+ * cannot invent a valid map fragment; what is *not* scripted is whether the channel was
+ * offered at all, which is the thing being measured.
  */
 const startScriptedModel = async (): Promise<{
   url: string
@@ -127,12 +163,35 @@ const startScriptedModel = async (): Promise<{
         tools?: { function: { name: string } }[]
         messages?: { role: string; content: string | null }[]
       }
+      const offered = (parsed.tools ?? []).map((tool) => tool.function.name)
       requests.push({
         model: parsed.model ?? '',
-        tools: (parsed.tools ?? []).map((tool) => tool.function.name),
+        tools: offered,
         messages: parsed.messages ?? [],
       })
-      const answer = answers[Math.min(turn, answers.length - 1)]
+      /**
+       * A channel is called once, and only if this backend offered it. The reply for the turn
+       * after it is the script's last line, so the run ends rather than calling it forever.
+       */
+      const channel = offered.find((name) => name in CHANNEL_ARGUMENTS)
+      const alreadyCalled = (parsed.messages ?? []).some((entry) => entry.role === 'tool')
+      const answer =
+        channel !== undefined && !alreadyCalled
+          ? {
+              tool_calls: [
+                {
+                  id: 'call_channel',
+                  type: 'function',
+                  function: {
+                    name: channel,
+                    arguments: JSON.stringify(CHANNEL_ARGUMENTS[channel]),
+                  },
+                },
+              ],
+            }
+          : channel !== undefined
+            ? { content: 'Recorded what I found.' }
+            : answers[Math.min(turn, answers.length - 1)]
       turn += 1
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(
@@ -283,10 +342,26 @@ const main = async () => {
       scripted.requests.every((request) => request.model === 'scripted-small'),
       scripted.requests[0]?.model ?? 'none',
     )
+    const first = scripted.requests[0]?.tools ?? []
     check(
-      'and exactly the tools the persona document declares, by the platform’s names',
-      JSON.stringify(scripted.requests[0]?.tools) === JSON.stringify(['Read', 'Write', 'Bash']),
-      (scripted.requests[0]?.tools ?? []).join(','),
+      'and the tools the persona document declares, by the platform’s names',
+      JSON.stringify(first.filter((name) => !name.startsWith('mcp__'))) ===
+        JSON.stringify(['Read', 'Write', 'Bash']),
+      first.join(','),
+    )
+    /**
+     * Everything else offered is a platform channel, and `ask_human` and the notes ledger are
+     * among them — both are documented as belonging to *every* run the platform starts.
+     *
+     * This is the check that recorded the gap. Before the channels were bridged, a run on this
+     * backend held no `ask_human`, no notes, no atlas and no handover, and nothing refused it:
+     * the refusal only covered the eight channels somebody had remembered to list. An agent
+     * that cannot ask a question does not report being unable to ask one.
+     */
+    check(
+      'along with the channels every run gets, which this backend used to be missing in silence',
+      first.includes('mcp__loom_ask__ask_human') && first.includes('mcp__loom_notes__write_note'),
+      first.filter((name) => name.startsWith('mcp__')).join(','),
     )
     check(
       'the persona’s prompt arrived as the system message, not folded into the task',
@@ -300,7 +375,7 @@ const main = async () => {
     )
   }
 
-  console.log('\n— a channel this backend does not have is a refusal, not a lesser run —')
+  console.log('\n— the platform’s channels are on this backend too —')
   const mastery = await client.mastery.start({
     threadId: channel.rootThread.id,
     repositoryId: repo.id,
@@ -308,14 +383,31 @@ const main = async () => {
   })
   const masteryDone = await awaitRun(mastery.id)
   check(
-    'a mastery run on this backend failed rather than running without record_map',
-    masteryDone.status === 'failed',
-    masteryDone.status,
+    'a mastery run on this backend completes rather than being refused for a missing channel',
+    masteryDone.status === 'completed',
+    `${masteryDone.status} ${masteryDone.errorMessage ?? ''}`,
+  )
+  const masteryRequests = scripted.requests.filter((request) =>
+    request.tools.includes('mcp__loom_map__record_map'),
   )
   check(
-    'and the reason names the channel it could not offer',
-    (masteryDone.errorMessage ?? '').includes('record_map'),
-    masteryDone.errorMessage ?? 'no reason',
+    'the endpoint was offered record_map, under the name the other backend uses for it',
+    masteryRequests.length > 0,
+    scripted.requests.map((request) => request.tools.join('+')).join(' | '),
+  )
+  /**
+   * The claim a declaration cannot make: the call reached the callback the Runner holds, the
+   * server validated the fragment, and the map is in the database. Read back over the contract
+   * a person reads it through, rather than out of the row this driver could have written.
+   */
+  const maps = await client.mastery.listForRepository({ repositoryId: repo.id })
+  const mapId = maps[0]?.map?.id
+  const view = mapId === undefined ? null : await client.mastery.get({ mapId })
+  const labels = ((view?.nodes ?? []) as { label: string }[]).map((node) => node.label).join(' | ')
+  check(
+    'and what it recorded is in the map a person reads, not only in the transcript',
+    labels.includes(MAP_MARKER),
+    labels.slice(0, 300) || `${maps.length} map(s), no nodes`,
   )
 
   runner.kill('SIGTERM')

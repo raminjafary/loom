@@ -4,6 +4,7 @@ import { dirname, join, relative, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { usageCostUsd } from '@loom/domain'
 import { buildPrompt, gateBehavior, type RunAgentOptions } from './claude-agent-adapter.js'
+import { bridgeMcpServer, type BridgedServer, type SdkServerLike } from './mcp-bridge.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -36,12 +37,14 @@ const execFileAsync = promisify(execFile)
  * the same three functions the other adapter calls, in a shared helper, because two gates
  * that agree today are two gates that disagree after the next edit to one of them.
  *
- * **3. It refuses rather than degrades.** A run needing a channel this backend does not have
- * — a planner's `submit_plan`, a mastery run's `record_map`, a verifier's verdict, a
- * proposer's submission, tier 1's `revise_own_prompt`, tier 5's `record_experience` — is
- * *failed with a reason*, never run as a lesser agent. This repository has shipped "a tool
- * the model was never offered" three times and each one looked like a working run producing
- * nothing; a refusal that names the missing channel is the opposite of that failure.
+ * **3. It has the platform's channels, and refuses rather than degrades when one will not
+ * open.** A planner's `submit_plan`, a mastery run's `record_map`, a verifier's verdict, a
+ * workflow step's answer, a designer's proposal, `ask_human`, the notes ledger — every one of
+ * them is offered here, read off the same in-process server the other backend mounts (see
+ * `mcp-bridge.ts`). They are *not* re-declared in this file, and that is the point: a second
+ * list is a list that falls behind, and this repository has shipped "a tool the model was
+ * never offered" three times, each looking like a working run producing nothing. A channel
+ * that is handed over but will not open still fails the run, by name.
  *
  * **4. The cost figure says what kind of figure it is.** There is no egress proxy in front of
  * a model on the operator's own machine, so what is available is the server's own `usage`
@@ -84,42 +87,49 @@ const BASH_TIMEOUT_MS = Number(process.env.LOOM_CHAT_COMPLETIONS_BASH_TIMEOUT_MS
 /**
  * Which of this run's channels this backend cannot provide — the refusal, as a sentence.
  *
- * Null means it can run. Everything named here is an in-process MCP server on the other
- * backend, and there is no equivalent yet: they are not *tools* so much as private channels
- * back to the platform, and wiring them through would mean re-expressing each one as a
- * function declaration plus a callback the Runner already holds. That is real work rather
- * than an oversight, and until it is done the honest behaviour is to refuse the run.
+ * Null means it can run, and it now nearly always does: every channel the Runner hands over is
+ * offered, read off the server that holds it. What is left is the one case the platform can
+ * still get wrong on *either* backend — a persona whose whole job is planning, started without
+ * a planning channel. There is nothing to bridge then, and a run that cannot submit a plan
+ * looks exactly like a working run that produced nothing.
  */
 export const chatCompletionsRefusal = (
-  options: Pick<
-    RunAgentOptions,
-    | 'persona'
-    | 'plannerTool'
-    | 'mapTool'
-    | 'verdictTool'
-    | 'proposalTool'
-    | 'selfTool'
-    | 'experienceTool'
-    | 'workflowTool'
-    | 'designTool'
-  >,
+  options: Pick<RunAgentOptions, 'persona' | 'plannerTool'>,
 ): string | null => {
-  const missing: string[] = []
-  if (options.plannerTool) missing.push('planning (submit_plan)')
-  if (options.mapTool) missing.push('mastery (record_map)')
-  if (options.verdictTool) missing.push('the verifier verdict')
-  if (options.workflowTool) missing.push("a workflow step's answer")
-  if (options.designTool) missing.push('a harness design (submit_workflow_design)')
-  if (options.proposalTool) missing.push('candidate proposal')
-  if (options.selfTool) missing.push('self-modification (revise_own_prompt)')
-  if (options.experienceTool) missing.push('durable memory (record_experience)')
-  if (options.persona.planner) missing.push('planning, which this persona is for')
-  if (missing.length === 0) return null
+  if (!options.persona.planner || options.plannerTool !== undefined) return null
   return (
-    `A model served over the chat-completions backend cannot be offered ${missing.join(', ')}. ` +
-    'The run is refused rather than started without them: a run whose whole job is a channel ' +
-    'it was never offered looks like a working run that produced nothing.'
+    'This persona is a planner and the run was started with no planning channel, so there is ' +
+    'nothing for it to submit a plan through. The run is refused rather than started without ' +
+    'it: a run whose whole job is a channel it was never offered looks like a working run that ' +
+    'produced nothing.'
   )
+}
+
+/**
+ * The platform channels this run was handed, found by shape rather than by name.
+ *
+ * Every option holding an in-process server, whatever it is called — including one added to
+ * `RunAgentOptions` after this was written. A list of field names here would be the second list
+ * the bridge exists to avoid: it would be correct today and one channel short after the next
+ * one is added, and the failure would be invisible, because a model that is never offered a
+ * tool does not complain about it.
+ */
+export const platformChannelsOf = (options: Partial<RunAgentOptions>): SdkServerLike[] => {
+  const found: SdkServerLike[] = []
+  for (const value of Object.values(options)) {
+    // Either the server itself, or `{ server, toolName }` — the planner's shape, which carries
+    // the name of the tool it mounted so two spellings of it cannot drift apart.
+    const candidate = (value as { server?: unknown } | undefined)?.server ?? value
+    const server = candidate as { type?: unknown; name?: unknown; instance?: unknown } | undefined
+    if (
+      server?.type === 'sdk' &&
+      typeof server.name === 'string' &&
+      typeof (server.instance as { connect?: unknown } | undefined)?.connect === 'function'
+    ) {
+      found.push(server as unknown as SdkServerLike)
+    }
+  }
+  return found
 }
 
 /** The tools this backend implements, by the platform's own names. */
@@ -402,6 +412,43 @@ export const runChatCompletionsAgent = async (options: RunAgentOptions): Promise
   const offered = options.persona.tools.filter((tool) => tool in TOOL_SCHEMAS)
   const tools = offered.map((tool) => TOOL_SCHEMAS[tool])
 
+  /**
+   * The platform's channels, opened once for the run.
+   *
+   * A channel that will not open fails the run by name rather than being dropped: the whole
+   * argument for this backend refusing rather than degrading is that a missing channel is
+   * invisible from the model's side, and that argument does not change once the channels exist.
+   */
+  const channels: BridgedServer[] = []
+  const channelCall = new Map<string, BridgedServer>()
+  for (const server of platformChannelsOf(options)) {
+    try {
+      const bridged = await bridgeMcpServer(server)
+      channels.push(bridged)
+      for (const tool of bridged.tools) {
+        channelCall.set(tool.name, bridged)
+        tools.push({
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          },
+        })
+      }
+    } catch (error) {
+      await options.onEvent({
+        kind: 'run_failed',
+        message:
+          `The ${server.name} channel this run needs could not be opened: ` +
+          `${error instanceof Error ? error.message : String(error)}. The run is refused rather ` +
+          'than started without it.',
+      })
+      await Promise.all(channels.map((open) => open.close().catch(() => {})))
+      return
+    }
+  }
+
   const messages: ChatMessage[] = [
     { role: 'system', content: options.persona.systemPrompt },
     { role: 'user', content: buildPrompt(options) },
@@ -530,7 +577,17 @@ export const runChatCompletionsAgent = async (options: RunAgentOptions): Promise
           input,
         })
 
-        const outcome = await gateAndRun(options, call.id, call.function.name, input)
+        const channel = channelCall.get(call.function.name)
+        /**
+         * A platform channel is not gated. It holds no file and runs no command — it is a
+         * private line back to the server, which validates what arrives on it and answers in
+         * its own words. Sending it through the file/shell gate would ask a human to approve
+         * `submit_plan`, and `classifyToolEffect` has no path to classify.
+         */
+        const outcome =
+          channel === undefined
+            ? await gateAndRun(options, call.id, call.function.name, input)
+            : await channel.call(call.function.name, input)
         await options.onEvent({
           kind: 'tool_result',
           toolUseId: call.id,
@@ -555,6 +612,9 @@ export const runChatCompletionsAgent = async (options: RunAgentOptions): Promise
       kind: 'run_failed',
       message: `The chat-completions backend failed: ${error instanceof Error ? error.message : String(error)}`,
     })
+  } finally {
+    // The channels are this run's, so they close with it whichever way it ended.
+    await Promise.all(channels.map((open) => open.close().catch(() => {})))
   }
 }
 

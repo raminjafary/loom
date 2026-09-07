@@ -6,10 +6,18 @@ import type { WireAgentEvent } from '@loom/runner-protocol'
 import {
   CHAT_COMPLETIONS_BASE_URL_ENV,
   chatCompletionsRefusal,
+  platformChannelsOf,
   runChatCompletionsAgent,
   upstreamModelId,
   usesChatCompletions,
 } from './chat-completions-adapter.js'
+import { createPlannerTool } from './planner-tool.js'
+import { createQuestionTool, ASK_HUMAN_TOOL_NAME } from './question-tool.js'
+import {
+  createWorkflowAnswerTool,
+  SUBMIT_WORKFLOW_ANSWER_TOOL_NAME,
+  WORKFLOW_SERVER_NAME,
+} from './workflow-answer-tool.js'
 import { backendFor } from './agent-backend.js'
 import type { RunAgentOptions } from './claude-agent-adapter.js'
 
@@ -103,31 +111,144 @@ describe('backend selection', () => {
 
 describe('chatCompletionsRefusal', () => {
   /**
-   * The rule that keeps this backend from being a worse version of the other one. Three
-   * features have shipped here as "a tool the model was never offered", and each looked like
-   * a working run producing nothing.
+   * What is left to refuse now that the channels are bridged: a persona whose whole job is
+   * planning, started with nothing to plan through. The platform can get that wrong on either
+   * backend, and on both it produces a run that looks like it worked.
    */
-  it('refuses a run whose channel this backend cannot offer, and names it', () => {
-    const reason = chatCompletionsRefusal({
-      persona: persona(),
-      mapTool: {} as never,
-    })
-    expect(reason).toContain('record_map')
-    expect(reason).toContain('refused rather than started')
+  it('refuses a planner that was handed no planning channel', () => {
+    const reason = chatCompletionsRefusal({ persona: persona({ planner: true }) })
+    expect(reason).toContain('nothing for it to submit a plan through')
   })
 
-  it('refuses a planner outright', () => {
-    expect(chatCompletionsRefusal({ persona: persona({ planner: true }) })).toContain('planning')
+  it('permits a planner that has one', () => {
+    expect(
+      chatCompletionsRefusal({
+        persona: persona({ planner: true }),
+        plannerTool: createPlannerTool() as never,
+      }),
+    ).toBeNull()
   })
 
   it('permits an ordinary worker', () => {
     expect(chatCompletionsRefusal({ persona: persona() })).toBeNull()
   })
 
-  it('fails the run rather than starting it, when a channel is missing', async () => {
-    const { events } = await run([message({ content: 'hello' })], { mapTool: {} as never })
+  it('fails the run rather than starting it, when a channel it needs will not open', async () => {
+    // A channel-shaped option whose server cannot be connected to: the run is refused by name
+    // rather than started with one channel quietly missing.
+    const broken = { type: 'sdk', name: 'loom_broken', instance: { connect: async () => { throw new Error('no') } } }
+    const { events } = await run([message({ content: 'hello' })], { mapTool: broken as never })
     expect(events).toHaveLength(1)
-    expect(events[0]?.kind).toBe('run_failed')
+    expect(events[0]?.kind === 'run_failed' && events[0].message).toContain('loom_broken')
+  })
+})
+
+/**
+ * The platform's channels on the second backend.
+ *
+ * The claim being tested is not that a function declaration can be built — it is that the
+ * channel a model is offered here is *the same channel*, under the same name, reaching the same
+ * callback, and that a second list of declarations was not introduced to make that true.
+ */
+describe('platform channels', () => {
+  it('offers every channel the run was handed, under the platform’s own names', async () => {
+    const { bodies } = await run([message({ content: 'nothing to do' })], {
+      workflowTool: createWorkflowAnswerTool([{ kind: 'text', name: 'verdict' }], {
+        submit: async () => ({ ok: true, outcome: 'recorded' }),
+      }) as never,
+      questionTool: createQuestionTool({ askHuman: async () => ({ answer: 'yes' }) }).server as never,
+    })
+    const declared = (bodies[0] as { tools: { function: { name: string } }[] }).tools.map(
+      (tool) => tool.function.name,
+    )
+    expect(declared).toContain(SUBMIT_WORKFLOW_ANSWER_TOOL_NAME)
+    expect(declared).toContain(ASK_HUMAN_TOOL_NAME)
+    // And the persona's ordinary tools are still there beside them.
+    expect(declared).toContain('Read')
+  })
+
+  /**
+   * Found by shape rather than by a list of field names, so a channel added to
+   * `RunAgentOptions` after this was written is offered without anybody remembering to come
+   * back here. The list-that-falls-behind is the defect this backend has shipped three times.
+   */
+  it('finds a channel this file has never heard of', () => {
+    const server = createWorkflowAnswerTool([{ kind: 'text', name: 'verdict' }], {
+      submit: async () => ({ ok: true, outcome: 'ok' }),
+    })
+    const found = platformChannelsOf({ somethingNewTool: server } as never)
+    expect(found.map((entry) => entry.name)).toEqual([WORKFLOW_SERVER_NAME])
+  })
+
+  it('reaches the callback, and feeds what it answered back to the model', async () => {
+    const submit = vi.fn(async () => ({ ok: true as const, outcome: 'Answer recorded.' }))
+    const { events, bodies } = await run(
+      [
+        message({
+          tool_calls: [toolCall(SUBMIT_WORKFLOW_ANSWER_TOOL_NAME, { verdict: 'it holds' })],
+        }),
+        message({ content: 'Done.' }),
+      ],
+      {
+        workflowTool: createWorkflowAnswerTool([{ kind: 'text', name: 'verdict' }], {
+          submit,
+        }) as never,
+      },
+    )
+    expect(submit).toHaveBeenCalledWith({ verdict: 'it holds' })
+    const result = events.find((event) => event.kind === 'tool_result')
+    expect(result?.kind === 'tool_result' && result.summary).toContain('Answer recorded')
+    const second = bodies[1] as { messages: { role: string; content?: string }[] }
+    expect(second.messages.at(-1)?.role).toBe('tool')
+    expect(second.messages.at(-1)?.content).toContain('Answer recorded')
+  })
+
+  /**
+   * A channel holds no file and runs no command — it is a private line back to the server. A
+   * human asked to approve `submit_plan` is a human trained to click through approvals, and
+   * `classifyToolEffect` has no path to classify.
+   */
+  it('does not put a channel through the file and shell gate', async () => {
+    const asked: string[] = []
+    await run(
+      [
+        message({
+          tool_calls: [toolCall(SUBMIT_WORKFLOW_ANSWER_TOOL_NAME, { verdict: 'it holds' })],
+        }),
+        message({ content: 'Done.' }),
+      ],
+      {
+        // Everything is risky and everything needs approval: only the gate's absence can
+        // explain nothing being asked.
+        isRiskyTool: () => true,
+        classifyEffect: async () => ({ ok: true, requiresApproval: true }),
+        onPermissionRequest: async (_id: string, name: string) => {
+          asked.push(name)
+          return 'allow'
+        },
+        workflowTool: createWorkflowAnswerTool([{ kind: 'text', name: 'verdict' }], {
+          submit: async () => ({ ok: true, outcome: 'recorded' }),
+        }) as never,
+      },
+    )
+    expect(asked).toEqual([])
+  })
+
+  it('carries a channel’s refusal back as an error the model still has a turn to fix', async () => {
+    const { events } = await run(
+      [
+        message({ tool_calls: [toolCall(SUBMIT_WORKFLOW_ANSWER_TOOL_NAME, { verdict: 'x' })] }),
+        message({ content: 'I will answer again.' }),
+      ],
+      {
+        workflowTool: createWorkflowAnswerTool([{ kind: 'text', name: 'verdict' }], {
+          submit: async () => ({ ok: false, error: 'The answer has no "verdict".' }),
+        }) as never,
+      },
+    )
+    const result = events.find((event) => event.kind === 'tool_result')
+    expect(result?.kind === 'tool_result' && result.isError).toBe(true)
+    expect(result?.kind === 'tool_result' && result.summary).toContain('no "verdict"')
   })
 })
 
