@@ -86,6 +86,16 @@ const EnvSchema = z.object({
   // runs.
   BLOB_STORAGE_ROOT: z.string().default('.loom-blobs'),
   /**
+   * A SeaweedFS filer to keep the raw transcript tier in instead of the local filesystem.
+   *
+   * Unset is the Phase 1 default and stays the default: one operator on one host is exactly the
+   * case a directory serves better than an object store. Set — `http://localhost:8888/loom` for
+   * the compose service — and the same port is served by the filer, which is the swap the
+   * replaceability contract promises rather than an alternative code path: nothing above
+   * `BlobStoragePort` can tell which one it got.
+   */
+  BLOB_STORAGE_FILER_URL: z.string().url().optional(),
+  /**
    * Where the running-revision pointer is, for the surface that shows what is serving.
    *
    * The same default `tools/self-promote.mts` uses, and read rather than written here: the

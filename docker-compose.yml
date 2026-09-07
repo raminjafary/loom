@@ -30,6 +30,29 @@ services:
       timeout: 5s
       retries: 10
 
+  # The raw transcript tier's object store — the Phase 3 swap behind `BlobStoragePort`.
+  #
+  # Behind a profile, so `docker compose up -d` is unchanged for an operator who does not want
+  # it: the default is a directory, and a service that started anyway would be a running
+  # dependency nothing reads. `weed server -filer` is one process holding the master, a volume
+  # server and the filer, which is the shape this port needs — no bucket, no signing, no S3
+  # gateway. Bring it up with `docker compose --profile blobs up -d seaweedfs` and point the
+  # server at it with BLOB_STORAGE_FILER_URL=http://localhost:8888/loom
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.80
+    profiles: ["blobs"]
+    restart: unless-stopped
+    command: server -dir=/data -filer -master.volumeSizeLimitMB=64
+    ports:
+      - "127.0.0.1:8888:8888"
+    volumes:
+      - seaweed-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8888/ >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # The credential-injecting, metering, allowlisting egress boundary
   #. Deliberately the only service on both networks below:
   # that asymmetry is what makes deny-by-default egress real for sandboxes.
@@ -87,3 +110,4 @@ networks:
 
 volumes:
   postgres-data:
+  seaweed-data:

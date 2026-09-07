@@ -65,6 +65,7 @@ import { webPushNotificationPort } from './notifications.js'
 import { router } from './router.js'
 import { subscriptionTokenMinter } from './subscription-token.js'
 import { fileBlobStorage } from './blob-storage.js'
+import { seaweedBlobStorage } from './seaweed-blob-storage.js'
 import { fileSelfDeploymentStore } from './self-deployment-store.js'
 import { createRunnerGateway } from './runner-gateway.js'
 
@@ -140,7 +141,11 @@ export const buildApp = async (
     workflows: workflowRepository(db),
     personaGroups: personaGroupRepository(db),
     runControl: workspaceRunControlRepository(db),
-    blobs: fileBlobStorage(config.BLOB_STORAGE_ROOT),
+    // The one place the swap is chosen. A directory when nothing says otherwise.
+    blobs:
+      config.BLOB_STORAGE_FILER_URL === undefined
+        ? fileBlobStorage(config.BLOB_STORAGE_ROOT)
+        : seaweedBlobStorage(config.BLOB_STORAGE_FILER_URL),
     selfDeployment: fileSelfDeploymentStore(config.LOOM_DEPLOYMENT_STATE),
     notifications,
     notificationTargets,
