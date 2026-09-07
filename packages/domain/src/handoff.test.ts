@@ -4,7 +4,9 @@ import {
   HAND_OVER_TOOL_NAME,
   UNTRUSTED_BRIEF_OPEN,
   checkBrief,
+  describeDroppedAnchors,
   handoffDecision,
+  recoverableAnchors,
   parseBrief,
   renderHandoffBrief,
   renderHandoffNudge,
@@ -134,6 +136,83 @@ describe('checkBrief', () => {
 
   it('marks nothing when the claims match what was observed', () => {
     expect(checkBrief(brief(), facts()).unverifiedPaths).toEqual([])
+  })
+})
+
+/**
+ * Compaction with validation — the mechanism the context-management framing puts first, on the
+ * one summary in this platform whose loss is paid for by a *different* agent.
+ *
+ * The failure is measured rather than theoretical: one-shot summarization has been observed
+ * dropping downstream accuracy below running with no context at all. A brief is exactly that,
+ * written by a model already low on room, so what is asserted here is that the platform checks
+ * its own observations are still recoverable from the compressed form.
+ */
+describe('recoverableAnchors', () => {
+  it('accepts a brief that still accounts for what the platform saw', () => {
+    const verdict = recoverableAnchors(brief(), ['src/refund.ts'])
+    expect(verdict.enough).toBe(true)
+    expect(verdict.dropped).toEqual([])
+  })
+
+  /**
+   * Recoverable, not verbatim: "the refund module" is a successor's way to the file, and a
+   * check that demanded the exact path would mark a good brief wrong.
+   */
+  it('counts a file named in prose, by its file name', () => {
+    const verdict = recoverableAnchors(
+      brief({ changedPaths: [], done: ['Rewrote refund.ts and left the fee case open'] }),
+      ['packages/payments/src/refund.ts'],
+    )
+    expect(verdict.enough).toBe(true)
+  })
+
+  it('refuses a brief that dropped most of the work', () => {
+    const verdict = recoverableAnchors(brief({ changedPaths: [], done: ['Did some work'] }), [
+      'src/refund.ts',
+      'src/fees.ts',
+      'src/ledger.ts',
+      'src/api.ts',
+    ])
+    expect(verdict.enough).toBe(false)
+    expect(verdict.dropped).toHaveLength(4)
+  })
+
+  /**
+   * Half, not all: a run that touched forty files cannot name forty in twelve items, and
+   * demanding it would turn a brief into a list of paths.
+   */
+  it('accepts half of them, which is what keeps a brief prose', () => {
+    const verdict = recoverableAnchors(
+      brief({ changedPaths: ['src/refund.ts', 'src/fees.ts'], done: [] }),
+      ['src/refund.ts', 'src/fees.ts', 'src/ledger.ts', 'src/api.ts'],
+    )
+    expect(verdict.enough).toBe(true)
+    expect(verdict.dropped).toEqual(['src/ledger.ts', 'src/api.ts'])
+  })
+
+  /**
+   * The anchors are the platform's observations, never the predecessor's claims — otherwise a
+   * confused agent sets its own paper: name one file, mention it, pass.
+   */
+  it('does not let the brief nominate its own facts', () => {
+    const verdict = recoverableAnchors(
+      brief({ changedPaths: ['src/something-nobody-saw.ts'], done: [], branchState: '', nextStep: 'go' }),
+      ['src/refund.ts', 'src/fees.ts'],
+    )
+    expect(verdict.enough).toBe(false)
+    expect(verdict.dropped).toEqual(['src/refund.ts', 'src/fees.ts'])
+  })
+
+  it('has nothing to check when the platform saw nothing written', () => {
+    expect(recoverableAnchors(brief({ changedPaths: [], done: [] }), []).enough).toBe(true)
+  })
+
+  it('says which files to write about rather than quoting a ratio', () => {
+    const sentence = describeDroppedAnchors(['src/refund.ts', 'src/fees.ts'])
+    expect(sentence).toContain('src/refund.ts')
+    expect(sentence).toContain('summary rather than a handover')
+    expect(sentence).not.toContain('%')
   })
 })
 

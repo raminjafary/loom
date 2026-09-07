@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { asAgentRunId, asWorkspaceId, type AgentRunId, type WorkspaceId } from '@loom/domain'
-import { suggestHandoffOnPressure, type SuggestHandoffDeps } from './handoff-use-cases.js'
+import {
+  handOverToSuccessor,
+  suggestHandoffOnPressure,
+  type SuggestHandoffDeps,
+} from './handoff-use-cases.js'
 
 /**
  * The nudge.
@@ -132,5 +136,100 @@ describe('suggestHandoffOnPressure', () => {
     const h = harness()
     await suggestHandoffOnPressure(h.deps, run({ contextTokens: 10_000 }))
     expect(h.treeReads()).toBe(0)
+  })
+})
+
+/**
+ * The submission path, and the one thing about it that is irreversible: starting a successor
+ * retires the predecessor. So the compaction is validated *before* that, and a brief that
+ * dropped what the platform saw comes back as a tool result with nothing started.
+ */
+describe('handOverToSuccessor — compaction with validation', () => {
+  const handoffHarness = (observedPaths: string[]) => {
+    const started: { brief: string }[] = []
+    const retired: string[] = []
+    const deps = {
+      agentRuns: {
+        findById: async () => ({
+          id: runId,
+          status: 'running',
+          branchName: 'loom/run-1',
+          contextTokens: 90_000,
+          contextMaxTokens: 100_000,
+          totalCostUsd: 0.4,
+          task: 'Do the work.',
+        }),
+        listTree: async () => [],
+        updateStatus: async (_workspaceId: WorkspaceId, id: AgentRunId) => {
+          retired.push(id as string)
+          return {}
+        },
+      },
+      agentRunEvents: { writtenPaths: async () => observedPaths },
+      resolveTreeRunId: async (_workspaceId: WorkspaceId, id: AgentRunId) => id,
+      startSuccessor: async (input: { brief: string }) => {
+        started.push({ brief: input.brief })
+        return asAgentRunId('run-2')
+      },
+      announce: async () => {},
+      limits: {},
+    }
+    return { deps, started, retired }
+  }
+
+  const brief = (over: Record<string, unknown> = {}) => ({
+    done: ['Wired the refund path'],
+    branchState: 'committed',
+    openQuestions: [],
+    nextStep: 'Run the payments suite',
+    changedPaths: ['src/refund.ts'],
+    ...over,
+  })
+
+  it('hands over a brief that still accounts for what the platform saw', async () => {
+    const { deps, started, retired } = handoffHarness(['src/refund.ts'])
+    const result = await handOverToSuccessor(deps, {
+      workspaceId,
+      agentRunId: runId,
+      brief: brief(),
+    })
+    expect(result.ok).toBe(true)
+    expect(started).toHaveLength(1)
+    expect(retired).toEqual([runId as string])
+  })
+
+  it('sends back one that dropped the work, and starts nothing', async () => {
+    const { deps, started, retired } = handoffHarness([
+      'src/refund.ts',
+      'src/fees.ts',
+      'src/ledger.ts',
+      'src/api.ts',
+    ])
+    const result = await handOverToSuccessor(deps, {
+      workspaceId,
+      agentRunId: runId,
+      brief: brief({ changedPaths: [], done: ['Did some work'] }),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('src/fees.ts')
+    // The irreversible half never happened: no successor, and the predecessor is still working.
+    expect(started).toEqual([])
+    expect(retired).toEqual([])
+  })
+
+  /**
+   * Accepted with some anchors missing — the threshold is a share — and the successor is told
+   * which files the brief never mentioned. It is the reader who pays for the omission.
+   */
+  it('tells the successor what the brief left out, when it accepts one', async () => {
+    const { deps, started } = handoffHarness(['src/refund.ts', 'src/ledger.ts'])
+    const result = await handOverToSuccessor(deps, {
+      workspaceId,
+      agentRunId: runId,
+      brief: brief(),
+    })
+    expect(result.ok).toBe(true)
+    expect(started[0]?.brief).toContain('src/ledger.ts')
+    expect(started[0]?.brief).toContain('did not think it worth handing over')
   })
 })

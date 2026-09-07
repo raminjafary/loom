@@ -3,6 +3,8 @@ import {
   HAND_OVER_TOOL_NAME,
   NotFoundError,
   checkBrief,
+  describeDroppedAnchors,
+  recoverableAnchors,
   handoffDecision,
   parseBrief,
   renderHandoffBrief,
@@ -130,6 +132,26 @@ export const handOverToSuccessor = async (
   }
 
   const observedPaths = await deps.agentRunEvents.writtenPaths(input.workspaceId, run.id)
+
+  /**
+   * Compaction with validation: the brief is compressed by a model, and this is where the
+   * platform checks that what it observed is still recoverable from it before anything is
+   * handed forward. A brief that dropped most of it is sent back as a tool result, with the
+   * files named, so the writer compresses less aggressively — the paper's mechanism, on the
+   * one summary in this platform whose loss is paid for by a *different* agent.
+   *
+   * Checked before the successor is started rather than after, because starting one is the
+   * irreversible half: the predecessor is retired the moment its replacement exists.
+   */
+  const recoverable = recoverableAnchors(verdict.brief, observedPaths)
+  if (!recoverable.enough) {
+    return {
+      ok: false,
+      reason: describeDroppedAnchors(recoverable.dropped),
+      successorRunId: null,
+    }
+  }
+
   const checked = checkBrief(verdict.brief, {
     branchName: run.branchName,
     observedPaths,
