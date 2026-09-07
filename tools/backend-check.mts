@@ -216,6 +216,8 @@ const main = async () => {
   const scripted = process.env.LOOM_CHAT_COMPLETIONS_BASE_URL
     ? { url: process.env.LOOM_CHAT_COMPLETIONS_BASE_URL, requests: [], close: async () => {} }
     : await startScriptedModel()
+  /** A second serving stack, so "which stack" is a real question rather than a setting. */
+  const second = await startScriptedModel()
   console.log(
     process.env.LOOM_CHAT_COMPLETIONS_BASE_URL
       ? `driving a real endpoint at ${scripted.url}`
@@ -253,6 +255,10 @@ const main = async () => {
       LOOM_SANDBOX_ENABLED: '0',
       LOOM_ALLOW_UNSANDBOXED: 'i-understand-the-agent-gets-my-privileges',
       LOOM_CHAT_COMPLETIONS_BASE_URL: scripted.url,
+      // A second stack, named. What is under test is that a persona naming it lands there
+      // and not on the default — the failure being prevented is a run silently going to the
+      // wrong serving stack, which produces a completed run against the wrong model.
+      LOOM_CHAT_COMPLETIONS_ENDPOINTS: `second=${second.url}`,
       LOOM_RUNNER_STATE_DIR: join(tmpdir(), `backend-check-state-${Date.now()}`),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -410,10 +416,83 @@ const main = async () => {
     labels.slice(0, 300) || `${maps.length} map(s), no nodes`,
   )
 
+  console.log('\n— a second serving stack, named by the persona that wants it —')
+  const onSecond = await client.persona.create({
+    markdownSource: [
+      '---',
+      'name: second-stack-worker',
+      'description: A worker on the operator’s other serving stack.',
+      'model: local/second:other-small',
+      'tools: [Read, Write, Bash]',
+      'harness:',
+      '  autoApprove: true',
+      '---',
+      '',
+      'You work on this repository.',
+    ].join('\n'),
+  })
+  const onSecondRun = await awaitRun(
+    (
+      await client.agentRun.start({
+        threadId: channel.rootThread.id,
+        repositoryId: repo.id,
+        personaId: onSecond.id,
+        task: 'Add BACKEND.md and commit it.',
+      })
+    ).id,
+  )
+  check(
+    'a run on the named stack completed',
+    onSecondRun.status === 'completed',
+    `${onSecondRun.status} ${onSecondRun.errorMessage ?? ''}`,
+  )
+  check(
+    'it reached the second endpoint, with the id that endpoint knows the model by',
+    second.requests.length > 0 && second.requests.every((request) => request.model === 'other-small'),
+    `${second.requests.length} request(s) — ${second.requests[0]?.model ?? 'none'}`,
+  )
+  const defaultSaw = scripted.requests.filter((request) => request.model === 'other-small')
+  check(
+    'and the default endpoint was not sent it, which is the failure worth preventing',
+    defaultSaw.length === 0,
+    `${defaultSaw.length} stray request(s)`,
+  )
+
+  const unserved = await client.persona.create({
+    markdownSource: [
+      '---',
+      'name: nowhere-worker',
+      'description: A worker naming a stack this Runner does not serve.',
+      'model: local/nowhere:some-model',
+      'tools: [Read]',
+      'harness:',
+      '  autoApprove: true',
+      '---',
+      '',
+      'You work on this repository.',
+    ].join('\n'),
+  })
+  const unservedRun = await awaitRun(
+    (
+      await client.agentRun.start({
+        threadId: channel.rootThread.id,
+        repositoryId: repo.id,
+        personaId: unserved.id,
+        task: 'Anything.',
+      })
+    ).id,
+  )
+  check(
+    'a persona naming a stack this host does not serve is refused, not redirected',
+    unservedRun.status === 'failed' && (unservedRun.errorMessage ?? '').includes('"nowhere"'),
+    `${unservedRun.status} — ${unservedRun.errorMessage ?? 'no reason'}`,
+  )
+
   runner.kill('SIGTERM')
   await app.close()
   await closeDb()
   await scripted.close()
+  await second.close()
   console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)
   process.exit(failures === 0 ? 0 : 1)
 }

@@ -6,6 +6,7 @@ import type { WireAgentEvent } from '@loom/runner-protocol'
 import {
   CHAT_COMPLETIONS_BASE_URL_ENV,
   chatCompletionsRefusal,
+  endpointFor,
   platformChannelsOf,
   runChatCompletionsAgent,
   upstreamModelId,
@@ -106,6 +107,61 @@ describe('backend selection', () => {
 
   it('sends the operator’s own id upstream, without the prefix that chose the backend', () => {
     expect(upstreamModelId('local/qwen-coder')).toBe('qwen-coder')
+  })
+})
+
+/**
+ * Several serving stacks at once, which is what "an adapter per stack" means once one adapter
+ * speaks the protocol they all speak: not two code paths, but a way to say which persona goes
+ * where. The failure worth preventing is a run *silently* going to the wrong stack.
+ */
+describe('endpointFor', () => {
+  const env = {
+    LOOM_CHAT_COMPLETIONS_BASE_URL: 'http://default:8000/v1',
+    LOOM_CHAT_COMPLETIONS_ENDPOINTS: 'small=http://small:11434/v1;big=http://big:8000/v1',
+    LOOM_CHAT_COMPLETIONS_API_KEY: 'shared',
+    LOOM_CHAT_COMPLETIONS_API_KEY_BIG: 'just-for-big',
+  }
+
+  it('sends an unnamed model to the single base URL, as before', () => {
+    const served = endpointFor('local/qwen-coder', env)
+    expect(served.ok && served.url).toBe('http://default:8000/v1')
+    expect(served.ok && served.apiKey).toBe('shared')
+  })
+
+  it('sends a named model to its own endpoint, with the id that endpoint knows it by', () => {
+    const served = endpointFor('local/small:qwen2.5-coder', env)
+    expect(served.ok && served.url).toBe('http://small:11434/v1')
+    expect(upstreamModelId('local/small:qwen2.5-coder')).toBe('qwen2.5-coder')
+  })
+
+  it('prefers a key scoped to the endpoint over the shared one', () => {
+    expect(endpointFor('local/big:llama-70b', env)).toMatchObject({ apiKey: 'just-for-big' })
+  })
+
+  /**
+   * A model id with a slash before the colon is one name, not an endpoint and a model: `:q4` is
+   * a quantization, and reading it as an endpoint would send the run somewhere nobody
+   * configured.
+   */
+  it('does not read a quantization suffix as an endpoint name', () => {
+    expect(upstreamModelId('local/org/model-7b:q4')).toBe('org/model-7b:q4')
+    expect(endpointFor('local/org/model-7b:q4', env)).toMatchObject({
+      url: 'http://default:8000/v1',
+    })
+  })
+
+  it('refuses a stack this Runner does not serve, rather than falling back to the default', () => {
+    const served = endpointFor('local/nowhere:model', env)
+    expect(served.ok).toBe(false)
+    expect(!served.ok && served.reason).toContain('"nowhere"')
+    expect(!served.ok && served.reason).toContain('not interchangeable')
+  })
+
+  it('refuses when the Runner was never configured for this backend at all', () => {
+    const served = endpointFor('local/qwen-coder', {})
+    expect(served.ok).toBe(false)
+    expect(!served.ok && served.reason).toContain('nowhere to send it')
   })
 })
 

@@ -59,6 +59,25 @@ export const CHAT_COMPLETIONS_BASE_URL_ENV = 'LOOM_CHAT_COMPLETIONS_BASE_URL'
 export const CHAT_COMPLETIONS_KEY_ENV = 'LOOM_CHAT_COMPLETIONS_API_KEY'
 
 /**
+ * Several self-served endpoints at once — `name=url` pairs, separated by `;` or `,`.
+ *
+ * This is what "an adapter per serving stack" turns out to mean once one adapter speaks the
+ * protocol all of them speak. An operator running a small model on one stack and a larger one
+ * on another does not need two adapters; they need to say which persona goes where, and a
+ * single global base URL cannot express it.
+ *
+ * A name is used by writing `local/<name>:<model>` in the persona document — a colon, because
+ * model ids carry slashes (`org/model-7b`) and a slash-separated name could not be told apart
+ * from one. `local/<model>` with no name keeps using the single base URL above, so nothing an
+ * operator has already written changes meaning.
+ *
+ * A key per endpoint is `LOOM_CHAT_COMPLETIONS_API_KEY_<NAME>`, uppercased, falling back to the
+ * global one. Keys stay in their own variables rather than inside the URL: a credential in a
+ * URL is a credential in every log line that ever prints the URL.
+ */
+export const CHAT_COMPLETIONS_ENDPOINTS_ENV = 'LOOM_CHAT_COMPLETIONS_ENDPOINTS'
+
+/**
  * The model-id convention that selects this backend.
  *
  * A prefix rather than a per-run flag, so the choice travels with the persona document and
@@ -71,9 +90,79 @@ export const LOCAL_MODEL_PREFIX = 'local/'
 export const usesChatCompletions = (model: string): boolean =>
   model.startsWith(LOCAL_MODEL_PREFIX)
 
-/** The id to send upstream: the operator's own name for the model, without the prefix. */
-export const upstreamModelId = (model: string): string =>
-  model.startsWith(LOCAL_MODEL_PREFIX) ? model.slice(LOCAL_MODEL_PREFIX.length) : model
+/**
+ * The endpoint name a model id asks for, and the id the endpoint itself knows the model by.
+ *
+ * Split at the *first* colon and only before any slash, so `local/ollama:qwen2.5-coder` names
+ * an endpoint while `local/org/model-7b:q4` does not — a quantization suffix is part of the
+ * model's name, and reading it as an endpoint would send the run somewhere nobody configured.
+ */
+const splitLocalModel = (model: string): { endpoint: string | null; upstream: string } => {
+  const rest = model.startsWith(LOCAL_MODEL_PREFIX)
+    ? model.slice(LOCAL_MODEL_PREFIX.length)
+    : model
+  const colon = rest.indexOf(':')
+  const slash = rest.indexOf('/')
+  if (colon <= 0 || (slash !== -1 && slash < colon)) return { endpoint: null, upstream: rest }
+  return { endpoint: rest.slice(0, colon), upstream: rest.slice(colon + 1) }
+}
+
+/** The id to send upstream: the operator's own name for the model, without prefix or endpoint. */
+export const upstreamModelId = (model: string): string => splitLocalModel(model).upstream
+
+/** The named endpoints the Runner was given, as a map. Malformed entries are skipped. */
+export const parseEndpoints = (raw: string | undefined): Map<string, string> => {
+  const endpoints = new Map<string, string>()
+  for (const entry of (raw ?? '').split(/[;,]/)) {
+    const at = entry.indexOf('=')
+    if (at <= 0) continue
+    const name = entry.slice(0, at).trim()
+    const url = entry.slice(at + 1).trim()
+    if (name !== '' && url !== '') endpoints.set(name, url)
+  }
+  return endpoints
+}
+
+/**
+ * Where this run's model is served, and with which credential — or why it cannot be run.
+ *
+ * A refusal rather than a fallback in both failure cases, and they are different failures worth
+ * different sentences: a model naming an endpoint the Runner has no URL for is a persona
+ * pointed at a stack this host does not serve, and an unnamed model with no base URL is a
+ * Runner that was never configured for this backend at all. Falling back to localhost would
+ * turn either one into a connection error against whatever happens to be listening.
+ */
+export const endpointFor = (
+  model: string,
+  env: Record<string, string | undefined> = process.env,
+): { readonly ok: true; readonly url: string; readonly apiKey: string | undefined } | { readonly ok: false; readonly reason: string } => {
+  const { endpoint } = splitLocalModel(model)
+  if (endpoint === null) {
+    const url = env[CHAT_COMPLETIONS_BASE_URL_ENV]
+    if (!url) {
+      return {
+        ok: false,
+        reason:
+          `This run's model is served over the chat-completions backend and ${CHAT_COMPLETIONS_BASE_URL_ENV} ` +
+          'is not set on the Runner, so there is nowhere to send it. An unset base URL is a ' +
+          'refusal rather than a guess at localhost.',
+      }
+    }
+    return { ok: true, url, apiKey: env[CHAT_COMPLETIONS_KEY_ENV] }
+  }
+  const url = parseEndpoints(env[CHAT_COMPLETIONS_ENDPOINTS_ENV]).get(endpoint)
+  if (url === undefined) {
+    return {
+      ok: false,
+      reason:
+        `This run's model names the "${endpoint}" endpoint, and ${CHAT_COMPLETIONS_ENDPOINTS_ENV} on ` +
+        `this Runner has no URL for it. The run is refused rather than sent to the default ` +
+        'endpoint: a persona pointed at one serving stack is not interchangeable with another.',
+    }
+  }
+  const scoped = `${CHAT_COMPLETIONS_KEY_ENV}_${endpoint.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`
+  return { ok: true, url, apiKey: env[scoped] ?? env[CHAT_COMPLETIONS_KEY_ENV] }
+}
 
 /** How many model calls one run may make before it is stopped. */
 export const MAX_TURNS = Number(process.env.LOOM_CHAT_COMPLETIONS_MAX_TURNS ?? 40)
@@ -397,15 +486,9 @@ export const runChatCompletionsAgent = async (options: RunAgentOptions): Promise
     return
   }
 
-  const baseUrl = process.env[CHAT_COMPLETIONS_BASE_URL_ENV]
-  if (!baseUrl) {
-    await options.onEvent({
-      kind: 'run_failed',
-      message:
-        `This run's model is served over the chat-completions backend and ${CHAT_COMPLETIONS_BASE_URL_ENV} ` +
-        'is not set on the Runner, so there is nowhere to send it. An unset base URL is a ' +
-        'refusal rather than a guess at localhost.',
-    })
+  const served = endpointFor(options.persona.model)
+  if (!served.ok) {
+    await options.onEvent({ kind: 'run_failed', message: served.reason })
     return
   }
 
@@ -500,13 +583,11 @@ export const runChatCompletionsAgent = async (options: RunAgentOptions): Promise
       }
       turns += 1
 
-      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      const response = await fetch(`${served.url.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          ...(process.env[CHAT_COMPLETIONS_KEY_ENV]
-            ? { authorization: `Bearer ${process.env[CHAT_COMPLETIONS_KEY_ENV]}` }
-            : {}),
+          ...(served.apiKey ? { authorization: `Bearer ${served.apiKey}` } : {}),
         },
         body: JSON.stringify({
           model: upstreamModelId(options.persona.model),
