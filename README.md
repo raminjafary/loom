@@ -419,7 +419,7 @@ generating a migration — a migration applied only to `loom` shows up as integr
 out rather than as a missing-table error.
 
 **No automated test calls the real model API** (that costs real tokens). That path is covered by
-the live drivers in `tools/` — twenty-eight of them, run by hand. Each drives a real server, a
+the live drivers in `tools/` — thirty of them, run by hand. Each drives a real server, a
 real Runner *process*, the real SDK and real git, and each **asserts** rather than prints.
 
 Several spend no tokens at all: a run refused by the Runner's own unsandboxed guard is refused
@@ -428,10 +428,14 @@ called.
 
 ```bash
 docker compose up -d postgres valkey
-npx tsx tools/workflow-check.mts   # 46 checks: a drawn shape dealing real runs, and a bracket
+npx tsx tools/workflow-check.mts   # 58 checks: a drawn shape dealing real runs, and a bracket
 npx tsx tools/designer-check.mts   # 36 checks: a harness asked for, refused, proposed, approved
 npx tsx tools/trial-check.mts      # 15 checks: the arms alternating, and a task as the unit
 npx tsx tools/campaign-check.mts   # a campaign against a real repository, no tokens
+npx tsx tools/backend-check.mts    # 19 checks: a second backend, its channels, and two stacks
+npx tsx tools/persona-share-check.mts  # 16 checks: a persona across two real workspaces
+docker compose --profile blobs up -d seaweedfs
+npx tsx tools/blob-check.mts       # 8 checks: the object store against the filesystem, differentially
 ```
 
 The no-token drivers buy their cheapness by answering on the model's behalf, and that is exactly
