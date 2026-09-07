@@ -1040,6 +1040,8 @@ export const contract = {
               /** Which turn of a loop, and which lane of a fan. Both 0 in an ordinary graph. */
               pass: z.number().int(),
               itemIndex: z.number().int(),
+              /** Which try. Above 0 where a step that answered nothing was dealt again. */
+              attempt: z.number().int(),
               /** What this lane was working on, for a step below a fan. */
               item: z.string().nullable(),
               status: z.enum(['pending', 'running', 'answered', 'refused', 'skipped']),

@@ -62,6 +62,7 @@ import {
   asWorkspaceId,
   bracketMatches,
   bracketSeeding,
+  STEP_UNANSWERED,
 } from '../packages/domain/src/index.js'
 
 const execFileAsync = promisify(execFile)
@@ -538,6 +539,7 @@ const main = async () => {
     nodeId: 'discover',
     pass: 0,
     itemIndex: 0,
+    attempt: 0,
     item: null,
   })
   const cappedSteps = await app.deps.workflows.stepsForRun(workspaceId, cappedId)
@@ -753,6 +755,116 @@ const main = async () => {
       .filter((entry: any) => entry.nodeId === 'judge')
       .map((entry: any) => `${entry.pass}:${entry.itemIndex}:${entry.status}`)
       .join(' '),
+  )
+
+  console.log('\n— a step that completed and answered nothing is dealt again, once —')
+  const retried = await client.workflow.start({
+    workflowId: created.workflowId,
+    repositoryId: repo.id,
+    threadId: channel.rootThread.id,
+    input: 'a scope step that says nothing at all',
+    capUsd: 5,
+  })
+  const retriedId = asWorkflowRunId(retried.runId)
+  /**
+   * The run is *completed* here rather than left to the Runner, and that is the whole point of
+   * the check: a run the Runner refuses settles as `the run failed`, which is deliberately not
+   * dealt again. Only a run that finished and never called its answer tool is a dice roll, and
+   * this driver has no model in it to roll one.
+   */
+  const silence = async (attempt: number) => {
+    const rows = await app.deps.workflows.stepsForRun(workspaceId, retriedId)
+    const row = rows.find((entry) => entry.nodeId === 'discover' && entry.attempt === attempt)
+    if (row?.agentRunId != null) {
+      await app.deps.agentRuns.updateStatus(workspaceId, row.agentRunId, {
+        status: 'completed',
+        totalCostUsd: 0.05,
+      })
+    }
+    return row
+  }
+
+  await tick()
+  const firstTry = await silence(0)
+  check('the first attempt was dealt to a real run', firstTry?.agentRunId != null)
+  await tick()
+
+  let attempts = (await app.deps.workflows.stepsForRun(workspaceId, retriedId)).filter(
+    (entry) => entry.nodeId === 'discover',
+  )
+  const settledFirst = attempts.find((entry) => entry.attempt === 0)
+  check(
+    'the silent attempt is refused in the exact words the retry turns on',
+    settledFirst?.status === 'refused' && settledFirst?.reason === STEP_UNANSWERED,
+    `${settledFirst?.status} — ${settledFirst?.reason ?? 'no reason'}`,
+  )
+  const secondTry = attempts.find((entry) => entry.attempt === 1)
+  check(
+    'and the step is dealt a second time, as a row of its own rather than a replacement',
+    attempts.length === 2 && secondTry?.agentRunId != null,
+    attempts.map((entry) => `attempt ${entry.attempt}:${entry.status}`).join(' '),
+  )
+  const secondRunOfStep =
+    secondTry?.agentRunId == null
+      ? null
+      : await app.deps.agentRuns.findById(workspaceId, secondTry.agentRunId)
+  check(
+    'the second attempt is asked the same question, rendered the same way',
+    String(secondRunOfStep?.task).startsWith(
+      'Find every site of: a scope step that says nothing at all',
+    ),
+    String(secondRunOfStep?.task).split('\n').join(' | '),
+  )
+  check(
+    'and is told the attempt before it ended without submitting an answer',
+    String(secondRunOfStep?.task).includes('without submitting an answer'),
+  )
+  const midRun = await app.deps.workflows.findRun(workspaceId, retriedId)
+  check(
+    'the execution is still running rather than closed under a refusal it retried',
+    midRun?.status === 'running',
+    `${midRun?.status} — ${midRun?.haltReason ?? 'no reason'}`,
+  )
+  const notSkipped = await app.deps.workflows.stepsForRun(workspaceId, retriedId)
+  check(
+    'and nothing below it was skipped in the tick that dealt the retry',
+    notSkipped.every((entry) => entry.nodeId === 'discover'),
+    notSkipped.map((entry) => `${entry.nodeId}:${entry.status}`).join(' '),
+  )
+  check(
+    'both attempts are charged to the execution, so a retry cannot be free',
+    Math.abs((await app.deps.workflows.spentOnRun(workspaceId, retriedId)) - 0.05) < 1e-9,
+    String(await app.deps.workflows.spentOnRun(workspaceId, retriedId)),
+  )
+
+  await silence(1)
+  await tick()
+  await tick()
+  await tick()
+  attempts = (await app.deps.workflows.stepsForRun(workspaceId, retriedId)).filter(
+    (entry) => entry.nodeId === 'discover',
+  )
+  check(
+    'a step that goes silent twice is not dealt a third time',
+    attempts.length === 2,
+    `${attempts.length} attempt(s)`,
+  )
+  const closedRun = await app.deps.workflows.findRun(workspaceId, retriedId)
+  check(
+    'the execution closes as failed rather than waiting on lanes that cannot open',
+    closedRun?.status === 'failed',
+    `${closedRun?.status}`,
+  )
+  check(
+    'and its reason names the step that cost it, and how many attempts it had',
+    String(closedRun?.haltReason).includes('"discover"') &&
+      String(closedRun?.haltReason).includes('all 2 attempts'),
+    String(closedRun?.haltReason),
+  )
+  check(
+    'the spend of both attempts survives on the rows',
+    Math.abs((await app.deps.workflows.spentOnRun(workspaceId, retriedId)) - 0.1) < 1e-9,
+    String(await app.deps.workflows.spentOnRun(workspaceId, retriedId)),
   )
 
   console.log(`\n${failures === 0 ? 'all checks passed' : `${failures} check(s) FAILED`}`)

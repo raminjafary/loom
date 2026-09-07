@@ -77,6 +77,7 @@ const runDetail: WorkflowRunDetail = {
       nodeId: 'discover',
       pass: 0,
       itemIndex: 0,
+      attempt: 0,
       item: null,
       status: 'answered',
       agentRunId: 'run-a',
@@ -89,6 +90,7 @@ const runDetail: WorkflowRunDetail = {
       nodeId: 'transform',
       pass: 0,
       itemIndex: 0,
+      attempt: 0,
       item: 'src/one.ts',
       status: 'running',
       agentRunId: 'run-b',
@@ -101,6 +103,8 @@ const runDetail: WorkflowRunDetail = {
       nodeId: 'transform',
       pass: 0,
       itemIndex: 1,
+      // The second try of a lane that said nothing the first time, which is a row of its own.
+      attempt: 1,
       item: 'src/two.ts',
       status: 'refused',
       agentRunId: 'run-c',
@@ -237,6 +241,15 @@ describe('WorkflowPanel', () => {
     it('gives a refused step its reason rather than only the word', async () => {
       const wrapper = await opened()
       expect(wrapper.find('.steps').text()).toContain('without submitting an answer')
+    })
+
+    /**
+     * A retried step and its first try are two rows, and the number is what tells a reader the
+     * platform already tried again — without it the two rows read as one step listed twice.
+     */
+    it('says which try a retried step is', async () => {
+      const wrapper = await opened()
+      expect(wrapper.find('.steps').text()).toContain('try 2')
     })
 
     it('offers a way into the run a step was dealt to', async () => {

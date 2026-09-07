@@ -2668,6 +2668,13 @@ export const workflowStepRun = pgTable(
     nodeId: text('node_id').notNull(),
     pass: integer('pass').notNull().default(0),
     itemIndex: integer('item_index').notNull().default(0),
+    /**
+     * Which try this row is, and the third dimension of the unique index for the same reason the
+     * other two are in it: a retry is a *new* row, so the try that was refused keeps its reason
+     * and — the load-bearing half — keeps its cost, which the cap is summed from. A retry that
+     * overwrote the row would make a step that burned two runs look like it had cost one.
+     */
+    attempt: integer('attempt').notNull().default(0),
     /** The element a fan is running against, verbatim, so a step is readable without its source. */
     item: text('item'),
     /** Claimed before the run exists, released if the start fails — the screen's two-step. */
@@ -2685,7 +2692,13 @@ export const workflowStepRun = pgTable(
     finishedAt: timestamp('finished_at', { withTimezone: true }),
   },
   (t) => [
-    uniqueIndex('workflow_step_run_node_idx').on(t.workflowRunId, t.nodeId, t.pass, t.itemIndex),
+    uniqueIndex('workflow_step_run_node_idx').on(
+      t.workflowRunId,
+      t.nodeId,
+      t.pass,
+      t.itemIndex,
+      t.attempt,
+    ),
     index('workflow_step_run_status_idx').on(t.workflowRunId, t.status),
   ],
 )

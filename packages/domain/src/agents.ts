@@ -980,6 +980,8 @@ export interface WorkflowStepRunRecord {
   readonly nodeId: string
   readonly pass: number
   readonly itemIndex: number
+  /** Which try this row is. Above 0 only where a refusal was dealt again — see the executor. */
+  readonly attempt: number
   readonly item: string | null
   readonly claimedAt: Date | null
   readonly agentRunId: AgentRunId | null

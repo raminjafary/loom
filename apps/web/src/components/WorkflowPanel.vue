@@ -689,10 +689,19 @@ watch(
           false about which answers that step actually had. The edges are in the diagram above.
         -->
         <ul class="steps">
-          <li v-for="step in openRun.steps" :key="step.nodeId + step.pass + step.itemIndex">
+          <li
+            v-for="step in openRun.steps"
+            :key="step.nodeId + step.pass + step.itemIndex + step.attempt"
+          >
             <span class="node-id">{{ step.nodeId }}</span>
             <span v-if="step.item" class="item">{{ step.item }}</span>
             <span v-if="step.pass > 0" class="pass">pass {{ step.pass + 1 }}</span>
+            <!--
+              A retry is its own row rather than a replacement, because the try that answered
+              nothing still cost a run and a reader deciding whether to trust this shape is owed
+              the sight of it.
+            -->
+            <span v-if="step.attempt > 0" class="pass">try {{ step.attempt + 1 }}</span>
             <span :class="['status', step.status]">{{ step.status }}</span>
             <button
               v-if="step.agentRunId"

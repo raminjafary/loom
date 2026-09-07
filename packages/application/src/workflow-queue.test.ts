@@ -12,6 +12,7 @@ import {
   asWorkflowVersionId,
   asWorkspaceId,
   parseWorkflowGraph,
+  STEP_UNANSWERED,
   systemActor,
   userActor,
   type AgentPersona,
@@ -94,11 +95,12 @@ const step = (
   nodeId: string,
   over: Partial<WorkflowStepRunRecord> = {},
 ): WorkflowStepRunRecord => ({
-  id: asWorkflowStepRunId(`step_${nodeId}_${over.itemIndex ?? 0}`),
+  id: asWorkflowStepRunId(`step_${nodeId}_${over.itemIndex ?? 0}_${over.attempt ?? 0}`),
   workflowRunId: RUN,
   nodeId,
   pass: 0,
   itemIndex: 0,
+  attempt: 0,
   item: null,
   claimedAt: new Date(),
   agentRunId: asAgentRunId('ar_1'),
@@ -140,13 +142,22 @@ const harness = (options: {
   const started: unknown[] = []
 
   const claimStep = vi.fn(
-    async (input: { nodeId: string; pass: number; itemIndex: number; item: string | null }) =>
+    async (input: {
+      nodeId: string
+      pass: number
+      itemIndex: number
+      attempt: number
+      item: string | null
+    }) =>
       options.claimSucceeds === false
         ? null
         : step(input.nodeId, {
-            id: asWorkflowStepRunId(`claimed_${input.nodeId}_${input.itemIndex}`),
+            id: asWorkflowStepRunId(
+              `claimed_${input.nodeId}_${input.itemIndex}_${input.attempt}`,
+            ),
             itemIndex: input.itemIndex,
             pass: input.pass,
+            attempt: input.attempt,
             item: input.item,
             agentRunId: null,
           }),
@@ -311,8 +322,62 @@ describe('advanceWorkflowQueue', () => {
     await tick(deps)
     expect(callsOf(finishStep)[0]?.[2]).toMatchObject({
       status: 'refused',
-      reason: 'the run ended without submitting an answer',
+      reason: STEP_UNANSWERED,
     })
+  })
+
+  /**
+   * The settlement's wording is the retry's trigger, so this holds the two halves together: a
+   * reason reworded on one side of the file would turn the retry off silently, and the sentence
+   * a person reads is not the sort of thing anybody expects to be load-bearing.
+   */
+  it('deals a step that answered nothing a second time, telling it so', async () => {
+    const refused = step('discover', {
+      status: 'refused',
+      reason: STEP_UNANSWERED,
+      finishedAt: new Date(1),
+    })
+    const { deps, claimStep, started } = harness({ steps: [refused] })
+    await tick(deps)
+    expect(callsOf(claimStep)[0]?.[0]).toMatchObject({ nodeId: 'discover', attempt: 1 })
+    expect(started[0]?.task).toContain('find the sites for the ask')
+    expect(started[0]?.task).toContain('ended without submitting an answer')
+  })
+
+  it('stops after the second, and says which step cost the execution', async () => {
+    const silent = (attempt: number) =>
+      step('discover', {
+        attempt,
+        status: 'refused' as WorkflowStepStatus,
+        reason: STEP_UNANSWERED,
+        finishedAt: new Date(1 + attempt),
+      })
+    const { deps, claimStep, closeRun } = harness({ steps: [silent(0), silent(1)] })
+    await tick(deps)
+    expect(callsOf(claimStep).map((call) => call[0])).not.toContainEqual(
+      expect.objectContaining({ nodeId: 'discover' }),
+    )
+    expect(callsOf(closeRun)[0]?.[2]).toMatchObject({ status: 'failed' })
+    const reason = String((callsOf(closeRun)[0]?.[2] as { reason: string }).reason)
+    expect(reason).toContain('"discover"')
+    expect(reason).toContain('all 2 attempts')
+  })
+
+  /**
+   * A run that failed is not dealt again: something happened to the *run*, and a second one is
+   * the same bet at twice the price. Only a run that completed and said nothing is a dice roll.
+   */
+  it('does not deal a step whose run failed a second time', async () => {
+    const refused = step('discover', {
+      status: 'refused',
+      reason: 'the run failed',
+      finishedAt: new Date(1),
+    })
+    const { deps, claimStep } = harness({ steps: [refused] })
+    await tick(deps)
+    expect(callsOf(claimStep).map((call) => call[0])).not.toContainEqual(
+      expect.objectContaining({ nodeId: 'discover' }),
+    )
   })
 
   /**

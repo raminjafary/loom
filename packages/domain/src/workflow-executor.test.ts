@@ -7,6 +7,7 @@ import {
   resolveRouterChoice,
   ROUTER_FIELD,
   workflowMayStart,
+  STEP_UNANSWERED,
   type WorkflowStepState,
 } from './workflow-executor.js'
 import { MAX_LOOP_ITERATIONS, parseWorkflowGraph, type WorkflowGraph } from './workflow-graph.js'
@@ -32,8 +33,10 @@ const step = (
   nodeId,
   pass: 0,
   itemIndex: 0,
+  attempt: 0,
   status: 'answered',
   answer: {},
+  reason: null,
   ...over,
 })
 
@@ -331,6 +334,81 @@ describe('nextWorkflowActions', () => {
         step('check', { itemIndex: 1, answer: { verdict: 'ok' } }),
       ]
       expect(plan(sweep, settled).collect.map((entry) => entry.nodeId)).toEqual(['all-done'])
+    })
+  })
+
+  /**
+   * The refusal that is a dice roll rather than a verdict.
+   *
+   * A step at the top of a shape is a single point of failure for everything under it: the fan
+   * below `discover` opens no lanes, so a whole execution produces nothing — which is how the
+   * trial lost a task to a `scope` step that did the work and never called its answer tool. One
+   * more attempt costs one step. It is the *reason* that decides, not the status, and the reason
+   * is the one settlement writes.
+   */
+  describe('a step that completed and answered nothing', () => {
+    const silent = (attempt: number) =>
+      step('discover', {
+        attempt,
+        status: 'refused' as const,
+        answer: null,
+        reason: STEP_UNANSWERED,
+      })
+
+    it('is dealt again, as its own attempt', () => {
+      const verdict = plan(sweep, [silent(0), step('lint')])
+      expect(verdict.deal.map((entry) => `${entry.nodeId}@${entry.attempt}`)).toEqual([
+        'discover@1',
+      ])
+    })
+
+    it('does not skip the graph beneath it on the same tick', () => {
+      // The bug this pins: the retry is dealt and the shape below it is written off at once,
+      // because the row it was dealt from still says refused.
+      const verdict = plan(sweep, [silent(0), step('lint')])
+      expect(verdict.skip).toEqual([])
+      expect(verdict.collect).toEqual([])
+      expect(verdict.done).toBe(false)
+      expect(verdict.failure).toBeNull()
+    })
+
+    it('is asked the same question, and told the last attempt said nothing', () => {
+      const [retried] = plan(sweep, [silent(0), step('lint')]).deal
+      expect(retried?.task).toContain('find the sites for the ask')
+      expect(retried?.task).toContain('ended without submitting an answer')
+    })
+
+    it('is not dealt a third time, and the shape below it closes', () => {
+      const twice = [silent(0), silent(1), step('lint')]
+      expect(plan(sweep, twice).deal).toEqual([])
+      expect(plan(sweep, twice).collect.map((entry) => entry.nodeId)).toEqual(['all-done'])
+    })
+
+    it('names itself in the closing reason, with how many attempts it had', () => {
+      const settled = [
+        silent(0),
+        silent(1),
+        step('lint', { status: 'refused', answer: null }),
+        step('all-done', { status: 'skipped', answer: null }),
+        step('report', { status: 'skipped', answer: null }),
+      ]
+      const closed = plan(sweep, settled)
+      expect(closed.done).toBe(true)
+      // A reader told only "report was skipped" learns nothing they can act on.
+      expect(closed.failure).toContain('"discover"')
+      expect(closed.failure).toContain('all 2 attempts')
+      expect(closed.failure).toContain(STEP_UNANSWERED)
+    })
+
+    it('leaves every other refusal settled where it is', () => {
+      // A failed or cancelled run, a timeout, a persona that has gone: something happened to the
+      // run rather than to the answer, and a second one is the same bet at twice the price.
+      const failed = step('discover', {
+        status: 'refused',
+        answer: null,
+        reason: 'the run failed',
+      })
+      expect(plan(sweep, [failed, step('lint')]).deal).toEqual([])
     })
   })
 

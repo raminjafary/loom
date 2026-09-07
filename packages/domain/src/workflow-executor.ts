@@ -32,6 +32,12 @@
  * downstream of that lane are `skipped` with the refusal named, a barrier below still collects
  * what the other lanes produced, and the run reports itself failed only when nothing at the
  * bottom of the graph answered at all.
+ *
+ * One refusal is dealt again before any of that happens: a run that completed and never called
+ * its answer tool decided nothing, so the step is worth one more try — `WORKFLOW_STEP_ATTEMPTS`
+ * below, and `attempt` is the third dimension of a step instance for exactly that. A step at the
+ * top of a shape is a single point of failure for everything under it, which is the one place
+ * `plan and delegate` is structurally sturdier than a drawing.
  */
 
 import type { WorkflowStepStatus } from './agents.js'
@@ -61,8 +67,12 @@ export interface WorkflowStepState {
   readonly nodeId: string
   readonly pass: number
   readonly itemIndex: number
+  /** Which try this row is. 0 for every step of an execution where nothing was refused. */
+  readonly attempt: number
   readonly status: WorkflowStepStatus
   readonly answer: Readonly<Record<string, unknown>> | null
+  /** Why it was refused — which is what decides whether asking again could say anything new. */
+  readonly reason: string | null
 }
 
 /** A step the executor may start now, with its prompt already rendered. */
@@ -70,6 +80,8 @@ export interface DealableStep {
   readonly nodeId: string
   readonly pass: number
   readonly itemIndex: number
+  /** Which try this is. Above 0 only after a refusal this shape is still owed a try at. */
+  readonly attempt: number
   /** The element this lane is working on, for a node below a fan. Null in a one-lane graph. */
   readonly item: string | null
   readonly persona: string
@@ -114,6 +126,51 @@ const SETTLED: ReadonlySet<WorkflowStepStatus> = new Set<WorkflowStepStatus>([
   'refused',
   'skipped',
 ])
+
+/**
+ * The one refusal another attempt could answer, in the words settlement writes on the row.
+ *
+ * A run that *completed* and never called its answer tool decided nothing: the work happened and
+ * was dropped on the floor, so the same prompt asked again is a different roll rather than the
+ * same one. No other refusal is dealt again — a failed or cancelled run says something happened
+ * to the run rather than to the answer, a timeout would double the wait to learn the same thing,
+ * and a persona that no longer exists will still not exist.
+ *
+ * The wording lives here, beside the decision it drives, for `BARRIER_PASSED`'s reason: the
+ * alternative is the application deciding which refusals are worth repeating, which would put
+ * the scheduling policy in the layer that only writes rows.
+ */
+export const STEP_UNANSWERED = 'the run ended without submitting an answer'
+
+/**
+ * How many times one step may be dealt, refusals included.
+ *
+ * Two, and the second is the whole point of the number existing. The trial's first verdict turned
+ * on one `scope` step that ended without an answer: the fan below it opened no lanes, the task
+ * produced no branch at all, and the shape lost a task it had not actually done badly at. One
+ * more try costs one step, where losing the top of a shape costs everything under it.
+ *
+ * Not higher than two, because a step that goes silent twice is evidence about the step.
+ */
+export const WORKFLOW_STEP_ATTEMPTS = 2
+
+/** Whether this row is a refusal the shape is still owed another attempt at. */
+export const owedAnotherAttempt = (step: WorkflowStepState): boolean =>
+  step.status === 'refused' &&
+  step.reason === STEP_UNANSWERED &&
+  step.attempt + 1 < WORKFLOW_STEP_ATTEMPTS
+
+/**
+ * What a retried step is told, and the only thing that differs from its first attempt.
+ *
+ * The question has to be the same question — a retry asked something else would be a different
+ * step wearing the same node's name — but a model that finished without answering is told so,
+ * because the words that produced silence once are the likeliest to produce it again.
+ */
+export const RETRY_NOTE =
+  'An earlier attempt at this exact step ended without submitting an answer, so nothing below it ' +
+  'could run. Submit the answer tool call before this run finishes — including when what you have ' +
+  'to report is that the work could not be done.'
 
 /**
  * Which `fan` each node inherits its lane count from, or null for a node that runs once.
@@ -488,7 +545,30 @@ export const nextWorkflowActions = (input: {
   const laneOf = lanes.sources
 
   const byId = new Map(input.graph.nodes.map((node) => [node.id, node]))
-  const byKey = new Map(input.steps.map((step) => [keyOf(step.nodeId, step.pass, step.itemIndex), step]))
+  /**
+   * The journal, latest attempt per step. A retried step has two rows and only the newer one is
+   * that step's state; the older one stays in the journal because it is what the try cost.
+   */
+  const byKey = new Map<string, WorkflowStepState>()
+  for (const step of input.steps) {
+    const key = keyOf(step.nodeId, step.pass, step.itemIndex)
+    const known = byKey.get(key)
+    if (known === undefined || step.attempt >= known.attempt) byKey.set(key, step)
+  }
+  /**
+   * A step owed another attempt reads as **pending** everywhere below here rather than as the
+   * refusal it currently is.
+   *
+   * Anything else deals the retry and skips the graph beneath it on the same tick: `edgeState`
+   * would see a settled refusal at this pass and resolve every edge out of it as not taken,
+   * which is precisely the outcome another attempt exists to prevent.
+   */
+  const retrying = new Map<string, number>()
+  for (const [key, step] of byKey) {
+    if (!owedAnotherAttempt(step)) continue
+    retrying.set(key, step.attempt + 1)
+    byKey.set(key, { ...step, status: 'pending', answer: null })
+  }
   const byNode = new Map<string, WorkflowStepState[]>()
   for (const step of input.steps) {
     const list = byNode.get(step.nodeId) ?? []
@@ -782,7 +862,15 @@ export const nextWorkflowActions = (input: {
     }
 
     for (let itemIndex = 0; itemIndex < width; itemIndex += 1) {
-      const existing = byKey.get(keyOf(node.id, pass, itemIndex))
+      const key = keyOf(node.id, pass, itemIndex)
+      const retry = retrying.get(key)
+      if (retry !== undefined) {
+        // Its inbound edges are not asked again: the path into this step was taken once already,
+        // and what is being decided a second time is only the run.
+        deal.push(dealt(node, pass, itemIndex, retry))
+        continue
+      }
+      const existing = byKey.get(key)
       if (existing !== undefined) {
         if (!SETTLED.has(existing.status)) pending = true
         continue
@@ -792,7 +880,7 @@ export const nextWorkflowActions = (input: {
       if (inbound.length === 0) {
         // A start, and a loop's target on a later pass reaches here through its own inbound edges.
         if (node.kind === 'barrier') continue
-        deal.push(dealt(node, pass, itemIndex))
+        deal.push(dealt(node, pass, itemIndex, 0))
         continue
       }
 
@@ -820,11 +908,11 @@ export const nextWorkflowActions = (input: {
         collect.push({ nodeId: node.id, pass, itemIndex, reason: BARRIER_PASSED })
         continue
       }
-      deal.push(dealt(node, pass, itemIndex))
+      deal.push(dealt(node, pass, itemIndex, 0))
     }
   }
 
-  function dealt(node: WorkflowNode, pass: number, itemIndex: number): DealableStep {
+  function dealt(node: WorkflowNode, pass: number, itemIndex: number, attempt: number): DealableStep {
     const answers = new Map<string, Readonly<Record<string, unknown>>[]>()
     for (const reference of isRunNode(node) ? templateReferences(node.task) : []) {
       if (reference.node === ITEM_REFERENCE || reference.node === INPUT_REFERENCE) continue
@@ -859,21 +947,23 @@ export const nextWorkflowActions = (input: {
       node.kind === 'bracket'
         ? (bracketState(node).matches.find((entry) => entry.index === itemIndex) ?? null)
         : null
+    const task = isRunNode(node)
+      ? renderWorkflowTask({
+          task: node.task,
+          input: input.input,
+          item,
+          sides: match === null ? null : { left: match.left, right: match.right },
+          answers,
+        })
+      : ''
     return {
       nodeId: node.id,
       pass,
       itemIndex,
+      attempt,
       item,
       persona: isRunNode(node) ? node.persona : '',
-      task: isRunNode(node)
-        ? renderWorkflowTask({
-            task: node.task,
-            input: input.input,
-            item,
-            sides: match === null ? null : { left: match.left, right: match.right },
-            answers,
-          })
-        : '',
+      task: attempt === 0 || task === '' ? task : `${task}\n\n${RETRY_NOTE}`,
     }
   }
 
@@ -919,10 +1009,47 @@ const failureOf = (
       (byNode.get(node.id) ?? []).some((step) => step.status === 'answered'),
   )
   if (answered) return null
+  const blamed = blameOf(graph, byNode)
   return (
     'Nothing at the bottom of this workflow answered: every terminal step was refused or was ' +
-    'on a path that was not taken.'
+    `on a path that was not taken.${blamed === null ? '' : ` ${blamed}`}`
   )
+}
+
+/**
+ * The step a reader should look at first, named in the closing reason.
+ *
+ * The **highest** refusal in the shape rather than the lowest, because everything below a
+ * refusal was skipped *for* it: "report was skipped" is not something a person can act on, and
+ * "scope was refused twice without answering" says both what happened and that the platform
+ * already tried again.
+ *
+ * Without this, a shape whose first step said nothing closes with exactly the words of a shape
+ * that ran everything and did it badly — which is how the trial lost a task with nobody able to
+ * say why from the rows.
+ */
+const blameOf = (
+  graph: WorkflowGraph,
+  byNode: ReadonlyMap<string, readonly WorkflowStepState[]>,
+): string | null => {
+  for (const node of topological(graph)) {
+    const refused = (byNode.get(node.id) ?? []).filter((row) => row.status === 'refused')
+    const worst = refused.reduce<WorkflowStepState | null>(
+      (found, row) => (found === null || row.attempt >= found.attempt ? row : found),
+      null,
+    )
+    if (worst === null) continue
+    const lanes = new Set(refused.map((row) => row.itemIndex)).size
+    const tries = worst.attempt + 1
+    return (
+      `The first step that failed is "${node.id}"` +
+      (lanes > 1 ? `, in ${lanes} of its lanes` : '') +
+      (tries > 1 ? `, refused on all ${tries} attempts` : ', refused') +
+      (worst.reason === null ? '' : `: ${worst.reason}`) +
+      '. Everything below it was skipped for it.'
+    )
+  }
+  return null
 }
 
 /**

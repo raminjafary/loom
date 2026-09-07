@@ -15,6 +15,7 @@ import {
   nextWorkflowTrialArm,
   parseWorkflowGraph,
   ROUTER_FIELD,
+  STEP_UNANSWERED,
   summarizeWorkflowTrial,
   userActor,
   ValidationError,
@@ -601,6 +602,8 @@ const advanceWorkflowRun = async (
       nodeId: entry.nodeId,
       pass: entry.pass,
       itemIndex: entry.itemIndex,
+      // A path nobody took and a barrier that collected are settled once; neither is retried.
+      attempt: 0,
       item: null,
     })
     if (!claimed) continue
@@ -637,6 +640,7 @@ const advanceWorkflowRun = async (
       nodeId: entry.nodeId,
       pass: entry.pass,
       itemIndex: entry.itemIndex,
+      attempt: entry.attempt,
       item: entry.item,
     })
     if (!claimed) continue
@@ -809,10 +813,15 @@ const settleFinishedSteps = async (
     await deps.workflows.finishStep(workspaceId, step.id, {
       status: answered ? 'answered' : 'refused',
       answer: step.answer,
+      /**
+       * `STEP_UNANSWERED` verbatim, from the domain, because the executor reads this row back and
+       * deals the step again on exactly this reason. A sentence reworded here is a retry silently
+       * turned off, so the wording is imported rather than written twice.
+       */
       reason: answered
         ? null
         : agentRun.status === 'completed'
-          ? 'the run ended without submitting an answer'
+          ? STEP_UNANSWERED
           : `the run ${agentRun.status}`,
       costUsd: agentRun.totalCostUsd,
     })

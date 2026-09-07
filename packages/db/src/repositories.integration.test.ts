@@ -17,6 +17,7 @@ import {
   asRepositoryId,
   asUserId,
   asWorkspaceId,
+  STEP_UNANSWERED,
   userActor,
   type VerificationStatus,
   type WorkspaceId,
@@ -3465,6 +3466,7 @@ describe('workflows', () => {
         nodeId: 'a',
         pass: 0,
         itemIndex: 0,
+        attempt: 0,
         item: null,
       })
     const [first, second] = await Promise.all([claim(), claim()])
@@ -3480,12 +3482,50 @@ describe('workflows', () => {
         nodeId: 'a',
         pass,
         itemIndex,
+        attempt: 0,
         item,
       })
     expect(await claim(0, 0, 'first')).not.toBeNull()
     expect(await claim(0, 1, 'second')).not.toBeNull()
     expect(await claim(1, 0, 'first again')).not.toBeNull()
     expect(await workflows.stepsForRun(WS, run.id)).toHaveLength(3)
+  })
+
+  /**
+   * A second attempt is a second row, and the reason it is not an update is the cap: the try
+   * that answered nothing still paid for a run, and a retry that overwrote the row would make a
+   * step which burned two runs look like it had cost one.
+   */
+  it('admits a second attempt of the same step, and charges the execution for both', async () => {
+    const { run } = await openRun(WS)
+    const claim = (attempt: number) =>
+      workflows.claimStep({
+        workspaceId: WS,
+        workflowRunId: run.id,
+        nodeId: 'a',
+        pass: 0,
+        itemIndex: 0,
+        attempt,
+        item: null,
+      })
+    const silent = await claim(0)
+    await workflows.finishStep(WS, silent!.id, {
+      status: 'refused',
+      answer: null,
+      reason: STEP_UNANSWERED,
+      costUsd: 0.3,
+    })
+    const again = await claim(1)
+    expect(again).not.toBeNull()
+    expect(again?.attempt).toBe(1)
+    await workflows.finishStep(WS, again!.id, {
+      status: 'answered',
+      answer: { note: 'this time' },
+      reason: null,
+      costUsd: 0.2,
+    })
+    expect(await workflows.stepsForRun(WS, run.id)).toHaveLength(2)
+    expect(await workflows.spentOnRun(WS, run.id)).toBeCloseTo(0.5)
   })
 
   it('lets a released step be dealt again, and a settled one not be re-settled', async () => {
@@ -3496,6 +3536,7 @@ describe('workflows', () => {
       nodeId: 'a',
       pass: 0,
       itemIndex: 0,
+      attempt: 0,
       item: null,
     })
     await workflows.releaseStep(WS, first!.id)
@@ -3507,6 +3548,7 @@ describe('workflows', () => {
       nodeId: 'a',
       pass: 0,
       itemIndex: 0,
+      attempt: 0,
       item: null,
     })
     await workflows.finishStep(WS, second!.id, {
@@ -3536,6 +3578,7 @@ describe('workflows', () => {
       nodeId: 'a',
       pass: 0,
       itemIndex: 0,
+      attempt: 0,
       item: null,
     })
     await workflows.finishStep(WS, step!.id, {

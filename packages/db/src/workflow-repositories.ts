@@ -101,6 +101,7 @@ const toStep = (row: {
   nodeId: string
   pass: number
   itemIndex: number
+  attempt: number
   item: string | null
   claimedAt: Date | null
   agentRunId: string | null
@@ -115,6 +116,7 @@ const toStep = (row: {
   nodeId: row.nodeId,
   pass: row.pass,
   itemIndex: row.itemIndex,
+  attempt: row.attempt,
   item: row.item,
   claimedAt: row.claimedAt,
   agentRunId: row.agentRunId === null ? null : asAgentRunId(row.agentRunId),
@@ -370,9 +372,9 @@ export const workflowRepository = (db: Database): WorkflowRepositoryPort => ({
 
   async claimStep(input) {
     /**
-     * `on conflict do nothing` *is* the claim: the unique index on (run, node, pass, item)
-     * decides which of two executors reaching this node at once gets to deal it, and the loser
-     * gets no row back rather than a row it has to remember to release.
+     * `on conflict do nothing` *is* the claim: the unique index on (run, node, pass, item,
+     * attempt) decides which of two executors reaching this node at once gets to deal it, and
+     * the loser gets no row back rather than a row it has to remember to release.
      */
     const [row] = await db
       .insert(workflowStepRun)
@@ -382,6 +384,7 @@ export const workflowRepository = (db: Database): WorkflowRepositoryPort => ({
         nodeId: input.nodeId,
         pass: input.pass,
         itemIndex: input.itemIndex,
+        attempt: input.attempt,
         item: input.item,
         status: 'running',
         claimedAt: new Date(),

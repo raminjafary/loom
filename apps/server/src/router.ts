@@ -1291,6 +1291,7 @@ export const router = os.router({
             nodeId: step.nodeId,
             pass: step.pass,
             itemIndex: step.itemIndex,
+            attempt: step.attempt,
             item: step.item,
             status: step.status,
             agentRunId: step.agentRunId === null ? null : (step.agentRunId as string),

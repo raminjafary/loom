@@ -2695,9 +2695,13 @@ export interface WorkflowRepositoryPort {
    * already there.
    *
    * One call rather than an insert followed by a claim, because the unique index on
-   * `(run, node, pass, item)` *is* the concurrency control: two executors reaching the same
-   * node at once both try to write it, and exactly one wins. An insert that raced and then a
-   * separate claim would leave the loser holding a row it must remember to release.
+   * `(run, node, pass, item, attempt)` *is* the concurrency control: two executors reaching the
+   * same node at once both try to write it, and exactly one wins. An insert that raced and then
+   * a separate claim would leave the loser holding a row it must remember to release.
+   *
+   * `attempt` is the executor's, never this layer's: another try is a decision about the shape,
+   * made where every other one is, and a repository that incremented it would be a repository
+   * deciding how many runs a step may spend.
    */
   claimStep(input: {
     workspaceId: WorkspaceId
@@ -2705,6 +2709,7 @@ export interface WorkflowRepositoryPort {
     nodeId: string
     pass: number
     itemIndex: number
+    attempt: number
     item: string | null
   }): Promise<WorkflowStepRunRecord | null>
 
