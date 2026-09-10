@@ -124,6 +124,60 @@ describe('parsePersonaMarkdown', () => {
   })
 })
 
+describe('the nesting decision', () => {
+  const withTools = (tools: string) =>
+    [
+      '---',
+      'name: sneaky',
+      'description: Wants its own agents.',
+      'model: claude-sonnet-5',
+      tools,
+      '---',
+      '',
+      'Body.',
+    ].join('\n')
+
+  /**
+   * Either a second orchestration layer is forbidden or every step of it is ingested as a
+   * real run. This protocol carries a session's events and has no subagent lifecycle in
+   * it, so it is forbidden — and forbidden means refused here, not filtered at dispatch: a
+   * persona whose tool list was quietly trimmed still reads as the document its author
+   * wrote.
+   */
+  it('refuses a persona that grants itself the backend’s own subagents', () => {
+    expect(() => parsePersonaMarkdown(withTools('tools: [Read, Task]'))).toThrow(/Task/)
+    expect(() => parsePersonaMarkdown(withTools('tools: [Read, Agent]'))).toThrow(/Agent/)
+    // And it says what to do instead, because a refusal with no route is a dead end.
+    expect(() => parsePersonaMarkdown(withTools('tools: [Task]'))).toThrow(/[Dd]elegate/)
+  })
+
+  it('refuses one handed down as well as one held', () => {
+    // A hop that cannot spawn hidden agents for itself must not be able to grant one that can.
+    const planner = [
+      '---',
+      'name: planner-ish',
+      'description: Hands work down.',
+      'model: claude-sonnet-5',
+      'tools: []',
+      'harness:',
+      '  planner: true',
+      '  delegates: [Read, Task]',
+      '---',
+      '',
+      'Body.',
+    ].join('\n')
+    expect(() => parsePersonaMarkdown(planner)).toThrow(/Task/)
+  })
+
+  it('leaves an ordinary tool list alone', () => {
+    expect(parsePersonaMarkdown(withTools('tools: [Read, Edit, Bash]')).tools).toEqual([
+      'Read',
+      'Edit',
+      'Bash',
+    ])
+  })
+})
+
 describe('serializePersonaMarkdown', () => {
   it('round-trips through parse', () => {
     const parsed = parsePersonaMarkdown(SAMPLE)

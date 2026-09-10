@@ -27,6 +27,39 @@
 import { DEFAULT_APPROVAL_MODE, isApprovalMode, type ApprovalMode } from './approval-modes.js'
 import type { Envelope } from './envelope.js'
 
+/**
+ * The tools that spawn a *backend's own* subagents, which no persona may hold.
+ *
+ * The nesting decision, enforced rather than assumed. The backend can spawn and manage
+ * agents inside one session, and a run that does so produces work the platform never sees:
+ * agents it does not render in the tree, cost it meters only as the parent's, and tool calls
+ * that never reach the approval gate because the gate is attached to the session it holds.
+ * Either that layer is forbidden or every step of it is ingested as a real run — and
+ * ingesting it is not available over this protocol, which carries a session's events and has
+ * no subagent lifecycle in it.
+ *
+ * So it is forbidden, and delegation is the supported route: a delegated child is a real
+ * `agent_run` with its own row, its own cost, its own place in the tree and its own gate,
+ * bounded per persona by the envelope's `subagentDepth` and workspace-wide by the delegation
+ * depth. A drawn workflow is the same answer one level up.
+ *
+ * Refused at parse time rather than filtered at dispatch, for the reason the envelope gives
+ * about a silently dropped check: a persona whose tool list was quietly trimmed still reads
+ * as the document its author wrote.
+ */
+const SUBAGENT_TOOLS = new Set(['Task', 'Agent'])
+
+const refuseSubagentTools = (tools: readonly string[], field: string): void => {
+  const named = tools.filter((tool) => SUBAGENT_TOOLS.has(tool))
+  if (named.length === 0) return
+  throw new Error(
+    `${field} names ${named.join(', ')}, which spawns agents this platform cannot see: ` +
+      'they are absent from the run tree, their spend is reported as their parent\'s, and ' +
+      'their tool calls never reach a human gate. Delegate instead — a delegated child is a ' +
+      'run of its own, bounded by this persona\'s subagentDepth.',
+  )
+}
+
 /** `[A, B]` → `['A','B']`; anything else → `[]`. Shared by `tools` and `harness.delegates`. */
 const parseToolList = (value: string): string[] => {
   const inner = /^\[(.*)\]$/.exec(value)?.[1]
@@ -207,6 +240,12 @@ export const parsePersonaMarkdown = (source: string): ParsedPersonaMarkdown => {
   if (!name) throw new Error('Persona markdown frontmatter missing required "name"')
   if (!description) throw new Error('Persona markdown frontmatter missing required "description"')
   if (!model) throw new Error('Persona markdown frontmatter missing required "model"')
+
+  // Both lists, because a planner hands its delegates a tool list too, and a hop that
+  // could not spawn hidden agents for itself must not be able to grant one that can.
+  refuseSubagentTools(tools, 'tools')
+  refuseSubagentTools(harnessDelegates, 'harness.delegates')
+  if (envelope) refuseSubagentTools(envelope.tools, 'envelope.tools')
 
   const systemPrompt = lines.slice(endIndex + 1).join('\n').trim()
   if (!systemPrompt) {
