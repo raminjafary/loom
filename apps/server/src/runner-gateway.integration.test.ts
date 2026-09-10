@@ -2393,6 +2393,70 @@ describe('runner-gateway: notification fan-out', () => {
     socket.close()
   })
 
+  /**
+   * A refusal has to arrive as a refusal.
+   *
+   * These two channels used to answer `ok: true` with the reason in `outcome`, so that a
+   * rejected submission would reach the model as something it could fix rather than as a
+   * platform error. It did reach the model — and it also told everything else the
+   * submission had succeeded: the tool inside the container marks a result an error only on
+   * `ok: false`, so the thread rendered a rejected design as `✓` followed by the validator
+   * explaining why it was rejected, and a live driver counted nine design calls, one stored
+   * proposal and zero refusals.
+   *
+   * Driven at the frame because that is where it was lost. The zero-token driver for the
+   * designer calls the use case directly — the deliberate substitution that lets it run
+   * without a model — so it saw correct refusals the whole time the frame above them was
+   * flattening them.
+   */
+  it('answers a refused design as a refusal, not as a successful call', async () => {
+    const { socket, runId } = await startRunViaFakeRunner('design-refusal-shape')
+
+    const answered = nextFrame(
+      socket,
+      (v) => v.type === 'persona_prompt_result' && v.requestId === 'design-1',
+    )
+    socket.send(
+      JSON.stringify({
+        type: 'workflow_design_submitted',
+        runId,
+        requestId: 'design-1',
+        name: 'something',
+        description: null,
+        rationale: 'because',
+        graph: { nodes: [], edges: [] },
+      }),
+    )
+    const frame = await answered
+    expect(frame.ok).toBe(false)
+    // The reason still travels, which is the half that was always working.
+    expect(String(frame.error)).not.toBe('')
+
+    socket.close()
+  })
+
+  it('answers a refused workflow answer the same way', async () => {
+    const { socket, runId } = await startRunViaFakeRunner('answer-refusal-shape')
+
+    const answered = nextFrame(
+      socket,
+      (v) => v.type === 'persona_prompt_result' && v.requestId === 'answer-1',
+    )
+    socket.send(
+      JSON.stringify({
+        type: 'workflow_answer_submitted',
+        runId,
+        requestId: 'answer-1',
+        answer: { done: 'yes' },
+      }),
+    )
+    const frame = await answered
+    expect(frame.ok).toBe(false)
+    expect(String(frame.error)).not.toBe('')
+
+    socket.close()
+  })
+
   it('does not notify when a human stops the work themselves', async () => {
     const { socket } = await startRunViaFakeRunner('notify-paused')
 

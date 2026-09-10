@@ -1326,10 +1326,12 @@ export const createRunnerGateway = (
       /**
        * One workflow step's answer.
        *
-       * Which step it is comes from the run, so this frame carries only the answer. A shape the
-       * node did not declare comes back as an outcome rather than an error, on tier 1's
-       * discipline: "that field is a list and you sent a sentence" is something the model can
-       * act on, and it has the rest of its run in which to act.
+       * Which step it is comes from the run, so this frame carries only the answer. A shape
+       * the node did not declare comes back as a refusal the model can act on — "that field
+       * is a list and you sent a sentence" — and it has the rest of its run in which to act.
+       * Sent as `ok: false` so the tool inside the container marks the result an error and
+       * the transcript shows a refusal: see the design channel below for what the other
+       * shape cost.
        */
       case 'workflow_answer_submitted': {
         try {
@@ -1338,12 +1340,22 @@ export const createRunnerGateway = (
             agentRunId: asAgentRunId(frame.runId),
             answer: frame.answer,
           })
-          send(from, {
-            type: 'persona_prompt_result',
-            requestId: frame.requestId,
-            ok: true,
-            outcome: result.ok ? result.outcome : result.error,
-          })
+          send(
+            from,
+            result.ok
+              ? {
+                  type: 'persona_prompt_result',
+                  requestId: frame.requestId,
+                  ok: true,
+                  outcome: result.outcome,
+                }
+              : {
+                  type: 'persona_prompt_result',
+                  requestId: frame.requestId,
+                  ok: false,
+                  error: result.error,
+                },
+          )
         } catch (error) {
           send(from, {
             type: 'persona_prompt_result',
@@ -1358,10 +1370,19 @@ export const createRunnerGateway = (
       /**
        * A harness a designer drew.
        *
-       * Refused *as an outcome* rather than as an error, on the same discipline the answer
-       * channel keeps: "that fan fans over a text field" is something the session can fix, and
-       * it has the rest of its run in which to fix it. Nothing here is configuration — what it
-       * writes is a proposal, and a person is what turns one into a version.
+       * **A refusal travels as a refusal.** It used to be sent as `ok: true` with the reason
+       * in `outcome`, on the reasoning that "that fan fans over a text field" is something
+       * the session can fix and should not read as a platform error. The session does still
+       * get the reason and does still have the rest of its run — the tool inside the
+       * container turns `ok: false` into a tool result carrying the text, which is what the
+       * notes, atlas and map channels have always done. What the old shape also did was tell
+       * *everything else* the submission succeeded: the thread rendered a rejected design as
+       * `✓ "verify" mentions {{item}} but does not run once per item`, and a driver whose
+       * whole job was to prove the refusal loop runs counted nine calls, one stored proposal
+       * and zero refusals. Found by the first live session that was ever refused.
+       *
+       * Nothing here is configuration either way — what a design writes is a proposal, and a
+       * person is what turns one into a version.
        */
       case 'workflow_design_submitted': {
         try {
@@ -1373,12 +1394,22 @@ export const createRunnerGateway = (
             rationale: frame.rationale,
             graph: frame.graph,
           })
-          send(from, {
-            type: 'persona_prompt_result',
-            requestId: frame.requestId,
-            ok: true,
-            outcome: result.ok ? result.outcome : result.error,
-          })
+          send(
+            from,
+            result.ok
+              ? {
+                  type: 'persona_prompt_result',
+                  requestId: frame.requestId,
+                  ok: true,
+                  outcome: result.outcome,
+                }
+              : {
+                  type: 'persona_prompt_result',
+                  requestId: frame.requestId,
+                  ok: false,
+                  error: result.error,
+                },
+          )
         } catch (error) {
           send(from, {
             type: 'persona_prompt_result',
