@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm'
 import type { Database } from './client.js'
 import {
   agentPersona,
+  personaGroup,
   personaRevision,
   agentRun,
   agentRunEvent,
@@ -72,17 +73,24 @@ const truncateWithRetry = async (db: Database, statement: SQL): Promise<void> =>
   }
 }
 
+/**
+ * `personaGroup` is in both lists and was in neither, which is a hole `cascade` cannot close:
+ * a group holds its members as a JSON array of ids rather than as foreign keys, so truncating
+ * the personas leaves the groups behind pointing at rows that no longer exist. A workspace in
+ * that state answers `personaGroup.list()` with a 500, and any test that truncated and then
+ * touched a team was asserting against a shape the product never produces.
+ */
 export const truncateDomainTables = async (db: Database): Promise<void> => {
   await truncateWithRetry(
     db,
-    sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${colosseumTurn}, ${colosseumClaim}, ${colosseumParticipant}, ${colosseumSession}, ${expertiseUse}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${personaRevision}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel} restart identity cascade`,
+    sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${colosseumTurn}, ${colosseumClaim}, ${colosseumParticipant}, ${colosseumSession}, ${expertiseUse}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${personaRevision}, ${agentPersona}, ${personaGroup}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel} restart identity cascade`,
   )
 }
 
 export const truncateAll = async (db: Database): Promise<void> => {
   await truncateWithRetry(
     db,
-    sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${colosseumTurn}, ${colosseumClaim}, ${colosseumParticipant}, ${colosseumSession}, ${expertiseUse}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${personaRevision}, ${agentPersona}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel}, ${workspace} restart identity cascade`,
+    sql`truncate table ${auditEvent}, ${approvalRequest}, ${agentRunEvent}, ${masteryCheckpoint}, ${colosseumTurn}, ${colosseumClaim}, ${colosseumParticipant}, ${colosseumSession}, ${expertiseUse}, ${subjectMapEdge}, ${subjectMapNode}, ${subjectMap}, ${noteReadEdge}, ${agentRun}, ${personaRevision}, ${agentPersona}, ${personaGroup}, ${repository}, ${runner}, ${message}, ${notificationTarget}, ${thread}, ${channel}, ${workspace} restart identity cascade`,
   )
 }
 

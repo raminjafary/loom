@@ -147,6 +147,53 @@ describe('Better Auth over HTTP', () => {
     expect(posted.author.kind).toBe('user')
   })
 
+  /**
+   * The burst a new user's first page load actually makes.
+   *
+   * Seeding the built-ins runs on every request and is read-then-write — list what the
+   * workspace has, insert what is missing — so half a dozen simultaneous calls against a fresh
+   * workspace each found it empty and each inserted the same fourteen personas. One won and the
+   * rest came back `500`. What the user saw was a shell that rendered with no personas, no cost
+   * summary and no run list, on their very first load, and nothing in the logs said "race".
+   *
+   * Asserted as *nothing rejected* rather than as a persona count, because the count was always
+   * right afterwards — the winner's inserts landed. The defect was entirely in what the other
+   * five callers were told.
+   */
+  it('survives a burst of requests against a workspace that still needs seeding', async () => {
+    const cookie = await signUp(`burst-${Date.now()}@example.test`)
+    const client = clientAs(cookie)
+
+    /**
+     * One built-in removed through the product's own operation, *after* sign-up — because
+     * sign-up seeds serially and a burst that arrives to find the work already done races over
+     * nothing. A single missing persona is the state that actually recurs: it is what every
+     * existing workspace looks like the first time a newly shipped built-in is seen, and what a
+     * brand-new one looks like for the length of its first page load.
+     *
+     * Deleted rather than truncated, so the workspace stays coherent — a bulk truncation leaves
+     * teams pointing at personas that no longer exist, which is a state the product cannot
+     * produce and which fails for its own unrelated reason.
+     */
+    const before = await client.persona.list()
+    const doomed = before.find((persona) => persona.name === 'prosecutor')
+    expect(doomed, 'no prosecutor to delete').toBeDefined()
+    await client.persona.delete({ personaId: doomed!.id })
+
+    const results = await Promise.allSettled([
+      client.persona.list(),
+      client.persona.list(),
+      client.persona.list(),
+      client.persona.list(),
+      client.session.me(),
+      client.session.me(),
+    ])
+    const rejected = results.flatMap((result) =>
+      result.status === 'rejected' ? [String(result.reason).slice(0, 120)] : [],
+    )
+    expect(rejected).toEqual([])
+  })
+
   it('rejects a request with no session cookie at all', async () => {
     const anonymous = createORPCClient<ContractRouterClient<Contract>>(
       new RPCLink({ url: `${baseUrl}/rpc` }),

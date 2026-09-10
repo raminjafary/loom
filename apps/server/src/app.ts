@@ -169,22 +169,55 @@ export const buildApp = async (
     webOrigin: config.WEB_ORIGIN,
   })
 
+  /**
+   * One seeding at a time per workspace, because all three seeders are read-then-write.
+   *
+   * Each one lists what the workspace has, then inserts what is missing, and that is not
+   * atomic. It ran on *every request*, so a new user's first page load — which fires half a
+   * dozen calls at once — had every one of them find an empty workspace and every one of them
+   * insert the same fourteen personas. One won. The rest came back `500`, and what the user saw
+   * was a shell that rendered with no personas, no cost summary and no run list. Reproduced at
+   * six concurrent calls: one fulfilled, five rejected on the unique index.
+   *
+   * A promise per workspace, so the second caller awaits the first's work rather than repeating
+   * it. **In-process, which is the whole of this deployment and not the whole of the problem**:
+   * two server processes would still race, and the fix there is the database refusing the
+   * duplicate quietly rather than loudly — `on conflict do nothing` in all three repositories.
+   * That is a bigger change than this one and it is not needed until a second process exists.
+   */
+  const seeding = new Map<string, Promise<void>>()
+  const seedOnce = async (workspaceId: string): Promise<void> => {
+    const running = seeding.get(workspaceId)
+    if (running) return running
+    const started = (async () => {
+      // Every time, not only on creation: `seedBuiltinPersonas` skips names that
+      // already exist, and running it once meant a workspace never received any
+      // built-in added after it was made — silently, since the reconciler is looked
+      // up by name and simply does nothing when absent.
+      await seedBuiltinPersonas(deps, { workspaceId: asWorkspaceId(workspaceId) })
+      // After the personas, necessarily: a team is a roster of them, and a member
+      // whose persona has not been seeded yet would simply be dropped.
+      await seedBuiltinTeams(deps, { workspaceId: asWorkspaceId(workspaceId) })
+      // After the personas for the team's reason, and skipped rather than trimmed when one
+      // is missing: a graph that lost a node would be a different shape under the same name.
+      await seedBuiltinWorkflows(deps, { workspaceId: asWorkspaceId(workspaceId) })
+    })()
+    seeding.set(workspaceId, started)
+    try {
+      await started
+    } finally {
+      // Cleared either way, so a seeding that failed is retried on the next request rather
+      // than remembered as done — and so the map does not grow with every workspace ever seen.
+      seeding.delete(workspaceId)
+    }
+  }
+
   const auth =
     authOverride ??
     betterAuthPort(betterAuth, {
       ensureMembership: async (userId) => {
         const result = await ensureWorkspaceMembership(db, userId, DEFAULT_WORKSPACE)
-        // Every time, not only on creation: `seedBuiltinPersonas` skips names that
-        // already exist, and running it once meant a workspace never received any
-        // built-in added after it was made — silently, since the reconciler is looked
-        // up by name and simply does nothing when absent.
-        await seedBuiltinPersonas(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
-        // After the personas, necessarily: a team is a roster of them, and a member
-        // whose persona has not been seeded yet would simply be dropped.
-        await seedBuiltinTeams(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
-        // After the personas for the team's reason, and skipped rather than trimmed when one
-        // is missing: a graph that lost a node would be a different shape under the same name.
-        await seedBuiltinWorkflows(deps, { workspaceId: asWorkspaceId(result.workspaceId) })
+        await seedOnce(result.workspaceId)
         return result
       },
     })
