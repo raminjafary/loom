@@ -17,8 +17,15 @@
  * - the page does not scroll sideways
  * - the surface's own heading is on screen rather than below the fold
  * - every enabled control on it is legible against what is behind it
+ * - no one-line field renders a placeholder wider than itself
  *
- * Each of those has caught a real defect in this repository, three of them in the last day.
+ * Each of those has caught a real defect in this repository, four of them in the last day.
+ *
+ * The last one is here because the first fix for it was wrong and looked right. A placeholder
+ * wraps and a one-line field has no room for the second line, so the reader gets half a
+ * sentence — and the field the composer gets at 900px is about 200px, narrower than a phone,
+ * because the run launcher takes the rest. Measuring it is the only way to know: the two-rung
+ * version of that fix chose the shorter hint correctly and still rendered a sliced line.
  */
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -128,6 +135,39 @@ const sweep = async (name: string, heading: string | null) => {
     return out
   })()`)
 
+  /**
+   * A one-line field whose placeholder does not fit in it. Measured with the element's own
+   * font rather than guessed from a character count, and only for fields that are actually one
+   * line tall — a grown textarea has room to wrap.
+   */
+  const slicedHints: string[] = await page.evaluate(`(() => {
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    const out = []
+    for (const el of Array.from(document.querySelectorAll('input[placeholder], textarea[placeholder]'))) {
+      const text = el.placeholder || ''
+      if (!text) continue
+      const st = getComputedStyle(el)
+      if (st.visibility === 'hidden' || st.display === 'none') continue
+      const r = el.getBoundingClientRect()
+      if (r.width === 0 || r.height === 0) continue
+      const line = Number.parseFloat(st.lineHeight) || Number.parseFloat(st.fontSize) * 1.2
+      const inner =
+        el.clientWidth - Number.parseFloat(st.paddingLeft) - Number.parseFloat(st.paddingRight)
+      const rows = Math.round(
+        (el.clientHeight - Number.parseFloat(st.paddingTop) - Number.parseFloat(st.paddingBottom)) /
+          line,
+      )
+      if (rows > 1) continue
+      ctx.font = st.font || (st.fontWeight + ' ' + st.fontSize + ' ' + st.fontFamily)
+      const width = ctx.measureText(text).width
+      if (width > inner + 1) {
+        out.push(text.slice(0, 28) + '… (' + Math.round(width) + 'px in ' + Math.round(inner) + 'px)')
+      }
+    }
+    return out
+  })()`)
+
   const threw = consoleErrors.slice(before)
   const headingOnScreen = heading === null ? true : await isInViewport(page, heading)
 
@@ -136,6 +176,7 @@ const sweep = async (name: string, heading: string | null) => {
     ...(unreadable.length > 0 ? [`unreadable: ${unreadable.join(', ')}`] : []),
     ...(threw.length > 0 ? [`threw: ${threw[0]}`] : []),
     ...(headingOnScreen ? [] : ['its heading is below the fold']),
+    ...(slicedHints.length > 0 ? [`a sliced placeholder: ${slicedHints.join(', ')}`] : []),
   ]
   check(name, problems.length === 0, problems.join(' · '))
 }
