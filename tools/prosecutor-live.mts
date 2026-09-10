@@ -269,6 +269,25 @@ const main = async () => {
       `\n${label} ${String(run?.status)} after ${Math.round((Date.now() - startedAt) / 1000)}s, ` +
         `cost $${String(run?.totalCostUsd ?? 0)}${run?.errorMessage ? ` — ${run.errorMessage}` : ''}`,
     )
+    /**
+     * A session that is not finished is stopped here rather than left running, and
+     * `awaiting_approval` counts: it ends the wait because a prosecutor has no approval to
+     * give — it reads, writes, runs and reports — so a parked one is a finding, but the
+     * *container* is still up and will sit there until something kills it.
+     *
+     * `designer-live.mts` learned this by walking away from one for twenty-five minutes. This
+     * driver did the same thing on the run that found the missing local `main`: the session
+     * asked a human why its clone was on the wrong branch, the driver reported the finding and
+     * exited, and the container was still up forty-two minutes later. The Runner that would
+     * reap it starts with a fresh state directory each time and cannot know the container was
+     * its predecessor's, so the only process that knows is this one. The workspace-wide
+     * control is the right instrument because this workspace is the driver's own.
+     */
+    if (run !== null && !['completed', 'failed', 'cancelled'].includes(run.status)) {
+      await client.runControl.pauseAll()
+      await client.runControl.resume()
+      console.log(`  (${label} was still open and has been stopped — nothing was reading it)`)
+    }
     return run
   }
 
