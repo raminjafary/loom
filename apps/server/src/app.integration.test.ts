@@ -9,6 +9,8 @@ import { APPROVAL_MODES, BUILTIN_TEAMS, asWorkspaceId } from '@loom/domain'
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
 import type { ContractRouterClient } from '@orpc/contract'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import webpush from 'web-push'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp, type App } from './app.js'
@@ -39,6 +41,20 @@ const config = loadConfig({
   SERVER_PORT: '0',
   VAPID_PUBLIC_KEY: vapidKeys.publicKey,
   VAPID_PRIVATE_KEY: vapidKeys.privateKey,
+  /**
+   * Pointed away from the host's real one, which defaults to `~/.loom/revisions`.
+   *
+   * Without this the suite reads whatever this machine has actually promoted, so
+   * "reports no promoted revision" passes only on a machine that has never promoted a
+   * revision of Loom's own source — and fails the first time somebody exercises the
+   * promoter, which is exactly when they least want an unrelated red suite. Found that
+   * way: the tier-4 exercise promoted a revision and this test went red an hour later.
+   */
+  LOOM_DEPLOYMENT_STATE: join(
+    tmpdir(),
+    `loom-server-test-deployment-${process.pid}`,
+    'deployment.json',
+  ),
 } as NodeJS.ProcessEnv)
 
 const { db, close: closeDb } = createDatabase(config.DATABASE_URL)
