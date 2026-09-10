@@ -353,6 +353,31 @@ try {
       })
       .filter((entry) => entry !== null)`)
   check('no control is wider than the column holding it', selects.length === 0, selects.join(', '))
+
+  /**
+   * Every top-bar control is the thing at its own coordinates.
+   *
+   * The sweep found this and no assertion here would have: below about 1000px the actions
+   * row overflowed the main column and the run launcher — later in the DOM, and fixed-width
+   * — painted straight over it. Settings, Inbox, Design and **Stop all** were all present,
+   * enabled, and underneath another element. Stop all is the kill switch.
+   *
+   * `elementFromPoint` is the only honest form of the question: visible, enabled and
+   * on-screen were all true the whole time.
+   */
+  const covered: string[] = await page.evaluate(`(() => {
+    const out = []
+    for (const el of Array.from(document.querySelectorAll('.topbar-actions button'))) {
+      const r = el.getBoundingClientRect()
+      if (r.width === 0 || r.height === 0) continue
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+      if (top !== el && !el.contains(top)) {
+        out.push((el.textContent || el.getAttribute('aria-label') || '?').trim().slice(0, 16))
+      }
+    }
+    return out
+  })()`)
+  check('no top-bar control is covered by another element', covered.length === 0, covered.join(', '))
   await page.setViewportSize(VIEWPORT)
 
   // ------------------------------------------------------------------ the log

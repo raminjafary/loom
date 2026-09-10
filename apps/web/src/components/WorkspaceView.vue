@@ -1529,8 +1529,24 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+/*
+  Wraps, and the actions never shrink.
+
+  It did neither, and below about 1000px that cost a person the controls rather than the
+  layout: the row could not fit, its children overflowed the main column's right edge, and
+  the run launcher — which comes later in the DOM and does not shrink — painted straight over
+  them. Settings, Inbox, Design and *Stop all* were all still there, still enabled, and
+  underneath another element. Stop all is the kill switch; a split-screen laptop could not
+  reach the control that stops every run.
+
+  Wrapping puts the actions on their own line instead of outside the column, and
+  `flex-shrink: 0` keeps them whole once there: a half-width "Stop all" is the same defect
+  with a smaller radius. The heading is what gives up the space, which is the right trade —
+  the channel name is already rendered a second time in the sidebar.
+*/
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -1631,10 +1647,25 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, var(--danger) 10%, transparent);
 }
 
+/*
+  The actions wrap among themselves, which is the half that actually fixes it.
+
+  Wrapping the topbar alone only moved the row down: at 900px the main column is about
+  324px and this row is wider than that on its own, so it still overflowed and still ended
+  up underneath the run launcher. Each control keeps its size and the row uses as many
+  lines as it needs — a topbar two lines tall is a cost worth paying for a reachable
+  "Stop all".
+*/
 .topbar-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 0.6rem;
+}
+
+.topbar-actions > * {
+  flex-shrink: 0;
 }
 
 .inbox-toggle {

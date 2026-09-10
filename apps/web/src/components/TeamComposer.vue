@@ -1997,8 +1997,16 @@ header h2 {
   gap: 0.25rem;
 }
 
+/*
+  Wraps, because the alternative is a control that lies. This row holds a name, a fleet
+  count, a review rule and a delegation rule, and in a panel this narrow they do not fit on
+  one line: the selects were rendering "unrevie" and "anyone'", which is not a shorter way
+  of saying the same thing — a person reading "unrevie" cannot tell which rule is set.
+  A second line costs vertical space in a panel that scrolls anyway.
+*/
 .chips li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
