@@ -88,6 +88,7 @@ export const startProsecutor = async (
     relation: 'prosecute'
     task: string
     prosecute: true
+    openOnBranch: { targetRunId: AgentRunId; branchName: string }
   }) => Promise<{ id: string }>,
 ): Promise<void> => {
   try {
@@ -130,6 +131,17 @@ export const startProsecutor = async (
       parentRunId: run.id,
       relation: 'prosecute',
       prosecute: true,
+      /**
+       * On the branch it prosecutes, the way a reviewer opens on the branch it reviews.
+       *
+       * Without this a prosecutor opens on a fresh branch off the default, which is the
+       * *base* of the diff it was sent to examine — so `git diff <default>...HEAD` is empty
+       * and the tree holds none of the change. Nothing fails: the task names a branch, the
+       * clone does not have it, and the session spends its budget looking for a diff that is
+       * not there. Found by a live driver watching a real session do exactly that for nine
+       * minutes.
+       */
+      openOnBranch: { targetRunId: run.id, branchName: run.branchName },
       task: renderProsecutorTask({
         branchName: run.branchName,
         baseBranch: repository.defaultBranch,
@@ -148,6 +160,41 @@ export const startProsecutor = async (
      * Swallowed, like the verifier's own start. The run is over and its branch is intact; a
      * prosecutor that could not start is evidence nobody gathered.
      */
+  }
+}
+
+/**
+ * Closes a prosecution whose prosecutor ended without reporting.
+ *
+ * `inconclusive` is defined in the domain as "it finished without usable observations — its
+ * own tests would not run, **or it never reported**", and until this existed nothing wrote
+ * the second half: a session that ran out of turns, or narrated its findings into the thread
+ * instead of calling the tool, left the row `running` for ever. The visible symptom is a card
+ * that says "Writing tests against this diff…" about a run that has been over for a week,
+ * which is worse than no evidence — it is evidence a reviewer is still waiting for.
+ *
+ * Called on the prosecutor's own terminal transition, and a no-op for every other run.
+ */
+export const closeUnreportedProsecution = async (
+  deps: AgentDeps,
+  run: AgentRun,
+  outcome: { readonly ok: true } | { readonly ok: false; readonly message: string },
+): Promise<void> => {
+  try {
+    if (run.relation !== 'prosecute') return
+    const prosecution = await deps.prosecutions.findByProsecutorRun(run.workspaceId, run.id)
+    if (!prosecution || prosecution.status !== 'running') return
+    await deps.prosecutions.report(run.workspaceId, prosecution.id, {
+      status: 'inconclusive',
+      observations: [],
+      reason: outcome.ok
+        ? 'The prosecutor finished without reporting anything. Whatever it found is in its ' +
+          'thread rather than here.'
+        : `The prosecutor did not finish: ${outcome.message}`,
+    })
+  } catch {
+    // Swallowed for the reason the start is: this pass holds no authority, and a row it
+    // could not close must not make a finished run look failed.
   }
 }
 

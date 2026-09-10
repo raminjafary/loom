@@ -1,6 +1,7 @@
 import { asAgentRunId, asWorkspaceId, type AgentRun, type Prosecution } from '@loom/domain'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  closeUnreportedProsecution,
   recordProsecution,
   renderProsecutorTask,
   startProsecutor,
@@ -127,6 +128,21 @@ describe('startProsecutor', () => {
   })
 
   /**
+   * The whole pass is about a diff, and this is the field that gives the run one.
+   *
+   * Without it the Runner opens every run on a fresh branch off the default — which is the
+   * *base* of the change under prosecution, so the tree holds none of it and `git diff` comes
+   * back empty. It cost a live session nine minutes and a third of a dollar searching for a
+   * branch its own task had named.
+   */
+  it('opens the prosecutor on the branch it is prosecuting', async () => {
+    const { deps, started } = harness()
+    await startProsecutor(deps, run(), started)
+    const input = (started.mock.calls as unknown as Record<string, unknown>[][])[0]![0]!
+    expect(input.openOnBranch).toEqual({ targetRunId: RUN, branchName: 'loom/run-a1' })
+  })
+
+  /**
    * The one that would otherwise cost money forever: a prosecution leaves a branch, and a
    * branch starts a prosecution. The only bound on that loop is the workspace concurrency
    * limit, which is to say the bill.
@@ -161,6 +177,62 @@ describe('startProsecutor', () => {
       throw new Error('at the concurrency limit')
     })
     await expect(startProsecutor(deps, run(), started)).resolves.toBeUndefined()
+  })
+})
+
+describe('closeUnreportedProsecution', () => {
+  const prosecutorRun = (overrides: Partial<AgentRun> = {}) =>
+    run({ id: PROSECUTOR_RUN, relation: 'prosecute', ...overrides })
+
+  const unreported = {
+    id: 'p1',
+    workspaceId: WS,
+    agentRunId: RUN,
+    prosecutorRunId: PROSECUTOR_RUN,
+    status: 'running',
+    observations: [],
+    reason: null,
+    createdAt: new Date(0),
+    finishedAt: null,
+  } as Prosecution
+
+  /**
+   * The state the domain already defined and nothing wrote. A session that ends without
+   * calling the tool — out of turns, or narrating its findings into the thread — used to
+   * leave the row `running`, so the card said "Writing tests against this diff…" about a run
+   * that had been over for a week.
+   */
+  it('marks a running prosecution inconclusive when its prosecutor just stops', async () => {
+    const { deps, report } = harness({ prosecution: unreported })
+    await closeUnreportedProsecution(deps, prosecutorRun(), { ok: true })
+    expect(report).toHaveBeenCalledWith(WS, 'p1', {
+      status: 'inconclusive',
+      observations: [],
+      reason: expect.stringContaining('without reporting'),
+    })
+  })
+
+  it('records why, when the prosecutor failed rather than finished', async () => {
+    const { deps, report } = harness({ prosecution: unreported })
+    await closeUnreportedProsecution(deps, prosecutorRun(), { ok: false, message: 'budget cap' })
+    expect(report).toHaveBeenCalledWith(
+      WS,
+      'p1',
+      expect.objectContaining({ reason: expect.stringContaining('budget cap') }),
+    )
+  })
+
+  /** Evidence a person may already have read is never overwritten by a tidy-up. */
+  it('leaves a prosecution that already reported alone', async () => {
+    const { deps, report } = harness()
+    await closeUnreportedProsecution(deps, prosecutorRun(), { ok: true })
+    expect(report).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op for every run that was not prosecuting', async () => {
+    const { deps, report } = harness({ prosecution: unreported })
+    await closeUnreportedProsecution(deps, run(), { ok: true })
+    expect(report).not.toHaveBeenCalled()
   })
 })
 
