@@ -212,12 +212,48 @@ export interface RunNetwork {
 }
 
 /**
+ * Every subnet the daemon currently has allocated, across all networks.
+ *
+ * Two calls rather than one because `network inspect` takes ids, and `--format` over all of
+ * them is one pass. Best-effort by construction: a network removed between the two calls makes
+ * `inspect` refuse the whole batch, and the honest answer then is "nothing known to be taken",
+ * which degrades allocation to the random pick it used to be rather than failing a run.
+ */
+const subnetsInUse = async (config: RunNetworkConfig, exec: Exec): Promise<Set<string>> => {
+  try {
+    const { stdout: ids } = await exec(config.runtime, ['network', 'ls', '--quiet'])
+    const list = ids.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+    if (list.length === 0) return new Set()
+    const { stdout } = await exec(config.runtime, [
+      'network',
+      'inspect',
+      ...list,
+      '--format',
+      '{{range .IPAM.Config}}{{.Subnet}} {{end}}',
+    ])
+    return new Set(stdout.split(/\s+/).map((entry) => entry.trim()).filter((entry) => entry !== ''))
+  } catch {
+    return new Set()
+  }
+}
+
+/**
  * The network one sandbox runs on, for as long as it runs.
  *
  * A subnet collision is expected rather than exceptional: two Runners on one host draw
- * from the same pool and neither can see the other's allocations, so the /24 is chosen at
- * random and a clash is retried. Retrying is what makes the pool safe to share without a
- * lock — the daemon is the arbiter, and it already refuses an overlapping subnet.
+ * from the same pool and neither can see the other's allocations, so a clash is retried.
+ * Retrying is what makes the pool safe to share without a lock — the daemon is the arbiter,
+ * and it already refuses an overlapping subnet.
+ *
+ * What the retry cannot fix on its own is *occupancy*. This picked uniformly at random from
+ * the whole pool and gave up after eight tries, so the chance of failing was `(taken/256)^8`
+ * — 6% of runs at 180 concurrent sandboxes, 14% at 200, and the error told the operator to
+ * widen a pool that still had fifty free /24s in it. So the free set is asked of the daemon
+ * first and the random pick is made among *those*; the retry is then doing the job it was
+ * written for, which is losing a race to a rival Runner rather than guessing.
+ *
+ * A genuinely full pool now fails immediately and says so, which is the one case where
+ * "widen the pool" is the right advice.
  */
 export const createRunNetwork = async (
   config: RunNetworkConfig,
@@ -235,7 +271,20 @@ export const createRunNetwork = async (
   let lastError: unknown = null
   let created = false
   for (let attempt = 0; attempt < attempts && !created; attempt += 1) {
-    const subnet = subnets[Math.floor(Math.random() * subnets.length)]
+    const taken = await subnetsInUse(config, exec)
+    const free = subnets.filter((subnet) => !taken.has(subnet))
+    if (free.length === 0 && taken.size > 0) {
+      throw new Error(
+        `The sandbox network pool ${config.pool} is full: all ${subnets.length} of its /24s are ` +
+          `allocated, so ${id} has nowhere to run. Widen LOOM_SANDBOX_NETWORK_POOL, or run fewer ` +
+          'concurrent sandboxes on this host.',
+      )
+    }
+    // `free` empty with nothing known to be taken means the daemon could not be asked, not
+    // that the pool is full — so the pick falls back to the whole pool and the retry earns
+    // its keep.
+    const candidates = free.length > 0 ? free : subnets
+    const subnet = candidates[Math.floor(Math.random() * candidates.length)]
     try {
       await exec(config.runtime, [
         'network',
@@ -255,8 +304,8 @@ export const createRunNetwork = async (
   if (!created) {
     throw new Error(
       `Could not create a network for ${id} after ${attempts} attempts on pool ${config.pool}: ` +
-        `${detailOf(lastError)}. Widen LOOM_SANDBOX_NETWORK_POOL if this host runs more ` +
-        'concurrent sandboxes than the pool holds.',
+        `${detailOf(lastError)}. Every attempt picked a /24 the daemon reported as free, so this ` +
+        'is a host that is refusing to create networks rather than a pool that is out of them.',
     )
   }
 

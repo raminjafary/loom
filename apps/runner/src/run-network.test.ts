@@ -156,11 +156,64 @@ describe('createRunNetwork', () => {
     expect(attempts).toBe(3)
   })
 
-  it('gives up with the pool named rather than falling back to the shared network', async () => {
+  it('gives up with the pool and the daemon’s own words rather than falling back to the shared network', async () => {
     const { exec } = recorder({ 'network create': new Error('all predefined address pools have been fully subnetted') })
-    await expect(createRunNetwork(config, 'run-3', 'proxy', exec, 2)).rejects.toThrow(
-      /LOOM_SANDBOX_NETWORK_POOL/,
+    const failure = createRunNetwork(config, 'run-3', 'proxy', exec, 2)
+    await expect(failure).rejects.toThrow(/10\.201\.0\.0\/16/)
+    // The daemon's own message, carried through: this one is Docker's *default* pools being
+    // exhausted, which is a different remedy from widening ours, and the old text advised
+    // widening ours for it.
+    await expect(failure).rejects.toThrow(/fully subnetted/)
+  })
+
+  /**
+   * Occupancy, which the retry alone could not handle.
+   *
+   * The pick used to be uniform over the whole pool, so a nearly-full host failed runs while
+   * free /24s remained — `(taken/256)^8`, which is 14% of runs at 200 concurrent sandboxes,
+   * and the error blamed a pool that had 56 free. Asking the daemon which subnets are taken
+   * turns eight tries from a lottery into a race with rival Runners.
+   */
+  it('picks a free subnet at the first attempt on a pool that is nearly full', async () => {
+    const pool = subnetsInPool(config.pool)
+    const free = pool[137]!
+    const calls: string[][] = []
+    const exec = async (_command: string, args: string[]) => {
+      calls.push(args)
+      if (args[0] === 'network' && args[1] === 'ls') return { stdout: 'n1\n' }
+      if (args[0] === 'network' && args[1] === 'inspect' && args.includes('--format')) {
+        return { stdout: pool.filter((subnet) => subnet !== free).join(' ') }
+      }
+      if (args[0] === 'network' && args[1] === 'create') {
+        const subnet = args[args.indexOf('--subnet') + 1]
+        if (subnet !== free) throw new Error('Pool overlaps with other one on this address space')
+      }
+      return { stdout: '' }
+    }
+    const net = await createRunNetwork(config, 'run-full', 'proxy', exec)
+    expect(net.name).toBe('loom-net-run-full')
+    const creates = calls.filter((args) => args[0] === 'network' && args[1] === 'create')
+    expect(creates).toHaveLength(1)
+    expect(creates[0]).toContain(free)
+  })
+
+  /** And a pool with nothing left says so, which is the one case "widen it" is the answer to. */
+  it('refuses immediately when every subnet in the pool is allocated', async () => {
+    const pool = subnetsInPool(config.pool)
+    let created = 0
+    const exec = async (_command: string, args: string[]) => {
+      if (args[0] === 'network' && args[1] === 'ls') return { stdout: 'n1\n' }
+      if (args[0] === 'network' && args[1] === 'inspect' && args.includes('--format')) {
+        return { stdout: pool.join(' ') }
+      }
+      if (args[0] === 'network' && args[1] === 'create') created += 1
+      return { stdout: '' }
+    }
+    await expect(createRunNetwork(config, 'run-none', 'proxy', exec)).rejects.toThrow(
+      /pool .* is full[\s\S]*Widen LOOM_SANDBOX_NETWORK_POOL/,
     )
+    // Nothing attempted: the daemon was asked and it had no room to offer.
+    expect(created).toBe(0)
   })
 
   /**
