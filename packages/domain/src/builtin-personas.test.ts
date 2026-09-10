@@ -3,7 +3,7 @@ import { attenuateChildPersona } from './attenuation.js'
 import { BUILTIN_PERSONAS, type BuiltinPersona } from './builtin-personas.js'
 import { parsePersonaMarkdown } from './persona-markdown.js'
 import { actingTools, canPlannerRead } from './planner-tools.js'
-import type { PersonaSpec } from './agents.js'
+import { isPlatformInitiatedRelation, type AgentRunRelation, type PersonaSpec } from './agents.js'
 
 /** The spec `startAgentRun` snapshots onto a run, built from the seeded row. */
 const asSpec = (persona: BuiltinPersona): PersonaSpec => ({
@@ -127,6 +127,50 @@ describe('BUILTIN_PERSONAS', () => {
 
     expect(refusals).toEqual([])
   })
+
+  /**
+   * The passes the platform runs over somebody else's branch, paired with the persona each
+   * one starts.
+   *
+   * Both halves of every row are asserted below, and the pair is the point. A narrow worker
+   * cannot grant any of these personas — they run what they write, or they judge at a tier the
+   * worker was not given — so each pass only happens at all because its relation is exempt from
+   * attenuation. `prosecute` was missing from that exemption for its first day: the start is
+   * best-effort, so the refusal was swallowed, and the only symptom was that every worker with
+   * a deliberately narrow tool list went silently unprosecuted. Found by a live driver, whose
+   * worker held `[Read, Edit, Write]`.
+   */
+  const PLATFORM_PASSES = [
+    { relation: 'reconcile', persona: 'reconciler' },
+    { relation: 'verify', persona: 'variant-verifier' },
+    { relation: 'prosecute', persona: 'prosecutor' },
+  ] as const satisfies readonly { relation: AgentRunRelation; persona: string }[]
+
+  /** About as narrow as a worker gets and still does something. */
+  const narrowWorker: PersonaSpec = {
+    name: 'narrow',
+    systemPrompt: 'You make one small edit.',
+    model: 'claude-haiku-4-5-20251001',
+    tools: ['Read', 'Edit'],
+    approvalMode: 'auto',
+    budgetCapUsd: 0.5,
+    planner: false,
+    delegates: [],
+    capabilities: [],
+  }
+
+  it.each(PLATFORM_PASSES)(
+    'exempts $relation, because a narrow worker could never grant the $persona it starts',
+    ({ relation, persona }) => {
+      const started = BUILTIN_PERSONAS.find((p) => p.name === persona)
+      expect(started, `no built-in named ${persona}`).toBeDefined()
+      // Why the exemption has to exist. If this ever passes, this pass no longer needs
+      // an exemption and the row should be read again rather than deleted.
+      expect(attenuateChildPersona(narrowWorker, asSpec(started!)).ok).toBe(false)
+      // And that it does.
+      expect(isPlatformInitiatedRelation(relation)).toBe(true)
+    },
+  )
 
   it('keeps the planner envelope to exactly what the built-in workers hold', () => {
     // The other half of the check above, and the one that catches the opposite drift:

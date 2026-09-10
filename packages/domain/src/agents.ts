@@ -768,6 +768,58 @@ export const isParentlessRelation = (
   relation !== undefined &&
   (PARENTLESS_RELATIONS as readonly string[]).includes(relation)
 
+/**
+ * The relations the **platform** starts, where the parent contributes nothing but the ids.
+ *
+ * These are exempt from persona attenuation, and the exemption is not a convenience. Attenuation
+ * exists so a parent cannot grant a child more than it holds — a defence against a parent that
+ * has been manipulated into escalating. None of these is something a parent asks for or shapes:
+ * the platform starts them, the persona is looked up in the registry by a fixed name, the task
+ * text is platform-authored, and the relation is not reachable from the contract. There is no
+ * escalation here for attenuation to prevent.
+ *
+ * Applying it anyway is not merely redundant, it is **backwards** — it withholds each pass from
+ * exactly the runs that most need it, because the narrower the worker, the more certainly its
+ * snapshot refuses the wider persona doing the platform's work:
+ *
+ * - `reconcile` needs `Edit` and a model tier a narrow worker does not have, so the branches
+ *   most likely to conflict would be the ones that could never be reconciled. Found by an
+ *   integration test refusing `Edit, Grep, Glob` for a read-only-ish parent.
+ * - `verify` judges a search a narrow Haiku worker ran, and a read-only Opus session is wider
+ *   than that worker's snapshot in every dimension that matters.
+ * - `escalate` exists *to* run at a higher tier than the attempt that failed, so attenuating it
+ *   against that attempt would refuse every escalation by definition. Its bound is the envelope
+ *   ceiling and the cap, both checked before the run is started.
+ * - `prosecute` must run what it writes, so it holds `Bash` and a worker with a deliberately
+ *   narrow tool list does not. It was missing from this rule for its first day, which meant
+ *   every such worker's branch went silently unprosecuted — the start is best-effort, so the
+ *   refusal was swallowed and the only symptom was a prosecution nobody had.
+ * - `screen` is parentless in a campaign and hangs off the proposing run in a search, so it
+ *   reaches the check in one shape and not the other. It is here because the list says who
+ *   *shapes* a run rather than which relations happen to reach one call site — a relation must
+ *   not become wrong by being re-parented.
+ *
+ * A list rather than conditions at the call site, for the reason `PARENTLESS_RELATIONS` gives:
+ * that call site was an allow-list and it was wrong the first time it grew.
+ *
+ * What is deliberately **not** here is `delegation` — a planner's children stay fully
+ * attenuated, which is the case the rule is actually about.
+ */
+export const PLATFORM_INITIATED_RELATIONS = [
+  'reconcile',
+  'verify',
+  'escalate',
+  'prosecute',
+  'screen',
+] as const satisfies readonly AgentRunRelation[]
+
+export const isPlatformInitiatedRelation = (
+  relation: AgentRunRelation | null | undefined,
+): relation is AgentRunRelation =>
+  relation !== null &&
+  relation !== undefined &&
+  (PLATFORM_INITIATED_RELATIONS as readonly string[]).includes(relation)
+
 export interface AgentRun {
   readonly id: AgentRunId
   readonly workspaceId: WorkspaceId
