@@ -379,8 +379,8 @@ export const createRunnerGateway = (
      * time the run started, cost money, and looked entirely normal.
      *
      * So the pass-through fields travel in `rest` and cannot be forgotten; what is named below
-     * is exactly what needs *changing* on the way — a defensive copy, or a rendering. A new
-     * plain field needs no edit here at all.
+     * is exactly what needs *changing* on the way — a rendering, or a rebuild one level down.
+     * A new plain field needs no edit here at all.
      */
     async startRun({
       runnerId,
@@ -390,6 +390,7 @@ export const createRunnerGateway = (
       verifyVariants,
       proposeVariants,
       answerWorkflow,
+      designWorkflow,
       ...rest
     }) {
       send(runnerId, {
@@ -417,8 +418,14 @@ export const createRunnerGateway = (
               },
             }),
         ...(steering ? { steering: true } : {}),
-        // Copied rather than forwarded: the frame must not share a mutable array with its
-        // caller.
+        /**
+         * The nested objects are rebuilt field by field rather than forwarded, and that is not
+         * inconsistency with `rest` above — it is the same rule applied one level down. The
+         * guard that makes `rest` safe (`sends nothing on start_run that the protocol does not
+         * declare`) compares *top-level* keys, so a field added to one of these shapes on the
+         * port would still cross unexamined. Rebuilding them is also what keeps the frame from
+         * sharing a mutable array with its caller.
+         */
         ...(verifyVariants === undefined
           ? {}
           : { verifyVariants: { optionKeys: [...verifyVariants.optionKeys] } }),
@@ -436,6 +443,7 @@ export const createRunnerGateway = (
                 })),
               },
             }),
+        ...(designWorkflow === undefined ? {} : { designWorkflow: { ask: designWorkflow.ask } }),
       })
     },
 
