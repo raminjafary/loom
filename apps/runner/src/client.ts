@@ -18,6 +18,12 @@ import WebSocket from 'ws'
 import { runAgentOnBackend } from './agent-backend.js'
 import { depCacheDirFor, depCacheEnv, depCacheFromEnv, warmDepCache } from './dep-cache.js'
 import {
+  createRunNetwork,
+  removeOrphanedNetworks,
+  runNetworkFromEnv,
+  runNetworkVerdict,
+} from './run-network.js'
+import {
   capturePreparedTree,
   lockDigest,
   materializePreparedTree,
@@ -97,6 +103,13 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
   const log = options.log ?? ((message: string) => process.stdout.write(`${message}\n`))
 
   /**
+   * Read once, here, because the startup sweep needs it before the run config below is
+   * built — and because a mode that changed under a live process would leave networks
+   * nothing would ever clean up.
+   */
+  const runNetwork = runNetworkFromEnv()
+
+  /**
    * Containers this Runner left behind.
    *
    * **Here rather than in the connect handler, and that placement is the whole of it.**
@@ -118,6 +131,16 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         log,
       )
       if (killed > 0) log(`swept ${killed} orphaned container(s) from a previous Runner`)
+      // The container's network outlives the container it was made for, because `--rm`
+      // takes the one and nothing takes the other. Same scoping, and after the kill: a
+      // network still holding a container is one the daemon refuses to remove.
+      const removed = await removeOrphanedNetworks(
+        states.map((state) => state.runId),
+        runNetwork,
+        undefined,
+        log,
+      )
+      if (removed > 0) log(`swept ${removed} orphaned network(s) from a previous Runner`)
     })
     .catch(() => {
       // A state directory this Runner cannot read means nothing to sweep — and it must
@@ -296,6 +319,18 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
   const sandboxIsolation = (config: typeof sandbox) => {
     isolationPromise ??= isolationVerdict(config)
     return isolationPromise
+  }
+
+  /**
+   * Whether this host can give a sandbox a network of its own, proved by doing it once.
+   * Memoized for the same reason as the two above, and refusing for the same reason: a
+   * fallback to the shared network would be a claim about isolation that is false
+   * everywhere it is read.
+   */
+  let networkPromise: ReturnType<typeof runNetworkVerdict> | null = null
+  const sandboxNetwork = () => {
+    networkPromise ??= runNetworkVerdict(runNetwork)
+    return networkPromise
   }
 
   let socket: WebSocket | null = null
@@ -1255,6 +1290,17 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
       return
     }
 
+    /**
+     * Beside the kernel boundary and for the same reason: both are answers about isolation
+     * that are wrong for every run, not for this one, and both refuse rather than fall back
+     * to the weaker arrangement while claiming the stronger.
+     */
+    const network = await sandboxNetwork()
+    if (!network.ok) {
+      sendAgentEvent(input.runId, { kind: 'run_failed', message: `Refusing to run: ${network.reason}` })
+      return
+    }
+
     // Before the lease, so a refusal never leaves one issued. Memoized across runs —
     // the answer cannot change while this process lives, and it costs a container spawn.
     const freshness = await imageFreshness(sandbox)
@@ -1295,9 +1341,20 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
       ),
     })
 
+    /**
+     * Created after the lease and before the container, so a run never exists on a network
+     * the proxy is not on yet — the model call is the first thing the agent loop makes, and
+     * it would meet a network with nothing on it.
+     */
+    const runNet =
+      network.mode === 'per-run'
+        ? await createRunNetwork(runNetwork, input.runId, network.proxyContainer)
+        : { name: sandbox.network, release: async () => {} }
+
     try {
       await runAgentInSandbox(sandbox, {
         runId: input.runId,
+        network: runNet.name,
         persona: input.persona,
         ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
         ...(input.task === undefined ? {} : { task: input.task }),
@@ -1411,6 +1468,10 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
       await revokeEgressToken(egress, input.runId).catch((error) =>
         log(`failed to revoke lease for ${input.runId}: ${error instanceof Error ? error.message : String(error)}`),
       )
+      // The network goes with the run, like the lease and the cache copy. Best-effort
+      // inside: a leaked network costs a /24 out of the pool, and the startup sweep is
+      // what catches the ones a killed Runner could not release.
+      await runNet.release()
     }
   }
 
@@ -2032,13 +2093,24 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                * report itself stale on its first use. Found by the live driver.
                */
               const lockBefore = await lockDigest(workspace.clonePath)
+              /**
+               * A network of its own, like a run's. The install command is the operator's
+               * rather than an agent's, but the container is the same shape and sits beside
+               * live runs — the blast radius the per-run network closes is between
+               * sandboxes, and this is one of them.
+               */
+              const warmNetwork = await sandboxNetwork()
+              const warmNet =
+                warmNetwork.ok && warmNetwork.mode === 'per-run'
+                  ? await createRunNetwork(runNetwork, warmId, warmNetwork.proxyContainer)
+                  : { name: sandbox.network, release: async () => {} }
               try {
                 const proxy = proxyUrlWithToken(egress.dataUrl, token)
                 const warmed = await warmDepCache({
                   runtime: sandbox.runtime,
                   ociRuntime: sandbox.ociRuntime,
                   image: sandbox.image,
-                  network: sandbox.network,
+                  network: warmNet.name,
                   cacheRoot: depCacheDirFor(cache, frame.repositoryId),
                   clonePath: workspace.clonePath,
                   command: frame.installCommand,
@@ -2088,6 +2160,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 // is a credential nobody is watching.
                 await revokeEgressToken(egress, warmId).catch(() => {})
                 await discardRunWorkspace(workspace.clonePath).catch(() => {})
+                await warmNet.release()
               }
             })
             .then((result) => {

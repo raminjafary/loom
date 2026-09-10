@@ -32,7 +32,9 @@ const execFileAsync = promisify(execFile)
  *   is "`--network=none` by default with all egress through the authenticating proxy" —
  *   those cannot both be literally true. The internal network has no gateway, so it is
  *   `none` as far as the internet, the host, postgres and valkey are concerned, while
- *   leaving exactly one reachable peer.
+ *   leaving exactly one reachable peer. That peer is now the *only* one: the network is
+ *   created per run and holds this container and the proxy, so "exactly one reachable
+ *   peer" is enforced rather than merely intended. See run-network.ts.
  * - **A container by default, a VM where the operator has one.** A shared kernel is not a
  *   sufficient boundary for model-written code, and a container is a real boundary compared
  *   to running unsandboxed rather than a claim to have solved kernel escape. Where a
@@ -67,6 +69,12 @@ export interface SandboxOptions {
   readonly egressToken: string
   /** Where the sandbox reaches the proxy, e.g. http://loom-egress:8080. */
   readonly egressDataUrl: string
+  /**
+   * The network this run's container joins. Its own, under the default mode — see
+   * run-network.ts. Absent leaves the shared network from the config, which is what an
+   * operator gets after setting LOOM_SANDBOX_NETWORK_MODE=shared.
+   */
+  readonly network?: string
   readonly resumeSessionId?: string
   /** May return a promise; awaited before the next event is forwarded (see forwardEvent). */
   readonly onEvent: (event: WireAgentEvent) => void | Promise<void>
@@ -481,6 +489,12 @@ export const buildSandboxArgs = (
     env: Record<string, string>
     /** Host path to mount as the dependency cache — per-run in `copy` mode. */
     depCachePath?: string
+    /**
+     * The network this one container runs on, which under the default mode is its own and
+     * holds nothing but it and the egress proxy. Falls back to the shared one so a caller
+     * that has not been taught about `run-network.ts` still starts a working container.
+     */
+    network?: string
   },
 ): string[] => [
   'run',
@@ -495,9 +509,10 @@ export const buildSandboxArgs = (
   // `microvm`, because `isolationVerdict` refuses the run first.
   ...(config.ociRuntime ? ['--runtime', config.ociRuntime] : []),
 
-  // No route off the host except the egress proxy.
+  // No route off the host except the egress proxy — and, by default, no route to another
+  // run either: this is a network holding this container and the proxy. See run-network.ts.
   '--network',
-  config.network,
+  options.network ?? config.network,
 
   // Drop every capability, and forbid regaining any via setuid binaries.
   '--cap-drop=ALL',
@@ -633,6 +648,7 @@ export const runAgentInSandbox = async (
       ...(depCache ? depCacheEnv() : {}),
     },
     ...(depCache ? { depCachePath: depCache.path } : {}),
+    ...(options.network === undefined ? {} : { network: options.network }),
   })
 
   const child: ChildProcessWithoutNullStreams = spawn(config.runtime, args, {

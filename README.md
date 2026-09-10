@@ -393,13 +393,15 @@ Three limits stated plainly rather than buried:
   control is "secrets never enter the sandbox" rather than "the sandbox cannot talk out".
 - **Unsandboxed runs get the Runner's own privileges** — one `Bash` call reaches the login
   keychain — so that mode needs a separate, deliberately awkward acknowledgement.
-- **Concurrent sandboxes share one network.** They hold no credentials, so the blast radius is
-  one run's clone, but they can reach each other by container name. Per-run networks close it.
-  The egress proxy's control plane sits on that network too and no longer answers on it: a
-  connection from the sandbox's range is destroyed before it is parsed, and the proxy says at
-  boot which range that is — so the control secret is now the Runner's authentication rather
-  than the only barrier. It is still validated as one: at least 32 characters, example values
-  refused at boot.
+- **Each sandbox gets a network of its own**, holding it and the egress proxy, so one run can no
+  longer reach another by container name — a run id is not a secret, and that was the whole of
+  the old exposure. A host that cannot attach the proxy to a per-run network refuses every run
+  rather than quietly putting them back together. The proxy's control plane sits on those
+  networks too and answers on none of them: every internal network this container is on is
+  classified from the kernel's own route table, per connection, so a network created after the
+  proxy booted is refused on its first use. The control secret is now the Runner's
+  authentication rather than the only barrier, and is still validated as one — at least 32
+  characters, example values refused at boot.
 
 ---
 
