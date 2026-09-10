@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AgentPersona } from '@loom/api-contract'
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 const props = defineProps<{ disabled: boolean; personas: AgentPersona[] }>()
 const emit = defineEmits<{ send: [text: string] }>()
@@ -70,6 +70,60 @@ const submit = () => {
   void nextTick(autoGrow)
 }
 
+/**
+ * The placeholder, as a ladder of hints, longest first — and which one fits is measured
+ * rather than guessed.
+ *
+ * A textarea's placeholder wraps and this field is one line tall, so at any width where a hint
+ * needs a second line that line is sliced off and the reader gets half a sentence. Both obvious
+ * fixes cost something at every width: a taller field, or an ellipsis on a hint whose ending is
+ * the part worth reading.
+ *
+ * Measuring costs nothing anywhere. Each candidate is laid out in a hidden mirror in the
+ * field's own font and the longest that fits is used, so nobody with room for the full hint
+ * loses it. Three rungs rather than two because the field gets narrower than a phone: at 900px
+ * the run launcher leaves the composer about 200px, which the middle rung does not fit either —
+ * that was measured on the sweep after the two-rung version, which chose correctly and still
+ * rendered a sliced line.
+ *
+ * The last rung has to be short enough to fit anything, because there is no rung below it.
+ */
+const PLACEHOLDERS = [
+  'Message… (Enter to send, Shift+Enter for a newline, @persona to start a run)',
+  'Message… (@persona to start a run)',
+  'Message…',
+] as const
+
+const mirrorRef = ref<HTMLSpanElement | null>(null)
+const rung = ref(0)
+const placeholder = computed(() => PLACEHOLDERS[rung.value] ?? PLACEHOLDERS[PLACEHOLDERS.length - 1])
+
+const measurePlaceholder = () => {
+  const el = textareaRef.value
+  const mirror = mirrorRef.value
+  if (!el || !mirror) return
+  const style = getComputedStyle(el)
+  const inner =
+    el.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight)
+  // A field with no layout yet reports zero, and zero is not "nothing fits" — it is "not
+  // measured", so the longest hint stays until there is a width to compare against.
+  if (inner <= 0) return
+  const fits = PLACEHOLDERS.findIndex((text) => {
+    mirror.textContent = text
+    return mirror.getBoundingClientRect().width <= inner
+  })
+  mirror.textContent = ''
+  rung.value = fits === -1 ? PLACEHOLDERS.length - 1 : fits
+}
+
+let observer: ResizeObserver | null = null
+onMounted(() => {
+  measurePlaceholder()
+  observer = new ResizeObserver(measurePlaceholder)
+  if (textareaRef.value) observer.observe(textareaRef.value)
+})
+onBeforeUnmount(() => observer?.disconnect())
+
 const onEnter = () => {
   const first = mentionMatches.value[0]
   if (first) {
@@ -96,13 +150,14 @@ const onEnter = () => {
         v-model="draft"
         :disabled="props.disabled"
         rows="1"
-        placeholder="Message… (Enter to send, Shift+Enter for a newline, @persona to start a run)"
+        :placeholder="placeholder"
         aria-label="Message"
         @input="onInput"
         @click="trackCursor"
         @keyup="trackCursor"
         @keydown.enter.exact.prevent="onEnter"
       />
+      <span ref="mirrorRef" class="hint-mirror" aria-hidden="true" />
     </div>
     <button type="submit" :disabled="props.disabled || draft.trim().length === 0">Send</button>
   </form>
@@ -151,6 +206,22 @@ textarea {
   */
   resize: none;
   overflow-y: auto;
+}
+
+/*
+  The ruler for the placeholder above: one candidate at a time on one unbreakable line, in the
+  field's own font, laid out where it cannot be seen or read aloud. `visibility: hidden` rather
+  than `display: none`, which has no width to measure.
+*/
+.hint-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  font-size: 0.92rem;
+  line-height: 1.4;
 }
 
 .mentions {
