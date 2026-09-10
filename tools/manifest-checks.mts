@@ -122,6 +122,24 @@ export const MANIFEST_CHECKS: readonly ManifestCheckSpec[] = [
     requires: 'tools/browser-check.mts',
     needs: 'stack',
   },
+  /**
+   * The prosecutor's plumbing, and the three negatives the whole pass rests on: a verdict that
+   * must not move, a run that must not change, a merge that must not be blocked. It belongs
+   * here for the reason the six above do — zero tokens, its own server, its own Runner, and it
+   * asserts — and it was left out when it was written.
+   *
+   * What is deliberately *not* here is either sandbox-network driver. Both need a running
+   * container daemon, an egress proxy built from the current control plane and a freshly built
+   * sandbox image, which is a different prerequisite from `stack` and would make an absent one
+   * look like a refusal. Adding them means a second value for `needs` and a second thing for
+   * the drill and the promoter to provision.
+   */
+  {
+    name: 'prosecutor-driver',
+    command: 'npx tsx tools/prosecutor-check.mts',
+    requires: 'tools/prosecutor-check.mts',
+    needs: 'stack',
+  },
 ]
 
 /**
