@@ -224,6 +224,31 @@ describe('waitingCount', () => {
  * human does next; a branch that failed its checks still needs the same decision, and
  * putting it in "Stopped early" would say something false about the run.
  */
+describe('buildInboxBoard and the runs nobody decides about', () => {
+  /**
+   * The lane filled with cards no human could act on the moment a prosecutor started on every
+   * finished branch: two per branch, and the badge counted both. A reviewer's branch had the
+   * same problem for longer and quieter, because a plan produces one reviewer, not one per run.
+   */
+  it.each(['review', 'prosecute', 'verify', 'screen'] as const)(
+    'keeps a %s run off the board entirely — its branch is not a proposal',
+    (relation) => {
+      const lanes = board({ needsAttention: [run({ id: 'second-opinion', relation })] })
+      expect(laneOf(lanes, 'second-opinion')).toBeNull()
+      expect(waitingCount(lanes)).toBe(0)
+    },
+  )
+
+  /** A reconciler's branch *is* the fix and does merge; an escalation is the same task retried. */
+  it.each(['reconcile', 'escalate', 'delegation', null] as const)(
+    'keeps a %s run on it — that branch is work',
+    (relation) => {
+      const lanes = board({ needsAttention: [run({ id: 'work', relation })] })
+      expect(laneOf(lanes, 'work')).toBe('review')
+    },
+  )
+})
+
 describe('buildInboxBoard with prosecutions', () => {
   const broke = [{ name: 'a probe', outcome: 'broke' as const, detail: null }]
   const held = [{ name: 'a probe', outcome: 'held' as const, detail: null }]

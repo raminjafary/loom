@@ -332,6 +332,39 @@ describe('architectural boundaries', () => {
     }
   })
 
+  /**
+   * The client's second mirror of a domain rule, and the one where a drift *hides* a card
+   * rather than reordering two — so this is checked against every relation the union has,
+   * rather than against a chosen few. A relation added to the union and not thought about here
+   * is the case this catches.
+   */
+  it('the Inbox agrees with the domain about whose branch is somebody’s to decide', async () => {
+    const { branchIsSomebodysToDecide } = await import('../packages/domain/src/index.js')
+    const { buildInboxBoard } = await import('../packages/client-core/src/inbox-board.js')
+
+    const relations = [
+      'delegation', 'review', 'reconcile', 'steer', 'handoff', 'verify',
+      'screen', 'escalate', 'workflow', 'design', 'prosecute', null,
+    ] as const
+
+    for (const relation of relations) {
+      const run = {
+        id: 'r1',
+        status: 'completed',
+        branchName: 'loom/run-r1',
+        branchDisposition: null,
+        relation,
+        createdAt: new Date(0),
+        completedAt: new Date(0),
+      } as never
+      const lanes = buildInboxBoard({ needsAttention: [run], settled: [], mergeQueue: [] })
+      const onTheBoard = lanes.some((lane) => lane.cards.length > 0)
+      expect(onTheBoard, `relation ${String(relation)}`).toBe(
+        branchIsSomebodysToDecide(relation as never),
+      )
+    }
+  })
+
   it('every CSS variable a component uses is declared by the design system', () => {
     const declared = (text: string) =>
       new Set([...text.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].map((match) => match[1] as string))

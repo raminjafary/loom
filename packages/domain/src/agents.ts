@@ -813,6 +813,42 @@ export const PLATFORM_INITIATED_RELATIONS = [
   'screen',
 ] as const satisfies readonly AgentRunRelation[]
 
+/**
+ * The relations whose branch is **not work anybody decides about**.
+ *
+ * Every run with a branch lands in the Inbox's "ready to review" lane, because a lane is what a
+ * human does next and the next thing to do with a finished branch is decide about it. That is
+ * true of a worker's branch and false of these four, and the difference is not cosmetic:
+ *
+ * - a `review` run's branch *is the branch it reviewed*, cloned — `enqueueMergeRun` refuses it
+ *   outright, because merging it would land the reviewed work a second time under a name
+ *   nobody chose. Its output is its notes.
+ * - a `prosecute` run's branch is the same shape and its prompt tells it to commit nothing. Its
+ *   output is evidence on somebody else's card.
+ * - `verify` and `screen` are the platform judging a search. Their branches are the material
+ *   being scored, not a proposal.
+ *
+ * `reconcile` and `escalate` are deliberately absent: a reconciler's branch *is* the fix and
+ * does merge, and an escalation is the same task retried at a higher tier. Both are work.
+ *
+ * This list exists because the Inbox had none: with a prosecutor started on every finished
+ * branch, the lane filled with a second card per branch that no human could act on — and the
+ * badge counted them, so every run made the number go up by two.
+ */
+export const RELATIONS_WHOSE_BRANCH_IS_NOT_WORK = [
+  'review',
+  'prosecute',
+  'verify',
+  'screen',
+] as const satisfies readonly AgentRunRelation[]
+
+export const branchIsSomebodysToDecide = (
+  relation: AgentRunRelation | null | undefined,
+): boolean =>
+  relation === null ||
+  relation === undefined ||
+  !(RELATIONS_WHOSE_BRANCH_IS_NOT_WORK as readonly string[]).includes(relation)
+
 export const isPlatformInitiatedRelation = (
   relation: AgentRunRelation | null | undefined,
 ): relation is AgentRunRelation =>

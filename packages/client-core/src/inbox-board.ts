@@ -72,6 +72,17 @@ const wantsAttention = (prosecution: Prosecution | null): boolean =>
   prosecution.status === 'reported' &&
   prosecution.observations.some((observation) => observation.outcome === 'broke')
 
+/**
+ * Mirrors `@loom/domain`'s `branchIsSomebodysToDecide`, rather than importing it, for the
+ * reason `models.ts` gives: a client depends on the contract, never on the domain.
+ *
+ * Unlike the mirror above this one, a drift here would *hide a card* rather than reorder two,
+ * so it is pinned in `architecture.test.ts` against the domain's own answer for every relation
+ * the union has — not for a chosen few.
+ */
+const decidable = (relation: string | null | undefined): boolean =>
+  relation !== 'review' && relation !== 'prosecute' && relation !== 'verify' && relation !== 'screen'
+
 const LANE_TITLES: Record<InboxLaneId, { title: string; empty: string }> = {
   'needs-you': {
     title: 'Needs you',
@@ -191,6 +202,15 @@ export const buildInboxBoard = (input: {
   for (const run of [...input.needsAttention, ...input.settled]) {
     if (seen.has(run.id)) continue
     seen.add(run.id)
+    /**
+     * A second-opinion run's branch is not a proposal — a reviewer's is the branch it reviewed
+     * and a prosecutor's is one it was told to commit nothing to. Left in, each one arrived in
+     * "ready to review" as a thing to decide about, so a workspace with the prosecutor enabled
+     * showed two cards per branch and counted two in the badge. They are not moved to another
+     * lane, because there is no lane for them: what a prosecutor produced is already on the
+     * card of the run it prosecuted.
+     */
+    if (!decidable(run.relation)) continue
 
     const queueEntry = entryByRun.get(run.id) ?? null
     const lane = laneFor(run, queueEntry)
