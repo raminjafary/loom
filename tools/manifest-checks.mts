@@ -16,17 +16,45 @@ const execFileAsync = promisify(execFile)
  * coincidence — a promoter that gated on a narrower set than the drill rehearses would be
  * rehearsing a recovery from a class of breakage it does not actually check for.
  *
- * ## What is in the list, and the part that is stated rather than implied
+ * ## What is in the list, in two tiers
  *
- * The 21 live drivers are this list's natural material and they are not here: every one needs a
- * live server, a Runner process and model access, and a gate that needs all three is a gate that
- * gets switched off. So the manifest covers the platform's static guarantees and its
- * infrastructure-free suites, and both callers say so rather than implying coverage they do not
- * have. Individual checks can be selected with `--check`.
+ * The live drivers were this list's natural material and were left out of it, on the argument
+ * that every one needs a live server, a Runner process and model access, and that a gate needing
+ * all three is a gate that gets switched off. Two thirds of that turned out to be wrong. The
+ * drivers **build their own server and spawn their own Runner** — that is what makes them
+ * drivers rather than tests — so the only real dependency is the compose stack, which is one
+ * command, and model access, which the zero-token ones do not need at all.
+ *
+ * So there are two tiers:
+ *
+ * - **static** — the platform's guarantees and its infrastructure-free suites. Seconds. The
+ *   default, because the drill is run by hand and often.
+ * - **live** — the zero-token drivers, each of which stands up everything it needs given
+ *   Postgres and Valkey. Minutes: `workflow-check` alone is two of them, which is the honest
+ *   reason this is a tier and not simply more rows.
+ *
+ * **The tier is shared state, read from one place**, because the rule that made this file exist
+ * still holds: a promoter gating on a wider set than the drill rehearses would refuse promotions
+ * for a class of breakage nobody has rehearsed recovering from. Set `LOOM_MANIFEST_TIER=live`
+ * and both callers widen together.
+ *
+ * What is still absent, and stated rather than implied: every driver that spends tokens. A gate
+ * that costs money per invocation is a gate someone turns off, and that argument was always the
+ * true one — it just never applied to the twenty-odd drivers that spend nothing.
  */
+export type ManifestTier = 'static' | 'live'
+
 export interface ManifestCheckSpec {
   readonly name: string
   readonly command: string
+  /**
+   * What this check cannot run without. `stack` means Postgres and Valkey answering and the
+   * test databases migrated — everything else a driver needs, it starts itself.
+   *
+   * Absent means it needs nothing but the tree, which is what makes the static tier the tier
+   * that can run anywhere, including inside a worktree pinned at another commit.
+   */
+  readonly needs?: 'stack'
   /**
    * Repo-relative path the check needs.
    *
@@ -51,12 +79,88 @@ export const MANIFEST_CHECKS: readonly ManifestCheckSpec[] = [
     command: 'npx vitest run packages/domain',
     requires: 'packages/domain/src/index.ts',
   },
+
+  /**
+   * The live tier. Every one of these spends nothing, builds its own server, spawns its own
+   * Runner where it needs one, and asserts rather than prints — which is what makes them
+   * usable as a gate at all. `requires` is the same distinction it is above: a driver the
+   * modification *deleted* is a check that cannot answer, not a check that failed.
+   */
+  {
+    name: 'workflow-driver',
+    command: 'npx tsx tools/workflow-check.mts',
+    requires: 'tools/workflow-check.mts',
+    needs: 'stack',
+  },
+  {
+    name: 'designer-driver',
+    command: 'npx tsx tools/designer-check.mts',
+    requires: 'tools/designer-check.mts',
+    needs: 'stack',
+  },
+  {
+    name: 'trial-driver',
+    command: 'npx tsx tools/trial-check.mts',
+    requires: 'tools/trial-check.mts',
+    needs: 'stack',
+  },
+  {
+    name: 'backend-driver',
+    command: 'npx tsx tools/backend-check.mts',
+    requires: 'tools/backend-check.mts',
+    needs: 'stack',
+  },
+  {
+    name: 'persona-share-driver',
+    command: 'npx tsx tools/persona-share-check.mts',
+    requires: 'tools/persona-share-check.mts',
+    needs: 'stack',
+  },
+  {
+    name: 'browser',
+    command: 'npx tsx tools/browser-check.mts',
+    requires: 'tools/browser-check.mts',
+    needs: 'stack',
+  },
 ]
 
-export const selectChecks = (names: string | null): readonly ManifestCheckSpec[] => {
-  if (names === null) return MANIFEST_CHECKS
+/**
+ * Which tier both callers are on. One reader, so the drill and the promoter cannot silently
+ * disagree about what a passing manifest means.
+ */
+export const manifestTier = (env: NodeJS.ProcessEnv = process.env): ManifestTier =>
+  env.LOOM_MANIFEST_TIER === 'live' ? 'live' : 'static'
+
+export const checksForTier = (tier: ManifestTier): readonly ManifestCheckSpec[] =>
+  tier === 'live' ? MANIFEST_CHECKS : MANIFEST_CHECKS.filter((entry) => entry.needs === undefined)
+
+export const selectChecks = (
+  names: string | null,
+  tier: ManifestTier = manifestTier(),
+): readonly ManifestCheckSpec[] => {
+  // A check named outright is a check the operator wants run, whatever tier it is in.
+  if (names === null) return checksForTier(tier)
   const wanted = names.split(',').map((name) => name.trim())
   return MANIFEST_CHECKS.filter((entry) => wanted.includes(entry.name))
+}
+
+/**
+ * Whether the stack the live tier needs is actually up.
+ *
+ * Probed rather than assumed, and the caller **refuses** rather than narrowing: a manifest that
+ * quietly dropped six checks because Postgres was down would record a clean run and compare a
+ * candidate against it, which is the shape of every failure this file exists to prevent.
+ */
+export const stackIsUp = async (): Promise<boolean> => {
+  try {
+    const { stdout } = await execFileAsync('docker', [
+      'compose', 'ps', '--services', '--filter', 'status=running',
+    ])
+    const running = stdout.split('\n').map((line) => line.trim())
+    return running.includes('postgres') && running.includes('valkey')
+  } catch {
+    return false
+  }
 }
 
 const tail = (text: string, lines = 4): string | null => {

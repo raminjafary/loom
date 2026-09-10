@@ -69,7 +69,13 @@ import {
   type SelfDeployment,
   type SelfRevision,
 } from '../packages/domain/src/index.js'
-import { MANIFEST_CHECKS, observeChecks, selectChecks } from './manifest-checks.mjs'
+import {
+  MANIFEST_CHECKS,
+  manifestTier,
+  observeChecks,
+  selectChecks,
+  stackIsUp,
+} from './manifest-checks.mjs'
 
 const execFileAsync = promisify(execFile)
 const REPO = resolve(new URL('..', import.meta.url).pathname)
@@ -312,6 +318,22 @@ const main = async () => {
     console.error(`no such check. Available: ${MANIFEST_CHECKS.map((c) => c.name).join(', ')}`)
     process.exit(2)
   }
+
+  /**
+   * The live tier needs Postgres and Valkey, and an absent stack must **refuse** rather than
+   * narrow the manifest: six checks quietly dropped would be recorded as a clean run and then
+   * compared against, which is exactly the shape of failure a manifest exists to prevent.
+   */
+  const tier = manifestTier()
+  if (selected.some((entry) => entry.needs === 'stack') && !(await stackIsUp())) {
+    console.error(
+      'LOOM_MANIFEST_TIER=live asks for the drivers, and Postgres or Valkey is not running.\n' +
+        '  docker compose up -d postgres valkey && pnpm db:test:prepare\n' +
+        'Or drop the variable to record the static tier, which needs nothing but the tree.',
+    )
+    process.exit(2)
+  }
+  console.log(`manifest tier: ${tier} — ${selected.map((entry) => entry.name).join(', ')}\n`)
   const baselineTree = deployment.running === null ? REPO : pathFor(deployment.running.commit)
   const baselineCommit = deployment.running?.commit ?? (await git(['rev-parse', 'HEAD']))
   console.log(`\n— what the running revision can do, at ${baselineCommit.slice(0, 12)} —`)
