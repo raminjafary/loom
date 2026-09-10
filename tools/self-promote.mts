@@ -171,11 +171,40 @@ const build = async (commit: string): Promise<boolean> => {
  */
 const healthOf = async (commit: string): Promise<SelfRevision['health']> => {
   const target = pathFor(commit)
-  const server = spawn('npx', ['tsx', 'apps/server/src/main.ts'], {
-    cwd: target,
-    env: { ...process.env, SERVER_PORT: String(HEALTH_PORT) },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  /**
+   * Started **the way a deployment starts it**, which for this platform means with the env
+   * file: `@loom/server`'s own start script is `tsx --env-file=../../.env src/main.ts`.
+   *
+   * This was the reason tier 4 had never been exercised, and the failure was silent in the
+   * worst direction — the candidate died inside `loadConfig` before binding a port, the
+   * promoter reported "it exited before answering", and the gate refused a revision that was
+   * fine. A health check that starts the program differently from the way it is served is
+   * not testing the thing it is named after.
+   *
+   * The env file belongs to the *host*, not to the revision: a candidate worktree is a
+   * checkout of tracked files and `.env` is not one. So it is read from the source
+   * repository, and an operator with a different arrangement names it outright. The flag is
+   * omitted entirely when there is no file, because node refuses to start on a missing one —
+   * which would turn a machine that configures its environment some other way into a machine
+   * where nothing can be promoted.
+   *
+   * `SERVER_PORT` still wins: an env file does not override a variable already in the
+   * environment, so the rehearsal binds its own port rather than the one that is serving.
+   */
+  const envFile = resolve(process.env.LOOM_ENV_FILE ?? join(REPO, '.env'))
+  const server = spawn(
+    'npx',
+    [
+      'tsx',
+      ...(existsSync(envFile) ? [`--env-file=${envFile}`] : []),
+      'apps/server/src/main.ts',
+    ],
+    {
+      cwd: target,
+      env: { ...process.env, SERVER_PORT: String(HEALTH_PORT) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  )
   let log = ''
   server.stdout.on('data', (d) => (log += String(d)))
   server.stderr.on('data', (d) => (log += String(d)))
