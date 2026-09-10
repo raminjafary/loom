@@ -3,7 +3,14 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    // The browser drivers hand source text to a page: the code inside `page.evaluate`
+    // runs in a document, not in this process, so `document` and `getComputedStyle` are
+    // real there and nowhere else here.
+    "lib": ["ES2023", "DOM"],
+    // `browser-check.mts` imports `browser-harness.mts` by its real extension because the
+    // loader that runs these drivers does not rewrite `.js` to `.mts` — only to `.ts`.
+    "allowImportingTsExtensions": true
   },
   "include": ["**/*.mts", "**/*.ts"]
 }

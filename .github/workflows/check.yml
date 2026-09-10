@@ -1,10 +1,10 @@
-# What `make check` runs, on every push and pull request.
+# What `make check` runs, plus the browser, on every push and pull request.
 #
-# This is deliberately not Phase 3c. That item is a real *browser* in CI and it is still the
-# trailing one; this job is typecheck, lint and the suite — no browser, no model, no tokens.
-# "No CI" had been in the README's known-gaps list for weeks while `make check` sat there
-# defining exactly what a CI job would run, because the trailing-item rule was read as
-# covering both. It never did.
+# Two jobs, deliberately. `check` is typecheck, lint and the suite — seconds, no browser.
+# `browser` is Phase 3c: a real Chromium driving the real app against a real server and a
+# real realtime gateway, asserting on what is *visible*. It is separate because it needs a
+# browser binary and a minute of wall clock, and because a failure in it means something
+# different — the suite says the logic is wrong, this says a person could not have used it.
 #
 # The containers are the real ones from docker-compose.yml rather than GitHub `services:`,
 # for one reason that matters: `tools/prepare-test-dbs.sh` creates the four test databases
@@ -70,6 +70,59 @@ jobs:
       # typecheck covers a directory turbo never sees — where a driver rotted for months.
       - name: Layer boundaries
         run: npx vitest run tools/architecture.test.ts
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose logs --tail 50 postgres valkey
+
+  # Phase 3c. The evidence for this job is a ratio: every UI defect this project has
+  # shipped was found by a human looking at a browser, and none by the suite — across
+  # sessions in which `apps/web` grew past two hundred component tests. On its first run
+  # the driver found the selected view tab rendering its own label at a contrast ratio of
+  # 1.02, and a modal dialog that Escape could not close.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      LOOM_EGRESS_CONTROL_SECRET: ci-placeholder-the-proxy-does-not-run-here
+      ANTHROPIC_API_KEY: ci-placeholder-no-model-call-happens-in-this-job
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `--with-deps` because a headless browser on a bare runner is missing shared
+      # libraries, and the failure is a launch error rather than a missing browser.
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Start Postgres and Valkey
+        run: docker compose up -d --wait postgres valkey
+
+      - name: Create and migrate the test databases
+        run: pnpm db:test:prepare
+
+      - name: Drive the UI
+        run: npx tsx tools/browser-check.mts
+
+      # Uploaded whether or not it passed: a screenshot of a layout that is merely *odd*
+      # is the thing a person wants to look at, and a pass does not mean nobody should.
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-screenshots
+          path: artifacts/browser/
+          if-no-files-found: warn
 
       - name: Diagnostics on failure
         if: failure()

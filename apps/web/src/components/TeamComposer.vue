@@ -17,7 +17,7 @@ import {
   type RemoveEdgeVerdict,
 } from '@loom/client-core'
 import { VueFlow, useVueFlow, type Connection, type NodeDragEvent } from '@vue-flow/core'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 /**
  * The canvas-based team composition, on the pinned Vue Flow.
@@ -979,10 +979,21 @@ const onKeydown = (event: KeyboardEvent) => {
   else if (selectedEdgeId.value) selectedEdgeId.value = ''
   else emit('close')
 }
+
+/**
+ * The same thing the settings overlay had to fix, missed here because this dialog is the
+ * newest of the three: a `keydown` handler on a `tabindex="-1"` element that nothing ever
+ * focuses never fires, so Escape did nothing and the only way out was the ✕ — while the
+ * element claimed `aria-modal="true"`. Focusing the scrim on mount is what makes both the
+ * handler and the claim true, and it moves focus off whatever is behind the dialog.
+ */
+const scrim = ref<HTMLElement | null>(null)
+onMounted(() => scrim.value?.focus())
 </script>
 
 <template>
   <div
+    ref="scrim"
     class="scrim"
     role="dialog"
     aria-modal="true"

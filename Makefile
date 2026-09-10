@@ -21,7 +21,7 @@ WS_GATEWAY_PORT ?= $(shell grep -E '^WS_GATEWAY_PORT=' .env 2>/dev/null | cut -d
 WEB_PORT ?= 5173
 DEV_PORTS := $(or $(SERVER_PORT),3001) $(or $(WS_GATEWAY_PORT),3002) $(WEB_PORT)
 
-.PHONY: help up dev down kill infra migrate status test check
+.PHONY: help up dev down kill infra migrate status test check browser
 
 help: ## What each target does
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -77,3 +77,11 @@ check: ## Everything CI runs, locally
 	pnpm lint
 	$(MAKE) test
 	npx vitest run tools/architecture.test.ts
+
+# Separate from `check` because it needs a browser binary, and because it is the one
+# target here that takes a minute rather than seconds. CI runs it as its own job for the
+# same reason.
+browser: ## The UI, in a real browser, against a real server
+	pnpm db:test:prepare
+	npx playwright install --with-deps chromium
+	npx tsx tools/browser-check.mts
