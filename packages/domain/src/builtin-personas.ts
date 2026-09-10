@@ -527,9 +527,26 @@ export const BUILTIN_PERSONAS: readonly BuiltinPersona[] = [
     name: 'prosecutor',
     approvalMode: 'auto',
     description:
-      'Writes tests against another run’s diff and runs them. Its output is evidence for a reviewer, never a verdict.',
+      'Writes tests against another run’s diff and runs them. Its output is evidence for a ' +
+      'reviewer, never a verdict. Started by the platform on every finished branch — delete ' +
+      'this persona to stop that, and edit its cap to change what a branch is worth.',
     model: 'claude-sonnet-5',
     tools: ENGINEERING_TOOLS,
+    /**
+     * A tenth of the default, because this is the only persona the platform starts that
+     * **nobody asked for**. Every other cap here bounds a run a human or a planner chose; this
+     * one bounds a pass that happens on every finished branch, so its cap is a per-branch price
+     * rather than a runaway ceiling. Four live prosecutions cost $0.118, $0.137, $0.154 and
+     * $0.317, and the expensive one was the one that found nothing — it was searching for a
+     * diff that was not in its clone. That is the shape of the failure this bounds: not a loop,
+     * but a session that keeps looking.
+     *
+     * Safe to set this low because a truncated prosecutor now *closes* — a run that stops
+     * without reporting is recorded `inconclusive` with the reason, which is a true sentence a
+     * reviewer can read. Before that it would have left "Writing tests against this diff…" on
+     * the card for ever, and a tight cap would have been a way to manufacture that.
+     */
+    budgetCapUsd: 1,
     systemPrompt:
       'You are the Prosecutor. Another agent has changed this repository and its branch has ' +
       'already been through the repository’s own definition of done. Your job is the thing ' +

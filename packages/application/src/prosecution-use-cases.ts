@@ -74,6 +74,16 @@ export const renderProsecutorTask = (input: {
  * holds no authority: no prosecutor persona in the workspace, no branch, a workspace at its
  * concurrency limit. A missing prosecution is a piece of evidence nobody gathered, not a run
  * that went wrong — and the one thing it must never do is make a finished run look failed.
+ *
+ * ## The operator's switch is the persona, and there is no second one
+ *
+ * This is the only pass the platform starts that nobody asked for: every finished run with a
+ * branch gets one, at whatever the prosecutor persona's cap allows. The lookup below by fixed
+ * name is therefore also the control — **delete or rename the persona and the pass is off for
+ * that workspace**, and edit its `budgetCapUsd` to change what a branch is worth. Stated here
+ * because it is otherwise invisible: an operator reading this file to find the flag would find
+ * a silent `return` and conclude there was none, and an environment variable would have been a
+ * second, per-host answer to a question the persona already answers per workspace.
  */
 export const startProsecutor = async (
   deps: AgentDeps,

@@ -172,6 +172,40 @@ describe('BUILTIN_PERSONAS', () => {
     },
   )
 
+  /**
+   * The one persona the platform starts that nobody asked for, and therefore the one whose cap
+   * is a *price* rather than a ceiling.
+   *
+   * Every other built-in is `@mention`ed or delegated to, so its cap bounds a runaway on a run
+   * somebody chose. A prosecutor happens on every finished branch, so its cap is multiplied by
+   * the branch count and an operator only meets it on the bill. Four live prosecutions cost
+   * $0.118 to $0.317; a cap five times the worst of those is a bound, and the shipped default
+   * of $5 was thirty-eight times it.
+   */
+  it('prices the prosecutor per branch, well under the cap every other built-in ships with', () => {
+    const prosecutor = BUILTIN_PERSONAS.find((p) => p.name === 'prosecutor')
+    const others = BUILTIN_PERSONAS.filter((p) => p.name !== 'prosecutor')
+    expect(prosecutor?.harnessBudgetCapUsd).toBe(1)
+    for (const persona of others) {
+      expect(
+        persona.harnessBudgetCapUsd,
+        `${persona.name} is cheaper than the pass that runs unrequested`,
+      ).toBeGreaterThan(prosecutor!.harnessBudgetCapUsd!)
+    }
+  })
+
+  /**
+   * The switch, and the reason it is asserted rather than left to the prompt: an operator
+   * turns this pass off by deleting the persona, which is only discoverable if the persona
+   * itself says so. `startProsecutor` looks it up by this exact name and returns silently when
+   * it is absent, so a renamed persona is a disabled pass with no other symptom.
+   */
+  it('tells the operator, in the description, that deleting it is how the pass is turned off', () => {
+    const prosecutor = BUILTIN_PERSONAS.find((p) => p.name === 'prosecutor')
+    expect(prosecutor?.description).toMatch(/every finished branch/i)
+    expect(prosecutor?.description).toMatch(/delete this persona/i)
+  })
+
   it('keeps the planner envelope to exactly what the built-in workers hold', () => {
     // The other half of the check above, and the one that catches the opposite drift:
     // an envelope wider than any shipped worker is granting reach nothing asked for.
