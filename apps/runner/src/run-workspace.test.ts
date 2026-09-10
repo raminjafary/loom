@@ -199,7 +199,7 @@ describe('prepareReviewWorkspace', () => {
 
   it('opens on the reviewed work', async () => {
     const { clonePath, branchName } = await buildReviewable()
-    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-1')
+    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-1', 'main')
 
     const content = await readFile(join(workspace.clonePath, 'app.ts'), 'utf8')
     expect(content).toContain('export const b = 2')
@@ -209,7 +209,7 @@ describe('prepareReviewWorkspace', () => {
     // Load-bearing: two runs answering to one branch name is how a reviewer's stray
     // edit would reach the merge queue as the reviewed run's work.
     const { clonePath, branchName } = await buildReviewable()
-    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-2')
+    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-2', 'main')
 
     expect(workspace.branchName).toBe('loom/run-reviewer-2')
     expect(workspace.branchName).not.toBe(branchName)
@@ -219,7 +219,7 @@ describe('prepareReviewWorkspace', () => {
 
   it('leaves no rebase in progress — a reviewer reads, it does not resolve', async () => {
     const { clonePath, branchName } = await buildReviewable()
-    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-3')
+    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-3', 'main')
 
     const { stdout } = await git(workspace.clonePath, ['status', '--porcelain'])
     expect(stdout.trim()).toBe('')
@@ -236,17 +236,34 @@ describe('prepareReviewWorkspace', () => {
      * `prepareReconcileWorkspace` produces the same shape, so this was latent there too.
      */
     const { clonePath, branchName } = await buildReviewable()
-    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-5')
+    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-5', 'main')
 
     const diff = await getDiff(workspace.clonePath, 'main')
     expect(diff).toContain('export const b = 2')
+  })
+
+  /**
+   * The other half of the check above, and the one it did not cover.
+   *
+   * `getDiff` resolves the default branch through `resolveDefaultBranchRef`, so the platform's
+   * own diff was always computable and the missing local ref stayed invisible. What is *not*
+   * routed through that helper is the agent: a reviewer is told to diff against the default
+   * branch and a prosecutor is handed `git diff main...HEAD` verbatim. Run by hand in the clone
+   * as it used to be prepared, that is `fatal: ambiguous argument`.
+   */
+  it('lets the agent run the diff its own task names, by hand', async () => {
+    const { clonePath, branchName } = await buildReviewable()
+    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-6', 'main')
+
+    const { stdout } = await git(workspace.clonePath, ['diff', 'main...HEAD'])
+    expect(stdout).toContain('export const b = 2')
   })
 
   it('cannot affect the branch it reviews', async () => {
     // A clone, not a checkout of the reviewed clone — the reviewed branch is what a
     // human may still want to read by hand.
     const { clonePath, branchName } = await buildReviewable()
-    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-4')
+    const workspace = await prepareReviewWorkspace(clonePath, branchName, 'reviewer-4', 'main')
     await writeFile(join(workspace.clonePath, 'app.ts'), 'reviewer scribbled here\n')
     await git(workspace.clonePath, ['add', '-A'])
     await git(workspace.clonePath, ['commit', '-qm', 'a stray edit'])

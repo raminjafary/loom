@@ -85,11 +85,24 @@ export const prepareRunWorkspace = async (
  * No `git fetch` of the default branch and no rebase: what a reviewer needs is the tree
  * as its author left it, not as the merge queue will land it. The queue's own rebase is
  * where the target's movement is accounted for.
+ *
+ * **A local ref for the default branch, though**, because the source is a clone whose HEAD is
+ * the branch — so `git clone` makes a local branch for that one and leaves the default as
+ * `origin/<default>` only.
+ *
+ * `resolveDefaultBranchRef` already copes with that for every diff the *platform* takes, which
+ * is why the shape survived a live reviewer. What it cannot cope with is the agent taking its
+ * own: a reviewer is told to "diff against the repository's default branch", and a prosecutor
+ * is told "read the diff first — `git diff main...HEAD`" in as many words. That command
+ * answered `fatal: ambiguous argument 'main...HEAD': unknown revision` — a failure a model
+ * works around rather than reports. The session that found it read the files by hand, wrote
+ * four good probes, and never mentioned that the one command its task named did not run.
  */
 export const prepareReviewWorkspace = async (
   targetClonePath: string,
   reviewedBranchName: string,
   runId: string,
+  defaultBranch: string,
 ): Promise<RunWorkspace> => {
   const branchName = `loom/run-${runId}`
   const clonePath = await mkdtemp(join(scratchRoot(), `loom-review-${runId}-`))
@@ -101,6 +114,15 @@ export const prepareReviewWorkspace = async (
   await execFileAsync('git', ['-C', clonePath, 'config', 'core.fsmonitor', 'false'])
   await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', reviewedBranchName])
   await execFileAsync('git', ['-C', clonePath, 'checkout', '--quiet', '-b', branchName])
+  /**
+   * Best-effort and last, when HEAD is already on this run's own branch so the name cannot be
+   * the one checked out. A repository whose default branch is not in the source clone is a
+   * tree the diff cannot be taken against at all, and failing the run over the *name* of a
+   * comparison would be worse than letting the agent discover it has no base.
+   */
+  await execFileAsync('git', [
+    '-C', clonePath, 'branch', '--no-track', defaultBranch, `refs/remotes/origin/${defaultBranch}`,
+  ]).catch(() => {})
 
   return { clonePath, branchName, homePath }
 }
