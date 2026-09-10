@@ -245,11 +245,16 @@ const main = async () => {
   })
 
   /**
-   * A design session is one turn of reading a brief and calling a tool; it does not touch the
-   * tree. Ten minutes is generous, and the wait ends the moment the run is terminal.
+   * A design session reads a brief, reads the tree, and calls a tool — possibly several
+   * times, because a refused shape is meant to be redrawn.
+   *
+   * Twenty minutes, raised from ten after a session that was still working at 601s was
+   * reported as `running` and counted as a failure. The wait ends the moment the run is
+   * terminal, so the number only costs anything when a session is genuinely iterating, which
+   * is the case this driver exists to watch.
    */
   const settle = async (id: ReturnType<typeof asAgentRunId>) => {
-    const DEADLINE_MS = 10 * 60 * 1000
+    const DEADLINE_MS = 20 * 60 * 1000
     const startedAt = Date.now()
     let run = await app.deps.agentRuns.findById(workspaceId, id)
     while (Date.now() - startedAt < DEADLINE_MS) {
@@ -266,6 +271,22 @@ const main = async () => {
       `\ndesign session ${String(run?.status)} after ${Math.round((Date.now() - startedAt) / 1000)}s, ` +
         `cost $${String(run?.totalCostUsd ?? 0)}${run?.errorMessage ? ` — ${run.errorMessage}` : ''}`,
     )
+    /**
+     * A session still working when the wait ends is stopped here rather than left running.
+     *
+     * The first run of this driver walked away from one: the driver exited, its Runner took
+     * a signal, and the container stayed up for twenty-five minutes talking to a model with
+     * nobody reading the answers. The Runner that would clean it up starts with a fresh
+     * state directory each time and cannot know the container was its predecessor's, so the
+     * only process that knows is this one. The workspace-wide control is the right
+     * instrument because this workspace is the driver's own and the abandoned session is
+     * the only thing in it.
+     */
+    if (run !== null && !['completed', 'failed', 'cancelled'].includes(run.status)) {
+      await client.runControl.pauseAll()
+      await client.runControl.resume()
+      console.log('  (it was still working and has been stopped — nothing was reading it)')
+    }
     return run
   }
 
