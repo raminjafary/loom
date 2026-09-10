@@ -205,6 +205,12 @@ export const createRunnerGateway = (
   baseDeps: Omit<AgentDeps, 'dispatch'>,
 ): { register(fastify: FastifyInstance): Promise<void>; dispatch: RunDispatchPort } => {
   const connections = new Map<string, ConnectedRunner>()
+  /**
+   * Set when the gateway is registered. Frames are handled outside `register`, and a
+   * dropped frame that says nothing anywhere is indistinguishable from one that never
+   * arrived — which is the whole difficulty of diagnosing a misrouted Runner.
+   */
+  let log: FastifyInstance['log'] | null = null
   const pendingChecks = new Map<string, PendingCheck>()
   const pendingLists = new Map<string, PendingList>()
   const pendingInits = new Map<string, PendingInit>()
@@ -232,6 +238,43 @@ export const createRunnerGateway = (
     if (!entry || entry.to !== from) return null
     pending.delete(requestId)
     return entry
+  }
+
+  /**
+   * Which Runner a run belongs to, memoized, so that a frame *about* a run can be checked
+   * against the socket it arrived on.
+   *
+   * `take` closed half of this: a reply to a request the server made is matched to the
+   * Runner the request went to. The other half is every frame a Runner sends unprompted —
+   * an event, a heartbeat, a cost report, a plan, a note, a map, a workflow answer — all of
+   * which name their run and none of which were checked. Two Runners on one host is the
+   * ordinary arrangement here (every live driver in `tools/` spawns one), so a second
+   * Runner could write into another's run by naming it: events into its transcript, a plan
+   * into its gate, spend against its cap.
+   *
+   * A run's Runner never changes, so a hit is permanent and the map is a cache rather than
+   * state — bounded because a long-lived server sees unboundedly many runs, and evicting
+   * the oldest entry only costs the next frame for that run one query. `null` for a run
+   * that does not exist in this workspace, which is also a drop: the workspace comes from
+   * the connection, so a frame naming another workspace's run finds nothing here.
+   */
+  const RUN_OWNER_CACHE_LIMIT = 4_096
+  const runOwners = new Map<string, RunnerId>()
+  const runBelongsTo = async (
+    workspaceId: WorkspaceId,
+    from: RunnerId,
+    runId: string,
+  ): Promise<boolean> => {
+    const cached = runOwners.get(runId)
+    if (cached !== undefined) return cached === from
+    const run = await baseDeps.agentRuns.findById(workspaceId, asAgentRunId(runId))
+    if (!run) return false
+    if (runOwners.size >= RUN_OWNER_CACHE_LIMIT) {
+      const oldest = runOwners.keys().next().value
+      if (oldest !== undefined) runOwners.delete(oldest)
+    }
+    runOwners.set(runId, run.runnerId)
+    return run.runnerId === from
   }
 
   const send = (runnerId: RunnerId, frame: ServerFrame): void => {
@@ -639,6 +682,26 @@ export const createRunnerGateway = (
     const result = RunnerFrameSchema.safeParse(parsed)
     if (!result.success) return
     const frame = result.data
+
+    /**
+     * **The run a frame names must belong to the Runner that sent it.**
+     *
+     * One check for every unsolicited frame, rather than an argument repeated in
+     * twenty-eight handlers. Nothing below re-derives the Runner from the frame, so this is
+     * the only place the two can be compared — and every handler under it may now treat
+     * `frame.runId` as a run this socket is entitled to speak for.
+     *
+     * Dropped silently to the Runner and loudly to the log, the same way `take` drops a
+     * reply from the wrong Runner: the frame is not an error to be reported back to a
+     * process that may be lying about who it is, and the run's real Runner is unaffected.
+     */
+    if ('runId' in frame && !(await runBelongsTo(workspaceId, from, frame.runId))) {
+      log?.warn(
+        { runnerId: from, frame: frame.type, runId: frame.runId },
+        'runner frame dropped: the run belongs to another Runner',
+      )
+      return
+    }
 
     switch (frame.type) {
       case 'hello':
@@ -1463,10 +1526,28 @@ export const createRunnerGateway = (
        * id from a relayed record would let one Runner write audit entries into another
        * workspace's log.
        */
-      case 'egress_report':
+      case 'egress_report': {
+        /**
+         * Per decision, because the run is inside the batch rather than on the frame —
+         * the one place the guard above cannot reach. A relayed record naming another
+         * Runner's run is dropped and the rest of the batch is still written: a proxy
+         * report is an audit trail, and discarding true entries because one was wrong
+         * would lose more than it protects.
+         */
+        const owned: typeof frame.decisions = []
+        for (const decision of frame.decisions) {
+          if (await runBelongsTo(workspaceId, from, decision.runId)) owned.push(decision)
+        }
+        if (owned.length !== frame.decisions.length) {
+          log?.warn(
+            { runnerId: from, dropped: frame.decisions.length - owned.length },
+            'egress decisions dropped: the run belongs to another Runner',
+          )
+        }
+        if (owned.length === 0) return
         await recordEgressDecisions(deps, {
           workspaceId,
-          decisions: frame.decisions.map((decision) => ({
+          decisions: owned.map((decision) => ({
             agentRunId: asAgentRunId(decision.runId),
             host: decision.host,
             port: decision.port,
@@ -1475,10 +1556,12 @@ export const createRunnerGateway = (
           })),
         })
         return
+      }
     }
   }
 
   const register = async (fastify: FastifyInstance): Promise<void> => {
+    log = fastify.log
     await fastify.register(websocket)
 
     fastify.get('/ws/runner', { websocket: true }, (socket) => {

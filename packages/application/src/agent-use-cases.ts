@@ -8645,6 +8645,18 @@ export const recordReconcileResult = async (
   const parent = await deps.agentRuns.findById(input.workspaceId, input.parentRunId)
   if (!parent) return
 
+  /**
+   * The reconciler must be *this* branch's reconciler.
+   *
+   * The gateway checks that the run reporting belongs to the Runner it reported over, which
+   * leaves the parent: a frame could name its own reconciler run and somebody else's
+   * conflicted branch, and the effect of this function is to re-queue that branch for merge.
+   * The relationship is on the row — `reconcileConflict` sets `parentRunId` when it starts
+   * the run — so it is checked here rather than at the socket, which cannot know it.
+   */
+  const reconciler = await deps.agentRuns.findById(input.workspaceId, input.agentRunId)
+  if (!reconciler || reconciler.parentRunId !== input.parentRunId) return
+
   if (!input.ok) {
     // A refusal is a normal outcome, not an incident: the persona is told to decline a
     // conflict that encodes a real disagreement. The branch is already back with its

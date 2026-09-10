@@ -286,6 +286,64 @@ describe('runner-gateway: pairing and repository binding', () => {
     impostor.socket.close()
   })
 
+  /**
+   * The other half of the same hole, and the larger one.
+   *
+   * A reply is matched by request id and now also by Runner. Every *unsolicited* frame —
+   * an event, a heartbeat, a plan, a note, a cost report — names its run and was checked
+   * against nothing at all, so a second Runner on the host could write into another's run
+   * by naming it. Spend is the sharpest case to drive: it is authoritative, it is what the
+   * cap is enforced against, and a foreign report of it is silent.
+   */
+  it('drops an unsolicited frame about another Runner’s run, and still takes that run’s own', async () => {
+    const holder = await pairFakeRunner('run-holder')
+    const impostor = await pairFakeRunner('run-impostor')
+    const repo = await bindViaFakeRunner(holder.socket, holder.runnerId, '/tmp/held-repo', 'held repo')
+    const created = await client.channel.create({ name: 'frame-ownership' })
+
+    const startFrame = nextFrame(holder.socket, (v) => v.type === 'start_run')
+    const run = await client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: testPersonaId,
+    })
+    await startFrame
+
+    impostor.socket.send(
+      JSON.stringify({
+        type: 'cost_report',
+        runId: run.id,
+        spentUsd: 9.99,
+        capUsd: null,
+        exhausted: false,
+      }),
+    )
+    // Long enough that the write would have happened: the frame is handled off the socket,
+    // so "not yet" and "never" are only distinguishable by waiting.
+    await new Promise((r) => setTimeout(r, 300))
+    expect((await client.agentRun.get({ agentRunId: run.id })).totalCostUsd).toBeNull()
+
+    // The run's own Runner is unaffected, which is what makes this a check and not a lockout.
+    holder.socket.send(
+      JSON.stringify({
+        type: 'cost_report',
+        runId: run.id,
+        spentUsd: 0.042,
+        capUsd: null,
+        exhausted: false,
+      }),
+    )
+    let cost: number | null = null
+    for (let i = 0; i < 40 && cost === null; i += 1) {
+      cost = (await client.agentRun.get({ agentRunId: run.id })).totalCostUsd
+      if (cost === null) await new Promise((r) => setTimeout(r, 50))
+    }
+    expect(cost).toBeCloseTo(0.042)
+
+    holder.socket.close()
+    impostor.socket.close()
+  })
+
   it('surfaces a Runner-reported path failure as a validation error, not a crash', async () => {
     const { socket, runnerId } = await pairFakeRunner('rejecting-runner')
     const checkPath = nextFrame(socket, (v) => v.type === 'check_path')
@@ -2951,6 +3009,48 @@ describe('runner-gateway: serialized merge queue', () => {
           await new Promise((r) => setTimeout(r, 50))
         }
         throw new Error('the reconciled branch was never re-queued')
+      })
+    })
+
+    /**
+     * A reconciler reports on the branch it was started for, and the gateway cannot know
+     * which that is: it checks that the *reporting* run belongs to the Runner reporting,
+     * which a real reconciler passes. The branch it names is a second claim, and honouring
+     * it would let one run re-queue another's — so the relationship is checked where it is
+     * recorded, on the reconciler's own row.
+     */
+    it('ignores a reconciler’s verdict on a branch it was not started for', async () => {
+      await withReconciler(async () => {
+        const { socket, runnerId } = await pairFakeRunner('recon-wrong-parent')
+        const repo = await bindViaFakeRunner(socket, runnerId)
+        const created = await client.channel.create({ name: 'recon-wrong-parent' })
+        const conflicted = await finishRun(socket, created.rootThread.id, repo.id, 'loom/recon-wp-1')
+        const bystander = await finishRun(socket, created.rootThread.id, repo.id, 'loom/recon-wp-2')
+
+        await client.mergeQueue.enqueue({ agentRunId: conflicted.id })
+        const started = nextFrame(socket, (v) => v.type === 'start_run', 10_000)
+        const failing = sweep()
+        await answerMerge(socket, { ok: false, reason: 'conflict', detail: 'a.md' })
+        await failing
+        const child = await started
+
+        socket.send(
+          JSON.stringify({
+            type: 'reconcile_result',
+            runId: child.runId,
+            parentRunId: bystander.id,
+            ok: true,
+            commitSha: 'notyours123',
+          }),
+        )
+
+        await new Promise((r) => setTimeout(r, 300))
+        const queued = (await client.mergeQueue.list()).filter((e: any) => e.status === 'queued')
+        expect(queued.map((e: any) => e.agentRunId)).not.toContain(bystander.id)
+        const page = await client.message.list({ threadId: created.rootThread.id })
+        expect(page.messages.some((m: any) => m.body.text?.includes('loom/recon-wp-2'))).toBe(false)
+
+        socket.close()
       })
     })
 
