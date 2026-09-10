@@ -62,7 +62,7 @@ import {
   manifestTier,
   observeChecks,
   selectChecks,
-  stackIsUp,
+  missingPrerequisites,
 } from './manifest-checks.mjs'
 
 const execFileAsync = promisify(execFile)
@@ -134,16 +134,19 @@ const main = async () => {
   }
 
   /**
-   * The live tier needs Postgres and Valkey, and an absent stack must **refuse** rather than
-   * narrow the manifest: six checks quietly dropped would be recorded as a clean run and then
-   * compared against, which is exactly the shape of failure a manifest exists to prevent.
+   * The live tier needs things this host may not have, and a missing one must **refuse** rather
+   * than narrow the manifest: checks quietly dropped would be recorded as a clean run and then
+   * compared against, which is exactly the shape of failure a manifest exists to prevent. What
+   * is needed and what is missing are both `manifest-checks.mts`'s to say, so the drill and the
+   * promoter cannot disagree about whether a host can answer.
    */
   const tier = manifestTier()
-  if (selected.some((entry) => entry.needs === 'stack') && !(await stackIsUp())) {
+  const missing = await missingPrerequisites(selected)
+  if (missing.length > 0) {
     console.error(
-      'LOOM_MANIFEST_TIER=live asks for the drivers, and Postgres or Valkey is not running.\n' +
-        '  docker compose up -d postgres valkey && pnpm db:test:prepare\n' +
-        'Or drop the variable to record the static tier, which needs nothing but the tree.',
+      `LOOM_MANIFEST_TIER=live asks for the drivers, and this host cannot run them:\n\n${missing.join(
+        '\n\n',
+      )}\n\nOr drop the variable to record the static tier, which needs nothing but the tree.`,
     )
     process.exit(2)
   }

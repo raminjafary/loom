@@ -30,7 +30,8 @@ const execFileAsync = promisify(execFile)
  * - **static** — the platform's guarantees and its infrastructure-free suites. Seconds. The
  *   default, because the drill is run by hand and often.
  * - **live** — the zero-token drivers, each of which stands up everything it needs given
- *   Postgres and Valkey. Minutes: `workflow-check` alone is two of them, which is the honest
+ *   Postgres and Valkey, plus the two that ask the container daemon whether the sandbox
+ *   isolation is real. Minutes: `workflow-check` alone is two of them, which is the honest
  *   reason this is a tier and not simply more rows.
  *
  * **The tier is shared state, read from one place**, because the rule that made this file exist
@@ -42,19 +43,28 @@ const execFileAsync = promisify(execFile)
  * that costs money per invocation is a gate someone turns off, and that argument was always the
  * true one — it just never applied to the twenty-odd drivers that spend nothing.
  */
+/**
+ * What a check needs from the host beyond the tree.
+ *
+ * `stack` is Postgres and Valkey — everything else a driver needs, it starts itself. `sandbox`
+ * is the container daemon's side of it: the egress proxy, the agent image, and per-run networks
+ * left on. Absent means the check needs nothing but the tree, which is what makes the static
+ * tier the tier it is.
+ */
+export type ManifestPrerequisite = 'stack' | 'sandbox'
+
 export type ManifestTier = 'static' | 'live'
 
 export interface ManifestCheckSpec {
   readonly name: string
   readonly command: string
   /**
-   * What this check cannot run without. `stack` means Postgres and Valkey answering and the
-   * test databases migrated — everything else a driver needs, it starts itself.
+   * What this check cannot run without — see `ManifestPrerequisite`.
    *
    * Absent means it needs nothing but the tree, which is what makes the static tier the tier
    * that can run anywhere, including inside a worktree pinned at another commit.
    */
-  readonly needs?: 'stack'
+  readonly needs?: ManifestPrerequisite
   /**
    * Repo-relative path the check needs.
    *
@@ -127,18 +137,35 @@ export const MANIFEST_CHECKS: readonly ManifestCheckSpec[] = [
    * must not move, a run that must not change, a merge that must not be blocked. It belongs
    * here for the reason the six above do — zero tokens, its own server, its own Runner, and it
    * asserts — and it was left out when it was written.
-   *
-   * What is deliberately *not* here is either sandbox-network driver. Both need a running
-   * container daemon, an egress proxy built from the current control plane and a freshly built
-   * sandbox image, which is a different prerequisite from `stack` and would make an absent one
-   * look like a refusal. Adding them means a second value for `needs` and a second thing for
-   * the drill and the promoter to provision.
    */
   {
     name: 'prosecutor-driver',
     command: 'npx tsx tools/prosecutor-check.mts',
     requires: 'tools/prosecutor-check.mts',
     needs: 'stack',
+  },
+
+  /**
+   * The sandbox tier: the two drivers that ask the **container daemon** questions rather than
+   * this repository's own code. Neither needs Postgres; both need a proxy, an image and per-run
+   * networks left on, which is why `needs` is a kind rather than a flag.
+   *
+   * They are the only checks in the manifest that can say the isolation is real. Everything
+   * else here would pass unchanged on a host where every sandbox shared one network and could
+   * open a socket to its neighbour by name — which is precisely the property a promotion should
+   * not be allowed to lose quietly.
+   */
+  {
+    name: 'sandbox-network',
+    command: 'npx tsx tools/sandbox-network-check.mts',
+    requires: 'tools/sandbox-network-check.mts',
+    needs: 'sandbox',
+  },
+  {
+    name: 'sandbox-load',
+    command: 'npx tsx tools/sandbox-load-check.mts',
+    requires: 'tools/sandbox-load-check.mts',
+    needs: 'sandbox',
   },
 ]
 
@@ -162,6 +189,13 @@ export const selectChecks = (
   return MANIFEST_CHECKS.filter((entry) => wanted.includes(entry.name))
 }
 
+const runningServices = async (): Promise<string[]> => {
+  const { stdout } = await execFileAsync('docker', [
+    'compose', 'ps', '--services', '--filter', 'status=running',
+  ])
+  return stdout.split('\n').map((line) => line.trim())
+}
+
 /**
  * Whether the stack the live tier needs is actually up.
  *
@@ -171,14 +205,71 @@ export const selectChecks = (
  */
 export const stackIsUp = async (): Promise<boolean> => {
   try {
-    const { stdout } = await execFileAsync('docker', [
-      'compose', 'ps', '--services', '--filter', 'status=running',
-    ])
-    const running = stdout.split('\n').map((line) => line.trim())
+    const running = await runningServices()
     return running.includes('postgres') && running.includes('valkey')
   } catch {
     return false
   }
+}
+
+/**
+ * Whether this host can answer the sandbox questions at all.
+ *
+ * Three conditions, and each is a way the drivers would fail as something they are not. Without
+ * the egress proxy there is nothing to attach to a per-run network, and the failure reads as
+ * broken isolation. Without the image there is nothing to probe with, and `docker run` fails
+ * with a pull error. And under `LOOM_SANDBOX_NETWORK_MODE=shared` both drivers refuse by
+ * design and exit non-zero — which is a host that cannot answer the question, not a host that
+ * answered it badly, and a manifest that recorded it as a failure would be recording the
+ * operator's topology choice as a defect.
+ *
+ * What is deliberately *not* checked is whether the image is current. The Runner's closure
+ * guard refuses a stale one at run time with a message naming the rebuild, and a check that
+ * silently accepted a stale image would be worse than one that fails loudly.
+ */
+export const sandboxIsUp = async (): Promise<boolean> => {
+  if ((process.env.LOOM_SANDBOX_NETWORK_MODE ?? '') === 'shared') return false
+  try {
+    if (!(await runningServices()).includes('egress-proxy')) return false
+    const { stdout } = await execFileAsync('docker', [
+      'images', '--format', '{{.Repository}}:{{.Tag}}', 'loom-agent-sandbox',
+    ])
+    return stdout.trim() !== ''
+  } catch {
+    return false
+  }
+}
+
+/**
+ * What the selected checks need and this host does not have, as sentences a person can act on.
+ *
+ * One reader, for the reason `manifestTier` is one: the drill and the promoter had the same
+ * ten lines each, and a second prerequisite would have been a second place for them to
+ * disagree about what a runnable manifest is.
+ */
+export const missingPrerequisites = async (
+  selected: readonly ManifestCheckSpec[],
+): Promise<string[]> => {
+  const needed = new Set(
+    selected.map((entry) => entry.needs).filter((need): need is ManifestPrerequisite => need !== undefined),
+  )
+  const missing: string[] = []
+  if (needed.has('stack') && !(await stackIsUp())) {
+    missing.push(
+      'Postgres or Valkey is not running:\n' +
+        '  docker compose up -d postgres valkey && pnpm db:test:prepare',
+    )
+  }
+  if (needed.has('sandbox') && !(await sandboxIsUp())) {
+    missing.push(
+      'the sandbox prerequisites are not met — the egress proxy must be running, the agent\n' +
+        'image must exist, and per-run networks must not be turned off:\n' +
+        '  docker compose up -d egress-proxy\n' +
+        '  docker build -f apps/runner/Dockerfile.sandbox -t loom-agent-sandbox:latest .\n' +
+        '  unset LOOM_SANDBOX_NETWORK_MODE',
+    )
+  }
+  return missing
 }
 
 const tail = (text: string, lines = 4): string | null => {
