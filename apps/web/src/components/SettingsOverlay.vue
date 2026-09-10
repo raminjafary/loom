@@ -141,6 +141,7 @@ const props = defineProps<{
     designId: string
     note: string | null
   }) => Promise<{ declined: boolean; detail: string }>
+  archiveWorkflow: (workflowId: string) => Promise<{ archived: boolean; detail: string }>
   /** The trial each harness has to survive, read per harness rather than with the tab. */
   readWorkflowTrial: (workflowId: string) => Promise<WorkflowTrialReport | null>
   runTrialTask: (input: {
@@ -584,6 +585,7 @@ onMounted(() => scrim.value?.focus())
             :design="designWorkflow"
             :approve-design="approveWorkflowDesign"
             :decline-design="declineWorkflowDesign"
+            :archive="archiveWorkflow"
             :read-trial="readWorkflowTrial"
             :run-trial-task="runTrialTask"
             @refresh="refreshWorkflows()"

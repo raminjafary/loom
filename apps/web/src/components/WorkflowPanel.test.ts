@@ -164,6 +164,7 @@ const panel = (over: Partial<Record<string, unknown>> = {}) =>
       proposals: [],
       design: vi.fn(async () => ({ runId: 'ar1', detail: 'drawing' })),
       approveDesign: vi.fn(async () => ({ versionId: 'v2', version: 2, detail: 'drawn as v2' })),
+      archive: vi.fn(async () => ({ archived: true, detail: 'Archived.' })),
       declineDesign: vi.fn(async () => ({ declined: true, detail: 'declined' })),
       readTrial: vi.fn(async () => trialReport),
       runTrialTask: vi.fn(async () => ({
@@ -183,6 +184,59 @@ const settle = async (wrapper: ReturnType<typeof panel>) => {
 }
 
 describe('WorkflowPanel', () => {
+  /**
+   * Retiring a harness was the one lifecycle act the panel could not perform, so a workspace
+   * only ever accumulated shapes. Two clicks, like deleting a channel: this button sits beside
+   * the one that spends money, and a harness that vanished on a stray click would read as a
+   * bug rather than as housekeeping.
+   */
+  describe('retiring a harness', () => {
+    it('arms on the first click and does nothing yet', async () => {
+      const archive = vi.fn(async () => ({ archived: true, detail: 'Archived.' }))
+      const wrapper = panel({ archive })
+      await wrapper.findAll('button.pick')[0]!.trigger('click')
+      await settle(wrapper)
+
+      await wrapper.get('button.archive').trigger('click')
+      await settle(wrapper)
+
+      expect(archive).not.toHaveBeenCalled()
+      expect(wrapper.get('button.archive').text()).toContain('Confirm')
+    })
+
+    it('archives on the second, and says what came back', async () => {
+      const archive = vi.fn(async () => ({ archived: true, detail: 'Archived.' }))
+      const wrapper = panel({ archive })
+      await wrapper.findAll('button.pick')[0]!.trigger('click')
+      await settle(wrapper)
+
+      await wrapper.get('button.archive').trigger('click')
+      await settle(wrapper)
+      await wrapper.get('button.archive').trigger('click')
+      await settle(wrapper)
+
+      expect(archive).toHaveBeenCalledWith(row.id)
+      expect(wrapper.text()).toContain('Archived.')
+    })
+
+    /** Selecting another harness must not leave the first one one click from gone. */
+    it('disarms when a different harness is selected', async () => {
+      const archive = vi.fn(async () => ({ archived: true, detail: 'Archived.' }))
+      const wrapper = panel({ archive })
+      await wrapper.findAll('button.pick')[0]!.trigger('click')
+      await settle(wrapper)
+      await wrapper.get('button.archive').trigger('click')
+      await settle(wrapper)
+      expect(wrapper.get('button.archive').text()).toContain('Confirm')
+
+      await wrapper.findAll('button.pick')[0]!.trigger('click')
+      await settle(wrapper)
+
+      expect(wrapper.get('button.archive').text()).toBe('Archive')
+      expect(archive).not.toHaveBeenCalled()
+    })
+  })
+
   it('says what the shape may cost before offering to run it', async () => {
     const wrapper = panel()
     await settle(wrapper)

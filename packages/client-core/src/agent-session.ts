@@ -638,6 +638,12 @@ export interface AgentSession {
     note: string | null
   }): Promise<{ declined: boolean; detail: string }>
   /**
+   * Retires a harness. Not a delete: its versions keep their digests and every execution that
+   * ran against them, which is what lets a measurement go on referring to a shape nobody may
+   * start any more.
+   */
+  archiveWorkflow(workflowId: string): Promise<{ archived: boolean; detail: string }>
+  /**
    * The trial a drawn shape has to survive, and one task of its class run on whichever arm is
    * owed. Read on demand like everything else here: the verdict changes when a task is decided,
    * which is not an event a panel should re-fetch on.
@@ -1918,6 +1924,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
         const detail = errorMessage(error)
         patch({ error: detail })
         return { declined: false, detail }
+      }
+    },
+
+    async archiveWorkflow(workflowId) {
+      try {
+        return await options.api.workflow.archive({ workflowId })
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { archived: false, detail }
       }
     },
 

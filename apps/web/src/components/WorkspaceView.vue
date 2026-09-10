@@ -1389,6 +1389,7 @@ onBeforeUnmount(() => {
       :design-workflow="agent.designWorkflow"
       :approve-workflow-design="agent.approveWorkflowDesign"
       :decline-workflow-design="agent.declineWorkflowDesign"
+      :archive-workflow="agent.archiveWorkflow"
       :read-workflow-trial="agent.workflowTrial"
       :run-trial-task="agent.runTrialTask"
       :refresh-workflows="() => void refreshWorkflows()"

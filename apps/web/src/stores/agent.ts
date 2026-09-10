@@ -141,6 +141,7 @@ export const useAgentStore = defineStore('agent', () => {
     approveWorkflowDesign: (designId: string) => session.approveWorkflowDesign(designId),
     declineWorkflowDesign: (input: { designId: string; note: string | null }) =>
       session.declineWorkflowDesign(input),
+    archiveWorkflow: (workflowId: string) => session.archiveWorkflow(workflowId),
     listCampaigns: (personaId: string) => session.listCampaigns(personaId),
     campaignReport: (campaignId: string) => session.campaignReport(campaignId),
     gapCurve: (personaId: string) => session.gapCurve(personaId),

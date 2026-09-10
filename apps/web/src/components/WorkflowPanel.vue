@@ -84,6 +84,13 @@ const props = defineProps<{
     note: string | null
   }) => Promise<{ declined: boolean; detail: string }>
   /**
+   * Retires a harness — the one lifecycle act this panel had no way to perform, so a workspace
+   * only ever accumulated shapes. Not a delete, which is why it needs no more confirmation than
+   * arming the button: every version keeps its digest and its executions, and a measurement
+   * that referred to this shape goes on referring to it.
+   */
+  archive: (workflowId: string) => Promise<{ archived: boolean; detail: string }>
+  /**
    * The trial: whether this harness beats a planner and its workers on its own class of work.
    *
    * Read per selected harness rather than held in the panel's props, because the verdict changes
@@ -221,7 +228,32 @@ const declineIt = async (designId: string) => {
   }
 }
 
+/**
+ * Two clicks, like deleting a channel: the first arms, the second fires. Archiving is
+ * reversible in the sense that nothing is lost, but it is not undoable *from here*, and a
+ * harness that vanished on one stray click beside "Run it on" would read as a bug.
+ */
+const armedToArchive = ref<string | null>(null)
+
+const archiveIt = async (workflowId: string) => {
+  if (armedToArchive.value !== workflowId) {
+    armedToArchive.value = workflowId
+    return
+  }
+  working.value = true
+  try {
+    notice.value = (await props.archive(workflowId)).detail
+    armedToArchive.value = null
+    selectedId.value = null
+    detail.value = null
+    emit('refresh')
+  } finally {
+    working.value = false
+  }
+}
+
 const select = async (workflowId: string) => {
+  armedToArchive.value = null
   selectedId.value = workflowId
   openRun.value = null
   notice.value = null
@@ -504,8 +536,32 @@ watch(
       </li>
     </ul>
 
+    <!--
+      At panel level rather than inside the selected harness, because archiving clears the
+      selection: the confirmation used to be rendered by the same `v-if` as the thing it was
+      confirming the removal of, so the only flow that ends without a selection was the one
+      flow whose answer nobody saw. One place for it also means it does not move about.
+    -->
+    <p v-if="notice" class="notice">{{ notice }}</p>
+
     <template v-if="detail !== null">
-      <p v-if="detail.description" class="description">{{ detail.description }}</p>
+      <div class="detail-head">
+        <p v-if="detail.description" class="description">{{ detail.description }}</p>
+        <button
+          type="button"
+          class="archive"
+          :class="{ armed: armedToArchive === selectedId }"
+          :disabled="props.busy === true || working"
+          :aria-label="
+            armedToArchive === selectedId
+              ? `Confirm archiving ${detail.name}`
+              : `Archive ${detail.name}`
+          "
+          @click="selectedId && archiveIt(selectedId)"
+        >
+          {{ armedToArchive === selectedId ? 'Confirm archive' : 'Archive' }}
+        </button>
+      </div>
 
       <!--
         The ceiling, above the button that spends it. A worst case from the enforced caps rather
@@ -597,8 +653,6 @@ watch(
           </button>
         </div>
       </form>
-
-      <p v-if="notice" class="notice">{{ notice }}</p>
 
       <!--
         The claim this shape has to survive. A harness costs a run per step every time it is
@@ -761,6 +815,45 @@ header {
   opacity: 0.6;
   margin-left: 0.35rem;
 }
+/*
+  The description and the retire control on one line, with the control last and quiet: it is
+  the only destructive-looking thing on a panel whose other buttons spend money, and it should
+  read as housekeeping rather than as an alternative to running the harness.
+*/
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.detail-head .description {
+  flex: 1;
+  margin: 0;
+}
+
+.archive {
+  flex: none;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.archive.armed {
+  border-color: var(--danger, #c66);
+  color: var(--danger, #c66);
+}
+
+.archive:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .ceiling {
   background: var(--surface);
   border-radius: 6px;
