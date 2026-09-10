@@ -11,12 +11,12 @@
     "test": "TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://loom:loom@localhost:5432/loom_test_gateway} vitest run"
   },
   "dependencies": {
-    "@fastify/websocket": "^11.2.0",
+    "@fastify/websocket": "^11.3.0",
     "@loom/api-contract": "workspace:*",
     "@loom/domain": "workspace:*",
-    "fastify": "^5.10.0",
-    "ioredis": "^5.9.0",
-    "zod": "^4.4.3"
+    "fastify": "^5.12.3",
+    "ioredis": "^5.11.1",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@loom/db": "workspace:*",
@@ -24,9 +24,9 @@
     "@orpc/client": "^1.14.10",
     "@orpc/contract": "^1.14.10",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.20.6",
-    "typescript": "^5.9.2",
-    "vitest": "^4.1.10",
-    "ws": "^8.18.3"
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "ws": "^8.21.3"
   }
 }

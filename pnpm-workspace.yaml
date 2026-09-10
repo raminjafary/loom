@@ -10,7 +10,7 @@ allowBuilds:
   # anything that names vue-demi. This repository is Vue 3 only, so the switch has exactly
   # one outcome.
   vue-demi: true
-# Dependabot triage — 16 advisories (8 high) down to 1. Every entry is the smallest bump
+# Dependabot triage — re-run 2026-09-10, 18 advisories (9 high) down to 1. Every entry is the smallest bump
 # that clears an advisory, and all of them are transitive: nothing here is a dependency
 # this repository chose. Ranges are keyed by major where two majors are installed.
 #
@@ -33,11 +33,12 @@ overrides:
   "@esbuild-kit/core-utils>esbuild": ^0.25.12
   brace-expansion@^1: ^1.1.18
   brace-expansion@^5: ^5.0.9
-  fast-uri@^3: ^3.1.5
+  fast-uri@^3: ^3.1.6
   fast-uri@^4: ^4.1.2
   ip-address: ^10.3.1
-  hono: ^4.12.34
+  hono: ^4.13.5
   js-yaml@^4: ^4.3.1
+  qs@^6: ^6.15.4
   nanoid@^3: ^3.3.17
   "@hono/node-server": ^2.0.5
 minimumReleaseAgeExclude:
