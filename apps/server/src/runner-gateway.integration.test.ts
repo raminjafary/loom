@@ -2211,6 +2211,20 @@ describe('runner-gateway: notification fan-out', () => {
     }
   }
 
+  /** Waits until N tool calls for this run are persisted, so a sweep reads a real history. */
+  const settleUntilIngested = async (runId: string, count: number): Promise<void> => {
+    for (let i = 0; i < 40; i += 1) {
+      const calls = await app.deps.agentRunEvents.recentToolCalls(
+        asWorkspaceId(workspaceId),
+        asAgentRunId(runId),
+        count,
+      )
+      if (calls.length >= count) return
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    throw new Error('the tool calls never reached the event table')
+  }
+
   const startRunViaFakeRunner = async (
     name: string,
   ): Promise<{ socket: WebSocket; runId: string; threadId: string }> => {
@@ -2296,6 +2310,85 @@ describe('runner-gateway: notification fan-out', () => {
     expect(notification).toBeDefined()
     expect(notification?.runId).toBe(runId)
     expect(notification?.body).toMatch(/heartbeat/)
+
+    socket.close()
+  })
+
+  /**
+   * The third reaper signal, and the only one that looks at activity rather than silence.
+   *
+   * A model calling one tool with one input keeps the heartbeat fresh and the event stream
+   * moving, so both existing signals read it as a healthy run and the only thing that ends
+   * it is the budget cap. Driven over the real frames because the check reads the persisted
+   * events, which is the one place the digest either matches or does not.
+   */
+  it('reaps a run that has made the identical tool call over and over', async () => {
+    const { socket, runId } = await startRunViaFakeRunner('reap-loop')
+
+    for (let seq = 1; seq <= 4; seq += 1) {
+      socket.send(
+        JSON.stringify({
+          type: 'agent_event',
+          runId,
+          seq,
+          event: {
+            kind: 'tool_call',
+            toolUseId: `loop-${seq}`,
+            toolName: 'Bash',
+            input: { command: 'pnpm test' },
+          },
+        }),
+      )
+    }
+    // Waited on the events themselves: the frames are handled off the socket, and a sweep
+    // that ran before they landed would pass this test by reading an empty history.
+    await settleUntilIngested(runId, 4)
+
+    // Generous on both silence signals: what is under test must be the only thing that fires.
+    await reapStuckRuns(app.deps, {
+      heartbeatTimeoutMs: 3_600_000,
+      noProgressTimeoutMs: 3_600_000,
+      sameToolCallLimit: 4,
+    })
+
+    const reaped = await client.agentRun.get({ agentRunId: runId })
+    expect(reaped.status).toBe('failed')
+    // The tool and the count, not "stuck": the diagnosis is the point of the message.
+    expect(reaped.errorMessage).toContain('Bash')
+    expect(reaped.errorMessage).toContain('4 times in a row')
+
+    socket.close()
+  })
+
+  it('leaves a run whose calls keep changing alone', async () => {
+    const { socket, runId } = await startRunViaFakeRunner('reap-loop-working')
+
+    for (let seq = 1; seq <= 4; seq += 1) {
+      socket.send(
+        JSON.stringify({
+          type: 'agent_event',
+          runId,
+          seq,
+          event: {
+            kind: 'tool_call',
+            toolUseId: `work-${seq}`,
+            toolName: 'Read',
+            // The same tool, different arguments — a run doing its job, and the case a
+            // count that ignored the input would kill.
+            input: { file_path: `/work/file-${seq}.ts` },
+          },
+        }),
+      )
+    }
+    await settleUntilIngested(runId, 4)
+
+    await reapStuckRuns(app.deps, {
+      heartbeatTimeoutMs: 3_600_000,
+      noProgressTimeoutMs: 3_600_000,
+      sameToolCallLimit: 4,
+    })
+
+    expect((await client.agentRun.get({ agentRunId: runId })).status).toBe('running')
 
     socket.close()
   })

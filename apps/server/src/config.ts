@@ -33,6 +33,18 @@ const EnvSchema = z.object({
   REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
   REAPER_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
   REAPER_NO_PROGRESS_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
+  /**
+   * How many identical tool calls in a row make a run a loop rather than a worker.
+   *
+   * The reaper's other two signals are about silence — a dead Runner, an empty event
+   * stream — and neither sees a model calling one tool with one input until the budget cap
+   * ends it, because every call is an event and the run looks busy the whole time. Twelve
+   * is well past anything a retry loop does honestly and well short of a cap: a run that
+   * has read the same file with the same arguments twelve times running has stopped.
+   *
+   * Zero turns it off, for a deployment that would rather pay the cap than risk a verdict.
+   */
+  REAPER_SAME_TOOL_CALL_LIMIT: z.coerce.number().int().nonnegative().default(12),
   // Approval SLA — how long a risky-tool gate may sit undecided
   // before it auto-denies and the run resumes. Swept on the reaper's interval.
   // Independent of REAPER_NO_PROGRESS_TIMEOUT_MS by design: a run waiting on a

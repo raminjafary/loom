@@ -1521,6 +1521,33 @@ export const agentRunEventRepository = (db: Database): AgentRunEventRepositoryPo
     return [...rows].flatMap((row) => (row.path === null ? [] : [row.path]))
   },
 
+  async recentToolCalls(workspaceId, agentRunId, limit) {
+    if (limit <= 0) return []
+    /**
+     * `md5` over the input as jsonb text, computed here rather than in the caller.
+     *
+     * jsonb normalises key order and whitespace, so two calls a model wrote differently
+     * but meant identically digest the same — which is the comparison the stuck-loop rule
+     * wants, and one a string compare of the raw payload would get wrong. Absent input
+     * digests as the literal `null`, so a tool called with no arguments still compares
+     * equal to itself.
+     */
+    const rows = await db.execute<{ tool_name: string | null; input_digest: string }>(sql`
+      select
+        payload->>'toolName' as tool_name,
+        md5(coalesce(payload->'input', 'null'::jsonb)::text) as input_digest
+      from agent_run_event
+      where workspace_id = ${workspaceId}
+        and agent_run_id = ${agentRunId}
+        and kind = 'tool_call'
+      order by seq desc
+      limit ${limit}
+    `)
+    return [...rows].flatMap((row) =>
+      row.tool_name === null ? [] : [{ toolName: row.tool_name, inputDigest: row.input_digest }],
+    )
+  },
+
   async liveActivity(workspaceId, agentRunIds) {
     if (agentRunIds.length === 0) return new Map()
 

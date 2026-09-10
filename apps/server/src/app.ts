@@ -204,6 +204,7 @@ export const buildApp = async (
             await reapStuckRuns(deps, {
               heartbeatTimeoutMs: config.REAPER_HEARTBEAT_TIMEOUT_MS,
               noProgressTimeoutMs: config.REAPER_NO_PROGRESS_TIMEOUT_MS,
+              sameToolCallLimit: config.REAPER_SAME_TOOL_CALL_LIMIT,
             })
             // Last, and deliberately not awaited *into* the two above: a merge
             // runs a test suite, so this call can outlive its own interval tick.

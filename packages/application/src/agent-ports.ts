@@ -107,6 +107,7 @@ import type {
   WorkflowGraph,
   WorkflowId,
   WorkflowRecord,
+  ToolCallFingerprint,
   WorkflowRunId,
   WorkflowRunRecord,
   WorkflowRunStatus,
@@ -1566,6 +1567,23 @@ export interface AgentRunEventRepositoryPort {
    * on room, and the check is only worth having if its other side is independent of it.
    */
   writtenPaths(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<string[]>
+  /**
+   * The tail of a run's tool calls, newest first — the name and a digest of the input, and
+   * nothing else.
+   *
+   * A digest rather than the input, because the caller compares calls and never reads one:
+   * shipping arbitrary tool arguments out of the event table to answer "is this the same
+   * call again" would put model-authored payloads through a path that has no need of them.
+   * Equal digests mean equal input, which is all the stuck-loop rule asks.
+   *
+   * Bounded by `limit`, and the bound is the point: this runs per active run per sweep, so
+   * it reads the last handful of calls rather than a run's whole history.
+   */
+  recentToolCalls(
+    workspaceId: WorkspaceId,
+    agentRunId: AgentRunId,
+    limit: number,
+  ): Promise<ToolCallFingerprint[]>
 }
 
 /**

@@ -195,6 +195,8 @@ import {
   type ThreadId,
   type WorkspaceId,
   parseHandoffPolicy,
+  describeStuckLoop,
+  repeatedTailCall,
   describeVerification,
   parseVerificationChecks,
   summarizeVerification,
@@ -9420,7 +9422,16 @@ export const setRepositoryVerificationChecks = async (
  */
 export const reapStuckRuns = async (
   deps: AgentDeps,
-  options: { heartbeatTimeoutMs: number; noProgressTimeoutMs: number },
+  options: {
+    heartbeatTimeoutMs: number
+    noProgressTimeoutMs: number
+    /**
+     * How many times a run may make the identical tool call, consecutively, before it is
+     * reaped for looping. Omitted or zero turns the check off — and off is the default so
+     * that a caller which has never heard of it keeps the behaviour it had.
+     */
+    sameToolCallLimit?: number
+  },
 ): Promise<void> => {
   const runs = await deps.agentRuns.listAllActive()
   const now = Date.now()
@@ -9436,11 +9447,36 @@ export const reapStuckRuns = async (
     // gets to run. The heartbeat signal still applies: a dead Runner is dead
     // whatever the run was waiting for.
     const noProgress = run.status !== 'awaiting_approval' && sinceEvent > options.noProgressTimeoutMs
-    if (!heartbeatStale && !noProgress) continue
+
+    /**
+     * The third signal, and the only one that is about *activity* rather than silence.
+     *
+     * Read last and only for a run the other two cleared, so the query costs nothing on a
+     * run already being reaped — and skipped entirely for a run waiting on a human, whose
+     * last call is open by design and will still be the tail of its history all the while
+     * somebody thinks about it.
+     */
+    const loop =
+      heartbeatStale || noProgress || run.status === 'awaiting_approval'
+        ? null
+        : repeatedTailCall(
+            await deps.agentRunEvents.recentToolCalls(
+              run.workspaceId,
+              run.id,
+              options.sameToolCallLimit ?? 0,
+            ),
+            options.sameToolCallLimit ?? 0,
+          )
+
+    if (!heartbeatStale && !noProgress && !loop) continue
 
     const reason = heartbeatStale
       ? `no heartbeat for over ${Math.round(options.heartbeatTimeoutMs / 1000)}s`
-      : `no progress for over ${Math.round(options.noProgressTimeoutMs / 1000)}s`
+      : noProgress
+        ? `no progress for over ${Math.round(options.noProgressTimeoutMs / 1000)}s`
+        : // Named, never "stuck": the tool and the count are the diagnosis, and a human
+          // reading them knows whether the loop is the model's fault or the tool's.
+          describeStuckLoop(loop as { toolName: string; count: number })
 
     const failed = await deps.agentRuns.updateStatus(run.workspaceId, run.id, {
       status: 'failed',
