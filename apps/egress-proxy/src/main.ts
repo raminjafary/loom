@@ -1,7 +1,7 @@
 import { DEFAULT_ALLOWED_EGRESS_HOSTS, describeEgressRefusal, type EgressDecision } from '@loom/domain'
 import { z } from 'zod'
 import { createControlServer } from './control.js'
-import { discoverRefusedNetworks } from './control-peers.js'
+import { createRefusedNetworks, discoverRefusedNetworks } from './control-peers.js'
 import { createLeaseRegistry, type UsageRecord } from './leases.js'
 import { createEgressProxy } from './proxy.js'
 
@@ -149,10 +149,20 @@ const dataPlane = createEgressProxy({
 /**
  * Worked out before the listener opens, so there is never a window in which the control
  * plane is up and accepting the network it is meant to refuse.
+ *
+ * The boot-time answer is now only the *fallback*: a run gets a network of its own, this
+ * container is attached to it while the process is already running, and a set discovered
+ * once would omit every such network. `createRefusedNetworks` re-reads the interfaces per
+ * connection and keeps the alias answer for a host whose route table it cannot read.
  */
-const refusedNetworks = await discoverRefusedNetworks({
+const discovered = await discoverRefusedNetworks({
   explicit: env.EGRESS_CONTROL_REFUSED_NETWORKS,
   sandboxAlias: env.EGRESS_SANDBOX_ALIAS,
+})
+const refusedNetworks = createRefusedNetworks({
+  explicit: discovered.source === 'explicit' ? discovered.cidrs : [],
+  fallback: discovered.source === 'alias' ? discovered.cidrs : [],
+  fallbackSource: discovered.source === 'alias' ? 'alias' : 'none',
 })
 
 const controlPlane = createControlServer({
@@ -160,7 +170,7 @@ const controlPlane = createControlServer({
   controlSecret: env.LOOM_EGRESS_CONTROL_SECRET,
   usageQueue,
   egressDecisionQueue,
-  refusedNetworks: refusedNetworks.cidrs,
+  refusedNetworks: refusedNetworks.current,
   // One line per attempt: a sandbox that found this port is the thing an operator most
   // wants to know about, and a silent `destroy` would make it the thing they never see.
   onRefusedPeer: (address) => log(`control connection refused from the sandbox network: ${address}`),
@@ -180,11 +190,7 @@ controlPlane.listen(env.EGRESS_CONTROL_PORT, env.EGRESS_CONTROL_HOST, () => {
   // Said either way. "Refusing nothing" is a real deployment state — a proxy that is not on
   // a sandbox network at all — and it is also what a broken discovery looks like, so it is
   // printed rather than inferred from the absence of a line.
-  log(
-    refusedNetworks.cidrs.length === 0
-      ? 'control plane refuses no network: the control secret is the only barrier'
-      : `control plane refuses ${refusedNetworks.cidrs.map((cidr) => cidr.text).join(', ')} (${refusedNetworks.source})`,
-  )
+  log(refusedNetworks.describe())
 })
 
 /**

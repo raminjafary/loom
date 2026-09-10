@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   cidrForInterface,
+  createRefusedNetworks,
+  defaultRouteInterface,
   discoverRefusedNetworks,
   normalisePeer,
   parseCidr,
   peerIsRefused,
+  refusedNetworksFromRoutes,
 } from './control-peers.js'
 
 /**
@@ -101,5 +104,168 @@ describe('discoverRefusedNetworks', () => {
     })
     expect(found.source).toBe('explicit')
     expect(found.cidrs.map((entry) => entry.text)).toEqual(['192.168.5.0/24', '10.0.0.0/8'])
+  })
+})
+
+/**
+ * The route table as the kernel writes it: a header line, then columns of little-endian
+ * hex. Only the first, sixth and eighth fields are read here — interface, destination and
+ * mask — but the rows are kept full-width so a change to the parser meets the real shape.
+ */
+const routeTable = (rows: { iface: string; destination: string; mask: string }[]): string =>
+  [
+    'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT',
+    ...rows.map(
+      (row) =>
+        `${row.iface}\t${row.destination}\t0100007F\t0003\t0\t0\t0\t${row.mask}\t0\t0\t0`,
+    ),
+  ].join('\n')
+
+const NETWORKS = {
+  // The routable one: the default route leaves by it.
+  eth0: [
+    { address: '10.9.0.5', netmask: '255.255.255.0', family: 'IPv4', internal: false, mac: '', cidr: null },
+  ],
+  // The shared sandbox network.
+  eth1: [
+    { address: '172.20.0.3', netmask: '255.255.0.0', family: 'IPv4', internal: false, mac: '', cidr: null },
+  ],
+  // A network attached after boot, for one run.
+  eth2: [
+    { address: '172.31.4.2', netmask: '255.255.255.0', family: 'IPv4', internal: false, mac: '', cidr: null },
+  ],
+  lo: [
+    { address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: true, mac: '', cidr: null },
+  ],
+} as unknown as ReturnType<typeof import('node:os').networkInterfaces>
+
+const ROUTES = routeTable([
+  { iface: 'eth0', destination: '00000000', mask: '00000000' },
+  { iface: 'eth0', destination: '0000090A', mask: '00FFFFFF' },
+  { iface: 'eth1', destination: '000014AC', mask: '0000FFFF' },
+])
+
+describe('defaultRouteInterface', () => {
+  it('reads the interface a default route leaves by', () => {
+    expect(defaultRouteInterface(ROUTES)).toBe('eth0')
+  })
+
+  it('is unknown rather than wrong when there is no default route', () => {
+    expect(
+      defaultRouteInterface(routeTable([{ iface: 'eth1', destination: '000014AC', mask: '0000FFFF' }])),
+    ).toBeNull()
+    expect(defaultRouteInterface('')).toBeNull()
+  })
+})
+
+describe('refusedNetworksFromRoutes', () => {
+  /**
+   * The point of the whole change: eth2 did not exist when the proxy booted, and the alias
+   * discovery could not have found it. Classifying by route finds it without being told.
+   */
+  it('refuses every internal network, including one attached after boot', () => {
+    expect(refusedNetworksFromRoutes(NETWORKS, ROUTES).map((entry) => entry.text)).toEqual([
+      '172.20.0.0/16',
+      '172.31.4.0/24',
+    ])
+  })
+
+  it('never refuses the network the default route leaves by', () => {
+    expect(refusedNetworksFromRoutes(NETWORKS, ROUTES).map((entry) => entry.text)).not.toContain(
+      '10.9.0.0/24',
+    )
+  })
+
+  /**
+   * An unreadable route table must not turn into a proxy that refuses its own Runner —
+   * the failure has to land on "refuse nothing", which is loud in the startup line.
+   */
+  it('refuses nothing when the route table says nothing', () => {
+    expect(refusedNetworksFromRoutes(NETWORKS, '')).toEqual([])
+  })
+})
+
+describe('createRefusedNetworks', () => {
+  it('sees a network that appeared after the process started', () => {
+    let interfaces = {
+      eth0: NETWORKS.eth0,
+      eth1: NETWORKS.eth1,
+    } as unknown as ReturnType<typeof import('node:os').networkInterfaces>
+    let clock = 1000
+    const refused = createRefusedNetworks({
+      explicit: [],
+      fallback: [],
+      fallbackSource: 'none',
+      ttlMs: 250,
+      interfaces: () => interfaces,
+      readRouteTable: () => ROUTES,
+      now: () => clock,
+    })
+
+    expect(refused.current().map((entry) => entry.text)).toEqual(['172.20.0.0/16'])
+    expect(peerIsRefused('172.31.4.9', refused.current())).toBe(false)
+
+    interfaces = NETWORKS
+    clock += 300
+    expect(peerIsRefused('172.31.4.9', refused.current())).toBe(true)
+  })
+
+  it('answers from the cache inside the TTL rather than reading the interfaces again', () => {
+    let reads = 0
+    const refused = createRefusedNetworks({
+      explicit: [],
+      fallback: [],
+      fallbackSource: 'none',
+      ttlMs: 250,
+      interfaces: () => {
+        reads += 1
+        return NETWORKS
+      },
+      readRouteTable: () => ROUTES,
+      now: () => 1000,
+    })
+    refused.current()
+    refused.current()
+    refused.current()
+    expect(reads).toBe(1)
+  })
+
+  it('keeps an operator’s explicit list fixed, whatever the daemon later attaches', () => {
+    const refused = createRefusedNetworks({
+      explicit: [cidr('192.168.5.0/24')],
+      fallback: [],
+      fallbackSource: 'none',
+      interfaces: () => NETWORKS,
+      readRouteTable: () => ROUTES,
+    })
+    expect(refused.current().map((entry) => entry.text)).toEqual(['192.168.5.0/24'])
+    expect(refused.describe()).toContain('explicit')
+  })
+
+  /**
+   * A host with no readable route table is the one case the boot-time alias answer is still
+   * the best available, and the startup line has to say which of the two spoke.
+   */
+  it('falls back to the alias answer when the route table cannot be read', () => {
+    const refused = createRefusedNetworks({
+      explicit: [],
+      fallback: [cidr('172.20.0.0/16')],
+      fallbackSource: 'alias',
+      interfaces: () => NETWORKS,
+      readRouteTable: () => '',
+    })
+    expect(refused.current().map((entry) => entry.text)).toEqual(['172.20.0.0/16'])
+    expect(refused.describe()).toContain('alias')
+  })
+
+  it('says it refuses nothing rather than staying silent', () => {
+    const refused = createRefusedNetworks({
+      explicit: [],
+      fallback: [],
+      fallbackSource: 'none',
+      interfaces: () => ({}) as ReturnType<typeof import('node:os').networkInterfaces>,
+      readRouteTable: () => ROUTES,
+    })
+    expect(refused.describe()).toContain('refuses no network')
   })
 })

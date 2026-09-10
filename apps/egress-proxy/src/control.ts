@@ -85,8 +85,12 @@ export const createControlServer = (options: {
    * deployment that has one. Empty means the old behaviour, where the secret is the only
    * barrier; `main.ts` says so out loud at startup rather than letting it pass for a
    * configured refusal.
+   *
+   * A function, not a list, because a run now gets a network of its own: the set is asked
+   * for per connection so that a network attached to this container after boot is refused
+   * on its first use rather than on the next restart.
    */
-  refusedNetworks?: readonly Cidr[]
+  refusedNetworks?: () => readonly Cidr[]
   /** Called when a connection is dropped, so the operator sees an attempt rather than a silence. */
   onRefusedPeer?: (remoteAddress: string) => void
 }): Server => {
@@ -184,10 +188,10 @@ export const createControlServer = (options: {
    * sandbox's bytes and told it there is something here to talk to. Destroyed, so what a
    * run sees is a connection that closes.
    */
-  const refused = options.refusedNetworks ?? []
-  if (refused.length > 0) {
+  const refused = options.refusedNetworks
+  if (refused) {
     server.on('connection', (socket) => {
-      if (!peerIsRefused(socket.remoteAddress, refused)) return
+      if (!peerIsRefused(socket.remoteAddress, refused())) return
       options.onRefusedPeer?.(socket.remoteAddress ?? 'unknown')
       socket.destroy()
     })

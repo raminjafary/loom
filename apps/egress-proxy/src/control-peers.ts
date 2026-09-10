@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { lookup } from 'node:dns/promises'
 import { networkInterfaces } from 'node:os'
 
@@ -20,10 +21,13 @@ import { networkInterfaces } from 'node:os'
  * be — the Runner's authentication, not the only thing between an agent and its own
  * budget.
  *
- * The subnet is discovered rather than configured, because a compose network's address
- * range is assigned by the daemon: the proxy asks DNS for the alias sandboxes reach it by,
- * and the interface holding that address names the network to refuse. An operator running
- * a different topology can state it outright instead.
+ * The networks are classified rather than configured, because a compose network's address
+ * range is assigned by the daemon and — since a run gets a network of its own — the set is
+ * not even fixed for the life of the process. The property that decides it is the one that
+ * makes a network internal in the first place: no default route leaves by it. See
+ * `refusedNetworksFromRoutes`. An operator running a different topology can state the list
+ * outright instead, and a host with no readable route table falls back to the alias the
+ * proxy was found by at boot.
  */
 
 export interface Cidr {
@@ -153,4 +157,141 @@ export const discoverRefusedNetworks = async (input: {
     }
   }
   return cidrs.length > 0 ? { cidrs, source: 'alias' } : { cidrs: [], source: 'none' }
+}
+
+/**
+ * The interface a default route leaves by, read from the kernel's own table.
+ *
+ * `/proc/net/route` is columns of hex, little-endian: a default route is the row whose
+ * destination and mask are both zero. Returns null when the table cannot be read or holds
+ * no default route, which is how a non-Linux host and a container with no route off the
+ * network both arrive at the same answer — unknown, rather than "everything is routable".
+ */
+export const defaultRouteInterface = (routeTable: string): string | null => {
+  for (const line of routeTable.split('\n').slice(1)) {
+    const [iface, destination, , , , , , mask] = line.trim().split(/\s+/)
+    if (!iface || destination === undefined || mask === undefined) continue
+    if (Number.parseInt(destination, 16) === 0 && Number.parseInt(mask, 16) === 0) return iface
+  }
+  return null
+}
+
+/**
+ * Every network this container sits on that has no way off the host.
+ *
+ * This replaces asking DNS where the sandbox network is, and the reason is that the
+ * question changed: with a network per run (see the Runner's `run-network.ts`) the proxy is
+ * attached to networks that did not exist when it booted, and a set discovered once is a
+ * set that omits every one of them. Interfaces are read at accept time instead.
+ *
+ * The classifier is the property that actually matters rather than a name: an internal
+ * Docker network has no gateway and therefore no default route, so **every non-loopback
+ * IPv4 interface except the one the default route leaves by is a network a sandbox could
+ * be on**. That refuses more than the alias ever did — it does not depend on which alias
+ * resolved, or on the sandbox network being the only internal one — and it needs no DNS,
+ * which is what lets it run synchronously on `connection` before a byte is parsed.
+ *
+ * With no default route the answer is *nothing*, not *everything*: an unreadable route
+ * table must not turn into a proxy that refuses its own Runner.
+ */
+export const refusedNetworksFromRoutes = (
+  interfaces: ReturnType<typeof networkInterfaces>,
+  routeTable: string,
+): Cidr[] => {
+  const routable = defaultRouteInterface(routeTable)
+  if (routable === null) return []
+  const cidrs: Cidr[] = []
+  for (const [name, entries] of Object.entries(interfaces)) {
+    if (name === routable) continue
+    for (const entry of entries ?? []) {
+      if (entry.family !== 'IPv4' || entry.internal) continue
+      const cidr = cidrForInterface(entry.address, entry.netmask)
+      if (cidr && !cidrs.some((existing) => existing.text === cidr.text)) cidrs.push(cidr)
+    }
+  }
+  return cidrs
+}
+
+export interface RefusedNetworks {
+  /** Evaluated per connection, so a network attached after boot is refused on its first use. */
+  readonly current: () => readonly Cidr[]
+  /** What an operator is told at startup, and what the source of the answer is. */
+  readonly describe: () => string
+}
+
+/**
+ * The live answer to "who may reach the control plane", in the order an operator's
+ * intent beats a discovered one.
+ *
+ * 1. An **explicit** list is fixed for the life of the process — an operator who stated
+ *    the topology is not overruled by what the daemon later attaches.
+ * 2. **Routes**, re-read per connection behind a short cache. This is the live source, and
+ *    the only one that sees a per-run network.
+ * 3. The **alias** the proxy was discovered by at boot, kept as the answer for a host with
+ *    no readable route table.
+ *
+ * The cache exists because `getifaddrs` is cheap but not free and the control plane is the
+ * Runner's own channel; a quarter-second is far shorter than the time between a network
+ * being created and a container on it reaching anything, which is the window that matters.
+ */
+export const createRefusedNetworks = (input: {
+  readonly explicit: readonly Cidr[]
+  readonly fallback: readonly Cidr[]
+  readonly fallbackSource: 'alias' | 'none'
+  readonly ttlMs?: number
+  readonly readRouteTable?: () => string
+  readonly interfaces?: () => ReturnType<typeof networkInterfaces>
+  readonly now?: () => number
+}): RefusedNetworks => {
+  const ttlMs = input.ttlMs ?? 250
+  const now = input.now ?? Date.now
+  const readInterfaces = input.interfaces ?? networkInterfaces
+  const readRouteTable =
+    input.readRouteTable ??
+    (() => {
+      try {
+        return readFileSync('/proc/net/route', 'utf8')
+      } catch {
+        return ''
+      }
+    })
+
+  if (input.explicit.length > 0) {
+    return {
+      current: () => input.explicit,
+      describe: () =>
+        `control plane refuses ${input.explicit.map((cidr) => cidr.text).join(', ')} (explicit)`,
+    }
+  }
+
+  let cached: readonly Cidr[] | null = null
+  let cachedAt = 0
+  let live = false
+
+  const fromRoutes = (): readonly Cidr[] | null => {
+    const cidrs = refusedNetworksFromRoutes(readInterfaces(), readRouteTable())
+    return cidrs.length > 0 ? cidrs : null
+  }
+
+  const current = (): readonly Cidr[] => {
+    const at = now()
+    if (cached !== null && at - cachedAt < ttlMs) return cached
+    const routed = fromRoutes()
+    live = routed !== null
+    cached = routed ?? input.fallback
+    cachedAt = at
+    return cached
+  }
+
+  return {
+    current,
+    describe: () => {
+      const cidrs = current()
+      if (cidrs.length === 0) {
+        return 'control plane refuses no network: the control secret is the only barrier'
+      }
+      const source = live ? 'route table, live' : input.fallbackSource
+      return `control plane refuses ${cidrs.map((cidr) => cidr.text).join(', ')} (${source})`
+    },
+  }
 }
