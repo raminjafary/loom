@@ -1707,7 +1707,7 @@ const harnessSummary = (persona: AgentPersona): string => {
 <style scoped>
 .trial {
   margin-top: 1rem;
-  border: 1px solid var(--line, #2a2a2a);
+  border: 1px solid var(--border);
   border-left: 3px solid var(--accent, #7aa2f7);
   border-radius: 4px;
   padding: 0.6rem;
@@ -1783,7 +1783,7 @@ const harnessSummary = (persona: AgentPersona): string => {
 .trial.search .verdict {
   margin: 0 0 0.5rem;
   padding: 0.4rem 0.6rem;
-  border-left: 2px solid var(--line, #2a2a2a);
+  border-left: 2px solid var(--border);
   font-size: 0.8rem;
   display: grid;
   gap: 0.2rem;
@@ -1812,7 +1812,7 @@ const harnessSummary = (persona: AgentPersona): string => {
 
 .history {
   margin-top: 1rem;
-  border-top: 1px solid var(--line, #2a2a2a);
+  border-top: 1px solid var(--border);
   padding-top: 0.75rem;
 }
 
@@ -1830,7 +1830,7 @@ const harnessSummary = (persona: AgentPersona): string => {
 }
 
 .history li {
-  border: 1px solid var(--line, #2a2a2a);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.5rem;
 }

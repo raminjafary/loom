@@ -114,7 +114,7 @@ const submit = () => {
   padding: 0 0.35rem;
   border-radius: 999px;
   background: var(--accent, #7aa2f7);
-  color: var(--accent-fg, #10121a);
+  color: var(--accent-contrast);
   font-size: 0.7rem;
   font-weight: 600;
   line-height: 1.25rem;

@@ -1511,8 +1511,8 @@ onBeforeUnmount(() => {
 
 .thread-views button.on {
   opacity: 1;
-  border-color: var(--line, #2a2a2a);
-  background: var(--panel, #16181d);
+  border-color: var(--border);
+  background: var(--surface-hover);
 }
 
 .app {

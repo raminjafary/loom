@@ -206,4 +206,40 @@ describe('architectural boundaries', () => {
     expect(isInfra('@orpc/server')).toBe(true)
     expect(isInfra('@loom/domain')).toBe(false)
   })
+
+  /**
+   * Every design token a component reaches for is one the design system declares.
+   *
+   * `var(--panel, #16181d)` looks like a themed value and is not one: the token was never
+   * declared, so every render took the literal — which had been written for the dark theme.
+   * In light mode that put `#16161a` text on a `#16181d` background, a contrast ratio of
+   * about 1.02, and the *selected* view tab was therefore unreadable in the default theme.
+   * It shipped because in dark mode the accident looks correct, and because a component
+   * test asserts the class is on the element rather than what colour it came out.
+   *
+   * Seven such tokens were in use when this check was written, and two of the fallbacks
+   * disagreed with each other about which theme they were for — the same `--line` was
+   * `#2a2a2a` in one component and `#e2e5ea` in another. A fallback is a reasonable thing
+   * to write; a fallback that is the only value that ever applies is a hard-coded colour
+   * wearing a token's name.
+   */
+  it('every CSS variable a component uses is declared by the design system', () => {
+    const declared = (text: string) =>
+      new Set([...text.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].map((match) => match[1] as string))
+    const system = declared(readFileSync(join(ROOT, 'apps/web/src/styles.css'), 'utf8'))
+    // Guards the guard: an empty set would make every component pass.
+    expect(system.size).toBeGreaterThan(10)
+
+    const components = join(ROOT, 'apps/web/src/components')
+    const undeclared: string[] = []
+    for (const file of readdirSync(components).filter((name) => name.endsWith('.vue'))) {
+      const text = readFileSync(join(components, file), 'utf8')
+      const local = declared(text)
+      for (const match of text.matchAll(/var\((--[a-z0-9-]+)/g)) {
+        const token = match[1] as string
+        if (!system.has(token) && !local.has(token)) undeclared.push(`${file}: ${token}`)
+      }
+    }
+    expect(undeclared).toEqual([])
+  })
 })

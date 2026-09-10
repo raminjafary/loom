@@ -733,7 +733,7 @@ header {
 .empty,
 .description,
 .progress {
-  color: var(--muted, #667);
+  color: var(--text-muted);
   font-size: 0.85rem;
   margin: 0;
 }
@@ -746,7 +746,7 @@ header {
   padding: 0;
 }
 .pick {
-  border: 1px solid var(--line, #d5d8de);
+  border: 1px solid var(--border);
   border-radius: 999px;
   background: transparent;
   cursor: pointer;
@@ -762,7 +762,7 @@ header {
   margin-left: 0.35rem;
 }
 .ceiling {
-  background: var(--surface-2, #f6f7f9);
+  background: var(--surface);
   border-radius: 6px;
   font-size: 0.78rem;
   margin: 0;
@@ -778,28 +778,28 @@ header {
   height: auto;
 }
 figcaption {
-  color: var(--muted, #667);
+  color: var(--text-muted);
   font-size: 0.75rem;
   padding-top: 0.3rem;
 }
 .edge {
   fill: none;
-  stroke: var(--line, #c7ccd4);
+  stroke: var(--border);
   stroke-width: 1.4;
 }
 .edge.loop {
   stroke-dasharray: 4 3;
 }
 #wf-arrow path {
-  fill: var(--line, #c7ccd4);
+  fill: var(--border);
 }
 .node rect {
   fill: var(--surface, #fff);
-  stroke: var(--line, #c7ccd4);
+  stroke: var(--border);
   stroke-width: 1.2;
 }
 .node.barrier rect {
-  fill: var(--line, #b9bfc9);
+  fill: var(--border);
   stroke: none;
 }
 .node.running rect {
@@ -831,7 +831,7 @@ figcaption {
 .fan,
 .barrier-label {
   font-size: 9px;
-  fill: var(--muted, #6a707c);
+  fill: var(--text-muted);
 }
 .barrier-label {
   text-anchor: middle;
@@ -859,7 +859,7 @@ figcaption {
 }
 .hint,
 .rationale {
-  color: var(--muted, #667);
+  color: var(--text-muted);
   font-size: 0.78rem;
   margin: 0;
 }
@@ -900,7 +900,7 @@ figcaption {
 }
 .arms th,
 .arms td {
-  border-bottom: 1px solid var(--line, #e2e5ea);
+  border-bottom: 1px solid var(--border);
   padding: 0.15rem 0.3rem;
   text-align: left;
 }
@@ -925,7 +925,7 @@ h4 {
   margin: 0.4rem 0 0;
 }
 .spent {
-  color: var(--muted, #667);
+  color: var(--text-muted);
   font-weight: 400;
 }
 .runs,
@@ -967,7 +967,7 @@ h4 {
 .pass,
 .reason,
 .halt {
-  color: var(--muted, #667);
+  color: var(--text-muted);
   font-size: 0.75rem;
 }
 .status.answered {

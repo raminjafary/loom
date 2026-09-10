@@ -148,7 +148,7 @@ const answer = (approval: ApprovalRequest) => {
   margin: 0.25rem 0 0;
   padding: 0.5rem 0.7rem;
   border-left: 3px solid var(--border);
-  background: var(--surface-alt, transparent);
+  background: var(--surface);
   white-space: pre-wrap;
 }
 

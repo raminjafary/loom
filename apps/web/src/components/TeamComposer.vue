@@ -1823,7 +1823,7 @@ header h2 {
 .canvas :deep(.persona-node) {
   border: 1px solid var(--border);
   border-radius: 0.4rem;
-  background: var(--bg-raised, var(--bg));
+  background: var(--surface);
   color: var(--text);
   font-size: 0.8rem;
   padding: 0.4rem 0.7rem;

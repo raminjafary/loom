@@ -12,6 +12,9 @@
   --ok: #16794a;
   --warn: #9a6700;
   --danger: #b3261e;
+  /* A stack rather than a colour, so it is declared once and not repeated in the dark
+     block below — the two components that reach for it were falling back to a literal. */
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   color-scheme: light dark;
 }

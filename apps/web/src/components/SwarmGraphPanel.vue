@@ -1285,7 +1285,7 @@ header button:disabled {
 }
 
 .knode .box {
-  fill: var(--surface-2, transparent);
+  fill: var(--surface);
   stroke: var(--accent);
   stroke-dasharray: 3 3;
   opacity: 0.9;
@@ -1584,7 +1584,7 @@ header button:disabled {
 }
 
 .node.planner .rail {
-  fill: var(--muted);
+  fill: var(--text-muted);
 }
 
 .node.planner:hover .rail,
@@ -1671,7 +1671,7 @@ text {
 }
 
 .nnode .box {
-  fill: var(--surface-2, transparent);
+  fill: var(--surface);
   stroke: var(--border);
 }
 
