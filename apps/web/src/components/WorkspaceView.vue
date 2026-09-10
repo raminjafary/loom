@@ -35,6 +35,7 @@ import RunLauncher from './RunLauncher.vue'
 import SettingsOverlay from './SettingsOverlay.vue'
 import TeamComposer from './TeamComposer.vue'
 import SidebarSection from './SidebarSection.vue'
+import SupervisionPanel from './SupervisionPanel.vue'
 import CostDashboardPanel from './CostDashboardPanel.vue'
 import RunTreePanel from './RunTreePanel.vue'
 import SwarmBoardPanel from './SwarmBoardPanel.vue'
@@ -609,6 +610,18 @@ const spendSummary = computed(() => {
   return `$${summary.totals.totalUsd.toFixed(2)} · ${window}`
 })
 
+/**
+ * The collapsed summary: the ratio, because that is the only figure that means anything on its
+ * own. A bare count reads as close attention over ten runs and as near-abdication over four
+ * hundred, and the header has room for one number.
+ */
+const supervisionSummary = computed(() => {
+  const ledger = agentSnapshot.value.supervision
+  if (!ledger) return null
+  if (ledger.decidedRuns === 0) return `${ledger.total} acts`
+  return `${(ledger.total / ledger.decidedRuns).toFixed(2)} per decided run`
+})
+
 // `@mention` starts a run: the message always posts as
 // ordinary chat; if it mentions a known persona, a repo-picker bar appears
 // so the human can say inline which bound repo to target — never bound per
@@ -907,6 +920,10 @@ onMounted(() => {
   // slowly, and re-aggregating every two seconds would be a query per tick to redraw a
   // number that had not moved.
   void agent.refreshCostSummary(costWindowHours.value)
+  // Once on mount too, and for the same reason: it aggregates the audit log and moves in acts
+  // per week. It is also what makes the section openable at all — a section with nothing in it
+  // does not expand, so a ledger that waited to be asked for would never be.
+  void agent.refreshSupervision()
   consumeRunDeepLink()
   navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
   window.addEventListener('focus', onFocus)
@@ -1348,6 +1365,25 @@ onBeforeUnmount(() => {
           @open="(agentRunId) => openRun(agentRunId)"
           @refresh="() => agent.refreshCostSummary(costWindowHours)"
           @window="(hours) => setCostWindow(hours)"
+        />
+      </SidebarSection>
+
+      <!--
+        The other half of the pair above: spend is what the swarm cost, this is what attending
+        to it cost. Workspace-wide for the same reason, and read on open rather than on the run
+        poll — it aggregates the audit log, and it moves in acts per week rather than per tick.
+      -->
+      <SidebarSection
+        title="Supervision"
+        :summary="supervisionSummary"
+        :empty="agentSnapshot.supervision === null"
+        empty-text="not read yet"
+        storage-key="supervision"
+      >
+        <SupervisionPanel
+          :ledger="agentSnapshot.supervision"
+          :fetch-error="agentSnapshot.fetchErrors.supervision"
+          @refresh="() => agent.refreshSupervision()"
         />
       </SidebarSection>
     </aside>

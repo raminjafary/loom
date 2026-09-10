@@ -31,6 +31,7 @@ import {
   SelfRevisionSchema,
   RunnerSchema,
   CostSummarySchema,
+  SupervisionLedgerSchema,
   SwarmBoardSchema,
   ThreadSchema,
   ColosseumClaimSchema,
@@ -1215,33 +1216,7 @@ export const contract = {
    * that scored an operator on it would be optimising the thing it is supposed to measure.
    */
   supervision: {
-    ledger: oc.output(
-      z.object({
-        /** The window this reading covers — a rate is meaningless without it. */
-        since: z.date(),
-        /** `describeSupervision`'s sentence: the ratio, the spread, and no verdict. */
-        detail: z.string(),
-        total: z.number().int(),
-        byKind: z.object({
-          approval: z.number().int(),
-          disposition: z.number().int(),
-          promotion: z.number().int(),
-          veto: z.number().int(),
-          envelope: z.number().int(),
-        }),
-        /** Of the envelope acts, how many actually moved a ceiling. */
-        envelopeChanges: z.number().int(),
-        /** The denominator: runs that reached a decision in the same window. */
-        decidedRuns: z.number().int(),
-        /**
-         * Audited human acts that are not supervision of an agent's work, and acts by the
-         * platform itself. Both on the wire so a reader can see the rate's own bound rather
-         * than trusting that everything was counted.
-         */
-        uncounted: z.number().int(),
-        automatic: z.number().int(),
-      }),
-    ),
+    ledger: oc.output(SupervisionLedgerSchema),
   },
 
   /** The Phase 1 subset — markdown+frontmatter, read/CRUD only. */

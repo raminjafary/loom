@@ -6,6 +6,7 @@ import type {
   Capability,
   PlanReview,
   CostSummary,
+  SupervisionLedger,
   DirectoryListing,
   MasteryView,
   ColosseumSession,
@@ -177,6 +178,14 @@ export interface AgentSnapshot {
    */
   readonly costSummary: CostSummary | null
   /**
+   * How much human judgement this workspace is spending, against the work that needed it.
+   *
+   * Read on demand like the spend summary and for the same reason — it is workspace-wide and
+   * moves slowly, so folding it into the run poll would re-aggregate the whole audit log every
+   * two seconds to redraw a number that had not changed.
+   */
+  readonly supervision: SupervisionLedger | null
+  /**
    * Run id → persona name, for every run this client has heard of.
    *
    * The thread needs it and cannot derive it: a message's author is an
@@ -255,6 +264,7 @@ export interface AgentSnapshot {
     readonly board: string | null
     readonly cost: string | null
     readonly diff: string | null
+    readonly supervision: string | null
   }
   /**
    * How many runs the last kill-switch press actually cancelled.
@@ -783,6 +793,8 @@ export interface AgentSession {
   refreshBoard(agentRunId: string): Promise<void>
   /** Workspace spend. `windowHours` null or omitted means all time. */
   refreshCostSummary(windowHours?: number | null): Promise<void>
+  /** Re-reads the supervision ledger. Read-only, and there is deliberately no target. */
+  refreshSupervision(): Promise<void>
   /**
    * Adds a human's note to a tree — authoritative, and rendered to workers outside
    * the untrusted fence. There is deliberately no client path to
@@ -901,6 +913,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     mergeQueue: [],
     swarmBoard: null,
     costSummary: null,
+    supervision: null,
     personaNameByRunId: {},
     treeNotes: [],
     lastPairing: null,
@@ -916,7 +929,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     notificationConfig: null,
     loading: false,
     error: null,
-    fetchErrors: { inbox: null, board: null, cost: null, diff: null },
+    fetchErrors: { inbox: null, board: null, cost: null, diff: null, supervision: null },
     lastPauseCancelledCount: null,
     recentActivity: [],
   }
@@ -2276,6 +2289,16 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
 
     async refreshCostSummary(windowHours) {
       await fetchCostSummary(windowHours ?? null)
+    },
+
+    async refreshSupervision() {
+      try {
+        patch({ supervision: await options.api.supervision.ledger() })
+        patchFetchError('supervision', null)
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        patchFetchError('supervision', errorMessage(error))
+      }
     },
 
     async writeNote(input) {

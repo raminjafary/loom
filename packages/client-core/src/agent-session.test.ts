@@ -281,6 +281,7 @@ describe('fetchErrors', () => {
       board: null,
       cost: null,
       diff: null,
+      supervision: null,
     })
     session.dispose()
   })

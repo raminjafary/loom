@@ -807,6 +807,39 @@ export const SpendGroupSchema = z.object({
   totalUsd: z.number(),
 })
 
+/**
+ * How much human judgement a workspace is spending, against the work that needed it.
+ *
+ * Named here rather than written inline on the contract, like every other reading a client
+ * renders: a panel cannot hold a type it cannot import, which is one reason nothing rendered
+ * this for as long as it existed.
+ */
+export const SupervisionLedgerSchema = z.object({
+  /** The window this reading covers — a rate is meaningless without it. */
+  since: z.date(),
+  /** `describeSupervision`'s sentence: the ratio, the spread, and no verdict. */
+  detail: z.string(),
+  total: z.number().int(),
+  byKind: z.object({
+    approval: z.number().int(),
+    disposition: z.number().int(),
+    promotion: z.number().int(),
+    veto: z.number().int(),
+    envelope: z.number().int(),
+  }),
+  /** Of the envelope acts, how many actually moved a ceiling. */
+  envelopeChanges: z.number().int(),
+  /** The denominator: runs that reached a decision in the same window. */
+  decidedRuns: z.number().int(),
+  /**
+   * Audited human acts that are not supervision of an agent's work, and acts by the
+   * platform itself. Both on the wire so a reader can see the rate's own bound rather
+   * than trusting that everything was counted.
+   */
+  uncounted: z.number().int(),
+  automatic: z.number().int(),
+})
+
 export const CostSummarySchema = z.object({
   /** Null means all time; otherwise the window these figures cover. */
   windowHours: z.number().int().nullable(),
@@ -1621,6 +1654,7 @@ export type MasteryView = z.infer<typeof MasteryViewSchema>
 export type SwarmBoardCard = z.infer<typeof SwarmBoardCardSchema>
 export type SwarmBoard = z.infer<typeof SwarmBoardSchema>
 export type CostSummary = z.infer<typeof CostSummarySchema>
+export type SupervisionLedger = z.infer<typeof SupervisionLedgerSchema>
 export type SpendGroup = z.infer<typeof SpendGroupSchema>
 export type Capability = z.infer<typeof CapabilitySchema>
 export type PersonaCapability = z.infer<typeof PersonaCapabilitySchema>
