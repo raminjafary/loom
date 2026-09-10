@@ -365,46 +365,37 @@ export const createRunnerGateway = (
       })
     },
 
+    /**
+     * The frame, built by **forwarding what was not transformed** rather than by naming every
+     * field.
+     *
+     * This destructured all eighteen of them and rebuilt the frame field by field, and a field
+     * a function declines to read is dropped with no type error at the port, at the spread or
+     * at the schema. Three fields were lost that way before this was written: `mastery` (the
+     * map row created, the revision resolved, the model never offered `record_map`),
+     * `baseCommitSha` (a screening run at the wrong commit), and then both halves of the
+     * prosecutor at once — `prosecute`, so the container was never given the reporting tool,
+     * and `openOnBranch`, so it opened on the base of the diff it was sent to examine. Each
+     * time the run started, cost money, and looked entirely normal.
+     *
+     * So the pass-through fields travel in `rest` and cannot be forgotten; what is named below
+     * is exactly what needs *changing* on the way — a defensive copy, or a rendering. A new
+     * plain field needs no edit here at all.
+     */
     async startRun({
       runnerId,
-      runId,
       persona,
-      cwd,
-      defaultBranch,
-      repositoryId,
-      task,
-      baseCommitSha,
-      contextLedger,
-      mapContext,
-      experienceContext,
       mastery,
-      reconcile,
-      review,
       steering,
       verifyVariants,
       proposeVariants,
       answerWorkflow,
-      designWorkflow,
+      ...rest
     }) {
       send(runnerId, {
         type: 'start_run',
-        runId,
+        ...rest,
         persona: { ...persona, tools: [...persona.tools] },
-        cwd,
-        defaultBranch,
-        ...(repositoryId === undefined ? {} : { repositoryId }),
-        ...(task === undefined ? {} : { task }),
-        // Destructured above and forwarded here, which the comment below is about:
-        // The pinned commit is exactly the kind of field that would be lost in
-        // silence, and losing it means a screening run at the wrong commit.
-        ...(baseCommitSha === undefined ? {} : { baseCommitSha }),
-        ...(contextLedger === undefined ? {} : { contextLedger }),
-        // A field added to the port and not destructured here is dropped in silence —
-        // there is no type error for an argument you decline to read. That is exactly
-        // how `mastery` was lost on its first live run: the map row was created, the
-        // revision resolved, and the model was never offered `record_map`.
-        ...(mapContext === undefined ? {} : { mapContext }),
-        ...(experienceContext === undefined ? {} : { experienceContext }),
         /**
          * The directive is **rendered here**, not on the Runner.
          *
@@ -425,22 +416,15 @@ export const createRunnerGateway = (
                   : { directive: renderMasteryFraming(mastery) }),
               },
             }),
-        ...(reconcile === undefined ? {} : { reconcile }),
-        ...(review === undefined ? {} : { review }),
         ...(steering ? { steering: true } : {}),
+        // Copied rather than forwarded: the frame must not share a mutable array with its
+        // caller.
         ...(verifyVariants === undefined
           ? {}
           : { verifyVariants: { optionKeys: [...verifyVariants.optionKeys] } }),
-        // Destructured above and forwarded here, for the reason `mapContext`'s comment
-        // gives: a field this port declares and this function declines to read is dropped
-        // with no type error, and a proposer that never reaches its tool is a session that
-        // reads a repository and submits nothing.
         ...(proposeVariants === undefined
           ? {}
           : { proposeVariants: { personaName: proposeVariants.personaName } }),
-        // Destructured above and forwarded here, for the reason the two comments above give.
-        // A step whose Runner was never told its answer schema is a step with no way to
-        // answer, and the workflow below it waits for a run that ended.
         ...(answerWorkflow === undefined
           ? {}
           : {
@@ -452,11 +436,6 @@ export const createRunnerGateway = (
                 })),
               },
             }),
-        // Destructured above and forwarded here, for the reason the fields above give: a
-        // designer whose Runner was never told is a designer with nothing to submit through.
-        ...(designWorkflow === undefined
-          ? {}
-          : { designWorkflow: { ask: designWorkflow.ask } }),
       })
     },
 

@@ -1641,9 +1641,9 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
           aborts.set(runId, abort)
 
           const reconcile = frame.reconcile
-          const review = frame.review
+          const openOnBranch = frame.openOnBranch
           // A reconciler opens onto a paused rebase in a clone of the conflicted run's
-          // clone; a reviewer opens on the branch it reviews; every
+          // clone; a reviewer and a prosecutor open on the branch they are examining; every
           // other run opens onto a fresh branch off the default. Same run machinery from
           // here on — sandbox, budget, notes, approval gate all apply unchanged.
           const prepare = reconcile
@@ -1664,17 +1664,22 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                   runId,
                 )
               })()
-            : review
+            : openOnBranch
               ? (() => {
-                  const target = runWorkspaces.get(review.targetRunId)
+                  const target = runWorkspaces.get(openOnBranch.targetRunId)
                   if (!target) {
                     return Promise.reject(
                       new Error(
-                        `cannot review ${review.branchName}: this Runner no longer holds run ${review.targetRunId}'s clone`,
+                        `cannot open on ${openOnBranch.branchName}: this Runner no longer holds run ${openOnBranch.targetRunId}'s clone`,
                       ),
                     )
                   }
-                  return prepareReviewWorkspace(target.clonePath, review.branchName, runId)
+                  return prepareReviewWorkspace(
+                    target.clonePath,
+                    openOnBranch.branchName,
+                    runId,
+                    frame.defaultBranch,
+                  )
                 })()
               : prepareRunWorkspace(frame.cwd, runId, frame.baseCommitSha)
 

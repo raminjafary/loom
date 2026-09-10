@@ -33,6 +33,7 @@ import {
   describeCrossPlanOverlaps,
   delegationDesign,
   isParentlessRelation,
+  isPlatformInitiatedRelation,
   delegationMatrix,
   describeDelegationRoster,
   describeReportingLines,
@@ -258,7 +259,7 @@ import {
 } from './note-use-cases.js'
 import { recordSpokenTurn } from './colosseum-use-cases.js'
 import { handoffLimits, suggestHandoffOnPressure } from './handoff-use-cases.js'
-import { startProsecutor } from './prosecution-use-cases.js'
+import { closeUnreportedProsecution, startProsecutor } from './prosecution-use-cases.js'
 import { startThread, type Deps } from './use-cases.js'
 
 export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps, ExperienceDeps {
@@ -4917,7 +4918,7 @@ export const startAgentRun = async (
      * a review must not masquerade as a delegation child, and the reviewing role cites that
      * same distinction as the reason the relation already existed.
      */
-    review?: { targetRunId: AgentRunId; branchName: string }
+    openOnBranch?: { targetRunId: AgentRunId; branchName: string }
     /**
      * Start this run as a **mastery run**: its deliverable is a map of the
      * named subject, not a diff. Opens (or re-opens) the persona's map for that subject
@@ -5401,56 +5402,13 @@ export const startAgentRun = async (
   // with, and editing a persona mid-run must not widen what its children may ask
   // for.
   /**
-   * ...except for a reconciler, which is **platform-initiated**.
-   *
-   * Attenuation exists so a parent cannot grant a child more than it holds — it is a
-   * defence against a parent that has been manipulated into escalating. A reconcile
-   * child is not something the parent asks for or shapes: the merge queue starts it
-   * when a rebase conflicts, the persona is looked up from the registry by a fixed
-   * name, the task text is platform-authored, and `relation` is not reachable from the
-   * contract. The parent contributes nothing but the branch that failed to merge, so
-   * there is no escalation for attenuation to prevent here.
-   *
-   * Applying it anyway is not merely redundant, it is wrong: it makes reconciliation
-   * impossible for exactly the runs most likely to need it. A worker on Haiku, or one with
-   * a deliberately narrow tool list, could never have its branch reconciled — the
-   * reconciler needs `Edit` and a model tier the worker does not have, and the check reads
-   * both as escalation. That was found by an integration test refusing `Edit, Grep, Glob`
-   * for a read-only-ish parent.
-   *
-   * The reconciler's own bounds still apply: registry-provisioned capabilities and the
-   * budget cap on its persona. What is deliberately *not* relaxed is delegation — a
-   * Planner's children stay fully attenuated, which is the case the data model is actually
-   * about.
+   * ...except for the passes the **platform** starts, which are not delegation at all: the
+   * parent contributes nothing but the ids that put them in the right tree. Which relations
+   * those are lives beside the relation union as `PLATFORM_INITIATED_RELATIONS`, with the
+   * argument for each — this was three conditions written here, and the fourth pass to need
+   * the exemption was added to the union and not to them.
    */
-  /**
-   * `verify` is exempt for the reason `reconcile` is, and the argument transfers line for
-   * line: the platform starts it when a search opens, the persona is
-   * looked up in the registry by a fixed name, the task text is platform-authored and
-   * blinded, and the parent contributes nothing but the ids. There is no escalation for
-   * attenuation to prevent — and applying it anyway would make a search unverifiable for
-   * exactly the personas most likely to run one, since a narrow Haiku worker's snapshot
-   * cannot grant the read-only Opus session that judges its prompts.
-   */
-  /**
-   * `escalate` is exempt, and here the exemption is not a convenience — it is the feature.
-   *
-   * An escalation exists to run the same task at a *higher* model tier than the attempt that
-   * failed, so attenuation against that attempt would refuse every escalation there is, by
-   * definition. What bounds it instead is the thing that should: the envelope ceiling and the
-   * cap, both checked by `escalateAfterFailure` before this is called, and neither of them the
-   * failed run's own snapshot.
-   *
-   * The rest of the argument is `verify`'s, line for line: the platform starts it, the persona
-   * comes from the registry rather than from the parent, the task is text the platform already
-   * had, and the parent contributes nothing but the ids that put it in the right tree.
-   */
-  if (
-    parent &&
-    input.relation !== 'reconcile' &&
-    input.relation !== 'verify' &&
-    input.relation !== 'escalate'
-  ) {
+  if (parent && !isPlatformInitiatedRelation(input.relation)) {
     const verdict = attenuateChildPersona(parent.persona, personaSpec)
     if (!verdict.ok) throw new ValidationError(verdict.reason)
   }
@@ -5712,7 +5670,7 @@ export const startAgentRun = async (
       ...(input.reconcile && parent
         ? { reconcile: { parentRunId: parent.id, branchName: input.reconcile.branchName } }
         : {}),
-      ...(input.review ? { review: input.review } : {}),
+      ...(input.openOnBranch ? { openOnBranch: input.openOnBranch } : {}),
       // Derived from the relation rather than from a separate argument: the two would
       // be one more pair that has to agree, and a run recorded as `steer` whose Runner
       // was never told is a Planner offered the plan tool — which answers a steering
@@ -6108,7 +6066,7 @@ const startPlannedChild = async (
        */
       ownedPaths: input.reviewOf ? [] : subtask.paths,
       ...(input.reviewOf
-        ? { review: { targetRunId: input.reviewOf.runId, branchName: input.reviewOf.branchName } }
+        ? { openOnBranch: { targetRunId: input.reviewOf.runId, branchName: input.reviewOf.branchName } }
         : {}),
     })
     // The edge, at the moment it is created. This is the one frame a client cannot
@@ -9138,6 +9096,7 @@ const startProsecutorFor = async (deps: AgentDeps, run: AgentRun): Promise<void>
       parentRunId: input.parentRunId,
       relation: input.relation,
       prosecute: input.prosecute,
+      openOnBranch: input.openOnBranch,
       task: input.task,
     }),
   )
@@ -9798,6 +9757,12 @@ export const recordAgentEvent = async (
      * direction — see `startProsecutor` — and it holds no authority over anything above.
      */
     await startProsecutorFor(deps, completed)
+    /**
+     * And the other direction: if *this* run was the prosecutor, its prosecution is over
+     * whether or not it said anything. A session that narrated its findings into the thread
+     * instead of calling the tool would otherwise leave the row `running` for ever.
+     */
+    await closeUnreportedProsecution(deps, completed, { ok: true })
   } else if (input.event.kind === 'run_failed') {
     const failed = await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
       status: 'failed',
@@ -9841,6 +9806,7 @@ export const recordAgentEvent = async (
      * likely to have been written about it than about any other.
      */
     await startProsecutorFor(deps, failed)
+    await closeUnreportedProsecution(deps, failed, { ok: false, message: input.event.message })
   }
 }
 

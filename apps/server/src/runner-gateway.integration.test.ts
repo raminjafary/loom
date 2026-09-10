@@ -425,6 +425,57 @@ describe('runner-gateway: a mastery run reaches the Runner as one', () => {
     socket.close()
   })
 
+  /**
+   * Both halves of the prosecutor, at the frame — and they are here rather than in a test of
+   * their own because they were lost the same way `mastery` was, in the same function, after
+   * that comment was written.
+   *
+   * `prosecute` is what builds the reporting tool inside the container; without it the session
+   * has nothing to call, and the one that found this wrote its findings into the thread as
+   * prose. `openOnBranch` is what puts the change in the tree; without it the run opens on a
+   * fresh branch off the default, which is the *base* of the diff, so `git diff` is empty and
+   * the session spends its budget looking for a branch its own task named. Neither failed
+   * anything: two prosecutors ran, cost half a dollar between them, and reported nothing.
+   */
+  it('carries `prosecute` and `openOnBranch` on start_run, which is the whole prosecutor', async () => {
+    const { socket, runnerId } = await pairFakeRunner('prosecute-dispatch')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'prosecute-dispatch' })
+    const firstFrame = nextFrame(socket, (v) => v.type === 'start_run')
+    const target = await client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: testPersonaId,
+    })
+    await firstFrame
+
+    const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+    await startAgentRun(app.deps, {
+      workspaceId: asWorkspaceId(target.workspaceId),
+      // As the run under prosecution, which is how the platform starts one: `startAgentRun`
+      // only lets a run spawn children of itself.
+      actor: agentRunActor(asAgentRunId(target.id)),
+      threadId: asThreadId(created.rootThread.id),
+      repositoryId: asRepositoryId(repo.id),
+      personaId: asAgentPersonaId(testPersonaId),
+      parentRunId: asAgentRunId(target.id),
+      relation: 'prosecute',
+      prosecute: true,
+      openOnBranch: {
+        targetRunId: asAgentRunId(target.id),
+        branchName: `loom/run-${target.id}`,
+      },
+    })
+    const frame = await startRun
+
+    expect(frame.prosecute).toBe(true)
+    expect(frame.openOnBranch).toEqual({
+      targetRunId: target.id,
+      branchName: `loom/run-${target.id}`,
+    })
+    socket.close()
+  })
+
   it('masters an author, and tells the run where that record actually is', async () => {
     const { socket, runnerId } = await pairFakeRunner('mastery-author')
     const repo = await bindViaFakeRunner(socket, runnerId)
@@ -6244,11 +6295,11 @@ Decompose and delegate.`
     const frame = (await reviewerStart) as {
       runId: string
       task?: string
-      review?: { targetRunId: string; branchName: string }
+      openOnBranch?: { targetRunId: string; branchName: string }
     }
     // The whole point of the relation: the Runner is told to open on the reviewed
     // branch, by run id, because the branch exists only in that run's clone.
-    expect(frame.review).toEqual({ targetRunId: worker!.id, branchName: 'loom/run-build-1' })
+    expect(frame.openOnBranch).toEqual({ targetRunId: worker!.id, branchName: 'loom/run-build-1' })
     // And the reviewer is told the facts the planner could not know — where the code is
     // and what its author was asked to own.
     expect(frame.task).toContain('loom/run-build-1')

@@ -996,25 +996,31 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
      */
     prosecute: z.boolean().optional(),
     /**
-     * Start this run as a **reviewer** of another run's branch.
+     * Start this run **on another run's branch**, rather than on a fresh branch off the
+     * default.
      *
-     * Present, the Runner clones the reviewed run's clone and checks that branch out
-     * before cutting this run's own branch from it — so the reviewer opens on the real
-     * tree it is reviewing and can grep it, read it and run it, rather than being
-     * handed a diff in its prompt. The words are "read access to the reviewed
-     * branch"; a diff in a prompt is not read access, it is a quotation.
+     * Present, the Runner clones that run's clone and checks the branch out before cutting
+     * this run's own branch from it — so the run opens on the real tree it is examining and
+     * can grep it, read it and run it, rather than being handed a diff in its prompt. A diff
+     * in a prompt is not read access, it is a quotation.
      *
-     * `targetRunId` rather than `parentRunId`, and that difference is the point: a
-     * reconciler's parent *is* the run whose branch it fixes, while a reviewer's parent
-     * is the planner and the branch belongs to a **sibling**. Reusing `reconcile`'s
-     * field would have made the reviewed run the reviewer's parent, which would put a
-     * worker in the delegation chain above another worker and measure the attenuation
-     * against the wrong run.
+     * Two passes need it and neither is delegation:
      *
-     * The same Runner-holds-the-clone limitation as `reconcile`, `getDiff`, `push` and
-     * the merge itself: the branch exists only in that run's clone until it merges.
+     * - a **reviewer**, whose branch belongs to a *sibling* — which is why the field is
+     *   `targetRunId` rather than `parentRunId`. Reusing `reconcile`'s field would have made
+     *   the reviewed run the reviewer's parent, putting a worker in the delegation chain above
+     *   another worker and measuring the attenuation against the wrong run.
+     * - a **prosecutor**, whose branch belongs to its own parent. It was started without this
+     *   field for its first day, so every prosecutor opened on a fresh branch off the default
+     *   and `git diff` against that default was empty. Nothing failed: the session read its
+     *   task, went looking for the branch it names, could not find a diff anywhere, and spent
+     *   its budget on the search. That is what the rename is for — the field was named after
+     *   the first pass to need it, and the second one was written by someone reading the name.
+     *
+     * The same Runner-holds-the-clone limitation as `reconcile`, `getDiff`, `push` and the
+     * merge itself: the branch exists only in that run's clone until it merges.
      */
-    review: z.object({ targetRunId: z.string(), branchName: z.string() }).optional(),
+    openOnBranch: z.object({ targetRunId: z.string(), branchName: z.string() }).optional(),
     /**
      * Start this run as a **re-planning turn**.
      *

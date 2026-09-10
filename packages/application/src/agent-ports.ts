@@ -1873,14 +1873,15 @@ export interface RunDispatchPort {
      */
     reconcile?: { parentRunId: AgentRunId; branchName: string }
     /**
-     * Start this run as a **reviewer** of a sibling's branch.
-     * Changes how the Runner prepares the workspace: the reviewed run's clone with
-     * that branch checked out, then this run's own branch cut from its tip.
+     * Start this run **on another run's branch** rather than on a fresh one off the default.
+     * Changes how the Runner prepares the workspace: that run's clone with the branch checked
+     * out, then this run's own branch cut from its tip.
      *
-     * `targetRunId`, not `parentRunId` — a reviewer's parent is the planner, and the
-     * branch belongs to a sibling.
+     * `targetRunId`, not `parentRunId` — a reviewer's parent is the planner and the branch
+     * belongs to a sibling, while a prosecutor's parent *is* the run whose branch it reads.
+     * Both need the tree; neither is delegation.
      */
-    review?: { targetRunId: AgentRunId; branchName: string }
+    openOnBranch?: { targetRunId: AgentRunId; branchName: string }
     /**
      * Start this run as a **re-planning turn**.
      * The Runner's only decision from it is which channel a Planner gets:
