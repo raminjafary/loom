@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
+import { peerIsRefused, type Cidr } from './control-peers.js'
 import { z } from 'zod'
 import type { EgressDecision } from '@loom/domain'
 import type { LeaseRegistry, UsageRecord } from './leases.js'
@@ -9,13 +10,16 @@ import type { LeaseRegistry, UsageRecord } from './leases.js'
  * than more routes on the data plane: the data plane is reachable from inside
  * the sandbox, and lease issuance must not be.
  *
- * **It is nevertheless reachable from the sandbox network.** This header
- * used to claim "a run cannot reach this port even knowing the secret", on the strength of
- * compose publishing it as `127.0.0.1:8081:8081`. That restricts the host mapping only; the
- * proxy is also on the internal sandbox network, where this port answers. So the secret below
- * is a real boundary rather than a second lock on a door nobody can find, and every endpoint
- * here should be read that way: with the secret, a sandbox can issue a lease for any run id,
- * revoke a sibling's, and drain the queues the Runner has not read yet.
+ * **A connection from the sandbox network is destroyed before it is read.** The listener
+ * answers on every interface — it has to, because the Runner is a host process reaching a
+ * published port, and a published port connects to the container's network interface — so
+ * "not reachable from a sandbox" is enforced at accept time rather than by a bind address.
+ * `control-peers.ts` carries the argument and works out which network that is.
+ *
+ * The secret is still checked, and it is still the thing that authenticates the caller. What
+ * changed is that it is no longer the *only* barrier: it used to be all that stood between a
+ * sandboxed agent and a lease for any run id, a sibling's revocation, or a drain of the
+ * queues the Runner had not read yet.
  *
  * Only the Runner calls it — the host-side, trusted component that already holds
  * the authority to start and stop runs.
@@ -76,8 +80,17 @@ export const createControlServer = (options: {
    */
   egressDecisionQueue: EgressDecision[]
   setOauthToken: (token: string | null) => void
-}): Server =>
-  createServer((request, response) => {
+  /**
+   * Networks whose connections are dropped at accept time — the sandbox's, in every
+   * deployment that has one. Empty means the old behaviour, where the secret is the only
+   * barrier; `main.ts` says so out loud at startup rather than letting it pass for a
+   * configured refusal.
+   */
+  refusedNetworks?: readonly Cidr[]
+  /** Called when a connection is dropped, so the operator sees an attempt rather than a silence. */
+  onRefusedPeer?: (remoteAddress: string) => void
+}): Server => {
+  const server = createServer((request, response) => {
     void (async () => {
       const secret = request.headers['x-loom-control-secret']
       if (typeof secret !== 'string' || !constantTimeEquals(secret, options.controlSecret)) {
@@ -165,3 +178,20 @@ export const createControlServer = (options: {
       json(response, 500, { error: error instanceof Error ? error.message : String(error) })
     })
   })
+
+  /**
+   * Before the request line, not after it: an HTTP-level 403 would still have parsed a
+   * sandbox's bytes and told it there is something here to talk to. Destroyed, so what a
+   * run sees is a connection that closes.
+   */
+  const refused = options.refusedNetworks ?? []
+  if (refused.length > 0) {
+    server.on('connection', (socket) => {
+      if (!peerIsRefused(socket.remoteAddress, refused)) return
+      options.onRefusedPeer?.(socket.remoteAddress ?? 'unknown')
+      socket.destroy()
+    })
+  }
+
+  return server
+}

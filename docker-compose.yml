@@ -71,8 +71,10 @@ services:
       LOOM_EGRESS_TRACE_HEADERS: ${LOOM_EGRESS_TRACE_HEADERS:-0}
     ports:
       # Published to the host's loopback only, which is not the same as unreachable:
-      # this container is also on loom-sandbox, so a sandbox CAN reach 8081 by
-      # container name. The control secret is the boundary.
+      # this container is also on loom-sandbox, so a sandbox can *route* to 8081 by
+      # container name. The control plane drops those connections at accept time — it
+      # discovers the sandbox network from the `loom-egress` alias below and logs which
+      # range it refuses at boot. The control secret authenticates the Runner behind that.
       - "127.0.0.1:8081:8081"
     networks:
       loom-sandbox:

@@ -1,6 +1,7 @@
 import { DEFAULT_ALLOWED_EGRESS_HOSTS, describeEgressRefusal, type EgressDecision } from '@loom/domain'
 import { z } from 'zod'
 import { createControlServer } from './control.js'
+import { discoverRefusedNetworks } from './control-peers.js'
 import { createLeaseRegistry, type UsageRecord } from './leases.js'
 import { createEgressProxy } from './proxy.js'
 
@@ -19,23 +20,35 @@ const EnvSchema = z.object({
   EGRESS_CONTROL_PORT: z.coerce.number().int().default(8081),
   EGRESS_DATA_HOST: z.string().default('0.0.0.0'),
   /**
-   * **The control plane is reachable from the sandbox network.**
+   * **Bound to every interface, and refused on one of them.**
    *
-   * This used to be commented "must not be reachable from anywhere but the host", and compose
-   * publishes the port as `127.0.0.1:8081:8081`, which reads like it settles the matter. It
-   * does not: publishing restricts the *host* mapping, and this container also sits on the
-   * internal `loom-sandbox` network, so `http://loom-egress:8081/_control/…` answers from
-   * inside a sandbox. Verified by running a container on that network — 401, not a refused
-   * connection.
+   * It cannot be bound to `127.0.0.1`: that is the *container's* loopback, and Docker's
+   * published `127.0.0.1:8081:8081` mapping connects to the container's network interface,
+   * so loopback would take the control plane away from the Runner — the host process that
+   * is its only legitimate caller. The container also sits on the internal `loom-sandbox`
+   * network, where this port used to answer a sandbox with a 401 rather than a refused
+   * connection, leaving the shared secret as the only barrier.
    *
-   * It cannot simply be bound to `127.0.0.1` either: that is the *container's* loopback,
-   * and Docker's published mapping connects to the container's network interface, so
-   * loopback would take the control plane away from the Runner as well. Fixing it properly
-   * means splitting the two planes into separate containers or moving control onto a Unix
-   * socket — the control-plane exposure records both. Until then the shared secret below is
-   * the only barrier, which is why it is validated as one.
+   * So the listener stays open and the *peer* is checked: a connection from the sandbox
+   * network is destroyed before a byte of it is parsed. See `control-peers.ts` for why
+   * neither a Unix socket nor a second container was the answer here.
    */
   EGRESS_CONTROL_HOST: z.string().default('0.0.0.0'),
+  /**
+   * Networks the control plane will not accept a connection from, comma-separated CIDRs.
+   *
+   * Normally unset: the sandbox network's range is assigned by the daemon, so the proxy
+   * discovers it by asking DNS for the alias sandboxes reach it by and reading the netmask
+   * off the interface holding that address. An operator whose topology does not match —
+   * a different alias, a proxy reached over a routed network — states it here instead.
+   */
+  EGRESS_CONTROL_REFUSED_NETWORKS: z.string().optional(),
+  /**
+   * The alias a sandbox reaches this container by. Compose sets it on the internal network,
+   * and `apps/runner/src/egress-client.ts` hardcodes the same name — which is exactly what
+   * makes it the right thing to resolve: it names the network to refuse.
+   */
+  EGRESS_SANDBOX_ALIAS: z.string().default('loom-egress'),
   /**
    * At least 32 characters, and never the value shipped in `.env.example`.
    *
@@ -133,11 +146,24 @@ const dataPlane = createEgressProxy({
   log,
 })
 
+/**
+ * Worked out before the listener opens, so there is never a window in which the control
+ * plane is up and accepting the network it is meant to refuse.
+ */
+const refusedNetworks = await discoverRefusedNetworks({
+  explicit: env.EGRESS_CONTROL_REFUSED_NETWORKS,
+  sandboxAlias: env.EGRESS_SANDBOX_ALIAS,
+})
+
 const controlPlane = createControlServer({
   leases,
   controlSecret: env.LOOM_EGRESS_CONTROL_SECRET,
   usageQueue,
   egressDecisionQueue,
+  refusedNetworks: refusedNetworks.cidrs,
+  // One line per attempt: a sandbox that found this port is the thing an operator most
+  // wants to know about, and a silent `destroy` would make it the thing they never see.
+  onRefusedPeer: (address) => log(`control connection refused from the sandbox network: ${address}`),
   setOauthToken: (token) => {
     const changed = upstream.oauthToken !== token
     upstream.oauthToken = token
@@ -151,6 +177,14 @@ dataPlane.listen(env.EGRESS_DATA_PORT, env.EGRESS_DATA_HOST, () => {
 
 controlPlane.listen(env.EGRESS_CONTROL_PORT, env.EGRESS_CONTROL_HOST, () => {
   log(`control plane on ${env.EGRESS_CONTROL_HOST}:${env.EGRESS_CONTROL_PORT}`)
+  // Said either way. "Refusing nothing" is a real deployment state — a proxy that is not on
+  // a sandbox network at all — and it is also what a broken discovery looks like, so it is
+  // printed rather than inferred from the absence of a line.
+  log(
+    refusedNetworks.cidrs.length === 0
+      ? 'control plane refuses no network: the control secret is the only barrier'
+      : `control plane refuses ${refusedNetworks.cidrs.map((cidr) => cidr.text).join(', ')} (${refusedNetworks.source})`,
+  )
 })
 
 /**
