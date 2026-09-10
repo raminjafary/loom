@@ -1,4 +1,5 @@
 import type { Contract } from '@loom/api-contract'
+import { ServerFrameSchema } from '@loom/runner-protocol'
 import {
   advanceEvolutionTriggers,
   advanceMergeQueue,
@@ -437,6 +438,41 @@ describe('runner-gateway: a mastery run reaches the Runner as one', () => {
    * the session spends its budget looking for a branch its own task named. Neither failed
    * anything: two prosecutors ran, cost half a dollar between them, and reported nothing.
    */
+  /**
+   * The other half of the forwarding refactor.
+   *
+   * The dispatch adapter used to name every field, which meant a field could be forgotten;
+   * it now forwards what it did not transform, which means a field could *leak* — an object
+   * spread skips excess-property checking, so a port field that is not a wire field would
+   * travel with no type error, exactly as the reverse used to.
+   *
+   * Parsing the frame with the protocol's own schema in strict mode is the whole check: the
+   * union member for `start_run` is the authority on what may cross, and anything else is a
+   * key the Runner was never meant to see.
+   */
+  it('sends nothing on start_run that the protocol does not declare', async () => {
+    const { socket, runnerId } = await pairFakeRunner('start-frame-shape')
+    const repo = await bindViaFakeRunner(socket, runnerId)
+    const created = await client.channel.create({ name: 'start-frame-shape' })
+
+    const startRun = nextFrame(socket, (v) => v.type === 'start_run')
+    await client.agentRun.start({
+      threadId: created.rootThread.id,
+      repositoryId: repo.id,
+      personaId: testPersonaId,
+    })
+    const frame = await startRun
+
+    const member = ServerFrameSchema.options.find(
+      (option) => option.shape.type.value === 'start_run',
+    )
+    expect(member, 'no start_run member in ServerFrameSchema').toBeDefined()
+    const declared = new Set(Object.keys(member!.shape))
+    const undeclared = Object.keys(frame).filter((key) => !declared.has(key))
+    expect(undeclared).toEqual([])
+    socket.close()
+  })
+
   it('carries `prosecute` and `openOnBranch` on start_run, which is the whole prosecutor', async () => {
     const { socket, runnerId } = await pairFakeRunner('prosecute-dispatch')
     const repo = await bindViaFakeRunner(socket, runnerId)
