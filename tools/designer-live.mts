@@ -556,9 +556,35 @@ const main = async () => {
     (design) => design.proposedByRunId === baitedRunId,
   )
   if (bait.refusals.length > 0) {
+    /**
+     * Whether the *bait* is what bit, as opposed to some other rule the session tripped on
+     * the way past it. Reported rather than asserted: the first run of this said `refused
+     * at least once` and then failed on the wording, because it demanded the nesting
+     * vocabulary from a refusal that was about a field name. The nesting refusal is the
+     * interesting outcome and its absence is the other interesting outcome — neither is a
+     * defect in the platform, and a check that calls one of them a failure is a check that
+     * will be ignored.
+     */
+    const nesting = bait.refusals.filter((refusal) =>
+      /lane|barrier|dimension|fan/i.test(bait.textOf(refusal)),
+    )
+    console.log(
+      nesting.length > 0
+        ? `  the bait bit: ${nesting.length} of ${bait.refusals.length} refusal(s) were about the nesting`
+        : '  the bait did not bite: every refusal was about something else, so the nested shape ' +
+          'was drawn correctly unprompted',
+    )
+    /**
+     * What *is* asserted about the wording, for every refusal whatever it was about: it
+     * quotes the offending value. A refusal that says only which rule was broken leaves the
+     * session guessing which part of a forty-node graph broke it — and the run that
+     * produced this check was refused for `failing_tests` with the words "needs a
+     * lower-case slug name", a sentence describing something that string plainly already
+     * was.
+     */
     check(
-      'the refusal came back in the validator’s own words, naming what to do instead',
-      bait.refusals.some((refusal) => /lane|barrier|list|dimension/i.test(bait.textOf(refusal))),
+      'every refusal quotes what was wrong, not only which rule was broken',
+      bait.refusals.every((refusal) => /["“][^"”]+["”]/.test(bait.textOf(refusal))),
       bait.refusals.map((refusal) => bait.textOf(refusal).slice(0, 160)).join(' | '),
     )
     check(

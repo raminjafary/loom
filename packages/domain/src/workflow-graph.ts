@@ -351,6 +351,17 @@ export type WorkflowGraphVerdict =
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/
 
+/**
+ * What a slug is, in the words a refusal has to use.
+ *
+ * "a lower-case slug" was the whole of it, and a live session was refused for
+ * `failing_tests` — a string that is lower case, so the message described something the
+ * author could already see was true and never named the underscore. A refusal that does not
+ * say what to do instead costs a turn at best; the session that hit this one spent one
+ * guessing. The rule is spelled out wherever it is enforced.
+ */
+const SLUG_RULE = 'lower-case letters, digits and hyphens, starting with a letter or digit'
+
 /** The reference a template makes to an ancestor's answer: `{{node}}` or `{{node.field}}`. */
 const REFERENCE = /\{\{\s*([a-z0-9-]+)(?:\.([a-z0-9-]+))?\s*\}\}/g
 
@@ -434,7 +445,10 @@ const parseAnswer = (value: unknown, where: string): WorkflowAnswer | null | str
     }
     const { kind, name } = raw as { kind?: unknown; name?: unknown }
     if (!isString(name) || !SLUG.test(name)) {
-      return `${where}: an answer field needs a lower-case slug name, not ${JSON.stringify(name)}.`
+      return (
+        `${where}: an answer field's name must be a slug — ${SLUG_RULE} — ` +
+        `so ${JSON.stringify(name)} is not one.`
+      )
     }
     if (kind !== 'text' && kind !== 'flag' && kind !== 'list') {
       return `${where}: answer field "${name}" has kind ${JSON.stringify(kind)}; the vocabulary is text, flag and list.`
@@ -451,7 +465,10 @@ const parseNode = (value: unknown, index: number): WorkflowNode | string => {
   const raw = value as Record<string, unknown>
   const { id, title, kind } = raw
   if (!isString(id) || !SLUG.test(id)) {
-    return `Node ${index + 1} needs a lower-case slug id, not ${JSON.stringify(id)}.`
+    return (
+      `Node ${index + 1} needs an id that is a slug — ${SLUG_RULE} — ` +
+      `so ${JSON.stringify(id)} is not one.`
+    )
   }
   /**
    * A node may not take a name a template already means. `{{input}}` on a node called `input`
@@ -502,7 +519,10 @@ const parseNode = (value: unknown, index: number): WorkflowNode | string => {
     const parsed: string[] = []
     for (const choice of choices) {
       if (!isString(choice) || !SLUG.test(choice)) {
-        return `Router "${id}" has a choice that is not a lower-case slug: ${JSON.stringify(choice)}.`
+        return (
+          `Router "${id}" has a choice that is not a slug — ${SLUG_RULE} — ` +
+          `so ${JSON.stringify(choice)} is not one.`
+        )
       }
       if (parsed.includes(choice)) return `Router "${id}" declares the choice "${choice}" twice.`
       parsed.push(choice)

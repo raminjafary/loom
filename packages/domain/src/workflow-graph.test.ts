@@ -685,3 +685,43 @@ describe('a bracket', () => {
     expect(refusal({ nodes: [step('input')], edges: [] })).toContain('Reserved')
   })
 })
+
+describe('a refusal names the rule it enforces', () => {
+  /**
+   * A live design session was refused for the answer field `failing_tests` and told it
+   * "needs a lower-case slug name" — which that string already is. The underscore was the
+   * problem and the message never said so, so the model spent a turn guessing. A refusal
+   * that cannot be acted on is barely better than a silent rejection, and this one had a
+   * driver check written against exactly that property.
+   */
+  it('spells out what a slug is, and quotes what was wrong', () => {
+    const reason = refusal({
+      nodes: [
+        {
+          kind: 'step',
+          id: 'scope',
+          title: 'Scope it',
+          persona: 'worker',
+          task: 'Do {{input}}',
+          answer: { fields: [{ kind: 'list', name: 'failing_tests' }] },
+        },
+      ],
+      edges: [],
+    })
+    expect(reason).toContain('failing_tests')
+    expect(reason).toContain('hyphens')
+    // And it does not describe the value as something it plainly is.
+    expect(reason).not.toMatch(/needs a lower-case slug name/)
+  })
+
+  it('says the same thing about a node id', () => {
+    const reason = refusal({
+      nodes: [
+        { kind: 'step', id: 'scope_it', title: 'Scope', persona: 'worker', task: 'Do {{input}}' },
+      ],
+      edges: [],
+    })
+    expect(reason).toContain('scope_it')
+    expect(reason).toContain('hyphens')
+  })
+})
