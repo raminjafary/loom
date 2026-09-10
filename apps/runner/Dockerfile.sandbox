@@ -71,6 +71,7 @@ COPY apps/runner/src/mcp-bridge.ts src/
 COPY apps/runner/src/verdict-tool.ts src/
 COPY apps/runner/src/workflow-answer-tool.ts src/
 COPY apps/runner/src/design-tool.ts src/
+COPY apps/runner/src/prosecution-tool.ts src/
 COPY apps/runner/src/proposal-tool.ts src/
 COPY apps/runner/src/planner-tool.ts src/
 COPY apps/runner/src/capabilities.ts src/

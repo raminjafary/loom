@@ -735,6 +735,16 @@ export type AgentRunRelation =
    * no step, and what it submits waits for them.
    */
   | 'design'
+  /**
+   * A run that writes tests **against another run's diff** and executes them.
+   *
+   * Its own relation for the reason `verify` and `screen` give — a run the parent did not ask
+   * for must not masquerade as delegation — and for one that is specific to it: what a person
+   * needs to know when they see it in the tree is that it holds no authority. It produces
+   * evidence a reviewer reads; it never enters the definition of done and never refuses a
+   * merge. See `prosecution.ts`.
+   */
+  | 'prosecute'
 
 /**
  * The relations a run carries **with no parent**, and which therefore have to be stored anyway.

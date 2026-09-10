@@ -1165,6 +1165,7 @@ onBeforeUnmount(() => {
         :runs="agentSnapshot.needsAttention"
         :settled="agentSnapshot.settledRuns"
         :verifications="agentSnapshot.runVerifications"
+        :prosecutions="agentSnapshot.prosecutions"
         :merge-queue="agentSnapshot.mergeQueue"
         :selected-run="agentSnapshot.inspectedRun"
         :approvals="agentSnapshot.inspectedApprovals"

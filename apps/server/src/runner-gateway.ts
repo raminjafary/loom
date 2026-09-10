@@ -34,6 +34,7 @@ import {
   revisePersonaPrompt,
   proposeOwnVariants,
   recordVariantVerdict,
+  recordProsecution,
   recordWorkflowAnswer,
   recordWorkflowDesign,
   revisePersonaTools,
@@ -1339,6 +1340,51 @@ export const createRunnerGateway = (
             workspaceId,
             agentRunId: asAgentRunId(frame.runId),
             answer: frame.answer,
+          })
+          send(
+            from,
+            result.ok
+              ? {
+                  type: 'persona_prompt_result',
+                  requestId: frame.requestId,
+                  ok: true,
+                  outcome: result.outcome,
+                }
+              : {
+                  type: 'persona_prompt_result',
+                  requestId: frame.requestId,
+                  ok: false,
+                  error: result.error,
+                },
+          )
+        } catch (error) {
+          send(from, {
+            type: 'persona_prompt_result',
+            requestId: frame.requestId,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+        return
+      }
+
+      /**
+       * The prosecutor's evidence about another run's diff.
+       *
+       * A refusal travels as a refusal, for the reason the design channel had to be corrected
+       * to: `ok` is what the in-container tool turns into `isError`, so an `ok: true` carrying
+       * a refusal reason renders in the transcript as a tick beside the sentence explaining
+       * the refusal. There are two refusals here — this run is not prosecuting anything, and
+       * this prosecution has already been reported — and both are things a session can read
+       * and act on.
+       */
+      case 'prosecution_reported': {
+        try {
+          const result = await recordProsecution(deps, {
+            workspaceId,
+            agentRunId: asAgentRunId(frame.runId),
+            observations: frame.observations,
+            inconclusive: frame.inconclusive,
           })
           send(
             from,

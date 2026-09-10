@@ -488,6 +488,35 @@ export const RunnerFrameSchema = z.discriminatedUnion('type', [
    * (a template may only read an ancestor, a verifier may not be its author), which a
    * per-field schema cannot express at all.
    */
+  /**
+   * The prosecutor's evidence: tests it wrote against another run's diff, and what happened
+   * when it ran them.
+   *
+   * `held` and `broke` rather than `passed` and `failed`, all the way out to the wire. The
+   * verdict words belong to the definition of done, and a frame that used them would be the
+   * first step in something downstream treating this as one — which it is not, and must never
+   * become. See `prosecution.ts`.
+   */
+  z.object({
+    type: z.literal('prosecution_reported'),
+    runId: z.string(),
+    requestId: z.string(),
+    observations: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(200),
+          outcome: z.enum(['held', 'broke']),
+          detail: z.string().max(4_000).nullable(),
+        }),
+      )
+      .max(20),
+    /**
+     * Set when the prosecutor could not produce usable observations at all — its own tests
+     * would not run. Distinct from an empty list, which says it looked and found nothing to
+     * report; conflating the two would tell a reviewer a diff survived scrutiny it never met.
+     */
+    inconclusive: z.string().max(600).nullable(),
+  }),
   z.object({
     type: z.literal('workflow_design_submitted'),
     runId: z.string(),
@@ -959,6 +988,13 @@ export const ServerFrameSchema = z.discriminatedUnion('type', [
      * back refused in words the session can act on.
      */
     designWorkflow: z.object({ ask: z.string().min(1).max(4_000) }).optional(),
+    /**
+     * Start this run as a **prosecutor**: it is given `report_prosecution` and nothing else
+     * changes about it. A boolean rather than a shape, because unlike an answer there is no
+     * schema for the caller to fix — what a prosecutor reports is what it observed, and the
+     * platform has no view on what it should have looked for.
+     */
+    prosecute: z.boolean().optional(),
     /**
      * Start this run as a **reviewer** of another run's branch.
      *

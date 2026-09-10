@@ -95,6 +95,8 @@ export const SandboxCommandSchema = z.discriminatedUnion('t', [
      * nothing to submit through.
      */
     designWorkflow: z.object({ ask: z.string().min(1).max(4_000) }).optional(),
+    /** This run is a prosecutor: it is offered `report_prosecution`, and nothing else changes. */
+    prosecute: z.boolean().optional(),
     /** The tree's ledger, rendered and fenced server-side. */
     contextLedger: z.string().optional(),
     /** Where the run's clone is mounted inside the container, not the host path. */
@@ -383,6 +385,26 @@ export const SandboxEventSchema = z.discriminatedUnion('t', [
     description: z.string().max(600).nullable(),
     rationale: z.string().max(4_000),
     graph: z.unknown(),
+  }),
+  /**
+   * The prosecutor's evidence, reported inside the container and recorded on the host.
+   *
+   * In both paths for the reason the design channel is: a tool offered outside the container
+   * and not inside it is a feature that works until an operator turns the sandbox on.
+   */
+  z.object({
+    t: z.literal('prosecution_report'),
+    requestId: z.string(),
+    observations: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(200),
+          outcome: z.enum(['held', 'broke']),
+          detail: z.string().max(4_000).nullable(),
+        }),
+      )
+      .max(20),
+    inconclusive: z.string().max(600).nullable(),
   }),
   /** The agent asking a human a question, answered by `question_result`. */
   z.object({ t: z.literal('question_request'), requestId: z.string(), question: z.string() }),

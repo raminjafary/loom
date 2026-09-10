@@ -17,6 +17,8 @@ import {
 import { user } from './auth-schema.js'
 import type {
   Envelope,
+  ProsecutionObservation,
+  ProsecutionStatus,
   VerificationCheck,
   VerificationCheckResult,
   VerificationStatus,
@@ -460,6 +462,47 @@ export const mergeQueueEntry = pgTable(
  * collapsing them into `failed` would make every unconfigured repository look like it
  * was producing broken work.
  */
+/**
+ * The prosecutor's evidence about one run's branch.
+ *
+ * Its own table rather than columns on `run_verification`, and that separation is the point:
+ * a verdict and a piece of evidence are different kinds of thing, and putting them in one row
+ * is how the second quietly acquires the authority of the first. Nothing on the verification
+ * or merge path reads this table — checked in `tools/architecture.test.ts`, not remembered.
+ */
+export const runProsecution = pgTable(
+  'run_prosecution',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    /** The run whose diff is under prosecution. */
+    agentRunId: uuid('agent_run_id')
+      .notNull()
+      .references(() => agentRun.id, { onDelete: 'cascade' }),
+    /**
+     * The run doing the prosecuting. Nullable and `set null`: the evidence outlives the run
+     * that produced it, the same way a verification verdict outlives the check process.
+     */
+    prosecutorRunId: uuid('prosecutor_run_id').references(() => agentRun.id, {
+      onDelete: 'set null',
+    }),
+    status: text('status').$type<ProsecutionStatus>().notNull().default('running'),
+    observations: jsonb('observations').$type<ProsecutionObservation[]>().notNull().default([]),
+    /** Why it was inconclusive, when it was. Recorded, never implied. */
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    // One prosecution per run: a second pass over the same diff would be a second opinion
+    // about evidence, which is a thing this pass deliberately does not produce.
+    uniqueIndex('run_prosecution_run_idx').on(t.agentRunId),
+    index('run_prosecution_workspace_idx').on(t.workspaceId, t.createdAt),
+  ],
+)
+
 export const runVerification = pgTable(
   'run_verification',
   {

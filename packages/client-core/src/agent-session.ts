@@ -17,6 +17,7 @@ import type {
   PromptTrial,
   VariantSearch,
   MergeQueueEntry,
+  Prosecution,
   RunVerification,
   NotificationConfig,
   DelegationEdge,
@@ -214,6 +215,8 @@ export interface AgentSnapshot {
    * own poll kept re-reading as null until it was not.
    */
   readonly runVerifications: RunVerification[]
+  /** What a prosecutor found in each of these runs' diffs. Evidence, never a verdict. */
+  readonly prosecutions: Prosecution[]
   // The run being reviewed from the Inbox — independent of `activeRun`,
   // since a human can review a past run's approval/diff without it being
   // the one currently executing.
@@ -899,6 +902,7 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
     needsAttention: [],
     settledRuns: [],
     runVerifications: [],
+    prosecutions: [],
     inspectedRun: null,
     inspectedApprovals: [],
     runControl: null,
@@ -982,13 +986,24 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
        * feature taking the surface down with it.
        */
       const agentRunIds = [...new Set([...needsAttention, ...settledRuns].map((run) => run.id))]
-      const runVerifications =
+      const [runVerifications, prosecutions] =
         agentRunIds.length === 0
-          ? []
-          : await options.api.agentRun
-              .listVerifications({ agentRunIds: agentRunIds.slice(0, 200) })
-              .catch(() => [])
-      patch({ needsAttention, settledRuns, mergeQueue, runVerifications })
+          ? [[], []]
+          : await Promise.all([
+              options.api.agentRun
+                .listVerifications({ agentRunIds: agentRunIds.slice(0, 200) })
+                .catch(() => []),
+              /**
+               * Beside the verdicts and swallowed the same way, for a reason that is stronger
+               * here: this is evidence a reviewer reads, so an Inbox that failed to render
+               * because the prosecutor's rows could not be fetched would take the surface down
+               * for the one thing on it that decides nothing.
+               */
+              options.api.agentRun
+                .listProsecutions({ agentRunIds: agentRunIds.slice(0, 200) })
+                .catch(() => []),
+            ])
+      patch({ needsAttention, settledRuns, mergeQueue, runVerifications, prosecutions })
       patchFetchError('inbox', null)
       rememberPersonaNames(fromRuns([...needsAttention, ...settledRuns]))
     } catch (error) {

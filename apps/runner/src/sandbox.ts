@@ -69,6 +69,8 @@ export interface SandboxOptions {
   readonly egressToken: string
   /** Where the sandbox reaches the proxy, e.g. http://loom-egress:8080. */
   readonly egressDataUrl: string
+  /** This run is a prosecutor: it is offered `report_prosecution` and nothing else changes. */
+  readonly prosecute?: boolean
   /**
    * The network this run's container joins. Its own, under the default mode — see
    * run-network.ts. Absent leaves the shared network from the config, which is what an
@@ -167,6 +169,11 @@ export interface SandboxOptions {
     description: string | null
     rationale: string
     graph: unknown
+  }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
+  /** A prosecutor reporting evidence about another run's diff, recorded on the host. */
+  readonly onProsecutionReport?: (report: {
+    observations: readonly { name: string; outcome: 'held' | 'broke'; detail: string | null }[]
+    inconclusive: string | null
   }) => Promise<{ ok: true; outcome: string } | { ok: false; error: string }>
   /**
    * The agent asking a human a question and blocking on the answer.
@@ -726,6 +733,7 @@ export const runAgentInSandbox = async (
       ...(options.designWorkflow === undefined
         ? {}
         : { designWorkflow: { ask: options.designWorkflow.ask } }),
+      ...(options.prosecute ? { prosecute: true } : {}),
       cwd: WORK_DIR,
       ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
       ...(options.steering ? { steering: true } : {}),
@@ -1006,6 +1014,20 @@ export const runAgentInSandbox = async (
             rationale: frame.rationale,
             graph: frame.graph,
           })) ?? { ok: false, error: 'this run is not a designer' }
+          send({
+            t: 'self_edit_result',
+            requestId: frame.requestId,
+            ok: result.ok,
+            ...(result.ok ? { outcome: result.outcome } : { error: result.error }),
+          })
+        })()
+        return
+      case 'prosecution_report':
+        void (async () => {
+          const result = (await options.onProsecutionReport?.({
+            observations: frame.observations,
+            inconclusive: frame.inconclusive,
+          })) ?? { ok: false, error: 'this run is not a prosecutor' }
           send({
             t: 'self_edit_result',
             requestId: frame.requestId,

@@ -2158,6 +2158,21 @@ export const router = os.router({
         return records.map((record) => ({ ...record, checks: [...record.checks] }))
       }),
     ),
+
+    listProsecutions: os.agentRun.listProsecutions.handler(({ context, input }) =>
+      guard(async () => {
+        const records = await context.deps.prosecutions.listByRuns(
+          context.principal.workspaceId,
+          input.agentRunIds.map(asAgentRunId),
+        )
+        // `observations` is readonly in the domain and mutable on the wire, the same way
+        // `checks` is just above.
+        return records.map((record) => ({
+          ...record,
+          observations: record.observations.map((entry) => ({ ...entry })),
+        }))
+      }),
+    ),
   },
 
   runControl: {

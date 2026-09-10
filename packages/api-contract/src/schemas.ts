@@ -176,6 +176,31 @@ export const VerificationCheckSchema = z.object({
  * and a client that could not tell them apart would show broken work where there is
  * none.
  */
+/**
+ * The prosecutor's evidence, on the wire.
+ *
+ * `held`/`broke` rather than `passed`/`failed` all the way out to the client, for the reason
+ * the domain gives: the verdict words belong to the definition of done, and a UI that rendered
+ * "failed" beside a branch would be telling a reviewer something was blocked when nothing was.
+ */
+export const ProsecutionSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  agentRunId: z.string(),
+  prosecutorRunId: z.string().nullable(),
+  status: z.enum(['running', 'reported', 'inconclusive']),
+  observations: z.array(
+    z.object({
+      name: z.string(),
+      outcome: z.enum(['held', 'broke']),
+      detail: z.string().nullable(),
+    }),
+  ),
+  reason: z.string().nullable(),
+  createdAt: z.date(),
+  finishedAt: z.date().nullable(),
+})
+
 export const RunVerificationSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
@@ -1449,6 +1474,15 @@ export const AgentRunRelationSchema = z.enum([
    * an ordinary run would read as an agent changing the workspace.
    */
   'design',
+  /**
+   * A run that writes tests against another run's diff and executes them.
+   *
+   * On the wire for the reason `design` is: what a person needs to know about it is what it
+   * cannot do. Its output is evidence a reviewer reads — it never enters the definition of
+   * done and never refuses a merge — and a prosecutor rendered as an ordinary child would
+   * read as a second worker on the same task.
+   */
+  'prosecute',
 ])
 
 export const AgentRunSchema = z.object({
@@ -1569,6 +1603,7 @@ export type Runner = z.infer<typeof RunnerSchema>
 export type Repository = z.infer<typeof RepositorySchema>
 export type VerificationCheck = z.infer<typeof VerificationCheckSchema>
 export type RunVerification = z.infer<typeof RunVerificationSchema>
+export type Prosecution = z.infer<typeof ProsecutionSchema>
 export type MergeQueueEntry = z.infer<typeof MergeQueueEntrySchema>
 export type WorkerNote = z.infer<typeof WorkerNoteSchema>
 export type SubjectMap = z.infer<typeof SubjectMapSchema>

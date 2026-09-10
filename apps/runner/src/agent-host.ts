@@ -13,6 +13,7 @@ import { createProposalTool } from './proposal-tool.js'
 import { createVerdictTool } from './verdict-tool.js'
 import { createWorkflowAnswerTool } from './workflow-answer-tool.js'
 import { createDesignTool } from './design-tool.js'
+import { createProsecutionTool } from './prosecution-tool.js'
 import {
   PLANNER_TOOL_NAME,
   PLAN_DELTA_TOOL_NAME,
@@ -537,6 +538,33 @@ const main = async (): Promise<void> => {
     : null
 
   /**
+   * The prosecutor's channel inside the container, gated exactly as the two above are: the
+   * `start_run` frame says this run is a prosecutor, or the tool does not exist.
+   */
+  const prosecutionTool = command.prosecute
+    ? createProsecutionTool({
+        report: (report) => {
+          const requestId = nextRequestId()
+          emit({
+            t: 'prosecution_report',
+            requestId,
+            observations: report.observations,
+            inconclusive: report.inconclusive,
+          })
+          return new Promise((resolve) => {
+            pendingSelfEdits.set(requestId, (result) =>
+              resolve(
+                result.ok
+                  ? { ok: true, outcome: result.outcome ?? '' }
+                  : { ok: false, error: result.error ?? 'the platform refused it' },
+              ),
+            )
+          })
+        },
+      })
+    : null
+
+  /**
    * The proposal channel inside the container, present only when the host said this is a
    * proposer — the same gating `verdictTool` has just above, and the same `variants_propose`
    * message the self tool uses, because it is the same request arriving from a different
@@ -581,6 +609,7 @@ const main = async (): Promise<void> => {
     ...(verdictTool ? { verdictTool } : {}),
     ...(workflowTool ? { workflowTool } : {}),
     ...(designTool ? { designTool } : {}),
+    ...(prosecutionTool ? { prosecutionTool } : {}),
     ...(proposalTool ? { proposalTool } : {}),
     handoffTool,
     ...(selfTool ? { selfTool } : {}),

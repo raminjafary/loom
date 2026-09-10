@@ -61,6 +61,9 @@ import type {
   MergeQueueEntryId,
   MergeQueueEntryStatus,
   NoteAuthorKind,
+  Prosecution,
+  ProsecutionObservation,
+  ProsecutionStatus,
   RunVerification,
   RunVerificationId,
   VerificationCheck,
@@ -281,6 +284,42 @@ export interface MergeQueueRepositoryPort {
  * is the same question asked again, not a second record whose reader has to work out
  * which of two verdicts is current.
  */
+/**
+ * The prosecutor's evidence, stored apart from every verdict.
+ *
+ * No `claim`, no `listAllPending`, no sweep. A prosecution is started beside a run's
+ * verification and reports once; there is no queue because there is nothing to serialize —
+ * it holds no authority, so nothing waits on it and nothing is blocked by it being slow.
+ */
+export interface ProsecutionRepositoryPort {
+  open(input: {
+    workspaceId: WorkspaceId
+    agentRunId: AgentRunId
+    prosecutorRunId: AgentRunId
+  }): Promise<Prosecution>
+  findByRun(workspaceId: WorkspaceId, agentRunId: AgentRunId): Promise<Prosecution | null>
+  /** By the *prosecutor's* run id — how a reported frame finds the row it belongs to. */
+  findByProsecutorRun(
+    workspaceId: WorkspaceId,
+    prosecutorRunId: AgentRunId,
+  ): Promise<Prosecution | null>
+  listByRuns(workspaceId: WorkspaceId, agentRunIds: readonly AgentRunId[]): Promise<Prosecution[]>
+  /**
+   * Terminal transition. Returns null when the row is already terminal and writes nothing —
+   * the same rule the verification queue has, for the same reason: a late frame must not
+   * overwrite what a human has already read.
+   */
+  report(
+    workspaceId: WorkspaceId,
+    id: string,
+    input: {
+      status: Exclude<ProsecutionStatus, 'running'>
+      observations: readonly ProsecutionObservation[]
+      reason: string | null
+    },
+  ): Promise<Prosecution | null>
+}
+
 export interface RunVerificationRepositoryPort {
   enqueue(input: {
     workspaceId: WorkspaceId
@@ -1893,6 +1932,8 @@ export interface RunDispatchPort {
      * declared the field compiles, and this layer has dropped one that way before.
      */
     designWorkflow?: { ask: string }
+    /** This run is a prosecutor: the Runner offers it `report_prosecution`. */
+    prosecute?: boolean
   }): Promise<void>
   /**
    * Aborts a run mid-flight. Fire-and-forget and

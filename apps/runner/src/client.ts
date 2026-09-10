@@ -65,6 +65,7 @@ import { createProposalTool } from './proposal-tool.js'
 import { createVerdictTool } from './verdict-tool.js'
 import { createWorkflowAnswerTool } from './workflow-answer-tool.js'
 import { createDesignTool } from './design-tool.js'
+import { createProsecutionTool } from './prosecution-tool.js'
 import { createNotesTool } from './notes-tool.js'
 import { createQuestionTool } from './question-tool.js'
 import { createSendQueue } from './send-queue.js'
@@ -650,6 +651,8 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
      * presence is what gives the agent `submit_workflow_design` at all.
      */
     designWorkflow?: { ask: string }
+    /** This run is a prosecutor: it is offered `report_prosecution` and nothing else changes. */
+    prosecute?: boolean
     proposeVariants?: { personaName: string }
   }): Promise<void> => {
     // Async, and awaited by whoever produces events (the SDK loop in-process, the
@@ -1003,6 +1006,42 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         : null
 
     /**
+     * The prosecutor's channel, gated the same way and for the same reason. What travels is
+     * evidence: the platform records it beside the run under prosecution and nothing on the
+     * merge path reads it.
+     */
+    const onProsecutionReport = (report: {
+      observations: readonly { name: string; outcome: 'held' | 'broke'; detail: string | null }[]
+      inconclusive: string | null
+    }): Promise<{ ok: true; outcome: string } | { ok: false; error: string }> => {
+      const requestId = nextNoteRequestId()
+      send({
+        type: 'prosecution_reported',
+        runId: input.runId,
+        requestId,
+        observations: report.observations.map((entry) => ({ ...entry })),
+        inconclusive: report.inconclusive,
+      })
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingSelfEdits.delete(requestId)
+          resolve({ ok: false, error: 'the platform did not answer in time — nothing recorded' })
+        }, NOTE_TIMEOUT_MS)
+        pendingSelfEdits.set(requestId, (result) => {
+          clearTimeout(timer)
+          resolve(
+            result.ok
+              ? { ok: true, outcome: result.outcome ?? '' }
+              : { ok: false, error: result.error ?? 'the platform refused it' },
+          )
+        })
+      })
+    }
+    const prosecutionTool = input.prosecute
+      ? createProsecutionTool({ report: onProsecutionReport })
+      : null
+
+    /**
      * The handover. Offered to every run, unlike `record_map` — see `handoff-tool.ts`
      * for why the blast radius makes that the right trade.
      */
@@ -1242,6 +1281,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         ...(verdictTool ? { verdictTool } : {}),
         ...(workflowTool ? { workflowTool } : {}),
         ...(designTool ? { designTool } : {}),
+        ...(prosecutionTool ? { prosecutionTool } : {}),
         ...(proposalTool ? { proposalTool } : {}),
         ...(selfTool ? { selfTool } : {}),
         ...(experienceTool ? { experienceTool } : {}),
@@ -1381,6 +1421,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
          * between this call and the container.
          */
         ...(input.designWorkflow === undefined ? {} : { designWorkflow: input.designWorkflow }),
+        ...(input.prosecute ? { prosecute: true } : {}),
         clonePath: input.clonePath,
         homePath: input.homePath,
         egressToken,
@@ -1405,6 +1446,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
         ...(verdictTool ? { onVerdict } : {}),
         ...(workflowTool ? { onWorkflowAnswer } : {}),
         ...(designTool ? { onWorkflowDesign } : {}),
+        ...(prosecutionTool ? { onProsecutionReport } : {}),
         ...(mapTool
           ? {
               onMapWrite: (fragment: Record<string, unknown>) =>
@@ -1769,6 +1811,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 ...(frame.designWorkflow === undefined
                   ? {}
                   : { designWorkflow: { ask: frame.designWorkflow.ask } }),
+                ...(frame.prosecute ? { prosecute: true } : {}),
                 clonePath,
                 homePath,
                 abort,

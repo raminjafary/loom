@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -205,6 +205,53 @@ describe('architectural boundaries', () => {
     expect(isInfra('drizzle-orm')).toBe(true)
     expect(isInfra('@orpc/server')).toBe(true)
     expect(isInfra('@loom/domain')).toBe(false)
+  })
+
+  /**
+   * The prosecutor's evidence stays out of every verdict.
+   *
+   * "Evidence, never a verdict" is the whole design of that pass — a generated test that
+   * could refuse a merge would be a model writing its own gate — and the only way that rule
+   * survives contact with a future change is if it is *checked*, because the natural thing
+   * for somebody to write is `if (prosecution.observations.some(broke)) return false`.
+   *
+   * So: nothing that decides whether a branch is verified or mergeable may read a
+   * prosecution. Enforced by import and by name, because either would be enough to do the
+   * damage — a merge path that imported the module could read a row, and one that reached
+   * for `deps.prosecutions` would not need the import at all.
+   */
+  it('no verdict path reads the prosecutor’s evidence', () => {
+    const verdictModules = [
+      'packages/domain/src/verification.ts',
+      'packages/domain/src/merge-queue.ts',
+      'packages/domain/src/rollback-manifest.ts',
+      'packages/domain/src/self-promotion.ts',
+    ].filter((path) => existsSync(join(ROOT, path)))
+    // Guards the guard: a list that matched no files would pass forever.
+    expect(verdictModules.length).toBeGreaterThan(1)
+
+    const offenders: string[] = []
+    for (const file of verdictModules) {
+      const text = readFileSync(join(ROOT, file), 'utf8')
+      if (/prosecut/i.test(text)) offenders.push(file)
+    }
+
+    /**
+     * The application layer is one file, so it cannot be excluded wholesale — the check is
+     * on the *functions* that decide. Both are read out of `agent-use-cases.ts` by name.
+     */
+    const application = readFileSync(join(ROOT, 'packages/application/src/agent-use-cases.ts'), 'utf8')
+    const bodyOf = (name: string): string => {
+      const start = application.indexOf(name)
+      if (start === -1) throw new Error(`${name} is gone — this check is now guarding nothing`)
+      return application.slice(start, application.indexOf('\nconst ', start + 1))
+    }
+    for (const decider of ['const runVerificationFor', 'const resolveScreenRunOutcome', 'const runMergeEntry']) {
+      const body = application.includes(decider) ? bodyOf(decider) : null
+      if (body !== null && /prosecut/i.test(body)) offenders.push(decider)
+    }
+
+    expect(offenders).toEqual([])
   })
 
   /**

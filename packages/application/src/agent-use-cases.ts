@@ -152,6 +152,7 @@ import {
   type PersonaRevision,
   type PersonaRevisionId,
   type PersonaVariant,
+  asAgentPersonaId,
   asAgentRunId,
   asUserId,
   campaignMayStart,
@@ -227,6 +228,7 @@ import type {
   ListDirectoryResult,
   RunDispatchPort,
   RunnerRepositoryPort,
+  ProsecutionRepositoryPort,
   RunVerificationRepositoryPort,
   WorkspaceRunControlRepositoryPort,
 } from './agent-ports.js'
@@ -256,6 +258,7 @@ import {
 } from './note-use-cases.js'
 import { recordSpokenTurn } from './colosseum-use-cases.js'
 import { handoffLimits, suggestHandoffOnPressure } from './handoff-use-cases.js'
+import { startProsecutor } from './prosecution-use-cases.js'
 import { startThread, type Deps } from './use-cases.js'
 
 export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps, ExperienceDeps {
@@ -267,6 +270,12 @@ export interface AgentDeps extends Deps, NotificationDeps, NoteDeps, MasteryDeps
   readonly mergeQueue: MergeQueueRepositoryPort
   /** The verification harness — what a repository's definition of done said. */
   readonly runVerifications: RunVerificationRepositoryPort
+  /**
+   * The prosecutor's evidence. A separate port from the one above, and that separation is
+   * load-bearing rather than tidy: a verdict and a piece of evidence are different kinds of
+   * thing, and the moment they share a row the second acquires the authority of the first.
+   */
+  readonly prosecutions: ProsecutionRepositoryPort
   readonly capabilities: CapabilityRepositoryPort
   readonly personas: PersonaRepositoryPort
   /** The searching half — candidate prompts and the search they belong to. */
@@ -4966,6 +4975,8 @@ export const startAgentRun = async (
      * last place that can be restated before it becomes a proposal somebody reads.
      */
     designWorkflow?: { ask: string }
+    /** Start this run as a prosecutor: it is offered `report_prosecution`. */
+    prosecute?: boolean
   },
 ): Promise<AgentRun> => {
   const parent = input.parentRunId
@@ -5710,6 +5721,7 @@ export const startAgentRun = async (
       ...(input.verifyVariants ? { verifyVariants: input.verifyVariants } : {}),
       ...(input.answerWorkflow ? { answerWorkflow: input.answerWorkflow } : {}),
       ...(input.designWorkflow ? { designWorkflow: input.designWorkflow } : {}),
+      ...(input.prosecute ? { prosecute: true } : {}),
       /**
        * The subject's name, resolved here from the id the caller passed rather than taken
        * from the persona this run is: a proposer runs as `variant-proposer` and writes for
@@ -9109,6 +9121,29 @@ const enqueueRunVerification = async (deps: AgentDeps, run: AgentRun): Promise<v
 }
 
 /**
+ * Starts a prosecutor over a finished run, wiring it to this module's `startAgentRun`.
+ *
+ * The indirection exists because `prosecution-use-cases.ts` must not import this module —
+ * that would be a cycle, and it would also put the pass one import away from the merge path
+ * it is required to stay out of.
+ */
+const startProsecutorFor = async (deps: AgentDeps, run: AgentRun): Promise<void> => {
+  await startProsecutor(deps, run, (input) =>
+    startAgentRun(deps, {
+      workspaceId: input.workspaceId,
+      actor: input.actor,
+      threadId: input.threadId,
+      repositoryId: input.repositoryId,
+      personaId: asAgentPersonaId(input.personaId),
+      parentRunId: input.parentRunId,
+      relation: input.relation,
+      prosecute: input.prosecute,
+      task: input.task,
+    }),
+  )
+}
+
+/**
  * Runs one claimed verification and records what it found.
  *
  * Every exit finishes the row. A `pending` row left with `started_at` set would wedge
@@ -9757,6 +9792,12 @@ export const recordAgentEvent = async (
      * runs the checks, which is what keeps a run's completion from waiting on a test suite.
      */
     await enqueueRunVerification(deps, completed)
+    /**
+     * Beside the verification and after it, so the prosecutor can be told what the
+     * repository's own checks said rather than re-discovering it. Best-effort in every
+     * direction — see `startProsecutor` — and it holds no authority over anything above.
+     */
+    await startProsecutorFor(deps, completed)
   } else if (input.event.kind === 'run_failed') {
     const failed = await deps.agentRuns.updateStatus(input.workspaceId, input.agentRunId, {
       status: 'failed',
@@ -9794,6 +9835,12 @@ export const recordAgentEvent = async (
     // A failed run may still have committed work, and "it gave up and the tests pass"
     // is a different branch from "it gave up and the build is broken".
     await enqueueRunVerification(deps, failed)
+    /**
+     * And prosecuted, for the same reason: what an agent left behind when it gave up is
+     * exactly the diff a reviewer is least sure about, and the standing suite is no more
+     * likely to have been written about it than about any other.
+     */
+    await startProsecutorFor(deps, failed)
   }
 }
 

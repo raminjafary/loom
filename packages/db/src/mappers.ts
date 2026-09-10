@@ -67,6 +67,9 @@ import {
   type RunVerification,
   type VerificationCheck,
   type VerificationCheckResult,
+  type Prosecution,
+  type ProsecutionObservation,
+  type ProsecutionStatus,
   type VerificationStatus,
   asRunVerificationId,
 } from '@loom/domain'
@@ -386,6 +389,41 @@ export const toMergeQueueEntry = (row: MergeQueueEntryRow): MergeQueueEntry => {
   }
 }
 
+export interface ProsecutionRow {
+  id: string
+  workspaceId: string
+  agentRunId: string
+  prosecutorRunId: string | null
+  status: string
+  observations: ProsecutionObservation[] | null
+  reason: string | null
+  createdAt: Date
+  finishedAt: Date | null
+}
+
+const PROSECUTION_STATUSES: readonly ProsecutionStatus[] = ['running', 'reported', 'inconclusive']
+
+export const toProsecution = (row: ProsecutionRow): Prosecution => {
+  const status = PROSECUTION_STATUSES.find((candidate) => candidate === row.status)
+  /**
+   * Thrown rather than defaulted, for the reason a verification status is: there is no
+   * narrowest value to fall back to. `reported` would present evidence nobody produced and
+   * `inconclusive` would discard evidence somebody did.
+   */
+  if (!status) throw new Error(`unknown run_prosecution.status: ${row.status}`)
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    agentRunId: row.agentRunId,
+    prosecutorRunId: row.prosecutorRunId,
+    status,
+    observations: row.observations ?? [],
+    reason: row.reason,
+    createdAt: row.createdAt,
+    finishedAt: row.finishedAt,
+  }
+}
+
 export interface RunVerificationRow {
   id: string
   workspaceId: string
@@ -539,6 +577,7 @@ const AGENT_RUN_RELATIONS = [
   'escalate',
   'workflow',
   'design',
+  'prosecute',
 ] as const satisfies readonly AgentRunRelation[]
 
 /**

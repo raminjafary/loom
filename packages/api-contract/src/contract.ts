@@ -24,6 +24,7 @@ import {
   PersonaDraftSchema,
   PersonaGroupSchema,
   RepositorySchema,
+  ProsecutionSchema,
   RunVerificationSchema,
   VerificationCheckSchema,
   RunControlSchema,
@@ -1798,6 +1799,18 @@ export const contract = {
     listVerifications: oc
       .input(z.object({ agentRunIds: z.array(z.string()).min(1).max(200) }))
       .output(z.array(RunVerificationSchema)),
+
+    /**
+     * What a prosecutor found in each of these runs' diffs.
+     *
+     * A second call rather than a field on the verification, and the separation is the same
+     * one the table makes: a verdict and a piece of evidence are different kinds of thing,
+     * and a client that received them together would render them together. Batched by run id
+     * for the reason above, and runs with no prosecution simply do not appear.
+     */
+    listProsecutions: oc
+      .input(z.object({ agentRunIds: z.array(z.string()).min(1).max(200) }))
+      .output(z.array(ProsecutionSchema)),
   },
 
   /**

@@ -54,6 +54,15 @@ export const PLATFORM_STARTED_PERSONAS: readonly string[] = [
    * is paid for.
    */
   'variant-proposer',
+  /**
+   * The prosecutor, for the same reason and with a sharper edge: the platform starts it over
+   * a *finished* run's branch, and its whole context is that diff. A subtask assigned to it
+   * by a planner is a subtask that opens a repository with nothing to prosecute — and worse
+   * than useless, because a planner delegating "write tests for this" to a role whose output
+   * is explicitly not a verdict would be building a gate out of something that holds no
+   * authority.
+   */
+  'prosecutor',
 ]
 
 export const isPlatformStartedPersona = (name: string): boolean =>

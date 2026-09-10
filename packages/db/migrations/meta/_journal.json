@@ -533,6 +533,13 @@
       "when": 1788759418466,
       "tag": "0075_low_ink",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1789039708123,
+      "tag": "0076_special_cerebro",
+      "breakpoints": true
     }
   ]
 }

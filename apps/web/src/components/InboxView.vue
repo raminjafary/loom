@@ -1,12 +1,18 @@
 <script setup lang="ts">
-import type { AgentRun, ApprovalRequest, MergeQueueEntry, RunVerification } from '@loom/api-contract'
+import type {
+  AgentRun,
+  ApprovalRequest,
+  MergeQueueEntry,
+  Prosecution,
+  RunVerification,
+} from '@loom/api-contract'
 import {
   attentionReason,
   buildInboxBoard,
   describeAge,
   shortBranchName,
 } from '@loom/client-core'
-import { describeVerification, verificationFailureOutput } from '@loom/domain'
+import { describeVerification, summariseProsecution, verificationFailureOutput } from '@loom/domain'
 import { computed, onMounted, ref, watch } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import DiffView from './DiffView.vue'
@@ -28,6 +34,12 @@ const props = defineProps<{
    * open it.
    */
   verifications: RunVerification[]
+  /**
+   * What a prosecutor found in these runs' diffs. A separate prop from the verifications
+   * for the reason they are separate rows: a verdict and a piece of evidence are different
+   * kinds of thing, and a component handed them as one list would render them as one.
+   */
+  prosecutions?: Prosecution[]
   mergeQueue: MergeQueueEntry[]
   selectedRun: AgentRun | null
   approvals: ApprovalRequest[]
@@ -136,6 +148,13 @@ const total = computed(() => lanes.value.reduce((sum, lane) => sum + lane.cards.
  */
 const selectedVerification = computed(
   () => props.verifications.find((record) => record.agentRunId === props.selectedRun?.id) ?? null,
+)
+
+const selectedProsecution = computed(
+  () =>
+    (props.prosecutions ?? []).find(
+      (record) => record.agentRunId === props.selectedRun?.id,
+    ) ?? null,
 )
 
 const selectedFailureOutput = computed(() =>
@@ -313,6 +332,32 @@ const onKeydown = (event: KeyboardEvent) => {
           <pre v-if="selectedFailureOutput" class="check-output">{{
             selectedFailureOutput.output
           }}</pre>
+        </section>
+
+        <!--
+          The prosecutor's evidence, deliberately *below* the verdict and deliberately not
+          styled like one. It is a test somebody wrote because of this diff and then ran, and
+          it decides nothing: the repository's checks above are what a merge turns on. The
+          heading says so in words rather than relying on the reader to know, because "test
+          failed" is a phrase that carries authority whether or not it has any.
+        -->
+        <section v-if="selectedProsecution" class="prosecution">
+          <h3>
+            Probes written for this diff
+            <span class="not-a-verdict">evidence — nothing here blocks a merge</span>
+          </h3>
+          <p class="summary">{{ summariseProsecution(selectedProsecution) }}</p>
+          <ul v-if="selectedProsecution.observations.length > 0" class="observations">
+            <li
+              v-for="(observation, index) in selectedProsecution.observations"
+              :key="index"
+              :class="observation.outcome"
+            >
+              <span class="outcome">{{ observation.outcome === 'broke' ? 'broke' : 'held' }}</span>
+              <span class="name">{{ observation.name }}</span>
+              <pre v-if="observation.detail" class="check-output">{{ observation.detail }}</pre>
+            </li>
+          </ul>
         </section>
 
         <ApprovalCard :approvals="props.approvals" @decide="(id, decision, answer) => emit('decide', id, decision, answer)" />
@@ -685,6 +730,80 @@ const onKeydown = (event: KeyboardEvent) => {
 .verification .verdict {
   margin: 0;
   font-size: 0.85rem;
+}
+
+/*
+  Quieter than the verdict above it, on purpose. This section is a reviewer's reading
+  material, and giving it the weight of the thing that decides is how a reader starts
+  treating it as one.
+*/
+.prosecution {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.prosecution h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.prosecution .not-a-verdict {
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  font-weight: 400;
+}
+
+.prosecution .summary {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.prosecution .observations {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prosecution .observations li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.prosecution .outcome {
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/*
+  A broken probe is worth looking at and is still not a failure, so it is marked rather
+  than coloured with `--danger` — that colour in this app means something was refused.
+*/
+.prosecution .observations li.broke .outcome {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.prosecution .observations li .check-output {
+  grid-column: 1 / -1;
 }
 
 .check-output {

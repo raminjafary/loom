@@ -16,6 +16,7 @@ import type {
   RunLiveActivity,
   NoteReadRepositoryPort,
   RunnerRepositoryPort,
+  ProsecutionRepositoryPort,
   RunVerificationRepositoryPort,
   SubjectMapRepositoryPort,
   WorkerNoteRepositoryPort,
@@ -81,6 +82,8 @@ import {
   type PlanSubtaskRow,
   type RepositoryRow,
   type RunnerRow,
+  type ProsecutionRow,
+  toProsecution,
   type RunVerificationRow,
   type SubjectMapEdgeRow,
   type SubjectMapNodeRow,
@@ -96,6 +99,7 @@ import {
   capability,
   channel,
   mergeQueueEntry,
+  runProsecution,
   runVerification,
   personaCapability,
   notificationTarget,
@@ -397,6 +401,106 @@ export const mergeQueueRepository = (db: Database): MergeQueueRepositoryPort => 
       )
       .returning()
     return rows.map((row) => toMergeQueueEntry(row as MergeQueueEntryRow))
+  },
+})
+
+/**
+ * The prosecutor's rows.
+ *
+ * No claim and no sweep, unlike every other queue here. A prosecution holds no authority, so
+ * nothing waits on it: it is opened when the prosecutor starts, and it is written once when
+ * the prosecutor reports. The only rule it shares with the verification harness is the last
+ * one — a terminal row is not overwritten by a late frame.
+ */
+export const prosecutionRepository = (db: Database): ProsecutionRepositoryPort => ({
+  /**
+   * Upsert on the run, for the reason `enqueue` upserts: a second prosecution of the same
+   * diff is the same question asked again, and two rows would leave a reader working out
+   * which evidence is current.
+   */
+  async open(input) {
+    const [row] = await db
+      .insert(runProsecution)
+      .values({
+        workspaceId: input.workspaceId,
+        agentRunId: input.agentRunId,
+        prosecutorRunId: input.prosecutorRunId,
+        status: 'running',
+      })
+      .onConflictDoUpdate({
+        target: runProsecution.agentRunId,
+        set: {
+          prosecutorRunId: input.prosecutorRunId,
+          status: 'running',
+          observations: [],
+          reason: null,
+          finishedAt: null,
+        },
+      })
+      .returning()
+    if (!row) throw new Error('run_prosecution insert returned no row')
+    return toProsecution(row as ProsecutionRow)
+  },
+
+  async findByRun(workspaceId, agentRunId) {
+    const [row] = await db
+      .select()
+      .from(runProsecution)
+      .where(
+        and(eq(runProsecution.workspaceId, workspaceId), eq(runProsecution.agentRunId, agentRunId)),
+      )
+      .limit(1)
+    return row ? toProsecution(row as ProsecutionRow) : null
+  },
+
+  async findByProsecutorRun(workspaceId, prosecutorRunId) {
+    const [row] = await db
+      .select()
+      .from(runProsecution)
+      .where(
+        and(
+          eq(runProsecution.workspaceId, workspaceId),
+          eq(runProsecution.prosecutorRunId, prosecutorRunId),
+        ),
+      )
+      .limit(1)
+    return row ? toProsecution(row as ProsecutionRow) : null
+  },
+
+  async listByRuns(workspaceId, agentRunIds) {
+    if (agentRunIds.length === 0) return []
+    const rows = await db
+      .select()
+      .from(runProsecution)
+      .where(
+        and(
+          eq(runProsecution.workspaceId, workspaceId),
+          inArray(runProsecution.agentRunId, [...agentRunIds]),
+        ),
+      )
+    return rows.map((row) => toProsecution(row as ProsecutionRow))
+  },
+
+  async report(workspaceId, id, input) {
+    const [row] = await db
+      .update(runProsecution)
+      .set({
+        status: input.status,
+        observations: [...input.observations],
+        reason: input.reason,
+        finishedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(runProsecution.workspaceId, workspaceId),
+          eq(runProsecution.id, id),
+          // Terminal rows are not rewritten. A prosecutor answering after its row was
+          // written off would otherwise replace evidence a human has already read.
+          eq(runProsecution.status, 'running'),
+        ),
+      )
+      .returning()
+    return row ? toProsecution(row as ProsecutionRow) : null
   },
 })
 

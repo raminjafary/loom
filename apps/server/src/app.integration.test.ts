@@ -1233,6 +1233,7 @@ describe('contract completeness', () => {
       'listSettled',
       'listNeedsAttention',
       'listVerifications',
+      'listProsecutions',
     ])
     expect(Object.keys(contract.runControl)).toEqual([
       'get',
