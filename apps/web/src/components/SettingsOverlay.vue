@@ -653,7 +653,14 @@ onMounted(() => scrim.value?.focus())
   inset: 0;
   z-index: 40;
   display: flex;
-  align-items: center;
+  /*
+    Top-aligned, not centred, because the tab bar lives in this sheet's header and a centred
+    sheet whose height follows its content moves that header every time the tab changes. Across
+    the six tabs it travelled 235px in a real browser: Expertise holds four lines and dropped
+    the strip 210px, Workflows holds a diagram and snapped it back. The tabs you are aiming at
+    were the thing moving out from under the cursor.
+  */
+  align-items: flex-start;
   justify-content: center;
   padding: 2rem;
   background: rgb(0 0 0 / 45%);
@@ -663,6 +670,12 @@ onMounted(() => scrim.value?.focus())
   display: flex;
   flex-direction: column;
   width: min(64rem, 100%);
+  /*
+    Pinning the top settles the header. The floor settles the *other* edge for every tab short
+    enough to reach it, so the close button and the body's bottom stop moving too — only genuinely
+    tall content grows past it, and that scrolls inside `.body` rather than resizing the sheet.
+  */
+  min-height: min(32rem, 100%);
   max-height: 100%;
   border: 1px solid var(--border);
   border-radius: 0.75rem;

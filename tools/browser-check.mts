@@ -315,6 +315,29 @@ try {
     await isInViewport(page, '[aria-label="Settings"] h2'),
   )
   check('settings does not scroll the page sideways', !(await hasHorizontalOverflow(page)))
+  /**
+   * The tab bar must not move when the tab changes.
+   *
+   * The sheet was centred and its height followed its content, so switching tabs moved the
+   * header the tabs live in — 235px across the six of them, which means the control you are
+   * aiming at leaves from under the cursor as you click it. Invisible to every component test
+   * in `apps/web`, because `happy-dom` has no layout engine and every one of these numbers is
+   * zero there.
+   */
+  const tabTops: { label: string; top: number }[] = []
+  for (const label of ['Runners & repositories', 'Personas & groups', 'Expertise', 'Workflows', 'Colosseum', 'Capabilities']) {
+    await page.getByRole('button', { name: label, exact: true }).click()
+    await page.waitForTimeout(400)
+    const box = await boxOf(page, '[aria-label="Settings"] nav')
+    tabTops.push({ label, top: Math.round(box?.y ?? -1) })
+  }
+  const tops = tabTops.map((entry) => entry.top)
+  check(
+    'the settings tab bar stays put as the tab changes',
+    tops.length > 0 && Math.max(...tops) - Math.min(...tops) === 0,
+    tabTops.map((entry) => `${entry.label}@${entry.top}`).join(' · '),
+  )
+
   await page.keyboard.press('Escape')
   await page.waitForTimeout(500)
   check(
