@@ -142,6 +142,24 @@ describe('the warm step', () => {
     expect(args).toContain('/host/cache:/deps:rw')
   })
 
+  it('gets the same kernel boundary the runs do, when one was asked for', () => {
+    // An install command pulls and executes package scripts from a registry: untrusted
+    // code by a different route, and the one write to the cache every later run inherits.
+    const isolated = buildWarmArgs({
+      runtime: 'docker',
+      ociRuntime: 'kata-runtime',
+      image: 'loom-agent-sandbox:latest',
+      network: 'loom-sandbox',
+      cacheRoot: '/host/cache',
+      clonePath: '/host/clone',
+      command: 'npm ci',
+      env: {},
+      timeoutMs: 600_000,
+    }).join(' ')
+    expect(isolated).toContain('--runtime kata-runtime')
+    expect(args).not.toContain('--runtime')
+  })
+
   it('keeps the container restrictions', () => {
     // A warm step is still executing a command inside a container on the operator's
     // machine — the fact that a human authored the command is not a reason to drop the

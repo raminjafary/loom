@@ -169,6 +169,13 @@ export const prepareDepCache = async (
  */
 export interface WarmDepCacheInput {
   readonly runtime: string
+  /**
+   * The OCI runtime, when the deployment asked for a kernel per container. Null under
+   * container isolation. The warm step runs an operator's install command, which pulls
+   * and executes package scripts from a registry — untrusted code by a different route,
+   * and the one write to the cache every later run inherits.
+   */
+  readonly ociRuntime?: string | null
   readonly image: string
   readonly network: string
   readonly cacheRoot: string
@@ -217,6 +224,7 @@ const tail = (text: string, lines = 12): string =>
 export const buildWarmArgs = (input: WarmDepCacheInput): string[] => [
   'run',
   '--rm',
+  ...(input.ociRuntime ? ['--runtime', input.ociRuntime] : []),
   '--network',
   input.network,
   '--cap-drop=ALL',

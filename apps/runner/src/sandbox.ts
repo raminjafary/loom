@@ -33,10 +33,15 @@ const execFileAsync = promisify(execFile)
  *   those cannot both be literally true. The internal network has no gateway, so it is
  *   `none` as far as the internet, the host, postgres and valkey are concerned, while
  *   leaving exactly one reachable peer.
- * - **Containers, not microVMs.** The sandbox spec is explicit that a shared kernel is not
- *   a sufficient boundary for LLM-generated code. Kata/microsandbox is Phase 3; this is the
- *   Phase 1 boundary, and it is a real one compared to running unsandboxed, not a claim to
- *   have solved kernel escape.
+ * - **A container by default, a VM where the operator has one.** A shared kernel is not a
+ *   sufficient boundary for model-written code, and a container is a real boundary compared
+ *   to running unsandboxed rather than a claim to have solved kernel escape. Where a
+ *   VM-isolating OCI runtime is installed — `kata-runtime` is the usual name —
+ *   `LOOM_SANDBOX_ISOLATION=microvm` puts every container this Runner starts behind its own
+ *   kernel, and `isolationVerdict` **refuses the run** when the named runtime does not
+ *   actually work. That refusal is the load-bearing half: an unavailable runtime would
+ *   otherwise fall back to the shared kernel and every run would look exactly the same,
+ *   which is the failure the stale-image guard already exists to prevent one level down.
  * - **Runtime defaults to docker, not podman.** The tech stack prefers podman for being
  *   daemonless; the flags used here are common to both, so this is a one-variable
  *   swap rather than a design choice.
@@ -220,8 +225,23 @@ export interface SandboxOptions {
   readonly log?: (message: string) => void
 }
 
+export type SandboxIsolation = 'container' | 'microvm'
+
 export interface SandboxConfig {
   readonly runtime: string
+  /**
+   * The kernel boundary asked for. `container` shares the host's kernel; `microvm` puts
+   * each container in its own, through the OCI runtime named below.
+   */
+  readonly isolation: SandboxIsolation
+  /**
+   * The OCI runtime passed as `--runtime`, or null under `container` isolation.
+   *
+   * A name rather than a boolean because there is more than one such runtime and an
+   * operator's install decides what it is called; `isolationVerdict` proves the name works
+   * before a run is started with it.
+   */
+  readonly ociRuntime: string | null
   readonly image: string
   readonly network: string
   readonly memory: string
@@ -239,6 +259,14 @@ export interface SandboxConfig {
 export const sandboxConfigFromEnv = (env: NodeJS.ProcessEnv = process.env): SandboxConfig => ({
   // Docker by default; podman is drop-in (see the note above).
   runtime: env.LOOM_CONTAINER_RUNTIME ?? 'docker',
+  // Anything but an explicit `microvm` is a container, for the reason the dependency
+  // cache's mode falls to `copy`: a typo must land on the mode that is merely weaker,
+  // never on one that claims a boundary it does not have.
+  isolation: env.LOOM_SANDBOX_ISOLATION === 'microvm' ? 'microvm' : 'container',
+  ociRuntime:
+    env.LOOM_SANDBOX_ISOLATION === 'microvm'
+      ? (env.LOOM_SANDBOX_OCI_RUNTIME ?? 'kata-runtime')
+      : null,
   image: env.LOOM_SANDBOX_IMAGE ?? 'loom-agent-sandbox:latest',
   network: env.LOOM_SANDBOX_NETWORK ?? 'loom-sandbox',
   memory: env.LOOM_SANDBOX_MEMORY ?? '4g',
@@ -336,6 +364,49 @@ export const checkImageFreshness = async (
   return { ok: true, digest: hostDigest }
 }
 
+export type IsolationVerdict =
+  | { readonly ok: true; readonly runtime: string | null }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Proves the asked-for kernel boundary actually exists, before a run is started behind it.
+ *
+ * By *running* the image under the runtime rather than by reading a list of registered
+ * names: a runtime can be registered and still fail to start a VM — no nested
+ * virtualisation, a missing kernel image, a host that cannot allocate one — and each of
+ * those is a container that either does not start or, worse on some installs, starts
+ * without the boundary. The probe is `true` in the sandbox image, so it costs one VM boot
+ * once per Runner process and answers the only question worth asking: does a container
+ * started this way come up.
+ *
+ * There is no acknowledgement flag to override it, unlike the stale image. A pinned image
+ * is a deliberate choice with a visible cost; "run anyway with a shared kernel after I
+ * asked for a VM" is a claim about isolation that would then be false everywhere it is
+ * read — in the run's own record, and to whoever decided the workload was safe to run.
+ */
+export const isolationVerdict = async (config: SandboxConfig): Promise<IsolationVerdict> => {
+  if (config.isolation === 'container' || config.ociRuntime === null) {
+    return { ok: true, runtime: null }
+  }
+  try {
+    await execFileAsync(config.runtime, [
+      'run', '--rm', '--runtime', config.ociRuntime, '--entrypoint', 'true', config.image,
+    ])
+    return { ok: true, runtime: config.ociRuntime }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.split('\n').slice(-3).join(' ').trim() : String(error)
+    return {
+      ok: false,
+      reason:
+        `LOOM_SANDBOX_ISOLATION=microvm asks for a kernel per run, and the runtime ` +
+        `"${config.ociRuntime}" could not start a container under ${config.runtime}: ${detail}. ` +
+        'Install it and register it with the container runtime, name a different one with ' +
+        'LOOM_SANDBOX_OCI_RUNTIME, or drop LOOM_SANDBOX_ISOLATION to run with the shared ' +
+        'kernel a container gives — which is a real boundary, but not the one that was asked for.',
+    }
+  }
+}
+
 /**
  * Container name, which doubles as its DNS name on the sandbox network — that is how
  * the agent addresses its own shim (see ANTHROPIC_BASE_URL below).
@@ -418,6 +489,11 @@ export const buildSandboxArgs = (
   '-i',
   '--name',
   containerName(options.runId),
+
+  // Its own kernel, where the operator has a runtime that provides one. Absent under
+  // `container` isolation, which is the default — and never silently absent under
+  // `microvm`, because `isolationVerdict` refuses the run first.
+  ...(config.ociRuntime ? ['--runtime', config.ociRuntime] : []),
 
   // No route off the host except the egress proxy.
   '--network',

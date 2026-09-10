@@ -83,6 +83,10 @@ export const buildVerifyArgs = (
 ): string[] => [
   'run',
   '--rm',
+  // The same kernel boundary the run itself got. A check runs a command an operator wrote
+  // against a tree an agent wrote, so isolating the run and not its verification would
+  // leave the boundary exactly where the untrusted artefact is executed.
+  ...(config.ociRuntime ? ['--runtime', config.ociRuntime] : []),
   '--network',
   'none',
   '--cap-drop=ALL',

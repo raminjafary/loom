@@ -6,6 +6,7 @@ import { closureDigest, walkClosure } from './sandbox-closure.js'
 import { depCacheEnv, depCacheFromEnv } from './dep-cache.js'
 import {
   buildSandboxArgs,
+  isolationVerdict,
   killOrphanedContainers,
   sandboxConfigFromEnv,
   sandboxEnabled,
@@ -218,6 +219,68 @@ describe('sandbox configuration', () => {
  * Dockerfile.sandbox silently omitted three agent-side modules, and the image itself
  * silently predated them. Neither failed anything.
  */
+describe('the kernel boundary', () => {
+  const microvm = sandboxConfigFromEnv({ LOOM_SANDBOX_ISOLATION: 'microvm' } as NodeJS.ProcessEnv)
+
+  it('passes no runtime flag by default, which is a container', () => {
+    expect(config.isolation).toBe('container')
+    expect(config.ociRuntime).toBeNull()
+    expect(joined).not.toContain('--runtime')
+  })
+
+  it('puts the run behind its own kernel when one is asked for', () => {
+    expect(microvm.isolation).toBe('microvm')
+    const withVm = buildSandboxArgs(microvm, {
+      runId: 'run-1',
+      clonePath: '/scratch/clone',
+      homePath: '/scratch/home',
+      env: {},
+    }).join(' ')
+    expect(withVm).toContain('--runtime kata-runtime')
+  })
+
+  it('takes the operator’s runtime name over the usual one', () => {
+    const named = sandboxConfigFromEnv({
+      LOOM_SANDBOX_ISOLATION: 'microvm',
+      LOOM_SANDBOX_OCI_RUNTIME: 'io.containerd.kata.v2',
+    } as NodeJS.ProcessEnv)
+    expect(named.ociRuntime).toBe('io.containerd.kata.v2')
+  })
+
+  // The same rule the dependency cache's mode follows: a typo lands on the weaker mode,
+  // never on one that claims a boundary it does not have.
+  it('reads anything but an explicit microvm as a container', () => {
+    const typo = sandboxConfigFromEnv({ LOOM_SANDBOX_ISOLATION: 'microVM' } as NodeJS.ProcessEnv)
+    expect(typo.isolation).toBe('container')
+    expect(typo.ociRuntime).toBeNull()
+  })
+
+  it('asks nothing of the host when no VM was asked for', async () => {
+    // No probe, no container spawn: the default path must not pay for a check about a
+    // boundary nobody requested.
+    await expect(isolationVerdict(config)).resolves.toEqual({ ok: true, runtime: null })
+  })
+
+  /**
+   * The load-bearing half. A runtime that is not installed must end the run, because the
+   * alternative — falling back to the shared kernel — produces a run that looks identical
+   * to one that got the boundary it asked for.
+   */
+  it('refuses when the runtime it was told to use cannot start a container', async () => {
+    const verdict = await isolationVerdict(
+      sandboxConfigFromEnv({
+        LOOM_SANDBOX_ISOLATION: 'microvm',
+        LOOM_SANDBOX_OCI_RUNTIME: 'no-such-runtime-here',
+      } as NodeJS.ProcessEnv),
+    )
+    expect(verdict.ok).toBe(false)
+    if (!verdict.ok) {
+      expect(verdict.reason).toContain('no-such-runtime-here')
+      expect(verdict.reason).toContain('LOOM_SANDBOX_OCI_RUNTIME')
+    }
+  }, 30_000)
+})
+
 describe("the agent host's source closure", () => {
   const entry = fileURLToPath(new URL('./agent-host.ts', import.meta.url))
 

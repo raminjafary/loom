@@ -76,6 +76,7 @@ import {
 } from './run-workspace.js'
 import {
   checkImageFreshness,
+  isolationVerdict,
   proxyUrlWithToken,
   runAgentInSandbox,
   sandboxConfigFromEnv,
@@ -284,6 +285,17 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
   const imageFreshness = (config: typeof sandbox) => {
     freshnessPromise ??= checkImageFreshness(config, AGENT_HOST_ENTRY)
     return freshnessPromise
+  }
+
+  /**
+   * Whether the kernel boundary this deployment asked for can actually be started.
+   * Memoized for the same reason and at the same cost: neither the installed runtimes nor
+   * this process's configuration change while it lives, and the probe boots a VM.
+   */
+  let isolationPromise: ReturnType<typeof isolationVerdict> | null = null
+  const sandboxIsolation = (config: typeof sandbox) => {
+    isolationPromise ??= isolationVerdict(config)
+    return isolationPromise
   }
 
   let socket: WebSocket | null = null
@@ -1230,6 +1242,19 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
       return
     }
 
+    /**
+     * The kernel boundary, before the image's contents and before the lease.
+     *
+     * Order is deliberate: a deployment that asked for a VM per run and cannot start one
+     * has a wrong answer to give about *every* run, and saying "your image is stale" first
+     * would send the operator to rebuild an image that was never the problem.
+     */
+    const isolation = await sandboxIsolation(sandbox)
+    if (!isolation.ok) {
+      sendAgentEvent(input.runId, { kind: 'run_failed', message: `Refusing to run: ${isolation.reason}` })
+      return
+    }
+
     // Before the lease, so a refusal never leaves one issued. Memoized across runs —
     // the answer cannot change while this process lives, and it costs a container spawn.
     const freshness = await imageFreshness(sandbox)
@@ -2011,6 +2036,7 @@ export const connectRunner = (options: RunnerClientOptions): { close: () => void
                 const proxy = proxyUrlWithToken(egress.dataUrl, token)
                 const warmed = await warmDepCache({
                   runtime: sandbox.runtime,
+                  ociRuntime: sandbox.ociRuntime,
                   image: sandbox.image,
                   network: sandbox.network,
                   cacheRoot: depCacheDirFor(cache, frame.repositoryId),
