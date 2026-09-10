@@ -9468,15 +9468,20 @@ export const reapStuckRuns = async (
             options.sameToolCallLimit ?? 0,
           )
 
-    if (!heartbeatStale && !noProgress && !loop) continue
-
+    /**
+     * One expression for "is this run reaped, and what do we tell them", so the verdict and
+     * the sentence cannot disagree. Null is the healthy case.
+     */
     const reason = heartbeatStale
       ? `no heartbeat for over ${Math.round(options.heartbeatTimeoutMs / 1000)}s`
       : noProgress
         ? `no progress for over ${Math.round(options.noProgressTimeoutMs / 1000)}s`
         : // Named, never "stuck": the tool and the count are the diagnosis, and a human
           // reading them knows whether the loop is the model's fault or the tool's.
-          describeStuckLoop(loop as { toolName: string; count: number })
+          loop
+          ? describeStuckLoop(loop)
+          : null
+    if (reason === null) continue
 
     const failed = await deps.agentRuns.updateStatus(run.workspaceId, run.id, {
       status: 'failed',
