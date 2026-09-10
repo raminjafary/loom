@@ -270,6 +270,68 @@ describe('architectural boundaries', () => {
    * to write; a fallback that is the only value that ever applies is a hard-coded colour
    * wearing a token's name.
    */
+  /**
+   * The client mirrors `prosecutionWantsAttention` rather than importing it, because a client
+   * depends on the contract and never on the domain. That is the right call and it is also a
+   * second implementation, so it is pinned here — this is the only file that may import both.
+   *
+   * Behaviourally, through the board, rather than by comparing two functions: what has to
+   * agree is which card the Inbox puts first, and a mirror could be correct as a predicate and
+   * wired to the wrong lane.
+   */
+  it('the Inbox’s ordering agrees with the domain about which prosecution wants attention', async () => {
+    const { prosecutionWantsAttention } = await import('../packages/domain/src/index.js')
+    const { buildInboxBoard } = await import('../packages/client-core/src/inbox-board.js')
+
+    const observations = (outcome: 'held' | 'broke') => [{ name: 'a probe', outcome, detail: null }]
+    const cases = [
+      { status: 'reported' as const, observations: observations('broke') },
+      { status: 'reported' as const, observations: observations('held') },
+      { status: 'reported' as const, observations: [] },
+      { status: 'running' as const, observations: observations('broke') },
+      { status: 'inconclusive' as const, observations: [] },
+      /**
+       * The shape that discriminates, and a real one: `recordProsecution` takes `inconclusive`
+       * and `observations` in the same call, so a session that could not finish can still have
+       * reported a broken probe. Without this row the list passes a mirror that asks
+       * `status !== 'running'` instead of `status === 'reported'`.
+       */
+      { status: 'inconclusive' as const, observations: observations('broke') },
+    ]
+
+    for (const shape of cases) {
+      const record = {
+        id: 'p1',
+        workspaceId: 'w1',
+        agentRunId: 'noisy',
+        prosecutorRunId: 'pr1',
+        reason: null,
+        createdAt: new Date(0),
+        finishedAt: null,
+        ...shape,
+      }
+      const runOf = (id: string) =>
+        ({
+          id,
+          status: 'completed',
+          branchName: `loom/run-${id}`,
+          branchDisposition: null,
+          createdAt: new Date(0),
+          completedAt: new Date(0),
+        }) as never
+      const lanes = buildInboxBoard({
+        needsAttention: [runOf('quiet'), runOf('noisy')],
+        settled: [],
+        mergeQueue: [],
+        prosecutions: [record as never],
+      })
+      const promoted = lanes.find((lane) => lane.id === 'review')?.cards[0]?.run.id === 'noisy'
+      expect(promoted, `${shape.status} with ${shape.observations.length} observation(s)`).toBe(
+        prosecutionWantsAttention(record as never),
+      )
+    }
+  })
+
   it('every CSS variable a component uses is declared by the design system', () => {
     const declared = (text: string) =>
       new Set([...text.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].map((match) => match[1] as string))

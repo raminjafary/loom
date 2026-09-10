@@ -97,9 +97,14 @@ export const summariseProsecution = (prosecution: Prosecution): string => {
 /**
  * Whether a prosecution is worth a reviewer's attention *first*.
  *
- * Ordering, not gating. The Inbox already ranks what a human should look at, and a branch
- * whose diff broke a probe someone wrote for it is a better use of the next thirty seconds
- * than one that did not. It still merges if the repository's own checks pass.
+ * Ordering, not gating. The Inbox ranks the review lane by it, and a branch whose diff broke
+ * a probe someone wrote for it is a better use of the next thirty seconds than one that did
+ * not. It still merges if the repository's own checks pass.
+ *
+ * The client mirrors this rather than importing it — a client depends on the contract, never
+ * on the domain — which is safe here in a way it would not be for a rule with authority: a
+ * mirror that drifted would put a card second instead of first. This is the authority for what
+ * the rule *is*.
  */
 export const prosecutionWantsAttention = (prosecution: Prosecution | null): boolean =>
   prosecution !== null &&

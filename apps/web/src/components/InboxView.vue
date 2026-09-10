@@ -110,6 +110,7 @@ const lanes = computed(() =>
     settled: props.settled,
     mergeQueue: props.mergeQueue,
     verifications: props.verifications,
+    prosecutions: props.prosecutions,
   }),
 )
 

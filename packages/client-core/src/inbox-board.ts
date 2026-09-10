@@ -1,4 +1,4 @@
-import type { AgentRun, MergeQueueEntry, RunVerification } from '@loom/api-contract'
+import type { AgentRun, MergeQueueEntry, Prosecution, RunVerification } from '@loom/api-contract'
 import { attentionReason } from './attention.js'
 
 /**
@@ -40,6 +40,14 @@ export interface InboxCard {
    * they open it, which is a thing to *say* on the card rather than a different column.
    */
   readonly verification: RunVerification | null
+  /**
+   * What a prosecutor wrote against this diff, or null where none ran.
+   *
+   * Like `verification` it does not move the card, and unlike `verification` it could not:
+   * this evidence holds no authority at all. What it does do is order the review lane — see
+   * `prosecutionWantsAttention`.
+   */
+  readonly prosecution: Prosecution | null
 }
 
 export interface InboxLane {
@@ -49,6 +57,20 @@ export interface InboxLane {
   readonly empty: string
   readonly cards: InboxCard[]
 }
+
+/**
+ * Mirrors `@loom/domain`'s `prosecutionWantsAttention`, rather than importing it, for the
+ * reason `models.ts` gives: a client depends on the contract, never on the domain.
+ *
+ * Safe to duplicate here in a way most rules would not be, and for a reason specific to this
+ * one: it decides an *order*. A mirror that drifted would put a card second instead of first.
+ * It cannot grant anything, block anything, or enter any definition of done — the domain says
+ * so in `prosecutionAffectsMergeEligibility`, which returns `false` as a type.
+ */
+const wantsAttention = (prosecution: Prosecution | null): boolean =>
+  prosecution !== null &&
+  prosecution.status === 'reported' &&
+  prosecution.observations.some((observation) => observation.outcome === 'broke')
 
 const LANE_TITLES: Record<InboxLaneId, { title: string; empty: string }> = {
   'needs-you': {
@@ -144,9 +166,14 @@ export const buildInboxBoard = (input: {
   mergeQueue: readonly MergeQueueEntry[]
   /** Optional: a board built before the verifications arrive is still a correct board. */
   verifications?: readonly RunVerification[]
+  /** Optional, for the same reason, and doubly so — a prosecution is never load-bearing. */
+  prosecutions?: readonly Prosecution[]
 }): InboxLane[] => {
   const verificationByRun = new Map<string, RunVerification>()
   for (const record of input.verifications ?? []) verificationByRun.set(record.agentRunId, record)
+
+  const prosecutionByRun = new Map<string, Prosecution>()
+  for (const record of input.prosecutions ?? []) prosecutionByRun.set(record.agentRunId, record)
 
   const entryByRun = new Map<string, MergeQueueEntry>()
   for (const entry of input.mergeQueue) {
@@ -172,7 +199,29 @@ export const buildInboxBoard = (input: {
       summary: summaryFor(run, lane, queueEntry),
       queueEntry,
       verification: verificationByRun.get(run.id) ?? null,
+      prosecution: prosecutionByRun.get(run.id) ?? null,
     })
+  }
+
+  /**
+   * A branch whose diff broke a probe somebody wrote *for it* goes first in the lane.
+   *
+   * Ordering, and only ordering — the lane is the same lane and the next action is the same
+   * action, because the repository's checks are the arbiter and they have already spoken. What
+   * this changes is which of thirty cards is worth the next thirty seconds. `stable`, so
+   * everything else keeps the order it arrived in: the attention list first, then the settled
+   * one, which is oldest-first within each.
+   *
+   * The review lane alone. A landed branch has nothing left to decide and a queued one is not
+   * a human's to touch, so promoting a card in either would be an invitation to act on
+   * something that is not waiting.
+   */
+  const review = byLane.get('review')
+  if (review) {
+    const wanted = review.filter((card) => wantsAttention(card.prosecution))
+    if (wanted.length > 0 && wanted.length < review.length) {
+      byLane.set('review', [...wanted, ...review.filter((card) => !wantsAttention(card.prosecution))])
+    }
   }
 
   return LANE_ORDER.map((id) => ({

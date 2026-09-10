@@ -1,4 +1,4 @@
-import type { AgentRun, MergeQueueEntry, RunVerification } from '@loom/api-contract'
+import type { AgentRun, MergeQueueEntry, Prosecution, RunVerification } from '@loom/api-contract'
 import { describe, expect, it } from 'vitest'
 import { buildInboxBoard, waitingCount, type InboxLaneId } from './inbox-board.js'
 
@@ -43,17 +43,32 @@ const verification = (overrides: Partial<RunVerification>): RunVerification =>
     ...overrides,
   }) as RunVerification
 
+const prosecution = (overrides: Partial<Prosecution>): Prosecution =>
+  ({
+    id: 'p1',
+    agentRunId: 'r1',
+    prosecutorRunId: 'pr1',
+    status: 'reported',
+    observations: [],
+    reason: null,
+    createdAt: new Date('2026-08-13T00:00:00Z'),
+    finishedAt: new Date('2026-08-13T00:01:00Z'),
+    ...overrides,
+  }) as Prosecution
+
 const board = (input: {
   needsAttention?: AgentRun[]
   settled?: AgentRun[]
   mergeQueue?: MergeQueueEntry[]
   verifications?: RunVerification[]
+  prosecutions?: Prosecution[]
 }) =>
   buildInboxBoard({
     needsAttention: input.needsAttention ?? [],
     settled: input.settled ?? [],
     mergeQueue: input.mergeQueue ?? [],
     ...(input.verifications ? { verifications: input.verifications } : {}),
+    ...(input.prosecutions ? { prosecutions: input.prosecutions } : {}),
   })
 
 const cardFor = (lanes: ReturnType<typeof board>, runId: string) =>
@@ -209,6 +224,66 @@ describe('waitingCount', () => {
  * human does next; a branch that failed its checks still needs the same decision, and
  * putting it in "Stopped early" would say something false about the run.
  */
+describe('buildInboxBoard with prosecutions', () => {
+  const broke = [{ name: 'a probe', outcome: 'broke' as const, detail: null }]
+  const held = [{ name: 'a probe', outcome: 'held' as const, detail: null }]
+
+  /**
+   * The whole use of this evidence, and the only one it is allowed: which of thirty cards is
+   * worth the next thirty seconds. `prosecutionWantsAttention` existed, was tested, and was
+   * called by nothing — so the ordering its own doc described did not happen anywhere.
+   */
+  it('puts a branch whose diff broke a probe first in the review lane', () => {
+    const lanes = board({
+      needsAttention: [
+        run({ id: 'quiet' }),
+        run({ id: 'noisy', branchName: 'loom/run-2' }),
+        run({ id: 'also-quiet', branchName: 'loom/run-3' }),
+      ],
+      prosecutions: [prosecution({ agentRunId: 'noisy', observations: broke })],
+    })
+    const review = lanes.find((lane) => lane.id === 'review')
+    expect(review?.cards.map((card) => card.run.id)).toEqual(['noisy', 'quiet', 'also-quiet'])
+  })
+
+  it('leaves the order alone when nothing broke', () => {
+    const lanes = board({
+      needsAttention: [run({ id: 'first' }), run({ id: 'second', branchName: 'loom/run-2' })],
+      prosecutions: [prosecution({ agentRunId: 'second', observations: held })],
+    })
+    const review = lanes.find((lane) => lane.id === 'review')
+    expect(review?.cards.map((card) => card.run.id)).toEqual(['first', 'second'])
+  })
+
+  /** A prosecution still running has said nothing yet, so it is not a reason to look. */
+  it('does not promote a prosecution that has not reported', () => {
+    const lanes = board({
+      needsAttention: [run({ id: 'first' }), run({ id: 'second', branchName: 'loom/run-2' })],
+      prosecutions: [
+        prosecution({ agentRunId: 'second', status: 'running', observations: broke }),
+      ],
+    })
+    expect(lanes.find((lane) => lane.id === 'review')?.cards[0]?.run.id).toBe('first')
+  })
+
+  /**
+   * Ordering, and only ordering. A card promoted out of `landed` or `queued` would invite
+   * someone to act on a branch that is not theirs to touch.
+   */
+  it('never moves a card between lanes', () => {
+    const lanes = board({
+      settled: [run({ id: 'merged', branchDisposition: 'merged' })],
+      prosecutions: [prosecution({ agentRunId: 'merged', observations: broke })],
+    })
+    expect(laneOf(lanes, 'merged')).toBe('landed')
+    expect(cardFor(lanes, 'merged')?.prosecution?.observations).toHaveLength(1)
+  })
+
+  it('leaves the field null when nothing prosecuted a run', () => {
+    expect(cardFor(board({ needsAttention: [run({ id: 'r1' })] }), 'r1')?.prosecution).toBeNull()
+  })
+})
+
 describe('buildInboxBoard with verifications', () => {
   it('carries the verdict onto the card without changing its lane', () => {
     const failing = board({
