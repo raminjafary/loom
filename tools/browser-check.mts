@@ -30,11 +30,14 @@ import { loadConfig } from '../apps/server/src/config.js'
 import { buildGateway } from '../apps/ws-gateway/src/gateway.js'
 import {
   boxOf,
+  clientAsThePage,
+  computedStyle,
   contrastRatio,
   hasHorizontalOverflow,
   isInViewport,
   isVisible,
   openBrowser,
+  seedProsecutedBranch,
   signUpThroughTheGate,
   startStack,
   VIEWPORT,
@@ -324,6 +327,110 @@ try {
   await browser.screenshot('inbox')
   const inboxText = (await page.locator('main').innerText()).trim()
   check('the inbox says something when it is empty', inboxText.length > 0, `${inboxText.slice(0, 40)}…`)
+
+  /**
+   * The Inbox with something in it, which is the half no driver had ever seen.
+   *
+   * Two branches, one of them prosecuted. The prosecution's whole product effect is an
+   * *ordering* — a branch whose diff broke a probe somebody wrote for it is a better use of
+   * the next thirty seconds — and an ordering is a thing only a rendered page can be asked
+   * about. `inbox-board.test.ts` proves the array; this proves the column.
+   */
+  console.log('\n— the Inbox, with a prosecuted branch in it —')
+  const client = await clientAsThePage(page, stack.apiBase)
+  const quiet = await seedProsecutedBranch({
+    client,
+    apiBase: stack.apiBase,
+    task: 'A branch nobody wrote a probe against.',
+    observations: [{ name: 'the old path still refuses an empty answer', outcome: 'held', detail: null }],
+  })
+  const noisy = await seedProsecutedBranch({
+    client,
+    apiBase: stack.apiBase,
+    task: 'A branch whose diff broke a probe.',
+    observations: [
+      { name: 'the documented lower bound is enforced', outcome: 'broke', detail: 'applyDiscount(100, -10) returned 110 — the price went up.' },
+      { name: 'the upper bound throws', outcome: 'held', detail: null },
+    ],
+  })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: /^inbox/i }).click()
+  await page.waitForTimeout(2_000)
+  await browser.screenshot('inbox-prosecuted')
+
+  /**
+   * Relative, not absolute. The gate signs in to the shared default workspace and cannot
+   * truncate it, so the lane holds whatever previous runs left — and the claim was never "there
+   * are two cards", it is "the one with a broken probe is above the one without". That holds
+   * however much else is in the column, which is also the only form in which it is worth
+   * anything: a lane with two cards does not need ordering.
+   */
+  const reviewLane = page.locator('.lane').filter({ hasText: /ready to review/i }).first()
+  const cards = reviewLane.locator('li.row')
+  const texts = await cards.allInnerTexts()
+  /**
+   * By the *head* of the run id, because that is what the card shows: `shortBranchName` keeps
+   * `loom/run-` and the first characters of the id, so matching on the tail finds nothing and
+   * reports it as a missing card.
+   */
+  const indexOfRun = (runId: string) => texts.findIndex((text) => text.includes(runId.slice(0, 8)))
+  const noisyAt = indexOfRun(noisy.runId)
+  const quietAt = indexOfRun(quiet.runId)
+
+  check('both seeded branches reached the review lane', noisyAt >= 0 && quietAt >= 0, `${noisyAt} and ${quietAt} of ${texts.length}`)
+  /**
+   * And the prosecutors themselves did not. Each one leaves a branch of its own, so before the
+   * board learned to tell work from a second opinion, every prosecuted branch put *two* cards
+   * in this column and two on the badge — one of them a run whose prompt tells it to commit
+   * nothing. Asserted on the persona name, which is what the card leads with.
+   */
+  check(
+    'and no prosecutor is sitting in it as a thing to decide about',
+    !texts.some((text) => /^prosecutor\b/m.test(text.trim())),
+    texts.filter((text) => /^prosecutor\b/m.test(text.trim())).length + ' prosecutor card(s)',
+  )
+  check(
+    'the branch whose probe broke is ranked above the one whose probes held',
+    noisyAt >= 0 && quietAt >= 0 && noisyAt < quietAt,
+    `broke at ${noisyAt}, held at ${quietAt}`,
+  )
+  check(
+    'and its card says why, in the prosecutor’s own sentence',
+    /2 probes written against this diff, 1 broke/.test(texts[noisyAt] ?? ''),
+    (texts[noisyAt] ?? '').replace(/\n/g, ' · ').slice(0, 120),
+  )
+  /**
+   * The card that has nothing to report says nothing. A summary on every card would make the
+   * one that matters indistinguishable from the thirty that do not, which is the failure the
+   * ordering exists to prevent.
+   */
+  check(
+    'the branch whose probes all held carries no prosecution line',
+    !/probes? written against this diff/.test(texts[quietAt] ?? ''),
+    (texts[quietAt] ?? '').replace(/\n/g, ' · ').slice(0, 90),
+  )
+  /**
+   * Legibility, and against the *card* rather than the page: this line is new and muted on
+   * purpose, and muted-on-purpose is one shade from invisible. The verdict beside it is the
+   * repository's and may be red; a reader who saw these in the same colour would read a refused
+   * merge, so they must also not match.
+   */
+  const probeContrast = await contrastRatio(page, 'li.row .probes')
+  check(
+    'the prosecution line is legible',
+    probeContrast !== null && probeContrast >= 4.5,
+    `${probeContrast?.toFixed(2) ?? 'none'}:1`,
+  )
+  const probeColour = await computedStyle(page, 'li.row .probes', 'color')
+  const verdictColour = await computedStyle(page, 'li.row .verdict', 'color')
+  check(
+    'and it is not the verdict’s colour, because it is not a verdict',
+    probeColour !== '' && probeColour !== verdictColour,
+    `${probeColour} vs ${verdictColour}`,
+  )
+
+  await quiet.close()
+  await noisy.close()
   await page.getByRole('button', { name: /workspace|back/i }).first().click().catch(() => {})
   await page.waitForTimeout(500)
 

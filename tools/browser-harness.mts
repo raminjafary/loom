@@ -38,6 +38,8 @@ import { createServer as createNetServer } from 'node:net'
 import { extname, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 import { chromium, type Browser, type Page } from 'playwright'
+import { createORPCClient } from '@orpc/client'
+import { RPCLink } from '@orpc/client/fetch'
 
 const execFileAsync = promisify(execFile)
 const REPO_ROOT = new URL('..', import.meta.url).pathname
@@ -408,3 +410,237 @@ export const spawnRunner = (env: Record<string, string>): ChildProcess =>
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+
+// ---------------------------------------------------------------------------
+// Seeding a surface that needs a run
+// ---------------------------------------------------------------------------
+
+/**
+ * An authenticated client for whoever the browser signed in as.
+ *
+ * The cookies are lifted from the Playwright context rather than a second session being
+ * minted, so the driver and the page are the *same* user looking at the same workspace —
+ * which is the only arrangement in which seeding through the contract and then asserting on
+ * what the page renders means anything.
+ */
+export const clientAsThePage = async (page: Page, apiBase: string): Promise<any> => {
+  const cookies = await page.context().cookies()
+  const cookie = cookies.map((entry) => `${entry.name}=${entry.value}`).join('; ')
+  return createORPCClient(new RPCLink({ url: `${apiBase}/rpc`, headers: { cookie } }))
+}
+
+/**
+ * The platform's WebSocket, not the `ws` package — a driver helper should not add a dependency
+ * the repository does not otherwise have, and Node has had this global since 22, which is the
+ * floor `engines` already sets.
+ */
+const nextRunnerFrame = (socket: WebSocket, match: (frame: any) => boolean): Promise<any> =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no matching frame within 20s')), 20_000)
+    const onMessage = (event: MessageEvent) => {
+      const frame = JSON.parse(String(event.data))
+      if (!match(frame)) return
+      clearTimeout(timer)
+      socket.removeEventListener('message', onMessage)
+      resolve(frame)
+    }
+    socket.addEventListener('message', onMessage)
+  })
+
+export interface ProsecutedBranch {
+  readonly runId: string
+  readonly branchName: string
+  readonly personaName: string
+  readonly close: () => Promise<void>
+}
+
+/**
+ * A finished branch with a prosecution against it, seeded **through the real protocol**.
+ *
+ * Some surfaces cannot be reached by clicking: the Inbox's review lane needs a terminal run
+ * with a branch nobody has decided about, and the prosecution card needs a prosecutor to have
+ * reported a broken probe. Both of those normally cost a model.
+ *
+ * The alternative to this function was inserting `agent_run` and `run_prosecution` rows by
+ * hand, and that is the thing worth *not* doing: a hand-built row is a guess about a shape the
+ * platform owns, it drifts the first time a column moves, and a driver asserting on it ends up
+ * describing a fixture rather than the product. So what is faked here is exactly one thing —
+ * the model — and everything else is real. A Runner pairs over `/ws/runner` and speaks the
+ * protocol; the run is started through the contract; the branch arrives as
+ * `run_workspace_ready`; the terminal transition is an `agent_event`; and the *platform* then
+ * starts the prosecutor on its own, which the fake answers with `prosecution_reported`. If any
+ * of those shapes changes, this fails loudly rather than rendering a stale fixture.
+ *
+ * The verdict is deliberately left `pending`: running the repository's checks would need the
+ * Runner to be real, and a card showing a verdict that is still coming is a state the Inbox
+ * renders on purpose ("a blank where a verdict is coming reads as a pass").
+ */
+export const seedProsecutedBranch = async (input: {
+  readonly client: any
+  readonly apiBase: string
+  readonly task: string
+  readonly observations: readonly { name: string; outcome: 'held' | 'broke'; detail: string | null }[]
+}): Promise<ProsecutedBranch> => {
+  const { client, apiBase } = input
+  /**
+   * Everything named here is named uniquely, because the gate signs in to the *shared* default
+   * workspace and cannot truncate it — so a fixed name collides with the previous run of the
+   * same driver, and with the call two lines below it.
+   */
+  const tag = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
+  const { runnerId, rawToken } = await client.runner.createPairingToken({ name: `seeded-${tag}` })
+
+  const socket = new WebSocket(`${apiBase.replace(/^http/, 'ws')}/ws/runner`)
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener('open', () => resolve(), { once: true })
+    socket.addEventListener('error', () => reject(new Error('the seeded Runner could not connect')), {
+      once: true,
+    })
+  })
+  socket.send(JSON.stringify({ type: 'hello', token: rawToken, allowedRoots: ['/tmp'] }))
+  await nextRunnerFrame(socket, (frame) => frame.type === 'hello_ack')
+
+  const checkPath = nextRunnerFrame(socket, (frame) => frame.type === 'check_path')
+  const repository = client.repository.bindExisting({
+    runnerId,
+    path: `/tmp/seeded-repo-${tag}`,
+    displayName: `seeded repo ${tag}`,
+  })
+  const asked = await checkPath
+  socket.send(
+    JSON.stringify({
+      type: 'check_path_result',
+      requestId: asked.requestId,
+      ok: true,
+      defaultBranch: 'main',
+    }),
+  )
+  const repo = await repository
+  /**
+   * A definition of done, so the run gets a verification row and the card renders its verdict
+   * beside the prosecution. It stays `pending` — running the checks would need the Runner to be
+   * real — and pending is a state the Inbox draws on purpose, because a blank where a verdict
+   * is coming reads as a pass. It is also the state a prosecution is usually read in: the
+   * prosecutor starts when the run ends, which is when verification is merely enqueued.
+   */
+  await client.repository.setVerificationChecks({
+    repositoryId: repo.id,
+    checks: [{ name: 'tests', command: 'true' }],
+  })
+
+  const personas = await client.persona.list()
+  const worker = personas.find((entry: any) => entry.name === 'swe') ?? personas[0]
+  const channel = await client.channel.create({ name: `seeded-${tag}` })
+
+  const started = nextRunnerFrame(socket, (frame) => frame.type === 'start_run')
+  const run = await client.agentRun.start({
+    threadId: channel.rootThread.id,
+    repositoryId: repo.id,
+    personaId: worker.id,
+    task: input.task,
+  })
+  await started
+
+  const branchName = `loom/run-${run.id}`
+  socket.send(
+    JSON.stringify({
+      type: 'run_workspace_ready',
+      runId: run.id,
+      clonePath: `/tmp/seeded-clone-${run.id}`,
+      branchName,
+    }),
+  )
+  /**
+   * The prosecutor's own `start_run` is awaited *before* the completion is sent, because the
+   * platform starts it on the terminal transition and the frame would otherwise arrive while
+   * nothing was listening.
+   */
+  const prosecutorStarted = nextRunnerFrame(
+    socket,
+    (frame) => frame.type === 'start_run' && frame.prosecute === true,
+  )
+  socket.send(
+    JSON.stringify({
+      type: 'agent_event',
+      runId: run.id,
+      seq: 1,
+      event: { kind: 'run_completed', totalCostUsd: 0.21, result: 'Done.' },
+    }),
+  )
+  const prosecutor = await prosecutorStarted
+
+  socket.send(
+    JSON.stringify({
+      type: 'run_workspace_ready',
+      runId: prosecutor.runId,
+      clonePath: `/tmp/seeded-clone-${prosecutor.runId}`,
+      branchName: `loom/run-${prosecutor.runId}`,
+    }),
+  )
+  /**
+   * Reported, and the acknowledgement **awaited** before the run is allowed to finish.
+   *
+   * Not politeness: the two frames race. A prosecutor's terminal transition closes an
+   * unreported prosecution as `inconclusive`, so a completion that overtakes the report in the
+   * server's handlers wins and the evidence is refused as a second report. The first version of
+   * this helper sent both and got three `inconclusive` rows with no observations — which is the
+   * platform behaving correctly about a Runner that lied about when it had finished.
+   *
+   * The real Runner does not have this problem, because the report is a *tool call*: the model
+   * cannot end its turn until the tool has returned. Awaiting the ack is how a fake earns the
+   * same ordering.
+   */
+  /**
+   * Waited for, because the platform opens the prosecution row *after* it dispatches the run.
+   *
+   * `startProsecutor` calls `startAgentRun` — which sends `start_run` — and only then writes
+   * the row that `recordProsecution` looks the report up by. A real prosecutor cannot lose that
+   * race: it has to clone a repository and boot a container before its model sees anything, so
+   * the row is microseconds old by then. A fake that answers the frame in the same tick gets
+   * "this run is not prosecuting anything", which is the platform telling the truth about an
+   * order of events no real Runner produces.
+   *
+   * Worth knowing rather than worth fixing, and written down here rather than worked around
+   * silently: the hazard is real but the window is a database round trip against a clone.
+   */
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const [row] = await client.agentRun.listProsecutions({ agentRunIds: [run.id] })
+    if (row) break
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
+  const requestId = `seed-${tag}`
+  const acked = nextRunnerFrame(
+    socket,
+    (frame) => frame.type === 'persona_prompt_result' && frame.requestId === requestId,
+  )
+  socket.send(
+    JSON.stringify({
+      type: 'prosecution_reported',
+      runId: prosecutor.runId,
+      requestId,
+      observations: input.observations,
+      inconclusive: null,
+    }),
+  )
+  const ack = await acked
+  if (ack.ok !== true) throw new Error(`the seeded prosecution was refused: ${String(ack.error)}`)
+
+  socket.send(
+    JSON.stringify({
+      type: 'agent_event',
+      runId: prosecutor.runId,
+      seq: 1,
+      event: { kind: 'run_completed', totalCostUsd: 0.13, result: 'Reported.' },
+    }),
+  )
+
+  return {
+    runId: run.id,
+    branchName,
+    personaName: worker.name,
+    close: async () => {
+      socket.close()
+    },
+  }
+}
