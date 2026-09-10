@@ -110,7 +110,9 @@ const lanes = computed(() =>
     settled: props.settled,
     mergeQueue: props.mergeQueue,
     verifications: props.verifications,
-    prosecutions: props.prosecutions,
+    // Spread rather than passed, because the prop is optional and the board's field is not
+    // `| undefined`: a panel rendered before the second round trip lands is still correct.
+    ...(props.prosecutions ? { prosecutions: props.prosecutions } : {}),
   }),
 )
 
@@ -125,6 +127,18 @@ const lanes = computed(() =>
  * check".
  */
 const total = computed(() => lanes.value.reduce((sum, lane) => sum + lane.cards.length, 0))
+
+/**
+ * Whether a card has something a reviewer would want to see before opening it.
+ *
+ * The same question `buildInboxBoard` ordered the lane by — asked here rather than exported
+ * from there, because what the card needs is a *reason to render*, and a card that showed the
+ * summary without having been promoted would be describing a rank it does not have.
+ */
+const brokeAProbe = (prosecution: Prosecution | null): boolean =>
+  prosecution !== null &&
+  prosecution.status === 'reported' &&
+  prosecution.observations.some((observation) => observation.outcome === 'broke')
 
 /**
  * Review opens over the board, not beside it.
@@ -238,6 +252,15 @@ const onKeydown = (event: KeyboardEvent) => {
                   reason: card.verification.reason,
                 })
               }}
+            </span>
+            <!--
+              Only when a probe broke, which is also the only case that moved this card to the
+              top of its lane — a promoted card with no reason on it is worse than no
+              promotion. Never styled like the verdict above it: that one is the repository's
+              and can refuse a merge, this one is a reviewer's reading and refuses nothing.
+            -->
+            <span v-if="brokeAProbe(card.prosecution)" class="probes">
+              {{ summariseProsecution(card.prosecution!) }}
             </span>
             <div class="line meta">
               <span v-if="card.run.branchName" class="branch" :title="card.run.branchName">{{
@@ -490,6 +513,17 @@ const onKeydown = (event: KeyboardEvent) => {
 }
 
 .verdict.passed {
+  color: var(--text-muted);
+}
+
+/*
+  The prosecutor's line on a card. Deliberately not one of the `.verdict` colours: those say
+  what the repository decided, and a reader who saw this in the same red would read a refused
+  merge. Same size, muted, and it only appears when there is something to look at.
+*/
+.probes {
+  margin-top: 0.15rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
 }
 
