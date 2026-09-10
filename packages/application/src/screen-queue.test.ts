@@ -490,4 +490,43 @@ describe('advanceScreenQueue: starting', () => {
     await advanceScreenQueue(deps, { screenStuckMs: 3_600_000, maxStartsPerTick: 2 })
     expect(callsOf(claimScreenRun).length).toBeLessThanOrEqual(2)
   })
+
+  /**
+   * A set at the head of the line that cannot make progress used to spend the whole global
+   * start budget on every tick — its runs are claimed and then sit queued forever, because
+   * the repository's Runner is gone — so everything behind it waited out `screenStuckMs`, an
+   * hour by default. A live driver started **zero of its own fifteen** arms this way, and the
+   * queue looked broken from the outside when nothing was broken except the fairness.
+   *
+   * The order rotates between ticks, so a stuck set costs the ones behind it a tick rather
+   * than an hour. Asserted over several ticks, because within a single tick "second in line"
+   * and "never reached" look identical.
+   */
+  it('gives a set behind a budget-eating one a turn, rather than starving it', async () => {
+    const OTHER = asPersonaVariantSetId('00000000-0000-4000-8000-0000000000b2')
+    const { deps, claimScreenRun } = harness({
+      screens: [
+        { screen: screen('s_head', null), runs: [0, 1, 2, 3].map((i) => screenRun('s_head', i)) },
+      ],
+    })
+    // The set at the head never finishes anything: its claims succeed, its runs never score.
+    // The one behind it has arms of its own, and no reason of its own not to run them.
+    deps.screens.listSetsWithOpenScreens = vi.fn(async () => [
+      { workspaceId: WS, setId: SET },
+      { workspaceId: WS, setId: OTHER },
+    ])
+    deps.screens.screensForSet = vi.fn(async (_workspaceId: unknown, setId: unknown) =>
+      setId === OTHER
+        ? [{ screen: screen('s_behind', null), runs: [0, 1, 2, 3].map((i) => screenRun('s_behind', i)) }]
+        : [{ screen: screen('s_head', null), runs: [0, 1, 2, 3].map((i) => screenRun('s_head', i)) }],
+    )
+
+    for (let tick = 0; tick < 3; tick += 1) {
+      await advanceScreenQueue(deps, { screenStuckMs: 3_600_000, maxStartsPerTick: 2 })
+    }
+
+    const claimed = callsOf(claimScreenRun).map((call) => String(call[1]))
+    expect(claimed.some((id) => id.startsWith('s_head'))).toBe(true)
+    expect(claimed.some((id) => id.startsWith('s_behind'))).toBe(true)
+  })
 })

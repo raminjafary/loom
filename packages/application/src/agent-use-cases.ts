@@ -2741,6 +2741,16 @@ export const startVariantProposer = async (
  * gate reads as "no opinion" and admits. That direction is deliberate: the screen's only
  * authority is to refuse a measurement, and what it falls back to is the real fitness.
  */
+/**
+ * Which set the next tick starts from. Process-level, like the sweep itself: it does not need
+ * to survive a restart, because a restart already changes which sets are open.
+ */
+let screenTickCursor = 0
+
+/** The same list, starting `by` entries in. */
+const rotated = <T>(items: readonly T[], by: number): T[] =>
+  items.length === 0 ? [] : [...items.slice(by % items.length), ...items.slice(0, by % items.length)]
+
 export const advanceScreenQueue = async (
   deps: AgentDeps,
   options: {
@@ -2766,7 +2776,22 @@ export const advanceScreenQueue = async (
 ): Promise<void> => {
   const open = await deps.screens.listSetsWithOpenScreens()
   let budget = options.maxStartsPerTick
-  for (const entry of open) {
+  /**
+   * The order rotates between ticks, and that is a fix rather than a flourish.
+   *
+   * The budget is global and was spent strictly in the order the sets came back, so a set at
+   * the head of the line that *cannot* make progress — its repository's Runner is gone, so
+   * every run it starts is claimed and then sits queued — consumed the whole tick, every tick,
+   * until `screenStuckMs` finally wrote its arms off an hour later. Everything behind it
+   * waited that hour out. A live driver started **zero of its fifteen** arms this way and the
+   * queue looked broken from the outside; nothing was broken except the fairness.
+   *
+   * Rotating means the head of the line moves, so a set that cannot progress delays the others
+   * by one tick rather than starving them. It is not a priority scheme and does not try to be:
+   * what it guarantees is that every open set is *reached*, which is the property that was
+   * missing.
+   */
+  for (const entry of rotated(open, screenTickCursor++)) {
     /**
      * Every set is advanced, even once the start budget is spent — the budget bounds
      * *starts* and nothing else.
