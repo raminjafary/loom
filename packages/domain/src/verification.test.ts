@@ -7,6 +7,7 @@ import {
   planVerification,
   summarizeVerification,
   verificationChecksFor,
+  verificationFailureOutput,
   type VerificationCheckResult,
 } from './verification.js'
 import { ValidationError } from './errors.js'
@@ -214,5 +215,30 @@ describe('isVerificationTerminal', () => {
     for (const status of ['passed', 'failed', 'skipped', 'refused', 'error'] as const) {
       expect(isVerificationTerminal(status)).toBe(true)
     }
+  })
+})
+
+describe('verificationFailureOutput', () => {
+  // The tail is stored on the row and was rendered nowhere: a human read "the tests
+  // check failed" and re-ran the command the platform had already run.
+  it('hands back the failing check and what it printed', () => {
+    expect(
+      verificationFailureOutput({
+        status: 'failed',
+        checks: [result('build', 'passed', 'ok'), result('tests', 'failed', '  2 failing\n')],
+      }),
+    ).toEqual({ name: 'tests', output: '2 failing' })
+  })
+
+  it('says nothing where there is nothing stored to say', () => {
+    expect(
+      verificationFailureOutput({ status: 'failed', checks: [result('tests', 'failed')] }),
+    ).toBeNull()
+    // A refusal's whole story is its reason, which the one-line verdict already carries.
+    expect(verificationFailureOutput({ status: 'refused', checks: [] })).toBeNull()
+    // A passing check keeps its tail deliberately, but a pass is not a thing to explain.
+    expect(
+      verificationFailureOutput({ status: 'passed', checks: [result('tests', 'passed', 'ok')] }),
+    ).toBeNull()
   })
 })

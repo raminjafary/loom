@@ -6,7 +6,7 @@ import {
   describeAge,
   shortBranchName,
 } from '@loom/client-core'
-import { describeVerification } from '@loom/domain'
+import { describeVerification, verificationFailureOutput } from '@loom/domain'
 import { computed, onMounted, ref, watch } from 'vue'
 import ApprovalCard from './ApprovalCard.vue'
 import DiffView from './DiffView.vue'
@@ -124,6 +124,24 @@ const total = computed(() => lanes.value.reduce((sum, lane) => sum + lane.cards.
  * got wrong once: the Escape handler sits on an element that is actually focused, or it
  * never fires and the dialog claims `aria-modal` while being closable only by its ✕.
  */
+/**
+ * What the definition of done said about the run being reviewed, and what the check that
+ * failed actually printed.
+ *
+ * The card names the check — "the tests check failed" — and stops there, so the next move
+ * for a human deciding about this branch was to re-run a command the platform had already
+ * run and stored the tail of. The overlay is where it belongs rather than the card: a
+ * board is for comparing six lanes at a glance, and a wall of command output in a column
+ * destroys exactly that, while a review is one run at a time and has the room.
+ */
+const selectedVerification = computed(
+  () => props.verifications.find((record) => record.agentRunId === props.selectedRun?.id) ?? null,
+)
+
+const selectedFailureOutput = computed(() =>
+  selectedVerification.value ? verificationFailureOutput(selectedVerification.value) : null,
+)
+
 const scrim = ref<HTMLElement | null>(null)
 const focusScrim = () => scrim.value?.focus()
 onMounted(focusScrim)
@@ -276,6 +294,26 @@ const onKeydown = (event: KeyboardEvent) => {
         <p v-if="props.selectedRun.errorMessage" class="failure">
           {{ props.selectedRun.errorMessage }}
         </p>
+
+        <!--
+          The verdict, and underneath it the tail of the check that failed. Plain
+          interpolation into a <pre>: this is command output from a repository, so it is
+          text to display and never markup to render.
+        -->
+        <section v-if="selectedVerification" class="verification">
+          <p class="verdict" :class="selectedVerification.status">
+            {{
+              describeVerification({
+                status: selectedVerification.status,
+                checks: selectedVerification.checks,
+                reason: selectedVerification.reason,
+              })
+            }}
+          </p>
+          <pre v-if="selectedFailureOutput" class="check-output">{{
+            selectedFailureOutput.output
+          }}</pre>
+        </section>
 
         <ApprovalCard :approvals="props.approvals" @decide="(id, decision, answer) => emit('decide', id, decision, answer)" />
         <DiffView
@@ -630,6 +668,38 @@ const onKeydown = (event: KeyboardEvent) => {
   margin: 0.1rem 0 0;
   font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The verdict block in the review, which is not the one on a card: there the verdict is a
+ * seventh line under six others, here it is a section a human is reading on purpose. The
+ * output is monospaced and scrolls rather than wrapping — the tail is at most twelve lines
+ * of a command's own formatting, and rewrapping it turns a column of test names into prose.
+ */
+.verification {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.verification .verdict {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.check-output {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  max-height: 14rem;
+  overflow: auto;
+  border-radius: 0.4rem;
+  background: var(--surface-hover, var(--surface));
+  color: var(--text-muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre;
+  tab-size: 2;
 }
 
 .failure {

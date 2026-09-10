@@ -265,3 +265,28 @@ export const describeVerification = (input: {
       return `verification could not run — ${input.reason ?? 'the Runner did not answer'}`
   }
 }
+
+/**
+ * What the check that failed actually printed.
+ *
+ * `describeVerification` names the check, which is the difference between sending a human
+ * to the build and sending them to a log — but the tail the Runner already stored is the
+ * difference between sending them to the build and telling them what the build said. It is
+ * on the row (`VerificationCheckResult.detail`), it is already on the ledger note, and
+ * until now no surface rendered it: a card that says "the tests check failed" and nothing
+ * else makes a human re-run the command the platform has already run.
+ *
+ * Null when there is nothing stored to show, and the three ways that happens are all
+ * covered by the one line: the verdict is not a failure, the failing check produced no
+ * output, or the list is empty because the harness never reached a command — in which case
+ * `reason` is the whole story and `describeVerification` is already telling it.
+ */
+export const verificationFailureOutput = (input: {
+  readonly status: VerificationStatus
+  readonly checks: readonly VerificationCheckResult[]
+}): { readonly name: string; readonly output: string } | null => {
+  if (input.status !== 'failed') return null
+  const failed = input.checks.find((check) => check.status === 'failed')
+  const output = failed?.detail?.trim()
+  return failed && output ? { name: failed.name, output } : null
+}
