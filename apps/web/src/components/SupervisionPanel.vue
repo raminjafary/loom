@@ -26,20 +26,25 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ refresh: [] }>()
 
+/**
+ * Singular and plural both, because the counts are small enough to hit one regularly and
+ * "1 branch decisions" is the kind of thing a reader trusts a little less afterwards.
+ */
 const KINDS = [
-  { key: 'approval', label: 'approvals' },
-  { key: 'disposition', label: 'branch decisions' },
-  { key: 'promotion', label: 'promotions' },
-  { key: 'veto', label: 'vetoes' },
-  { key: 'envelope', label: 'envelope changes' },
+  { key: 'approval', one: 'approval', many: 'approvals' },
+  { key: 'disposition', one: 'branch decision', many: 'branch decisions' },
+  { key: 'promotion', one: 'promotion', many: 'promotions' },
+  { key: 'veto', one: 'veto', many: 'vetoes' },
+  { key: 'envelope', one: 'envelope change', many: 'envelope changes' },
 ] as const
 
 const counted = computed(() =>
   props.ledger === null
     ? []
-    : KINDS.map((kind) => ({ ...kind, count: props.ledger!.byKind[kind.key] })).filter(
-        (kind) => kind.count > 0,
-      ),
+    : KINDS.map((kind) => {
+        const count = props.ledger!.byKind[kind.key]
+        return { key: kind.key, count, label: count === 1 ? kind.one : kind.many }
+      }).filter((kind) => kind.count > 0),
 )
 
 /**
@@ -81,11 +86,13 @@ const since = computed(() =>
       -->
       <p v-if="ledger.uncounted > 0 || ledger.automatic > 0" class="bound">
         <template v-if="ledger.uncounted > 0">
-          {{ ledger.uncounted }} audited human act(s) were not supervision of an agent's work
-          and are outside this rate.
+          {{ ledger.uncounted }} audited human
+          {{ ledger.uncounted === 1 ? 'act was' : 'acts were' }} not supervision of an agent's
+          work and outside this rate.
         </template>
         <template v-if="ledger.automatic > 0">
-          {{ ledger.automatic }} act(s) were the platform's own.
+          {{ ledger.automatic }} {{ ledger.automatic === 1 ? 'act was' : 'acts were' }} the
+          platform's own.
         </template>
       </p>
     </template>

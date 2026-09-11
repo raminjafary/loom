@@ -48,6 +48,18 @@ describe('SupervisionPanel', () => {
     expect(wrapper.text()).not.toContain('vetoes')
   })
 
+  /** "1 branch decisions" is the kind of thing a reader trusts a little less afterwards. */
+  it('counts one of something in the singular', () => {
+    const wrapper = mount(SupervisionPanel, {
+      props: {
+        ledger: ledger({ byKind: { approval: 1, disposition: 1, promotion: 0, veto: 0, envelope: 0 } }),
+        fetchError: null,
+      },
+    })
+    expect(wrapper.get('.kinds').text()).toContain('branch decision')
+    expect(wrapper.get('.kinds').text()).not.toContain('branch decisions')
+  })
+
   /**
    * The rate's own bound, on screen rather than implied. A reader who cannot see what was left
    * out has to trust that everything was counted, which is the one thing a measurement should
