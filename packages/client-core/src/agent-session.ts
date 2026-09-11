@@ -65,6 +65,7 @@ export type BriefSource = NonNullable<
 >
 /** One persona's evolution, walked, as the contract puts it on the wire. */
 export type PersonaLineage = Awaited<ReturnType<LoomApi['persona']['evolution']>>
+export type PersonaDivergence = Awaited<ReturnType<LoomApi['persona']['divergence']>>
 /** One lesson a persona holds about one repository, as the contract puts it on the wire. */
 export type PersonaLesson = Awaited<ReturnType<LoomApi['experience']['listForPersona']>>[number]
 import type { PushRegistration } from './push.js'
@@ -600,6 +601,27 @@ export interface AgentSession {
    * search, neither of which is something a panel should re-fetch on a keystroke.
    */
   personaEvolution(personaId: string): Promise<PersonaLineage | null>
+  /**
+   * A persona as a bundle another workspace can adopt: the document, a claimed origin and a
+   * digest. Returned rather than written anywhere — where an operator puts it is their
+   * business, and a platform that offered to publish it would be a platform with a registry.
+   */
+  exportPersona(personaId: string): Promise<{ text: string; digest: string } | null>
+  /**
+   * Takes a bundle into this workspace. The provenance sentence comes back so a surface can
+   * show the operator the claim they are accepting, rather than presenting an import as a
+   * verified transfer.
+   */
+  adoptPersona(input: {
+    bundleText: string
+    as: string | null
+  }): Promise<{ name: string | null; provenance: string; detail: string }>
+  /**
+   * Where this persona's humans and its repository's checks disagree — branches that passed
+   * and were discarded, branches that failed and were merged. Read on demand for the reason
+   * the evolution walk is: it changes when a run is decided, not when a panel renders.
+   */
+  personaDivergence(personaId: string): Promise<PersonaDivergence | null>
   listExperience(personaId: string): Promise<PersonaLesson[]>
   retireLesson(input: { lessonId: string; reason: string }): Promise<{ invalidated: number }>
   /**
@@ -1813,6 +1835,45 @@ export const createAgentSession = (options: { api: LoomApi }): AgentSession => {
       } catch (error) {
         patch({ error: errorMessage(error) })
         return { detail: '', points: [] }
+      }
+    },
+
+    async exportPersona(personaId) {
+      try {
+        return await options.api.persona.exportOne({ personaId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return null
+      }
+    },
+
+    async adoptPersona(input) {
+      try {
+        const result = await options.api.persona.adopt({
+          bundleText: input.bundleText,
+          ...(input.as === null ? {} : { as: input.as }),
+        })
+        // The list, re-read here rather than by whoever called: an adoption adds a persona,
+        // and every other write on this session leaves the caller with a current list.
+        patch(await readPersonasAndMatrix())
+        return {
+          name: result.persona.name,
+          provenance: result.provenance,
+          detail: `Adopted as ${result.persona.name}.`,
+        }
+      } catch (error) {
+        const detail = errorMessage(error)
+        patch({ error: detail })
+        return { name: null, provenance: '', detail }
+      }
+    },
+
+    async personaDivergence(personaId) {
+      try {
+        return await options.api.persona.divergence({ personaId })
+      } catch (error) {
+        patch({ error: errorMessage(error) })
+        return null
       }
     },
 

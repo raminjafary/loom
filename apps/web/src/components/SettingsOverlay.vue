@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type {
+  PersonaDivergence,
   WorkflowDetail,
   WorkflowProposal,
   WorkflowRow,
@@ -38,6 +39,8 @@ import ColosseumPanel from './ColosseumPanel.vue'
 import MasteryPanel from './MasteryPanel.vue'
 import PersonaEditor from './PersonaEditor.vue'
 import PersonaGroupPanel from './PersonaGroupPanel.vue'
+import PersonaSharingPanel from './PersonaSharingPanel.vue'
+import PersonaDivergencePanel from './PersonaDivergencePanel.vue'
 import RepositoryPanel from './RepositoryPanel.vue'
 import RunnerPanel from './RunnerPanel.vue'
 
@@ -142,6 +145,22 @@ const props = defineProps<{
     note: string | null
   }) => Promise<{ declined: boolean; detail: string }>
   archiveWorkflow: (workflowId: string) => Promise<{ archived: boolean; detail: string }>
+  /** A persona as a bundle another workspace can adopt, and the way one comes back in. */
+  exportPersona: (personaId: string) => Promise<{ text: string; digest: string } | null>
+  adoptPersona: (input: {
+    bundleText: string
+    as: string | null
+  }) => Promise<{ name: string | null; provenance: string; detail: string }>
+  /** Where a persona's humans and its checks disagree. Read per persona, never held. */
+  readPersonaDivergence: (personaId: string) => Promise<PersonaDivergence | null>
+  /**
+   * Opens a divergent run behind this overlay.
+   *
+   * A callback rather than an emit, and not by preference: this emit map has a documented
+   * inference ceiling, and adding one more crossed it — every handler in the map degraded to
+   * `any` at once, which is how the ceiling announces itself.
+   */
+  openRun: (agentRunId: string) => void
   /** The trial each harness has to survive, read per harness rather than with the tab. */
   readWorkflowTrial: (workflowId: string) => Promise<WorkflowTrialReport | null>
   runTrialTask: (input: {
@@ -531,6 +550,21 @@ onMounted(() => scrim.value?.focus())
             @update="(input) => emit('update-group', input)"
             @delete="(id) => emit('delete-group', id)"
             @compose="emit('compose')"
+          />
+          <!--
+            Below the editor and the groups, in the order a person meets them: shape an agent,
+            put it on a team, and only then move it somewhere else or ask how its work was
+            ruled on. Both were reachable on the contract and from nowhere on screen.
+          -->
+          <PersonaSharingPanel
+            :personas="personas"
+            :export="exportPersona"
+            :adopt="adoptPersona"
+          />
+          <PersonaDivergencePanel
+            :personas="personas"
+            :read="readPersonaDivergence"
+            :open="openRun"
           />
         </template>
 

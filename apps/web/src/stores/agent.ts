@@ -143,6 +143,10 @@ export const useAgentStore = defineStore('agent', () => {
       session.declineWorkflowDesign(input),
     archiveWorkflow: (workflowId: string) => session.archiveWorkflow(workflowId),
     refreshSupervision: () => session.refreshSupervision(),
+    exportPersona: (personaId: string) => session.exportPersona(personaId),
+    adoptPersona: (input: { bundleText: string; as: string | null }) =>
+      session.adoptPersona(input),
+    personaDivergence: (personaId: string) => session.personaDivergence(personaId),
     listCampaigns: (personaId: string) => session.listCampaigns(personaId),
     campaignReport: (campaignId: string) => session.campaignReport(campaignId),
     gapCurve: (personaId: string) => session.gapCurve(personaId),
