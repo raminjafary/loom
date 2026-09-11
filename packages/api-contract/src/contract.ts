@@ -1695,7 +1695,21 @@ export const contract = {
      */
     listActive: oc.output(z.array(AgentRunSchema)),
 
-    /** One run's children — what the tree view is drawn from. */
+    /**
+     * One run's immediate children.
+     *
+     * **Not what the tree view is drawn from**, which is what this used to claim: the swarm
+     * board returns the whole tree in one call, with `parentRunId` on every card, and drawing
+     * it from here would be one request per node. What actually reads this is everything that
+     * inspects a tree *from outside* the client — the server's own integration tests and the
+     * live drivers in `tools/`, which wait on a plan's children appearing and assert on what
+     * was dealt.
+     *
+     * Worth stating rather than leaving to a grep, because the old sentence made an unused
+     * procedure look load-bearing to the UI and a load-bearing one look unused: a count of
+     * what the web client calls put this among the ten it does not, and deleting it on that
+     * basis would have taken fifty assertions and nine drivers with it.
+     */
     listChildren: oc
       .input(z.object({ agentRunId: z.string() }))
       .output(z.array(AgentRunSchema)),
