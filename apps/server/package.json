@@ -12,7 +12,7 @@
     "seed": "tsx --env-file=../../.env src/seed.ts"
   },
   "dependencies": {
-    "@better-auth/drizzle-adapter": "1.6.25",
+    "@better-auth/drizzle-adapter": "1.7.7",
     "@fastify/cors": "^11.3.0",
     "@fastify/websocket": "^11.3.0",
     "@loom/api-contract": "workspace:*",
