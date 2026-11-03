@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@loom/domain": "workspace:*",
-    "zod": "^4.5.4"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "tsx": "^4.23.13",

@@ -29,7 +29,7 @@
     "ioredis": "^5.11.1",
     "web-push": "3.6.7",
     "ws": "^8.21.3",
-    "zod": "^4.5.4"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/web-push": "3.6.4",
